@@ -1,74 +1,32 @@
 # Orion
 
-An open-source AI notebook IDE with integrated chat, Jupyter kernel support, local chat persistence, and bring-your-own-key model access.
+An open-source AI notebook IDE — code and markdown cells, Jupyter kernel execution, and an AI assistant with tools to read, edit, and run your notebooks.
 
-## Features
+Model credentials are configured in the app. No account or hosted backend required.
 
-- **Notebook editor** — Code and markdown cells with Monaco editor, syntax highlighting, and rich output rendering.
-- **AI assistant** — Chat sidebar with tools to read and edit notebooks, run terminal commands, execute code, and work with Jupyter kernels.
-- **BYOK providers** — Configure OpenAI, Anthropic, Google, xAI, or ChatGPT OAuth credentials locally in Settings.
-- **Jupyter integration** — Connect to local or remote Jupyter kernels for Python execution.
-- **Local persistence** — Chats and settings are stored in the browser with IndexedDB/local storage.
-- **Skills and sub-agents** — Extend Orion with markdown skills and `.agent.ipynb` notebook-defined sub-agents.
+## Quick Start
 
-## Tech Stack
-
-- **Framework**: Next.js 15, React 19
-- **UI**: Tailwind CSS, shadcn/ui, Monaco Editor
-- **AI**: Vercel AI SDK with BYOK provider credentials
-- **Notebooks**: JupyterLab services, custom notebook tools
-- **Storage**: Browser-local settings and IndexedDB chat history
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 20+
-- Optional: a running Jupyter server for notebook execution
-
-### Installation
+**Prerequisites:** Node.js 20+
 
 ```bash
 npm install --legacy-peer-deps
-```
-
-### Environment
-
-The OSS runtime does not require hosted app services or provider API keys in server environment variables.
-
-Optional:
-
-```bash
-NEXT_PUBLIC_APP_URL=http://localhost:3001
-```
-
-Model credentials are configured in the app under **Settings → Providers**.
-
-### Development
-
-```bash
 npm run dev
 ```
 
-Runs on [http://localhost:3001](http://localhost:3001).
+Open [http://localhost:3001](http://localhost:3001), then go to **Settings → Providers** to add your API keys.
 
-## Project Structure
+For notebook execution, connect a Jupyter server (supports Jupyter >= 2.0.0). Follow the instructions in the GUI.
 
-```text
-├── app/              # Next.js app router and local API routes
-├── components/       # React components
-│   ├── left-sidebar/ # File tree and search
-│   ├── right-sidebar/# Chat UI, messages, toolbar
-│   ├── notebook/     # Cells, output renderers, kernel dialogs
-│   ├── editor/       # Main editor
-│   └── ui/           # shadcn/ui primitives
-├── lib/              # Core logic
-│   ├── agent/        # Model gateway, tools, prompts, static catalog
-│   ├── chat/         # IndexedDB chat persistence
-│   └── ...           # Kernel service, settings, types, utils
-└── hooks/            # React hooks
-```
+## Documentation
+
+- [Contributing](./CONTRIBUTING.md) — setup, tests, pull requests
+- [Architecture](./docs/architecture.md) — how the app fits together
+- [Agent API](./docs/agent-api.md) — tools, skills, sub-agents, adding models
+
+## Tech Stack
+
+Next.js 15, React 19, Tailwind CSS, Monaco Editor, Vercel AI SDK, JupyterLab services.
 
 ## License
 
-Apache-2.0.
+Apache-2.0. See [LICENSE](./LICENSE).

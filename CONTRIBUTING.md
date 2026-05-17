@@ -16,7 +16,7 @@ npm run dev
 
 The dev server runs on port 3001 by default.
 
-No hosted database, auth service, billing service, or server-side provider key is required for OSS development. Configure model credentials inside the app under **Settings → Providers**.
+Configure model credentials inside the app under **Settings → Providers**.
 
 Optional environment:
 
@@ -32,7 +32,7 @@ npx tsc --noEmit
 npm run lint
 ```
 
-`npm test` includes an OSS boundary guard that fails if removed hosted-platform runtime paths or imports are reintroduced.
+`npm test` includes a boundary guard that catches unwanted external service dependencies being introduced.
 
 ## Architecture
 

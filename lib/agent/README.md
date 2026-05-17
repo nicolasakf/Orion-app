@@ -1,6 +1,6 @@
 # Orion Agent Flow
 
-This document summarizes Orion's OSS BYOK agent architecture across the UI, `/api/chat`, model orchestration, and browser-side tool execution.
+This document summarizes Orion's agent architecture across the UI, `/api/chat`, model orchestration, and browser-side tool execution.
 
 ## Primary Files
 
@@ -22,7 +22,7 @@ This document summarizes Orion's OSS BYOK agent architecture across the UI, `/ap
 4. `ModelGateway` creates the provider model instance from that request-scoped credential.
 5. The server injects agent context and streams model output back to the browser.
 
-There is no server account, hosted persistence session, paid-plan state, managed usage ledger, or managed provider-key fallback in the OSS runtime.
+All credentials are request-scoped and supplied by the user; no server-side provider keys are used.
 
 ## Tool Execution
 
