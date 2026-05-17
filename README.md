@@ -13,7 +13,7 @@
 **Prerequisites:** Node.js 20+
 
 ```bash
-npm install --legacy-peer-deps
+npm install
 npm run dev
 ```
 

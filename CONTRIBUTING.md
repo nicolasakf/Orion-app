@@ -10,7 +10,7 @@ Thanks for helping improve Orion.
 ## Setup
 
 ```bash
-npm install --legacy-peer-deps
+npm install
 npm run dev
 ```
 
