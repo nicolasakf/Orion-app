@@ -1,0 +1,1 @@
+make a model to predict boston house prices based on the csv dataset

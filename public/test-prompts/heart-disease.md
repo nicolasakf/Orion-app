@@ -1,0 +1,1 @@
+make a jupyter notebook that reads a csv file of patients and determines if they are at risk of having a heart attack in the next 10 years.

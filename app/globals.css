@@ -1,0 +1,376 @@
+@import "@xterm/xterm/css/xterm.css";
+@import "react-grid-layout/css/styles.css";
+@import "react-resizable/css/styles.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: Arial, Helvetica, sans-serif;
+  overscroll-behavior-x: none;
+  overscroll-behavior-y: none;
+  overflow: hidden;
+  height: 100%;
+}
+
+html {
+  overscroll-behavior-x: none;
+  overscroll-behavior-y: none;
+  overflow: hidden;
+  height: 100%;
+}
+
+/* iOS Safari zooms in whenever a focused input/textarea has font-size < 16px.
+   Force 16px on mobile to prevent the unwanted zoom, overriding any inline style.
+   Exclude `.orion-chat-composer-mobile`: chat composer + model picker search use the
+   Appearance chat font size instead (may cause brief focus zoom on iOS below 16px). */
+@media (max-width: 767px) {
+  textarea:not(.orion-chat-composer-mobile),
+  input[type="text"]:not(.orion-chat-composer-mobile),
+  input[type="search"]:not(.orion-chat-composer-mobile),
+  input[type="email"]:not(.orion-chat-composer-mobile),
+  input[type="password"]:not(.orion-chat-composer-mobile) {
+    font-size: 16px !important;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Reasonable radius when `corner-shape: squircle` is unsupported */
+  .corner-squircle {
+    border-radius: 0.5rem;
+  }
+
+  .no-overscroll-x {
+    overscroll-behavior-x: none;
+  }
+
+  .no-overscroll-y {
+    overscroll-behavior-y: none;
+  }
+
+  .ai-text-shine {
+    color: hsl(var(--ai-foreground));
+    background-image: linear-gradient(
+      110deg,
+      hsl(var(--ai-foreground)) 0%,
+      hsl(var(--ai-foreground)) 35%,
+      hsl(var(--ai-foreground-hover)) 50%,
+      hsl(var(--ai-foreground)) 65%,
+      hsl(var(--ai-foreground)) 100%
+    );
+    background-size: 220% 100%;
+    background-position: 200% 0;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: ai-text-shine 2.1s linear infinite;
+  }
+}
+
+/*
+ * Native squircle: must stay OUTSIDE @layer utilities so it overrides Tailwind rounded-*.
+ * Squircle rendering needs both corner-shape and border-radius; otherwise nothing reads “squircle”.
+ * Exceptions (flush toolbar edge, split segments): use !rounded-* or outer clipping wrappers.
+ */
+@supports (corner-shape: squircle) {
+  .corner-squircle {
+    corner-shape: squircle;
+    border-radius: 1.8rem;
+  }
+}
+
+/*
+ * Sonner injects `[data-sonner-toast][data-styled=true] [data-button]{ border-radius: 4px }`
+ * after our bundle; it beats plain `.corner-squircle`. Higher specificity + !important keeps Undo
+ * / action / cancel aligned with app squircles regardless of injection order.
+ */
+[data-sonner-toast] button[data-button].corner-squircle {
+  border-radius: 0.5rem !important;
+}
+
+@supports (corner-shape: squircle) {
+  [data-sonner-toast] button[data-button].corner-squircle {
+    corner-shape: squircle !important;
+    border-radius: 1.8rem !important;
+  }
+}
+
+@keyframes ai-text-shine {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -20% 0;
+  }
+}
+
+/* Notebook editor specific styles */
+.notebook-cell:focus {
+  outline: none !important;
+  /* Remove default focus outline */
+}
+
+/*
+ * JupyterLab-aligned HTML outputs (text/html), especially pandas DataFrame HTML.
+ * Mirrors @jupyterlab/rendermime styles for .jp-RenderedHTMLCommon — tables, links,
+ * typography — adapted to Orion theme tokens (light/dark).
+ */
+.orion-rendered-html {
+  color: hsl(var(--foreground));
+  font-size: 0.875rem;
+  line-height: 1.6;
+  padding: 0.75rem 1rem;
+  padding-right: 1.25rem;
+  text-align: left;
+}
+
+/* Links: --primary flips with theme (dark text on light, light text on dark) */
+.orion-rendered-html a:link {
+  text-decoration: none;
+  color: hsl(var(--primary));
+}
+
+.orion-rendered-html a:hover {
+  text-decoration: underline;
+  color: hsl(var(--primary));
+}
+
+.orion-rendered-html a:visited {
+  text-decoration: none;
+  color: hsl(var(--primary));
+}
+
+/* Tables — zebra rows, header rule, cell padding (JupyterLab rendermime/base.css) */
+.orion-rendered-html table {
+  border-collapse: collapse;
+  border-spacing: 0;
+  border: none;
+  color: hsl(var(--foreground));
+  font-size: 0.875rem;
+  table-layout: auto;
+  width: max-content;
+  max-width: 100%;
+  margin-left: 0;
+  margin-right: auto;
+  margin-bottom: 1em;
+}
+
+.orion-rendered-html thead {
+  border-bottom: 1px solid hsl(var(--border));
+  vertical-align: bottom;
+}
+
+.orion-rendered-html td,
+.orion-rendered-html th,
+.orion-rendered-html tr {
+  vertical-align: middle;
+  padding: 0.5em;
+  line-height: normal;
+  white-space: normal;
+  max-width: none;
+  border: none;
+}
+
+/* Non-markdown HTML in Jupyter: numeric table cells are right-aligned */
+.orion-rendered-html td,
+.orion-rendered-html th {
+  text-align: right;
+}
+
+.orion-rendered-html th {
+  font-weight: 700;
+}
+
+/* Zebra: use solid theme tokens so light/dark both get readable contrast (no alpha blending) */
+.orion-rendered-html tbody tr:nth-child(odd) {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+
+.orion-rendered-html tbody tr:nth-child(even) {
+  background-color: hsl(var(--muted));
+  color: hsl(var(--foreground));
+}
+
+.orion-rendered-html tbody tr:hover {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--accent-foreground));
+}
+
+.orion-rendered-html p {
+  text-align: left;
+  margin: 0 0 1em;
+}
+
+.orion-rendered-html > img,
+.orion-rendered-html img,
+.orion-rendered-html svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.orion-rendered-html pre,
+.orion-rendered-html code {
+  border: 0;
+  font-size: inherit;
+  line-height: 1.45;
+}
+
+.orion-rendered-html :not(pre) > code {
+  background-color: hsl(var(--muted));
+  padding: 1px 5px;
+  border-radius: 2px;
+}
+
+/*
+ * JSON MIME outputs use Monaco for folding/search, but should look like a
+ * rendered value rather than inherit notebook cell input backgrounds.
+ */
+.orion-json-monaco .monaco-editor,
+.orion-json-monaco .monaco-editor-background,
+.orion-json-monaco .monaco-editor .margin {
+  background-color: #ffffff !important;
+}
+
+.dark .orion-json-monaco .monaco-editor,
+.dark .orion-json-monaco .monaco-editor-background,
+.dark .orion-json-monaco .monaco-editor .margin {
+  background-color: #000000 !important;
+}
+
+.notebook-app-grid {
+  background-image: radial-gradient(
+    circle at 0 0,
+    hsl(var(--muted-foreground) / 0.28) 1px,
+    transparent 1px
+  );
+  background-size: var(--notebook-app-grid-column-width, calc(100% / 12))
+    var(--notebook-app-grid-row-height, 44px);
+  background-position: 0 0;
+  background-origin: content-box;
+  background-clip: content-box;
+}
+
+.notebook-app-grid .react-grid-item.react-grid-placeholder {
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--muted-foreground) / 0.18);
+  opacity: 0.65;
+}
+
+.notebook-app-grid .react-grid-item > .react-resizable-handle::after {
+  border-right-color: hsl(var(--muted-foreground) / 0.55);
+  border-bottom-color: hsl(var(--muted-foreground) / 0.55);
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 99%;
+    --foreground: 0 0% 3.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 3.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 3.9%;
+    --primary: 0 0% 9%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 0 0% 96.1%;
+    --secondary-foreground: 0 0% 9%;
+    --muted: 0 0% 93%;
+    --muted-foreground: 0 0% 45.1%;
+    --cell-separator-foreground: 0 0% 75%;
+    --toolbar-separator-foreground: 0 0% 80%;
+    --accent: 0 0% 90%;
+    --accent-foreground: 0 0% 9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 89.8%;
+    --input: 0 0% 89.8%;
+    --ring: 0 0% 3.9%;
+    --chart-1: 12 76% 61%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 197 37% 24%;
+    --chart-4: 43 74% 66%;
+    --chart-5: 27 87% 67%;
+    /* Base radius for rounded-* tokens; squircle-capable browsers use unlayered .corner-squircle override */
+    --radius: 0.5rem;
+    --sidebar-background: 0 0% 96%;
+    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 240 4.8% 93%;
+    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-border: 220 13% 91%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+    --ai-foreground: 276 100% 40%;
+    --ai-foreground-hover: 276 100% 70%;
+    --slash: 32 100% 91%;
+    --slash-foreground: 26 95% 28%;
+    --slash-border: 30 92% 76%;
+  }
+
+  .dark {
+    --background: 0 0% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 0 0% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --popover: 0 0% 3.9%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 0 0% 9%;
+    --secondary: 0 0% 14.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 0 0% 14.9%;
+    --muted-foreground: 0 0% 63.9%;
+    --cell-separator-foreground: 0 0% 35%;
+    --toolbar-separator-foreground: 0 0% 30%;
+    --accent: 0 0% 18%;
+    --accent-foreground: 0 0% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 14.9%;
+    --input: 0 0% 14.9%;
+    --ring: 0 0% 83.1%;
+    --chart-1: 220 70% 50%;
+    --chart-2: 160 60% 45%;
+    --chart-3: 30 80% 55%;
+    --chart-4: 280 65% 60%;
+    --chart-5: 340 75% 55%;
+    --sidebar-background: 240 5.9% 8%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+    --ai-foreground: 276 100% 60%;
+    --ai-foreground-hover: 276 100% 70%;
+    --slash: 28 70% 24%;
+    --slash-foreground: 32 96% 78%;
+    --slash-border: 28 65% 38%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}

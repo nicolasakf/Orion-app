@@ -1,0 +1,49 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files
+.env
+.env.*
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# mac
+.DS_Store
+
+# supabase
+supabase/.temp
+
+# notebook checkpoints
+.ipynb_checkpoints
+# dev logger output
+logs/
+
+# vscode
+.vscode/tasks.json
+
+.claude
+.cursor
+.agents/state.json
+
+private/
