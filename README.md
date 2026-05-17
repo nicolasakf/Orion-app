@@ -1,10 +1,14 @@
-# Orion
+<p align="center">
+  <img src="./public/assets/Cover%20Photo%203.png" width="800" alt="Orion — Master your data, speed your research">
+</p>
 
-An open-source AI notebook IDE — code and markdown cells, Jupyter kernel execution, and an AI assistant with tools to read, edit, and run your notebooks.
+**Orion** is an open-source AI coding agent built for **data scientists, analysts, and researchers**—inside a notebook IDE that understands both your **code** and **runtime notebook state** (cells, outputs, tracebacks, structure, and run order). The goal is to **close the context gap**: fewer wrong columns, guessed names, or edits that look fine but do not match what actually executed.
 
-Model credentials are configured in the app. No account or hosted backend required.
+- Connect from the browser to **your local Jupyter** environment—same notebooks, kernels, and env; no file uploads or redoing setup for Orion’s sake.
+- Use **frontier models** from providers you choose, or **local inference** (e.g. LM Studio, Ollama). Credentials are configured in the app; **self-hosted usage does not require an Orion account or hosted backend**.
+- **Privacy:** Orion does not use your notebooks, data, or code to train or improve the product ([website](https://www.orion-agent.ai)).
 
-## Quick Start
+## Quick start
 
 **Prerequisites:** Node.js 20+
 
@@ -15,7 +19,15 @@ npm run dev
 
 Open [http://localhost:3001](http://localhost:3001), then go to **Settings → Providers** to add your API keys.
 
-For notebook execution, connect a Jupyter server (supports Jupyter >= 2.0.0). Follow the instructions in the GUI.
+For notebook execution, connect a Jupyter server (supports Jupyter ≥ 2.0.0). Follow the instructions in the GUI.
+
+## Links
+
+| | |
+| --- | --- |
+| Website | [orion-agent.ai](https://www.orion-agent.ai) |
+| Hosted app | [app.orion-agent.ai](https://app.orion-agent.ai) |
+|
 
 ## Documentation
 
@@ -23,7 +35,7 @@ For notebook execution, connect a Jupyter server (supports Jupyter >= 2.0.0). Fo
 - [Architecture](./docs/architecture.md) — how the app fits together
 - [Agent API](./docs/agent-api.md) — tools, skills, sub-agents, adding models
 
-## Tech Stack
+## Tech stack
 
 Next.js 15, React 19, Tailwind CSS, Monaco Editor, Vercel AI SDK, JupyterLab services.
 
