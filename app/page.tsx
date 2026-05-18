@@ -2134,12 +2134,9 @@ export default function Page() {
                       }`}
                   >
                     <div
-                      className={`corner-squircle sticky top-0 z-10 bg-background flex h-12 min-w-0 shrink-0 items-center gap-2 border-x border-t px-4 shadow-sm !rounded-b-none ${leftSidebarCollapsed && rightSidebarCollapsed
-                          ? ""
-                          : "rounded-t-md"
-                        }`}
+                      className="corner-squircle sticky top-0 z-10 mx-1 flex h-11 min-w-0 shrink-0 items-center gap-1.5 rounded-md border bg-background px-2 shadow-md"
                     >
-                      <div className="flex min-w-0 flex-1 items-center gap-2">
+                      <div className="flex min-w-0 flex-1 items-center gap-1.5">
                         <ToolbarButton
                           onClick={toggleLeftSidebar}
                           toolTipLabel={
@@ -2528,7 +2525,7 @@ export default function Page() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex flex-1 flex-col min-h-0 overflow-hidden border-x no-overscroll-x no-overscroll-y">
+                  <div className="flex flex-1 flex-col min-h-0 overflow-hidden no-overscroll-x no-overscroll-y">
                     <Editor
                       filepath={currentFile.path}
                       openNotebookAsText={currentFile.openAsText === true}

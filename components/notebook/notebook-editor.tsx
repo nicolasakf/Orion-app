@@ -2726,7 +2726,7 @@ export function NotebookEditor({
       <div
         ref={notebookRootRef}
         data-keyboard-scope="notebook"
-        className="flex min-h-0 min-w-0 flex-1 flex-col"
+        className="flex min-h-0 min-w-0 flex-1 flex-col bg-sidebar"
       >
         {/* Notebook Toolbar */}
         {/* 
@@ -2778,11 +2778,11 @@ export function NotebookEditor({
             box-shadow: none !important;
           }
         `}</style>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-sidebar">
           {loading ? (
             <div
               className={cn(
-                "flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden",
+                "flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden bg-sidebar",
                 !notebookScrollbarVisible && "scrollbar-hide",
               )}
             >
@@ -2796,7 +2796,7 @@ export function NotebookEditor({
           ) : error ? (
             <div
               className={cn(
-                "flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden",
+                "flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden bg-sidebar",
                 !notebookScrollbarVisible && "scrollbar-hide",
               )}
             >
@@ -2834,7 +2834,7 @@ export function NotebookEditor({
                 aria-hidden={activeNotebookView !== "notebook"}
                 inert={activeNotebookView !== "notebook" ? true : undefined}
                 className={cn(
-                  "notebook-editor-scroll [container-type:size] absolute inset-0 w-full overflow-y-auto overflow-x-hidden transition-opacity duration-150",
+                  "notebook-editor-scroll [container-type:size] absolute inset-0 w-full overflow-y-auto overflow-x-hidden bg-sidebar transition-opacity duration-150",
                   !notebookScrollbarVisible && "scrollbar-hide",
                   activeNotebookView === "notebook"
                     ? "opacity-100"
@@ -3078,7 +3078,7 @@ export function NotebookEditor({
           ) : (
             <div
               className={cn(
-                "flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden",
+                "flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden bg-sidebar",
                 !notebookScrollbarVisible && "scrollbar-hide",
               )}
             >

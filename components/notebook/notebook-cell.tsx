@@ -1922,7 +1922,7 @@ function NotebookCellComponent({
         className={cn(
           "overflow-hidden relative",
           isSelected && "ring-1 ring-blue-500 ring-opacity-70",
-          effectiveVariant === "ghost" && "border-none shadow-none",
+          effectiveVariant === "ghost" && "border-none bg-transparent shadow-none",
         )}
         style={{ zIndex: 1 }}
         onClick={(e) => onCellSelect?.(cellIndex, e)}
@@ -2125,7 +2125,7 @@ function NotebookCellComponent({
                       {isEditingMode ? (
                         <div
                           ref={editorRef}
-                          className="min-w-0 max-w-full overflow-x-hidden border-t border-muted bg-[#F7F7F7] dark:bg-[#1E1E1E]"
+                          className="min-w-0 max-w-full overflow-x-hidden border-t border-muted bg-transparent"
                         >
                           <MarkdownFormattingToolbar
                             onFormat={applyMarkdownSyntax}
