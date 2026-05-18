@@ -30,6 +30,7 @@ import {
 } from "@/lib/chat/chat-references";
 import { compactConversation } from "@/lib/agent/context-manager";
 import { buildWirePayload } from "@/lib/agent/context-optimizer";
+import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
 import {
   estimateMessageTokens,
   HARD_CAP_TOKENS,
@@ -456,7 +457,17 @@ export function RightSidebar({
     const hasByokForProvider = (providerId: string) => !!credentials[providerId];
 
     return models.map((m) => {
-      return { ...m, isAccessible: hasByokForProvider(m.provider) };
+      const credential = credentials[m.provider];
+      const localLabel =
+        credential?.type === "local_endpoint"
+          ? credential.label ?? getLocalModelLabel(m.provider, credential.modelId) ?? credential.modelId
+          : undefined;
+
+      return {
+        ...m,
+        ...(localLabel && { label: localLabel }),
+        isAccessible: hasByokForProvider(m.provider),
+      };
     });
   }, [models, effectiveSettings.providers?.credentials]);
 

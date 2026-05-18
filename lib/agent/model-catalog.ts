@@ -22,7 +22,7 @@ const CATALOG_CREATED_AT = "2026-05-17T00:00:00.000Z";
 export const MODEL_CATALOG: ModelCatalogEntry[] = [
   {
     model_id: "ollama-local",
-    label: "Ollama Local Model",
+    label: "Ollama",
     provider_id: "ollama",
     input_price_per_1m: 0,
     output_price_per_1m: 0,
@@ -38,7 +38,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
   {
     model_id: "lmstudio-local",
-    label: "LM Studio Local Model",
+    label: "LM Studio",
     provider_id: "lmstudio",
     input_price_per_1m: 0,
     output_price_per_1m: 0,

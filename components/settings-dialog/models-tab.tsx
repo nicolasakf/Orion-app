@@ -29,6 +29,7 @@ import { useOrionSettings } from "@/hooks/use-orion-settings";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
 import { toast } from "sonner";
 import { OpenAI, Claude, Gemini, Grok, Ollama, LmStudio } from "@lobehub/icons";
+import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
 import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
 
 type ProviderId = SupportedProvider;
@@ -161,15 +162,33 @@ export function ModelsTab() {
     void fetchModels();
   }, [fetchModels]);
 
+  const modelsWithConfiguredLabels = React.useMemo(() => {
+    const credentials = effectiveSettings.providers?.credentials ?? {};
+
+    return models.map((model) => {
+      if (model.provider_id !== "ollama" && model.provider_id !== "lmstudio") {
+        return model;
+      }
+
+      const credential = credentials[model.provider_id];
+      if (credential?.type !== "local_endpoint") return model;
+
+      return {
+        ...model,
+        label: credential.label ?? getLocalModelLabel(model.provider_id, credential.modelId) ?? credential.modelId,
+      };
+    });
+  }, [effectiveSettings.providers?.credentials, models]);
+
   const filteredModels = React.useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return models;
-    return models.filter(
+    if (!q) return modelsWithConfiguredLabels;
+    return modelsWithConfiguredLabels.filter(
       (m) =>
         m.label.toLowerCase().includes(q) ||
         getProviderDisplayName(m.provider_id).toLowerCase().includes(q)
     );
-  }, [models, searchQuery]);
+  }, [modelsWithConfiguredLabels, searchQuery]);
 
   /** Sort: pinned first (preserving pin order), then by created_at (latest first). */
   const sortedModels = React.useMemo(() => {

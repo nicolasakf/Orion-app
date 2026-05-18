@@ -77,6 +77,8 @@ const ProviderCredentialSchema = z.discriminatedUnion("type", [
     baseUrl: z.string().min(1),
     /** Runtime-specific model ID to send to the local server. */
     modelId: z.string().min(1),
+    /** User-facing label for the configured local model. */
+    label: z.string().optional(),
     /** Optional bearer token for local servers configured with auth. */
     apiKey: z.string().optional(),
   }),

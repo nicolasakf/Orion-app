@@ -25,6 +25,7 @@ const UserCredentialSchema = z.discriminatedUnion("type", [
     type: z.literal("local_endpoint"),
     baseUrl: z.string().min(1),
     modelId: z.string().min(1),
+    label: z.string().optional(),
     apiKey: z.string().optional(),
   }),
 ]);

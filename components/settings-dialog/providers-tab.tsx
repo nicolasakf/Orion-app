@@ -13,6 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { useSettingsContext } from "@/components/settings/settings-provider";
 import type { ProviderCredential } from "@/lib/settings/schema";
+import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
 import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
 
 // ── Provider metadata ─────────────────────────────────────────────────────────
@@ -312,7 +313,7 @@ interface ProviderRowProps {
   onSaveKey: (provider: SupportedProvider, key: string) => Promise<void>;
   onSaveLocalEndpoint: (
     provider: SupportedProvider,
-    endpoint: { baseUrl: string; modelId: string; apiKey?: string }
+    endpoint: { baseUrl: string; modelId: string; label?: string; apiKey?: string }
   ) => Promise<void>;
   onRemove: (provider: SupportedProvider) => void;
   onSaveOAuthCredential: (provider: SupportedProvider, credential: ProviderCredential) => void;
@@ -326,7 +327,7 @@ interface ProviderGroupSectionProps {
   onSaveKey: (provider: SupportedProvider, key: string) => Promise<void>;
   onSaveLocalEndpoint: (
     provider: SupportedProvider,
-    endpoint: { baseUrl: string; modelId: string; apiKey?: string }
+    endpoint: { baseUrl: string; modelId: string; label?: string; apiKey?: string }
   ) => Promise<void>;
   onRemove: (provider: SupportedProvider) => void;
   onSaveOAuthCredential: (provider: SupportedProvider, credential: ProviderCredential) => void;
@@ -384,6 +385,8 @@ function ProviderRow({
   const [keyInput, setKeyInput] = useState("");
   const [baseUrlInput, setBaseUrlInput] = useState("");
   const [modelIdInput, setModelIdInput] = useState("");
+  const [labelInput, setLabelInput] = useState("");
+  const [labelManuallyEdited, setLabelManuallyEdited] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showDeviceFlow, setShowDeviceFlow] = useState(false);
@@ -397,6 +400,7 @@ function ProviderRow({
     if (provider.credentialKind === "local_endpoint") {
       const baseUrl = baseUrlInput.trim();
       const modelId = modelIdInput.trim();
+      const label = labelInput.trim();
       const apiKey = keyInput.trim();
 
       if (!baseUrl) {
@@ -413,6 +417,7 @@ function ProviderRow({
         await onSaveLocalEndpoint(provider.id, {
           baseUrl,
           modelId,
+          ...(label && { label }),
           ...(apiKey && { apiKey }),
         });
         setIsEditing(false);
@@ -439,6 +444,7 @@ function ProviderRow({
   }, [
     baseUrlInput,
     keyInput,
+    labelInput,
     modelIdInput,
     onSaveKey,
     onSaveLocalEndpoint,
@@ -451,7 +457,19 @@ function ProviderRow({
     setKeyInput("");
     setBaseUrlInput("");
     setModelIdInput("");
+    setLabelInput("");
+    setLabelManuallyEdited(false);
   }, []);
+
+  const handleLocalModelIdChange = useCallback(
+    (value: string) => {
+      setModelIdInput(value);
+      if (labelManuallyEdited) return;
+
+      setLabelInput(getLocalModelLabel(provider.id, value) ?? "");
+    },
+    [labelManuallyEdited, provider.id]
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -512,7 +530,7 @@ function ProviderRow({
             )}
             {hasLocalEndpoint && credential.type === "local_endpoint" && (
               <p className="text-xs text-muted-foreground mt-0.5">
-                {credential.modelId} at {credential.baseUrl}
+                {credential.label ? `${credential.label} (${credential.modelId})` : credential.modelId} at {credential.baseUrl}
               </p>
             )}
           </div>
@@ -527,7 +545,10 @@ function ProviderRow({
                 onClick={() => {
                   setKeyInput("");
                   setBaseUrlInput(provider.defaultBaseUrl ?? "");
-                  setModelIdInput(provider.defaultModelId ?? "");
+                  const defaultModelId = provider.defaultModelId ?? "";
+                  setModelIdInput(defaultModelId);
+                  setLabelInput(getLocalModelLabel(provider.id, defaultModelId) ?? "");
+                  setLabelManuallyEdited(false);
                   setIsEditing(true);
                 }}
                 className="text-xs"
@@ -552,6 +573,12 @@ function ProviderRow({
                       ? credential.modelId
                       : provider.defaultModelId ?? ""
                   );
+                  setLabelInput(
+                    hasLocalEndpoint
+                      ? credential.label ?? getLocalModelLabel(provider.id, credential.modelId) ?? ""
+                      : getLocalModelLabel(provider.id, provider.defaultModelId ?? "") ?? ""
+                  );
+                  setLabelManuallyEdited(false);
                   setIsEditing(true);
                 }}
                 className="text-xs"
@@ -601,7 +628,7 @@ function ProviderRow({
                 <Label className="text-xs text-muted-foreground">Model ID</Label>
                 <Input
                   value={modelIdInput}
-                  onChange={(e) => setModelIdInput(e.target.value)}
+                  onChange={(e) => handleLocalModelIdChange(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder={provider.defaultModelId}
                   className="font-mono text-sm"
@@ -611,6 +638,19 @@ function ProviderRow({
                     {provider.endpointHint}
                   </p>
                 )}
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Label</Label>
+                <Input
+                  value={labelInput}
+                  onChange={(e) => {
+                    setLabelInput(e.target.value);
+                    setLabelManuallyEdited(true);
+                  }}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Display name"
+                  className="text-sm"
+                />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">{provider.keyHint}</Label>
@@ -777,7 +817,7 @@ export function ProvidersTab() {
   const handleSaveLocalEndpoint = useCallback(
     async (
       provider: SupportedProvider,
-      endpoint: { baseUrl: string; modelId: string; apiKey?: string }
+      endpoint: { baseUrl: string; modelId: string; label?: string; apiKey?: string }
     ) => {
       let validationFailed = false;
       try {
@@ -814,6 +854,7 @@ export function ProvidersTab() {
               type: "local_endpoint" as const,
               baseUrl: endpoint.baseUrl,
               modelId: endpoint.modelId,
+              label: endpoint.label ?? getLocalModelLabel(provider, endpoint.modelId) ?? endpoint.modelId,
               ...(endpoint.apiKey && { apiKey: endpoint.apiKey }),
             },
           },
