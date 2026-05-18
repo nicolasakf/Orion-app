@@ -113,6 +113,9 @@ export interface RunSubagentOptions {
   /** Copy the selected source notebook to a tmp run notebook. */
   createTmpNotebookCopy: (subagent: SubagentDefinition, runId: string) => Promise<string>;
 
+  /** Called as soon as the writable tmp notebook path is known. */
+  onTmpNotebookPath?: (tmpNotebookPath: string) => void;
+
   /**
    * Existing tmp notebook path to reconnect to. When set, the runner skips
    * copying the source notebook and continues from reconnectMessages.

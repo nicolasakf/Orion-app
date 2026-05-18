@@ -36,6 +36,23 @@ export type { CredentialMode, SupportedProvider } from "./model-gateway-types";
 /** The ChatGPT backend endpoint used for OAuth / subscription-based access. */
 const CHATGPT_CODEX_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses";
 
+/** Normalize user-entered OpenAI-compatible base URLs for local runtimes. */
+export function normalizeOpenAICompatibleBaseUrl(rawBaseUrl: string): string {
+  const trimmed = rawBaseUrl.trim();
+  const withProtocol = /^[a-z][a-z\d+\-.]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `http://${trimmed}`;
+  const parsed = new URL(withProtocol);
+
+  if (parsed.pathname === "" || parsed.pathname === "/") {
+    parsed.pathname = "/v1";
+  } else {
+    parsed.pathname = parsed.pathname.replace(/\/+$/, "");
+  }
+
+  return parsed.toString().replace(/\/$/, "");
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -97,10 +114,16 @@ const PROVIDER_INFO: Record<SupportedProvider, { name: string }> = {
   anthropic: { name: "Anthropic" },
   google: { name: "Google" },
   xai: { name: "xAI" },
+  ollama: { name: "Ollama" },
+  lmstudio: { name: "LM Studio" },
 };
 
 // Default model configurations
 const MODEL_DEFAULTS: Record<string, Partial<ModelInfo>> = {
+  // Local providers
+  "ollama-local": { contextWindow: 32768, supportsStreaming: true },
+  "lmstudio-local": { contextWindow: 32768, supportsStreaming: true },
+
   // xAI
   "grok-4.20-0309-reasoning": { contextWindow: 2000000, supportsStreaming: true },
   "grok-4.20-0309-non-reasoning": { contextWindow: 2000000, supportsStreaming: true },
@@ -171,7 +194,7 @@ export class ModelGateway {
     modelId: string,
     config: ProviderConfig
   ): LanguageModel {
-    if (!config?.apiKey) {
+    if (!config?.apiKey && providerId !== "ollama" && providerId !== "lmstudio") {
       throw new GatewayConfigError(
         `${PROVIDER_INFO[providerId]?.name || providerId} API key not configured`,
         providerId
@@ -190,6 +213,10 @@ export class ModelGateway {
 
       case "xai":
         return this.createXAIModel(config, modelId);
+
+      case "ollama":
+      case "lmstudio":
+        return this.createLocalOpenAICompatibleModel(config, modelId);
 
       default:
         throw new GatewayConfigError(
@@ -462,6 +489,23 @@ export class ModelGateway {
     return xai.chat(modelId);
   }
 
+  /** Create a chat model for local OpenAI-compatible runtimes. */
+  private createLocalOpenAICompatibleModel(
+    config: ProviderConfig,
+    modelId: string
+  ): LanguageModel {
+    if (!config.baseUrl) {
+      throw new GatewayConfigError("Local provider base URL not configured", "local");
+    }
+
+    const localProvider = createOpenAI({
+      apiKey: config.apiKey || "local-endpoint",
+      baseURL: normalizeOpenAICompatibleBaseUrl(config.baseUrl),
+      ...config.options,
+    });
+    return localProvider.chat(modelId);
+  }
+
   /**
    * Get provider-specific streaming options, merging any per-model settings
    * from the client UI.
@@ -508,6 +552,10 @@ export class ModelGateway {
           },
         };
 
+      case "ollama":
+      case "lmstudio":
+        return {};
+
       default:
         return {};
     }
@@ -535,6 +583,11 @@ export class ModelGateway {
 
     if (cred.type === "chatgpt_oauth") {
       model = this.createChatGPTOAuthModel(cred.accessToken, cred.accountId, modelId);
+    } else if (cred.type === "local_endpoint") {
+      model = this.createModel(providerId, cred.modelId, {
+        apiKey: cred.apiKey || "local-endpoint",
+        baseUrl: cred.baseUrl,
+      });
     } else {
       model = this.createModel(providerId, modelId, { apiKey: cred.apiKey });
     }

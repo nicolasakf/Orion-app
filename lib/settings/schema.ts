@@ -71,6 +71,15 @@ const ProviderCredentialSchema = z.discriminatedUnion("type", [
     /** chatgpt_account_id extracted from the id_token JWT. */
     accountId: z.string().optional(),
   }),
+  z.object({
+    type: z.literal("local_endpoint"),
+    /** OpenAI-compatible local server URL, usually ending in /v1. */
+    baseUrl: z.string().min(1),
+    /** Runtime-specific model ID to send to the local server. */
+    modelId: z.string().min(1),
+    /** Optional bearer token for local servers configured with auth. */
+    apiKey: z.string().optional(),
+  }),
 ]);
 
 export type ProviderCredential = z.infer<typeof ProviderCredentialSchema>;
@@ -144,8 +153,10 @@ const SettingsDataSchema = z.object({
   providers: z
     .object({
       /**
-       * Per-provider user credentials (BYOK API keys or ChatGPT OAuth tokens).
-       * Keyed by provider_id ("openai" | "anthropic" | "google" | "xai").
+       * Per-provider user credentials (BYOK API keys, ChatGPT OAuth tokens, or
+       * local OpenAI-compatible endpoint settings).
+       * Keyed by provider_id ("openai" | "anthropic" | "google" | "xai" |
+       * "ollama" | "lmstudio").
        * Stored client-side only; never persisted on the server.
        */
       credentials: z.record(ProviderCredentialSchema).default({}),

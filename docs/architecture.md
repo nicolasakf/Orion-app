@@ -132,12 +132,13 @@ Key invariant: **the server never executes tools**. `tool-schemas.ts` defines sc
 
 ## BYOK Credentials
 
-Two credential types are supported, both stored in browser `localStorage`:
+Three credential types are supported, all stored in browser `localStorage`:
 
 | Type | How to configure |
 |---|---|
 | API key | Settings → Providers → enter key for OpenAI / Anthropic / Google / xAI |
 | ChatGPT OAuth | Settings → Providers → Connect ChatGPT (device flow via `/api/credentials/oauth/`) |
+| Local endpoint | Settings → Providers → configure Ollama or LM Studio with a base URL and model ID |
 
 The selected credential is sent as `userCredential` in every `/api/chat` request. The server creates the provider model from that credential; no server-side API keys are used.
 

@@ -23,11 +23,10 @@ For notebook execution, connect a Jupyter server (supports Jupyter ≥ 2.0.0). F
 
 ## Links
 
-| | |
+| Description | Link |
 | --- | --- |
 | Website | [orion-agent.ai](https://www.orion-agent.ai) |
 | Hosted app | [app.orion-agent.ai](https://app.orion-agent.ai) |
-|
 
 ## Documentation
 

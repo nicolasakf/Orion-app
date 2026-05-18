@@ -1,4 +1,7 @@
-import { Bot, Brain, Minimize2, type LucideIcon } from "lucide-react";
+import { Bot, Brain, Bug, Minimize2, type LucideIcon } from "lucide-react";
+
+/** GitHub issues page for reporting bugs in Orion. */
+export const ORION_GITHUB_ISSUES_URL = "https://github.com/nicolasakf/Orion-app/issues/new";
 
 /** A slash command available in the chat textbox. */
 export interface SlashCommand {
@@ -12,6 +15,11 @@ export interface SlashCommand {
   icon: LucideIcon;
   /** Category — used to group commands in the palette. */
   category?: "builtin" | "subagent" | "skill";
+  /**
+   * Jupyter-relative path of the SKILL.md / subagent notebook opened when the user
+   * invokes “edit definition” from the slash palette (optional).
+   */
+  definitionPath?: string;
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -22,6 +30,13 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     icon: Minimize2,
     category: "builtin",
   },
+  {
+    name: "report-bug",
+    label: "/report-bug",
+    description: "Open GitHub to report a bug in Orion",
+    icon: Bug,
+    category: "builtin",
+  },
 ];
 
 /**
@@ -29,7 +44,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
  * Each skill is invoked as `/<name>`.
  */
 export function buildSkillSlashCommands(
-  skills: Array<{ name: string; description?: string }>
+  skills: Array<{ name: string; description?: string; location?: string }>
 ): SlashCommand[] {
   return skills.map((skill) => ({
     name: `skill:${skill.name}`,
@@ -37,6 +52,7 @@ export function buildSkillSlashCommands(
     description: skill.description ?? "",
     icon: Brain,
     category: "skill" as const,
+    ...(skill.location ? { definitionPath: skill.location } : {}),
   }));
 }
 
@@ -45,7 +61,7 @@ export function buildSkillSlashCommands(
  * Each subagent is invoked as `/<name>` and then translated to a delegate call.
  */
 export function buildSubagentSlashCommands(
-  subagents: Array<{ name: string; label?: string; description?: string; options?: unknown }>
+  subagents: Array<{ name: string; label?: string; description?: string; options?: unknown; location?: string }>
 ): SlashCommand[] {
   return subagents.map((subagent) => ({
     name: `subagent:${subagent.name}`,
@@ -53,5 +69,6 @@ export function buildSubagentSlashCommands(
     description: subagent.description ?? subagent.label ?? "",
     icon: Bot,
     category: "subagent" as const,
+    ...(subagent.location ? { definitionPath: subagent.location } : {}),
   }));
 }

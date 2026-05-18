@@ -36,6 +36,10 @@ Cells 2 and 3 may optionally start with a markdown heading such as `# Descriptio
 
 Cells after the third cell may be code or markdown. They are copied into a temporary run notebook whenever the sub-agent is invoked. The sub-agent can connect to that tmp copy, run cells, edit cells, inspect outputs, and use the notebook as its working scratchpad.
 
+Treat the beginning of the runnable workflow as the sub-agent's local tool surface. The first workflow code cells after the system prompt should define small, named functions that perform the sub-agent's repeatable operations. These functions should be documented, typed where practical, deterministic when possible, and safe to call repeatedly. Design them like tools the sub-agent can invoke from later cells instead of burying important logic inside prose or one-off snippets.
+
+After the function definitions, include context-specific examples that show how the sub-agent should call those functions for realistic inputs and what shape of output to expect. Examples may be markdown walkthroughs, code cells with sample calls, or lightweight validation cells, but they should teach the future sub-agent how to use its local functions in the context it was created for.
+
 ## Optional notebook metadata
 
 Sub-agents may declare Orion runtime options in notebook metadata at `metadata.orion.subagent`.
@@ -71,11 +75,14 @@ Use `"disable-model-invocation": true` for specialized agents that should only r
 3. Create **`.agents/subagents/<name>.agent.ipynb`** by default. Use **`.orion/subagents/<name>.agent.ipynb`** only for an Orion-specific override of the same id. For user-level sub-agents only when asked, use the same filenames under the Jupyter root.
 4. Write cell 1 as a short H1 label.
 5. Write cell 2 as a third-person description that matches skill descriptions: what the sub-agent does, then explicit **when to use** triggers (e.g. “Use when …” with user-intent phrases the parent can match).
-6. Write cell 3 as a focused system prompt that defines role, goals, safety constraints, expected final response, and what success looks like.
-7. Use later markdown and code cells for reusable workflow material: checklists, templates, bootstrap code, validation code, examples, or scratch cells.
-8. Add `metadata.orion.subagent` only when the user needs model pinning or slash-only invocation. If you are editing metadata through notebook tools rather than creating the raw notebook JSON, load `orion-metadata` and use `edit_orion_metadata`.
-9. Keep the reusable source notebook clean. Do not store secrets, credentials, one-off user data, or runtime outputs that should only exist in tmp copies.
-10. Tell the user the saved path and mention that a reconnect or reload may be needed if the slash command does not appear immediately.
+6. Write cell 3 as a focused system prompt that defines role, goals, safety constraints, expected final response, and what success looks like. Mention the local functions the sub-agent should treat as its notebook tools and which cells to run first.
+7. Start the runnable workflow with function-definition code cells. These functions should encapsulate reusable actions, parsing, validation, formatting, or domain calculations the sub-agent will need.
+8. Follow those functions with examples of how to use them in the sub-agent's intended context, including realistic sample inputs and expected output shapes.
+9. Use later markdown and code cells for reusable workflow material: checklists, templates, bootstrap code, validation code, examples, or scratch cells.
+10. When function behavior is non-trivial, use ephemeral code-running tools such as `execute_code` or an equivalent scratch execution environment to test the functions before delivering the sub-agent. Keep those test runs outside the reusable source notebook unless the cells are intentional examples or validation cells.
+11. Add `metadata.orion.subagent` only when the user needs model pinning or slash-only invocation. If you are editing metadata through notebook tools rather than creating the raw notebook JSON, load `orion-metadata` and use `edit_orion_metadata`.
+12. Keep the reusable source notebook clean. Do not store secrets, credentials, one-off user data, or runtime outputs that should only exist in tmp copies.
+13. Tell the user the saved path, note any function tests or validation performed, and mention that a reconnect or reload may be needed if the slash command does not appear immediately.
 
 ## Notebook creation notes
 
@@ -91,7 +98,8 @@ Use valid nbformat JSON:
 
 - What the sub-agent is responsible for.
 - What inputs it should expect from the parent agent.
-- Which notebook cells it should run or modify first.
+- Which notebook cells it should run or modify first, especially the initial local function/tool cells.
+- Which local functions are available, when to call them, and what output shapes they return.
 - What files, outputs, or notebook state it may create.
 - What it must not do, especially around secrets and destructive actions.
 - The exact shape of the final summary returned to the parent.
@@ -102,3 +110,5 @@ Use valid nbformat JSON:
 - Creating files under `*/subagents/tmp`.
 - Invalid filenames that break slash-command ids.
 - Missing H1 label or non-markdown early cells.
+- Placing core workflow logic only in prose or scattered snippets instead of defining reusable functions near the beginning.
+- Shipping untested non-trivial function definitions when an ephemeral code runner could validate them quickly.

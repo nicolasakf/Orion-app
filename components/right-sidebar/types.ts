@@ -1,11 +1,12 @@
 import type { NotebookType } from "@/lib/types";
+import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
 
 export type InteractionMode = "Agent" | "Ask" | "Edit";
 
 export interface LLM {
   value: string;
   label: string;
-  provider: "google" | "openai" | "anthropic" | "xai";
+  provider: SupportedProvider;
   inputPrice?: number;
   outputPrice?: number;
   icon?: React.ComponentType<{ className?: string }>;
@@ -45,11 +46,17 @@ export interface XAIModelSettings {
   // reserved
 }
 
+/** Placeholder for future local-provider settings */
+export interface LocalModelSettings {
+  // reserved
+}
+
 export type ModelSettings =
   | OpenAIModelSettings
   | AnthropicModelSettings
   | GoogleModelSettings
-  | XAIModelSettings;
+  | XAIModelSettings
+  | LocalModelSettings;
 
 /** Map of modelId → provider-specific settings */
 export type ModelSettingsMap = Record<string, ModelSettings>;

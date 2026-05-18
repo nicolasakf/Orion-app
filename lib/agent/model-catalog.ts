@@ -21,6 +21,38 @@ const CATALOG_CREATED_AT = "2026-05-17T00:00:00.000Z";
 
 export const MODEL_CATALOG: ModelCatalogEntry[] = [
   {
+    model_id: "ollama-local",
+    label: "Ollama Local Model",
+    provider_id: "ollama",
+    input_price_per_1m: 0,
+    output_price_per_1m: 0,
+    cached_price_per_1m: null,
+    context_window: 32768,
+    max_output_tokens: null,
+    long_context_threshold: null,
+    long_context_input_price_per_1m: null,
+    long_context_output_price_per_1m: null,
+    client_avail: true,
+    pinned_by_default: false,
+    created_at: CATALOG_CREATED_AT,
+  },
+  {
+    model_id: "lmstudio-local",
+    label: "LM Studio Local Model",
+    provider_id: "lmstudio",
+    input_price_per_1m: 0,
+    output_price_per_1m: 0,
+    cached_price_per_1m: null,
+    context_window: 32768,
+    max_output_tokens: null,
+    long_context_threshold: null,
+    long_context_input_price_per_1m: null,
+    long_context_output_price_per_1m: null,
+    client_avail: true,
+    pinned_by_default: false,
+    created_at: CATALOG_CREATED_AT,
+  },
+  {
     model_id: "gpt-5.5",
     label: "GPT-5.5",
     provider_id: "openai",
@@ -673,5 +705,12 @@ export function getModelCatalogEntry(
 }
 
 export function isKnownProvider(provider: string): provider is SupportedProvider {
-  return provider === "openai" || provider === "anthropic" || provider === "google" || provider === "xai";
+  return (
+    provider === "openai" ||
+    provider === "anthropic" ||
+    provider === "google" ||
+    provider === "xai" ||
+    provider === "ollama" ||
+    provider === "lmstudio"
+  );
 }

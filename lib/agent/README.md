@@ -18,7 +18,7 @@ This document summarizes Orion's agent architecture across the UI, `/api/chat`, 
 
 1. `RightSidebar` sends the current messages, selected provider/model, local model settings, workspace context, and a user-supplied credential to `/api/chat`.
 2. `/api/chat` validates the provider/model against `MODEL_CATALOG`.
-3. `/api/chat` rejects requests without a usable BYOK API key or ChatGPT OAuth credential.
+3. `/api/chat` rejects requests without a usable BYOK API key, ChatGPT OAuth credential, or local endpoint configuration.
 4. `ModelGateway` creates the provider model instance from that request-scoped credential.
 5. The server injects agent context and streams model output back to the browser.
 
@@ -39,7 +39,7 @@ The browser receives pending tool calls through `useChat`; `RightSidebar` dispat
 ## Skills And Sub-Agents
 
 - Skills are markdown files discovered from the configured skill locations and injected into the prompt only when invoked.
-- Sub-agents are `.agent.ipynb` notebooks with the required name, description, and system-prompt cells. Delegation runs through the same BYOK credential path as the parent chat.
+- Sub-agents are `.agent.ipynb` notebooks with the required name, description, and system-prompt cells. Delegation runs through the same request-scoped credential path as the parent chat.
 
 ## Failure Paths
 

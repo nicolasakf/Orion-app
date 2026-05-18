@@ -8,8 +8,8 @@ import {
   DefaultChatTransport,
   lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
-import { OpenAI, Claude, Gemini, Grok } from "@lobehub/icons";
-import { Bot, ChevronLeft } from "lucide-react";
+import { OpenAI, Claude, Gemini, Grok, Ollama, LmStudio } from "@lobehub/icons";
+import { Bot, ChevronLeft, FileText } from "lucide-react";
 
 import { toast } from "sonner";
 import {
@@ -68,7 +68,12 @@ import { ChatToolbar } from "./chat-toolbar";
 import { ChatBody } from "./chat-body";
 import { ChatTextbox, type ReferenceTab } from "./chat-textbox";
 import { useContextEstimate } from "./context-usage-pill";
-import { SLASH_COMMANDS, buildSkillSlashCommands, buildSubagentSlashCommands } from "./slash-commands";
+import {
+  ORION_GITHUB_ISSUES_URL,
+  SLASH_COMMANDS,
+  buildSkillSlashCommands,
+  buildSubagentSlashCommands,
+} from "./slash-commands";
 import { resolveSubagentExecutionModel } from "./subagent-model-resolution";
 import type { EditingState, InteractionMode, LLM, ModelSettings, ModelSettingsMap } from "./types";
 import type { SettingsTab } from "@/components/settings-dialog/types";
@@ -362,12 +367,14 @@ export function RightSidebar({
   const compactionInFlightRef = useRef(false);
 
   /** Map provider ID to its icon component */
-  const getProviderIcon = (provider: "google" | "openai" | "anthropic" | "xai") => {
+  const getProviderIcon = (provider: SupportedProvider) => {
     switch (provider) {
       case "openai": return OpenAI;
       case "anthropic": return Claude;
       case "google": return Gemini;
       case "xai": return Grok;
+      case "ollama": return Ollama;
+      case "lmstudio": return LmStudio;
       default: return undefined;
     }
   };
@@ -390,7 +397,7 @@ export function RightSidebar({
         setModelRows(data);
 
         const mappedModels: LLM[] = data.map((m) => {
-          const provider = m.provider_id as "google" | "openai" | "anthropic" | "xai";
+          const provider = m.provider_id;
           return {
             value: m.model_id,
             label: m.label,
@@ -680,6 +687,15 @@ export function RightSidebar({
   const modelInfo = getModel(selectedModel);
 
   const handleOpenSubagentReport = useCallback(
+    (path: string) => {
+      if (!path) return;
+      onOpenFile?.({ name: fileNameFromPath(path), path });
+    },
+    [onOpenFile]
+  );
+
+  /** Opens a skill/subagent Jupyter definition path selected from the slash command palette. */
+  const handleOpenSlashDefinition = useCallback(
     (path: string) => {
       if (!path) return;
       onOpenFile?.({ name: fileNameFromPath(path), path });
@@ -1715,6 +1731,12 @@ export function RightSidebar({
                 createTmpNotebookCopy: assistant.createTmpSubagentNotebookCopy,
                 abortSignal: abortController.signal,
                 userCredential: effectiveUserCredential,
+                onTmpNotebookPath: (tmpNotebookPath) => {
+                  writeSubagentSession({
+                    status: "running",
+                    tmpNotebookPath,
+                  });
+                },
                 onMessagesChange: (nextMessages) => {
                   latestSubagentMessages = nextMessages;
                   writeSubagentSession({
@@ -2374,6 +2396,12 @@ export function RightSidebar({
       return;
     }
 
+    if (activeSlashCommand === "report-bug") {
+      setInput("");
+      window.open(ORION_GITHUB_ISSUES_URL, "_blank", "noopener,noreferrer");
+      return;
+    }
+
     // Handle subagent slash commands: /<name> <message>
     // Strip the command prefix and enforce delegation server-side via hidden metadata.
     if (activeSlashCommand?.startsWith("subagent:")) {
@@ -2810,6 +2838,19 @@ export function RightSidebar({
                   <span className="truncate">{activeSubagentSession.label}</span>
                 </div>
               </div>
+              {activeSubagentSession.tmpNotebookPath && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto h-8 shrink-0 gap-1.5 px-2"
+                  onClick={() => handleOpenSubagentReport(activeSubagentSession.tmpNotebookPath!)}
+                  aria-label="Open sub-agent tmp file"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Open tmp file</span>
+                </Button>
+              )}
             </div>
           </div>
 
@@ -2850,6 +2891,7 @@ export function RightSidebar({
             hasMessages={activeSubagentSession.messages.length > 0}
             readOnly
             readOnlyPlaceholder="Sub-agent chat is read-only"
+            onOpenSlashDefinition={handleOpenSlashDefinition}
           />
         </>
       ) : (
@@ -2918,6 +2960,7 @@ export function RightSidebar({
             }
             activeSlashCommand={activeSlashCommand}
             extraSlashCommands={[...subagentSlashCommands, ...skillSlashCommands]}
+            onOpenSlashDefinition={handleOpenSlashDefinition}
             hasMessages={messages.length > 0}
             contextEstimate={contextEstimate}
             onCompact={runCompaction}

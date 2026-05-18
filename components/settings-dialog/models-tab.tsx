@@ -28,9 +28,10 @@ import { AutoRunConfirmDialog } from "@/components/common/auto-run-confirm-dialo
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
 import { toast } from "sonner";
-import { OpenAI, Claude, Gemini, Grok } from "@lobehub/icons";
+import { OpenAI, Claude, Gemini, Grok, Ollama, LmStudio } from "@lobehub/icons";
+import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
 
-type ProviderId = "google" | "openai" | "anthropic" | "xai";
+type ProviderId = SupportedProvider;
 
 interface ModelRow {
   model_id: string;
@@ -50,6 +51,10 @@ function getProviderIcon(provider: ProviderId) {
       return Gemini;
     case "xai":
       return Grok;
+    case "ollama":
+      return Ollama;
+    case "lmstudio":
+      return LmStudio;
     default:
       return undefined;
   }
@@ -61,6 +66,8 @@ function getProviderDisplayName(providerId: string): string {
     openai: "OpenAI",
     anthropic: "Anthropic",
     xai: "xAI",
+    ollama: "Ollama",
+    lmstudio: "LM Studio",
   };
   return names[providerId] ?? providerId;
 }

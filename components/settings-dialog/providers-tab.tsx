@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useState, useCallback, useEffect, useRef } from "react";
 import { Eye, EyeOff, Check, X, Loader2, ExternalLink, Copy, CheckCheck } from "lucide-react";
-import { OpenAI, Anthropic, Google, XAI } from "@lobehub/icons";
+import { OpenAI, Anthropic, Google, XAI, Ollama, LmStudio } from "@lobehub/icons";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,9 +21,13 @@ interface ProviderMeta {
   id: SupportedProvider;
   name: string;
   icon: React.ElementType;
+  credentialKind: "api_key" | "local_endpoint";
   keyPlaceholder: string;
   keyHint: string;
   supportsOAuth: boolean;
+  defaultBaseUrl?: string;
+  defaultModelId?: string;
+  endpointHint?: string;
 }
 
 const PROVIDERS: ProviderMeta[] = [
@@ -31,6 +35,7 @@ const PROVIDERS: ProviderMeta[] = [
     id: "openai",
     name: "OpenAI",
     icon: OpenAI,
+    credentialKind: "api_key",
     keyPlaceholder: "sk-...",
     keyHint: "Starts with sk-",
     supportsOAuth: true,
@@ -39,6 +44,7 @@ const PROVIDERS: ProviderMeta[] = [
     id: "anthropic",
     name: "Anthropic",
     icon: Anthropic,
+    credentialKind: "api_key",
     keyPlaceholder: "sk-ant-...",
     keyHint: "Starts with sk-ant-",
     supportsOAuth: false,
@@ -47,6 +53,7 @@ const PROVIDERS: ProviderMeta[] = [
     id: "google",
     name: "Google",
     icon: Google,
+    credentialKind: "api_key",
     keyPlaceholder: "AIza...",
     keyHint: "Google AI Studio API key",
     supportsOAuth: false,
@@ -55,11 +62,39 @@ const PROVIDERS: ProviderMeta[] = [
     id: "xai",
     name: "xAI",
     icon: XAI,
+    credentialKind: "api_key",
     keyPlaceholder: "xai-...",
     keyHint: "Starts with xai-",
     supportsOAuth: false,
   },
+  {
+    id: "ollama",
+    name: "Ollama",
+    icon: Ollama,
+    credentialKind: "local_endpoint",
+    keyPlaceholder: "Optional bearer token",
+    keyHint: "Optional API key",
+    supportsOAuth: false,
+    defaultBaseUrl: "http://localhost:11434/v1",
+    defaultModelId: "llama3.2",
+    endpointHint: "Use the model name from ollama list.",
+  },
+  {
+    id: "lmstudio",
+    name: "LM Studio",
+    icon: LmStudio,
+    credentialKind: "local_endpoint",
+    keyPlaceholder: "Optional bearer token",
+    keyHint: "Optional API key",
+    supportsOAuth: false,
+    defaultBaseUrl: "http://localhost:1234/v1",
+    defaultModelId: "local-model",
+    endpointHint: "Use the model ID returned by LM Studio's local server.",
+  },
 ];
+
+const REMOTE_PROVIDERS = PROVIDERS.filter((p) => p.credentialKind === "api_key");
+const LOCAL_PROVIDERS = PROVIDERS.filter((p) => p.credentialKind === "local_endpoint");
 
 // ── Helper: mask an API key for display ──────────────────────────────────────
 
@@ -275,19 +310,80 @@ interface ProviderRowProps {
   provider: ProviderMeta;
   credential: ProviderCredential | undefined;
   onSaveKey: (provider: SupportedProvider, key: string) => Promise<void>;
+  onSaveLocalEndpoint: (
+    provider: SupportedProvider,
+    endpoint: { baseUrl: string; modelId: string; apiKey?: string }
+  ) => Promise<void>;
   onRemove: (provider: SupportedProvider) => void;
   onSaveOAuthCredential: (provider: SupportedProvider, credential: ProviderCredential) => void;
+}
+
+interface ProviderGroupSectionProps {
+  title: string;
+  description?: string;
+  providers: ProviderMeta[];
+  credentials: Partial<Record<SupportedProvider, ProviderCredential>>;
+  onSaveKey: (provider: SupportedProvider, key: string) => Promise<void>;
+  onSaveLocalEndpoint: (
+    provider: SupportedProvider,
+    endpoint: { baseUrl: string; modelId: string; apiKey?: string }
+  ) => Promise<void>;
+  onRemove: (provider: SupportedProvider) => void;
+  onSaveOAuthCredential: (provider: SupportedProvider, credential: ProviderCredential) => void;
+}
+
+/** Renders a heading plus provider rows with separators between rows. */
+function ProviderGroupSection({
+  title,
+  description,
+  providers,
+  credentials,
+  onSaveKey,
+  onSaveLocalEndpoint,
+  onRemove,
+  onSaveOAuthCredential,
+}: ProviderGroupSectionProps) {
+  if (providers.length === 0) return null;
+
+  return (
+    <section className="space-y-3">
+      <div className="space-y-1">
+        <h3 className="text-sm font-medium">{title}</h3>
+        {description ? (
+          <p className="text-xs text-muted-foreground">{description}</p>
+        ) : null}
+      </div>
+      <div className="space-y-6">
+        {providers.map((provider, idx) => (
+          <React.Fragment key={provider.id}>
+            <ProviderRow
+              provider={provider}
+              credential={credentials[provider.id]}
+              onSaveKey={onSaveKey}
+              onSaveLocalEndpoint={onSaveLocalEndpoint}
+              onRemove={onRemove}
+              onSaveOAuthCredential={onSaveOAuthCredential}
+            />
+            {idx < providers.length - 1 && <Separator />}
+          </React.Fragment>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function ProviderRow({
   provider,
   credential,
   onSaveKey,
+  onSaveLocalEndpoint,
   onRemove,
   onSaveOAuthCredential,
 }: ProviderRowProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [keyInput, setKeyInput] = useState("");
+  const [baseUrlInput, setBaseUrlInput] = useState("");
+  const [modelIdInput, setModelIdInput] = useState("");
   const [showKey, setShowKey] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [showDeviceFlow, setShowDeviceFlow] = useState(false);
@@ -295,8 +391,38 @@ function ProviderRow({
   const Icon = provider.icon;
   const hasApiKey = credential?.type === "api_key";
   const hasOAuth = credential?.type === "chatgpt_oauth";
+  const hasLocalEndpoint = credential?.type === "local_endpoint";
 
   const handleSave = useCallback(async () => {
+    if (provider.credentialKind === "local_endpoint") {
+      const baseUrl = baseUrlInput.trim();
+      const modelId = modelIdInput.trim();
+      const apiKey = keyInput.trim();
+
+      if (!baseUrl) {
+        toast.error("Please enter a base URL.");
+        return;
+      }
+      if (!modelId) {
+        toast.error("Please enter a model ID.");
+        return;
+      }
+
+      setIsSaving(true);
+      try {
+        await onSaveLocalEndpoint(provider.id, {
+          baseUrl,
+          modelId,
+          ...(apiKey && { apiKey }),
+        });
+        setIsEditing(false);
+        setKeyInput("");
+      } finally {
+        setIsSaving(false);
+      }
+      return;
+    }
+
     const trimmed = keyInput.trim();
     if (!trimmed) {
       toast.error("Please enter an API key.");
@@ -310,11 +436,21 @@ function ProviderRow({
     } finally {
       setIsSaving(false);
     }
-  }, [keyInput, onSaveKey, provider.id]);
+  }, [
+    baseUrlInput,
+    keyInput,
+    modelIdInput,
+    onSaveKey,
+    onSaveLocalEndpoint,
+    provider.credentialKind,
+    provider.id,
+  ]);
 
   const handleCancel = useCallback(() => {
     setIsEditing(false);
     setKeyInput("");
+    setBaseUrlInput("");
+    setModelIdInput("");
   }, []);
 
   const handleKeyDown = useCallback(
@@ -353,9 +489,14 @@ function ProviderRow({
                   ChatGPT
                 </Badge>
               )}
+              {hasLocalEndpoint && (
+                <Badge variant="secondary" className="text-xs shrink-0">
+                  Local
+                </Badge>
+              )}
               {!credential && (
                 <Badge variant="outline" className="text-xs shrink-0 text-muted-foreground">
-                  Platform
+                  {provider.credentialKind === "local_endpoint" ? "Not configured" : "Platform"}
                 </Badge>
               )}
             </div>
@@ -369,33 +510,53 @@ function ProviderRow({
                 Connected via ChatGPT subscription
               </p>
             )}
+            {hasLocalEndpoint && credential.type === "local_endpoint" && (
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {credential.modelId} at {credential.baseUrl}
+              </p>
+            )}
           </div>
         </div>
 
         {/* Actions */}
         <div className="flex items-center gap-2 shrink-0">
           {!credential && !isEditing && !showDeviceFlow && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setIsEditing(true)}
-              className="text-xs"
-            >
-              Add Key
-            </Button>
-          )}
-          {hasApiKey && !isEditing && (
-            <>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => {
                   setKeyInput("");
+                  setBaseUrlInput(provider.defaultBaseUrl ?? "");
+                  setModelIdInput(provider.defaultModelId ?? "");
                   setIsEditing(true);
                 }}
                 className="text-xs"
               >
-                Replace
+                {provider.credentialKind === "local_endpoint" ? "Configure" : "Add Key"}
+              </Button>
+          )}
+          {(hasApiKey || hasLocalEndpoint) && !isEditing && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setKeyInput(hasApiKey ? "" : credential?.apiKey ?? "");
+                  setBaseUrlInput(
+                    hasLocalEndpoint
+                      ? credential.baseUrl
+                      : provider.defaultBaseUrl ?? ""
+                  );
+                  setModelIdInput(
+                    hasLocalEndpoint
+                      ? credential.modelId
+                      : provider.defaultModelId ?? ""
+                  );
+                  setIsEditing(true);
+                }}
+                className="text-xs"
+              >
+                {hasLocalEndpoint ? "Edit" : "Replace"}
               </Button>
               <Button
                 variant="ghost"
@@ -423,43 +584,114 @@ function ProviderRow({
       {/* Inline key input */}
       {isEditing && (
         <div className="space-y-2 pl-8">
-          <Label className="text-xs text-muted-foreground">{provider.keyHint}</Label>
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Input
-                type={showKey ? "text" : "password"}
-                value={keyInput}
-                onChange={(e) => setKeyInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={provider.keyPlaceholder}
-                className="pr-9 font-mono text-sm"
-                autoFocus
-              />
-              <button
-                type="button"
-                onClick={() => setShowKey((v) => !v)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                tabIndex={-1}
-              >
-                {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-              </button>
+          {provider.credentialKind === "local_endpoint" ? (
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Base URL</Label>
+                <Input
+                  value={baseUrlInput}
+                  onChange={(e) => setBaseUrlInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={provider.defaultBaseUrl}
+                  className="font-mono text-sm"
+                  autoFocus
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">Model ID</Label>
+                <Input
+                  value={modelIdInput}
+                  onChange={(e) => setModelIdInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={provider.defaultModelId}
+                  className="font-mono text-sm"
+                />
+                {provider.endpointHint && (
+                  <p className="text-xs text-muted-foreground">
+                    {provider.endpointHint}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs text-muted-foreground">{provider.keyHint}</Label>
+                <div className="relative">
+                  <Input
+                    type={showKey ? "text" : "password"}
+                    value={keyInput}
+                    onChange={(e) => setKeyInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder={provider.keyPlaceholder}
+                    className="pr-9 font-mono text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKey((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    tabIndex={-1}
+                  >
+                    {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={() => void handleSave()}
+                  disabled={isSaving || !baseUrlInput.trim() || !modelIdInput.trim()}
+                >
+                  {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleCancel}
+                  disabled={isSaving}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
             </div>
-            <Button
-              size="sm"
-              onClick={() => void handleSave()}
-              disabled={isSaving || !keyInput.trim()}
-            >
-              {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleCancel}
-              disabled={isSaving}
-            >
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+          ) : (
+            <>
+              <Label className="text-xs text-muted-foreground">{provider.keyHint}</Label>
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Input
+                    type={showKey ? "text" : "password"}
+                    value={keyInput}
+                    onChange={(e) => setKeyInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder={provider.keyPlaceholder}
+                    className="pr-9 font-mono text-sm"
+                    autoFocus
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKey((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    tabIndex={-1}
+                  >
+                    {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  </button>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => void handleSave()}
+                  disabled={isSaving || !keyInput.trim()}
+                >
+                  {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleCancel}
+                  disabled={isSaving}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -541,6 +773,58 @@ export function ProvidersTab() {
     [setUserSettings]
   );
 
+  /** Save and validate a local OpenAI-compatible provider endpoint. */
+  const handleSaveLocalEndpoint = useCallback(
+    async (
+      provider: SupportedProvider,
+      endpoint: { baseUrl: string; modelId: string; apiKey?: string }
+    ) => {
+      let validationFailed = false;
+      try {
+        const res = await fetch("/api/credentials/validate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider,
+            baseUrl: endpoint.baseUrl,
+            modelId: endpoint.modelId,
+            apiKey: endpoint.apiKey,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json() as { valid: boolean; error?: string };
+          if (!data.valid) {
+            toast.error(`Local endpoint unavailable: ${data.error ?? "Endpoint rejected the request."}`);
+            validationFailed = true;
+          }
+        }
+      } catch {
+        // If the validation route itself is unavailable, chat will surface hard failures.
+      }
+
+      if (validationFailed) return;
+
+      await setUserSettings((current) => ({
+        ...current,
+        providers: {
+          ...current.providers,
+          credentials: {
+            ...current.providers?.credentials,
+            [provider]: {
+              type: "local_endpoint" as const,
+              baseUrl: endpoint.baseUrl,
+              modelId: endpoint.modelId,
+              ...(endpoint.apiKey && { apiKey: endpoint.apiKey }),
+            },
+          },
+        },
+      }));
+
+      toast.success(`${provider} local endpoint saved.`);
+    },
+    [setUserSettings]
+  );
+
   /** Remove a credential for a provider. */
   const handleRemove = useCallback(
     (provider: SupportedProvider) => {
@@ -578,26 +862,31 @@ export function ProvidersTab() {
         <h2 className="text-lg font-semibold">Providers</h2>
       </div>
 
-      {/* Info callout */}
-      <div className="corner-squircle rounded-md border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
-        When using your own keys, requests are billed directly to your provider account.
-        Your keys are stored in this browser only and are never saved on our servers.
-      </div>
-
-      {/* Provider rows */}
-      <div className="space-y-6">
-        {PROVIDERS.map((provider, idx) => (
-          <React.Fragment key={provider.id}>
-            <ProviderRow
-              provider={provider}
-              credential={credentials[provider.id]}
-              onSaveKey={handleSaveKey}
-              onRemove={handleRemove}
-              onSaveOAuthCredential={handleSaveOAuthCredential}
-            />
-            {idx < PROVIDERS.length - 1 && <Separator />}
-          </React.Fragment>
-        ))}
+      {/* Remote vs local provider groups */}
+      <div className="space-y-10">
+        <ProviderGroupSection
+          title="Remote"
+          description="Cloud APIs and platform credentials for hosted models."
+          providers={REMOTE_PROVIDERS}
+          credentials={credentials}
+          onSaveKey={handleSaveKey}
+          onSaveLocalEndpoint={handleSaveLocalEndpoint}
+          onRemove={handleRemove}
+          onSaveOAuthCredential={handleSaveOAuthCredential}
+        />
+        {REMOTE_PROVIDERS.length > 0 && LOCAL_PROVIDERS.length > 0 ? (
+          <Separator />
+        ) : null}
+        <ProviderGroupSection
+          title="Local"
+          description="OpenAI-compatible endpoints on your machine (Ollama, LM Studio, etc.)."
+          providers={LOCAL_PROVIDERS}
+          credentials={credentials}
+          onSaveKey={handleSaveKey}
+          onSaveLocalEndpoint={handleSaveLocalEndpoint}
+          onRemove={handleRemove}
+          onSaveOAuthCredential={handleSaveOAuthCredential}
+        />
       </div>
     </div>
   );

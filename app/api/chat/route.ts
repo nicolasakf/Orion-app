@@ -21,6 +21,12 @@ const UserCredentialSchema = z.discriminatedUnion("type", [
     expiresAt: z.number(),
     accountId: z.string().optional(),
   }),
+  z.object({
+    type: z.literal("local_endpoint"),
+    baseUrl: z.string().min(1),
+    modelId: z.string().min(1),
+    apiKey: z.string().optional(),
+  }),
 ]);
 import {
   buildAgentSystemPrompt,
@@ -170,11 +176,18 @@ export async function POST(req: Request) {
     const cred = parsed.data;
     if (cred.type === "api_key") {
       resolvedCredential = { type: "byok", apiKey: cred.apiKey };
-    } else {
+    } else if (cred.type === "chatgpt_oauth") {
       resolvedCredential = {
         type: "chatgpt_oauth",
         accessToken: cred.accessToken,
         accountId: cred.accountId,
+      };
+    } else {
+      resolvedCredential = {
+        type: "local_endpoint",
+        baseUrl: cred.baseUrl,
+        modelId: cred.modelId,
+        apiKey: cred.apiKey,
       };
     }
   }

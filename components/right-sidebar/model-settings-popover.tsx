@@ -20,6 +20,7 @@ import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
 import type {
   ModelSettings,
   OpenAIModelSettings,
@@ -27,7 +28,7 @@ import type {
 } from "./types";
 
 export interface ModelSettingsPopoverProps {
-  provider: "openai" | "anthropic" | "google" | "xai";
+  provider: SupportedProvider;
   settings: ModelSettings;
   onSettingsChange: (settings: ModelSettings) => void;
 }

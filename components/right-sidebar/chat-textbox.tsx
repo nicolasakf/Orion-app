@@ -16,6 +16,7 @@ import {
   Bot,
   MessageCircle,
   PenLine,
+  Pencil,
   Boxes,
 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -50,6 +51,7 @@ import { ModelSettingsPopover } from "./model-settings-popover";
 import type { EditingState, InteractionMode, LLM, ModelSettings } from "./types";
 import { SLASH_COMMANDS, type SlashCommand } from "./slash-commands";
 import { ContextUsagePill } from "./context-usage-pill";
+import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
 import type { TokenEstimate } from "@/lib/agent/token-budget";
 import {
   getReferenceTypeLabel,
@@ -125,7 +127,7 @@ export interface ChatTextboxProps {
   /** Called when the user reorders pinned models. */
   onReorderPinned?: (newOrder: string[]) => void;
   /** Provider of the currently selected model */
-  selectedModelProvider?: "openai" | "anthropic" | "google" | "xai";
+  selectedModelProvider?: SupportedProvider;
   /** Per-model settings for the currently selected model */
   modelSettings: ModelSettings;
   /** Called when the user changes a model setting */
@@ -134,6 +136,8 @@ export interface ChatTextboxProps {
   activeSlashCommand?: string | null;
   /** Additional slash commands to include in the typeahead (e.g. skill commands). */
   extraSlashCommands?: SlashCommand[];
+  /** Opens a Jupyter path for slash entries that expose {@link SlashCommand.definitionPath} (skills/subagents). */
+  onOpenSlashDefinition?: (path: string) => void;
   /** Whether the active chat has messages; keeps the context pill hidden for empty chats. */
   hasMessages?: boolean;
   /** Precomputed context usage estimate for the active chat. */
@@ -197,6 +201,7 @@ export function ChatTextbox({
   onModelSettingsChange,
   activeSlashCommand,
   extraSlashCommands = [],
+  onOpenSlashDefinition,
   hasMessages = false,
   contextEstimate = null,
   onCompact,
@@ -362,7 +367,7 @@ export function ChatTextbox({
   const isReferenceTypeaheadOpen = isMentioning;
 
   /** Refs for slash list rows so keyboard navigation can scroll the popover. */
-  const slashMatchItemRefs = React.useRef<Map<number, HTMLButtonElement>>(new Map());
+  const slashMatchItemRefs = React.useRef<Map<number, HTMLElement>>(new Map());
   const referenceMatchItemRefs = React.useRef<Map<number, HTMLButtonElement>>(new Map());
   /** Refs for mode rows so keyboard navigation mirrors the slash popover behavior. */
   const modeItemRefs = React.useRef<Map<number, HTMLButtonElement>>(new Map());
@@ -859,7 +864,7 @@ export function ChatTextbox({
               side="top"
               align="start"
               sideOffset={6}
-              className="relative overflow-visible w-auto min-w-[140px] max-w-[220px] p-1 border-border/50 shadow-sm"
+              className="relative overflow-visible w-auto min-w-[140px] max-w-[250px] p-1 border-border/50 shadow-sm"
               style={chatBoxFont}
               onOpenAutoFocus={(e) => e.preventDefault()}
               onCloseAutoFocus={(e) => e.preventDefault()}
@@ -1010,6 +1015,12 @@ export function ChatTextbox({
                             : "builtin";
                       const showGroupLabel = i === 0 || prevGroup !== group;
                       const Icon = cmd.icon;
+                      const definitionPath =
+                        cmd.definitionPath && cmd.definitionPath.length > 0
+                          ? cmd.definitionPath
+                          : undefined;
+                      const showDefinitionEdit =
+                        Boolean(definitionPath) && typeof onOpenSlashDefinition === "function";
                       return (
                         <React.Fragment key={cmd.name}>
                           {showGroupLabel && (
@@ -1027,27 +1038,54 @@ export function ChatTextbox({
                                   : "Skills"}
                             </div>
                           )}
-                          <button
-                            type="button"
+                          <div
                             ref={(el) => {
                               if (el) slashMatchItemRefs.current.set(i, el);
                               else slashMatchItemRefs.current.delete(i);
                             }}
-                            onMouseDown={(e) => {
-                              e.preventDefault();
-                              selectSlashCommand(cmd.label);
-                            }}
+                            role="presentation"
                             onMouseEnter={() => setHighlightedIndex(i)}
                             className={cn(
-                              "corner-squircle flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-inherit transition-colors",
+                              "group corner-squircle relative flex w-full min-w-0 items-stretch rounded-md transition-colors",
                               i === highlightedIndex
                                 ? "bg-muted text-foreground"
                                 : "text-muted-foreground hover:bg-muted/60"
                             )}
                           >
-                            <Icon className="h-3 w-3 shrink-0 opacity-60" />
-                            <span className="font-medium truncate">{cmd.label}</span>
-                          </button>
+                            <button
+                              type="button"
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                selectSlashCommand(cmd.label);
+                              }}
+                              className={cn(
+                                "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-inherit",
+                                showDefinitionEdit && "pr-7",
+                              )}
+                            >
+                              <Icon className="h-3 w-3 shrink-0 opacity-60" />
+                              <span className="font-medium truncate">{cmd.label}</span>
+                            </button>
+                            {showDefinitionEdit && definitionPath ? (
+                              <button
+                                type="button"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  onOpenSlashDefinition(definitionPath);
+                                }}
+                                className={cn(
+                                  "corner-squircle absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-inherit transition-opacity duration-150",
+                                  i === highlightedIndex
+                                    ? "pointer-events-auto opacity-70 hover:opacity-100"
+                                    : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-70 group-hover:hover:opacity-100",
+                                )}
+                                aria-label="Open definition in editor"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                            ) : null}
+                          </div>
                         </React.Fragment>
                       );
                     })}

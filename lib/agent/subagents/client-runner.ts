@@ -232,6 +232,7 @@ export async function runSubagent(options: RunSubagentOptions): Promise<RunSubag
   const tmpNotebookPath = reconnected
     ? reconnectTmpNotebookPath!
     : await options.createTmpNotebookCopy(def, runId);
+  options.onTmpNotebookPath?.(tmpNotebookPath);
   const promptPayload: SubagentPromptPayload = {
     name: def.name,
     label: def.label,
