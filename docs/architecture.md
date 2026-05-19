@@ -29,7 +29,7 @@ orion/
 │   ├── left-sidebar/
 │   │   ├── left-sidebar.tsx      # File tree, workspace picker, variables panel
 │   │   └── file-tree.tsx         # Recursive file navigator
-│   ├── settings-dialog/          # Settings tabs: Providers, Models, Appearance, Storage
+│   ├── settings-dialog/          # Settings tabs: Providers, Models, Appearance
 │   └── terminal/                 # Embedded xterm terminal panel
 │
 ├── lib/
@@ -59,7 +59,7 @@ orion/
 │   │   ├── parse-frontmatter.ts
 │   │   └── types.ts
 │   ├── chat/
-│   │   ├── chat-storage.ts       # IndexedDB persistence (bump DB_VERSION on schema change)
+│   │   ├── chat-storage.ts       # Client facade for local SQLite-backed chat persistence
 │   │   ├── chat-references.ts    # Cell/file reference metadata attached to messages
 │   │   └── compaction-client.ts  # Context-window compaction via /api/chat
 │   ├── notebook/
@@ -74,9 +74,9 @@ orion/
 │   │   ├── terminal-pool.ts      # Manages multiple terminal sessions
 │   │   └── system-commands/      # Glob, grep, open-file (used by agent tools)
 │   ├── settings/
-│   │   ├── schema.ts             # Zod schema for all settings (credentials, prefs, …)
+│   │   ├── schema.ts             # Zod schema for settings and workspace overrides
 │   │   ├── defaults.ts
-│   │   └── user-storage.ts       # localStorage-backed settings persistence
+│   │   └── user-storage.ts       # Client facade for local file settings + browser-only credentials
 │   └── credentials/
 │       └── chatgpt-oauth.ts      # ChatGPT OAuth device flow client
 │
@@ -132,7 +132,7 @@ Key invariant: **the server never executes tools**. `tool-schemas.ts` defines sc
 
 ## BYOK Credentials
 
-Three credential types are supported, all stored in browser `localStorage`:
+Three credential types are supported, all stored in browser-only storage:
 
 | Type | How to configure |
 |---|---|
@@ -146,11 +146,13 @@ The selected credential is sent as `userCredential` in every `/api/chat` request
 
 | Store | What | Location |
 |---|---|---|
-| IndexedDB | Chat history, messages, compaction summaries, subagent sessions | `lib/chat/chat-storage.ts` |
-| `localStorage` | Settings, credentials, pinned models, workspace prefs | `lib/settings/user-storage.ts` |
+| SQLite | Chat history, messages, compaction summaries, subagent sessions | `~/.orion/orion.db` via `lib/chat/chat-sqlite-storage.server.ts` |
+| JSON file | Non-secret user settings, pinned models, workspace prefs | `~/.orion/settings.json` via `lib/settings/user-file-storage.server.ts` |
+| Workspace JSON file | Workspace-level settings overrides | `<workspace>/.orion/settings.json` via Jupyter ContentsManager |
+| Browser-only storage | Provider credentials | `lib/settings/user-storage.ts` |
 | `localStorage` | Last Jupyter kernel config | `lib/kernel/kernel-storage.ts` |
 
-When changing the IndexedDB schema — stores, indexes, key paths, or the shape of persisted data — increment `DB_VERSION` in `lib/chat/chat-storage.ts`. Browsers refuse to open a database whose on-disk version exceeds the requested version.
+The React app still calls client-side storage facades, but durable user reads/writes go through private Next API routes so only the local server process accesses `~/.orion`. Workspace settings are read through the connected Jupyter server and override user-level settings.
 
 ## Jupyter Integration
 
@@ -202,7 +204,7 @@ When a sub-agent is invoked, `client-runner.ts` starts a nested chat loop — a 
 
 ## Context Compaction
 
-When the context window approaches its limit, `lib/chat/compaction-client.ts` triggers a compaction run: it sends the current message history to `/api/chat` with a summarization prompt, stores the resulting summary in IndexedDB alongside the chat, and replays only the summary + recent messages in subsequent turns.
+When the context window approaches its limit, `lib/chat/compaction-client.ts` triggers a compaction run: it sends the current message history to `/api/chat` with a summarization prompt, stores the resulting summary in SQLite alongside the chat, and replays only the summary + recent messages in subsequent turns.
 
 Compaction uses the same BYOK credential and model as the active chat session.
 
@@ -210,4 +212,4 @@ Compaction uses the same BYOK credential and model as the active chat session.
 
 All settings are defined in `lib/settings/schema.ts` as a Zod schema. The `useOrionSettings` hook provides typed read/write access to settings from any component. Settings are versioned (`SETTINGS_SCHEMA_VERSION`); migrations run in `lib/settings/migrations.ts`.
 
-Provider credentials live inside the settings object and are stored in `localStorage`. They are never sent to the server except as part of the `userCredential` field in `/api/chat` requests.
+User settings live in `~/.orion/settings.json`. Workspace settings overrides live in `<workspace>/.orion/settings.json` and override user settings. Provider credentials are merged into the in-memory settings object from browser-only storage; they are never written to settings files and are never sent to the server except as part of the `userCredential` field in `/api/chat` requests.

@@ -32,7 +32,7 @@ The browser receives pending tool calls through `useChat`; `RightSidebar` dispat
 
 ## Local State
 
-- Chat history is stored in IndexedDB through [`lib/chat/chat-storage.ts`](../chat/chat-storage.ts).
+- Chat history is stored in local SQLite (`~/.orion/orion.db`) through the chat API and [`lib/chat/chat-storage.ts`](../chat/chat-storage.ts) (client facade).
 - Provider credentials and model settings are stored locally through the settings system.
 - The static model catalog is the source of truth for model metadata, default pins, context windows, and provider ownership.
 

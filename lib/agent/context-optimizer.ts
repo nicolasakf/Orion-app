@@ -1,7 +1,7 @@
 /**
  * Always-on wire optimizer: stubs old tool-result text and strips old images
  * before every send. Non-destructive — only affects the wire payload, never
- * the stored IndexedDB history or the useChat message state.
+ * the persisted chat history or the useChat message state.
  */
 
 import type { UIMessage } from "ai";

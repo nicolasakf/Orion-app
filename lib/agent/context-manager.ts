@@ -2,7 +2,7 @@
  * Conversation compaction via a cheap side-channel LLM call.
  *
  * Non-destructive: the stored UIMessage array is never modified. Only the
- * CompactionSummary artifact is written to IndexedDB. The wire payload is
+ * CompactionSummary artifact is persisted via the chat API. The wire payload is
  * rebuilt on every send from the summary + recent turns by `buildWirePayload`.
  */
 
