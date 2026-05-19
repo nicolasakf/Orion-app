@@ -2591,9 +2591,9 @@ export default function Page() {
                 </div>
               </ResizablePanel>
 
-              <ResizableHandle />
+              <ResizableHandle className="bg-transparent border-none h-0 transition-all data-[panel-group-direction=vertical]:h-0" />
 
-              {/* Bottom Panel - Empty for now */}
+              {/* Bottom Panel - Terminal */}
               <ResizablePanel
                 ref={bottomPanelRef}
                 defaultSize={verticalPanelSizes[1]}

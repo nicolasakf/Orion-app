@@ -37,6 +37,12 @@ interface TerminalInfo {
   connection: JupyterTerminal.ITerminalConnection;
 }
 
+/** Matches the floating editor toolbar shell (squircle, border, shadow-md). */
+const TERMINAL_PANEL_SHELL =
+  "flex h-full w-full min-w-0 flex-col bg-sidebar pb-2 pt-0";
+const TERMINAL_PANEL_CARD =
+  "corner-squircle mx-1 flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-md border bg-background shadow-md";
+
 export interface TerminalPanelProps {
   /** The kernel service instance — null means no server configured. */
   kernelService: KernelService | null;
@@ -363,12 +369,19 @@ export function TerminalPanel({
   // No kernel/server available — show prompt
   if (!jupyterShellReady) {
     return (
-      <div className="flex h-full items-center justify-center border-l border-r bg-sidebar px-6">
-        <NoKernelPrompt
-          description="Connect to a Jupyter server to use the integrated terminal."
-          onConnect={onOpenKernelDropdown}
-          className="max-w-md"
-        />
+      <div className={TERMINAL_PANEL_SHELL}>
+        <div
+          className={cn(
+            TERMINAL_PANEL_CARD,
+            "items-center justify-center px-6",
+          )}
+        >
+          <NoKernelPrompt
+            description="Connect to a Jupyter server to use the integrated terminal."
+            onConnect={onOpenKernelDropdown}
+            className="max-w-md"
+          />
+        </div>
       </div>
     );
   }
@@ -376,39 +389,41 @@ export function TerminalPanel({
   // Server available but no terminals yet
   if (terminals.length === 0) {
     return (
-      <div className="flex h-full flex-col border-l border-r bg-sidebar">
-        {/* Tab bar */}
-        <div className="flex h-9 shrink-0 items-center gap-1 px-1 outline-none">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-accent-foreground"
-            onClick={handleCreateTerminal}
-            title="New terminal"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-accent-foreground"
-            onClick={() => void handleReloadTerminals()}
-            title="Reload terminals from server"
-          >
-            <RefreshCw
-              className={cn("h-4 w-4", isReloadingTerminals && "animate-spin")}
-            />
-          </Button>
-        </div>
-        {/* Empty state */}
-        <div className="flex flex-1 items-center justify-center">
-          <button
-            onClick={handleCreateTerminal}
-            className="corner-squircle flex flex-col items-center gap-2 rounded-lg border border-dashed border-muted-foreground/30 px-8 py-6 text-muted-foreground transition-colors hover:border-muted-foreground/50 hover:text-foreground"
-          >
-            <TerminalSquare className="h-8 w-8" />
-            <span className="text-sm">Create a new terminal</span>
-          </button>
+      <div className={TERMINAL_PANEL_SHELL}>
+        <div className={TERMINAL_PANEL_CARD}>
+          {/* Tab bar */}
+          <div className="flex h-9 shrink-0 items-center gap-1 px-1 outline-none">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-accent-foreground"
+              onClick={handleCreateTerminal}
+              title="New terminal"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-accent-foreground"
+              onClick={() => void handleReloadTerminals()}
+              title="Reload terminals from server"
+            >
+              <RefreshCw
+                className={cn("h-4 w-4", isReloadingTerminals && "animate-spin")}
+              />
+            </Button>
+          </div>
+          {/* Empty state */}
+          <div className="flex flex-1 items-center justify-center">
+            <button
+              onClick={handleCreateTerminal}
+              className="corner-squircle flex flex-col items-center gap-2 rounded-lg border border-dashed border-muted-foreground/30 px-8 py-6 text-muted-foreground transition-colors hover:border-muted-foreground/50 hover:text-foreground"
+            >
+              <TerminalSquare className="h-8 w-8" />
+              <span className="text-sm">Create a new terminal</span>
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -416,138 +431,140 @@ export function TerminalPanel({
 
   // Terminals active
   return (
-    <div className="flex h-full flex-col border-l border-r bg-sidebar">
-      {/* Tab bar */}
-      <div className="flex h-9 min-w-0 shrink-0 items-center gap-1 px-1 outline-none">
-        {/* User tabs + actions stay grouped on the left; extra width stays between this block and agent */}
-        <div className="flex min-w-0 flex-1 items-center gap-1">
-          <div className="min-w-0 shrink overflow-x-auto">
-            <Tabs
-              value={activeUserTerminalName}
-              onValueChange={(value) => setActiveTerminalName(value)}
-              className="min-w-0"
-            >
-              <TabsList className="h-7 w-max shrink-0 gap-0 rounded-none border-0 bg-transparent p-0 shadow-none outline-none ring-0">
-                {userTerminals.map((terminal) => (
-                  <TabsTrigger
-                    key={terminal.name}
-                    value={terminal.name}
-                    className="corner-squircle group flex h-7 shrink-0 items-center gap-1.5 rounded-sm px-2.5 text-xs font-normal text-muted-foreground shadow-none outline-none ring-0 hover:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground data-[state=active]:shadow-none"
-                  >
-                    <TerminalSquare className="h-3.5 w-3.5 shrink-0" />
-                    <span className="max-w-[120px] truncate">{terminal.name}</span>
-                    <span
-                      role="button"
-                      onClick={(e) => handleCloseTerminal(terminal.name, e)}
-                      className="corner-squircle ml-0.5 shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-transparent group-hover:opacity-100 text-muted-foreground hover:text-foreground"
-                      aria-label={`Close terminal ${terminal.name}`}
+    <div className={TERMINAL_PANEL_SHELL}>
+      <div className={TERMINAL_PANEL_CARD}>
+        {/* Tab bar */}
+        <div className="flex h-9 min-w-0 shrink-0 items-center gap-1 px-1 outline-none">
+          {/* User tabs + actions stay grouped on the left; extra width stays between this block and agent */}
+          <div className="flex min-w-0 flex-1 items-center gap-1">
+            <div className="min-w-0 shrink overflow-x-auto">
+              <Tabs
+                value={activeUserTerminalName}
+                onValueChange={(value) => setActiveTerminalName(value)}
+                className="min-w-0"
+              >
+                <TabsList className="h-7 w-max shrink-0 gap-0 rounded-none border-0 bg-transparent p-0 shadow-none outline-none ring-0">
+                  {userTerminals.map((terminal) => (
+                    <TabsTrigger
+                      key={terminal.name}
+                      value={terminal.name}
+                      className="corner-squircle group flex h-7 shrink-0 items-center gap-1.5 rounded-sm px-2.5 text-xs font-normal text-muted-foreground shadow-none outline-none ring-0 hover:text-foreground focus-visible:ring-0 focus-visible:ring-offset-0 data-[state=active]:bg-accent data-[state=active]:text-accent-foreground data-[state=active]:shadow-none"
                     >
-                      <X className="h-3 w-3" />
-                    </span>
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
+                      <TerminalSquare className="h-3.5 w-3.5 shrink-0" />
+                      <span className="max-w-[120px] truncate">{terminal.name}</span>
+                      <span
+                        role="button"
+                        onClick={(e) => handleCloseTerminal(terminal.name, e)}
+                        className="corner-squircle ml-0.5 shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-transparent group-hover:opacity-100 text-muted-foreground hover:text-foreground"
+                        aria-label={`Close terminal ${terminal.name}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </span>
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-accent-foreground"
+              onClick={handleCreateTerminal}
+              title="New terminal"
+            >
+              <Plus className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 shrink-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-accent-foreground"
+              onClick={() => void handleReloadTerminals()}
+              title="Reload terminals from server"
+            >
+              <RefreshCw
+                className={cn("h-4 w-4", isReloadingTerminals && "animate-spin")}
+              />
+            </Button>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-accent-foreground"
-            onClick={handleCreateTerminal}
-            title="New terminal"
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7 shrink-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-accent-foreground"
-            onClick={() => void handleReloadTerminals()}
-            title="Reload terminals from server"
-          >
-            <RefreshCw
-              className={cn("h-4 w-4", isReloadingTerminals && "animate-spin")}
-            />
-          </Button>
+
+          {agentTerminals.length > 0 && (
+            <div className="flex shrink-0 items-center">
+              <Popover
+                open={isAgentDropdownOpen}
+                onOpenChange={setIsAgentDropdownOpen}
+              >
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    className={cn(
+                      "corner-squircle group flex h-7 shrink-0 gap-1 rounded-sm px-2 text-xs font-normal text-muted-foreground",
+                      activeIsAgent && "bg-accent text-accent-foreground"
+                    )}
+                  >
+                    {activeIsAgent
+                      ? `agent:${activeTerminalName}`
+                      : "Agent Tabs"}
+                    {activeIsAgent && activeTerminalName && (
+                      <span
+                        role="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void handleCloseTerminal(activeTerminalName, e);
+                        }}
+                        className="corner-squircle ml-0.5 rounded p-0.5 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
+                        aria-label={`Close terminal ${activeTerminalName}`}
+                      >
+                        <X className="h-3 w-3" />
+                      </span>
+                    )}
+                    <ChevronDown className="h-3 w-3" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-48 p-0" align="start">
+                  <Command>
+                    <CommandInput
+                      placeholder="Search agent terminals..."
+                      className="h-8 rounded-none"
+                    />
+                    <CommandEmpty>No agent terminals found.</CommandEmpty>
+                    <CommandList className="max-h-[220px] overflow-y-auto">
+                      <CommandGroup>
+                        {agentTerminals.map((terminal) => (
+                          <CommandItem
+                            key={terminal.name}
+                            value={terminal.name}
+                            onSelect={() => {
+                              setActiveTerminalName(terminal.name);
+                              setIsAgentDropdownOpen(false);
+                            }}
+                            className="text-xs"
+                          >
+                            <div className="flex w-full items-center gap-2">
+                              <TerminalSquare className="h-3.5 w-3.5 opacity-60" />
+                              <span className="truncate">agent:{terminal.name}</span>
+                            </div>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </div>
+          )}
         </div>
 
-        {agentTerminals.length > 0 && (
-          <div className="flex shrink-0 items-center">
-            <Popover
-              open={isAgentDropdownOpen}
-              onOpenChange={setIsAgentDropdownOpen}
-            >
-              <PopoverTrigger asChild>
-                <Button
-                  variant="ghost"
-                  className={cn(
-                    "corner-squircle group flex h-7 shrink-0 gap-1 rounded-sm px-2 text-xs font-normal text-muted-foreground",
-                    activeIsAgent && "bg-accent text-accent-foreground"
-                  )}
-                >
-                  {activeIsAgent
-                    ? `agent:${activeTerminalName}`
-                    : "Agent Tabs"}
-                  {activeIsAgent && activeTerminalName && (
-                    <span
-                      role="button"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        void handleCloseTerminal(activeTerminalName, e);
-                      }}
-                      className="corner-squircle ml-0.5 rounded p-0.5 opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
-                      aria-label={`Close terminal ${activeTerminalName}`}
-                    >
-                      <X className="h-3 w-3" />
-                    </span>
-                  )}
-                  <ChevronDown className="h-3 w-3" />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-48 p-0" align="start">
-                <Command>
-                  <CommandInput
-                    placeholder="Search agent terminals..."
-                    className="h-8 rounded-none"
-                  />
-                  <CommandEmpty>No agent terminals found.</CommandEmpty>
-                  <CommandList className="max-h-[220px] overflow-y-auto">
-                    <CommandGroup>
-                      {agentTerminals.map((terminal) => (
-                        <CommandItem
-                          key={terminal.name}
-                          value={terminal.name}
-                          onSelect={() => {
-                            setActiveTerminalName(terminal.name);
-                            setIsAgentDropdownOpen(false);
-                          }}
-                          className="text-xs"
-                        >
-                          <div className="flex w-full items-center gap-2">
-                            <TerminalSquare className="h-3.5 w-3.5 opacity-60" />
-                            <span className="truncate">agent:{terminal.name}</span>
-                          </div>
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
-          </div>
-        )}
-      </div>
-
-      {/* Terminal content area */}
-      <div className="relative flex-1 overflow-hidden">
-        {terminals.map((terminal) => (
-          <XTermTerminal
-            key={terminal.name}
-            connection={terminal.connection}
-            isActive={terminal.name === activeTerminalName}
-          />
-        ))}
+        {/* Terminal content area */}
+        <div className="relative flex-1 overflow-hidden">
+          {terminals.map((terminal) => (
+            <XTermTerminal
+              key={terminal.name}
+              connection={terminal.connection}
+              isActive={terminal.name === activeTerminalName}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );

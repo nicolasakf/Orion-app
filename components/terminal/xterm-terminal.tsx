@@ -5,9 +5,8 @@ import type { ITheme } from "@xterm/xterm";
 import type { Terminal as JupyterTerminal } from "@jupyterlab/services";
 
 /**
- * Reads sidebar background and foreground from the active document theme for xterm.
+ * Terminal shell colors from theme `--background` and `--foreground`.
  * Sets `cursor` explicitly: xterm's default cursor is light and is invisible on light themes.
- * Cursor uses muted foreground so it reads as subtle vs body text.
  */
 function getXtermThemeColorsFromDocument(): Pick<
   ITheme,
@@ -15,7 +14,7 @@ function getXtermThemeColorsFromDocument(): Pick<
 > {
   const computedStyle = getComputedStyle(document.documentElement);
   const bg =
-    computedStyle.getPropertyValue("--sidebar-background").trim() || "#1e1e1e";
+    computedStyle.getPropertyValue("--background").trim() || "0 0% 100%";
   const fg = computedStyle.getPropertyValue("--foreground").trim() || "#d4d4d4";
   const mutedFg =
     computedStyle.getPropertyValue("--muted-foreground").trim() || "0 0% 45.1%";
