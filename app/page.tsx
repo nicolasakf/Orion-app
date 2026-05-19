@@ -493,11 +493,17 @@ export default function Page() {
     effectiveSettings.layout.sidebars.bottomCollapsed,
   );
   const [isFocusMode, setIsFocusMode] = useState(false);
-  /** While Focus mode is on, sidebar chrome is hidden until the pointer is over that panel. */
-  const [focusLeftPointerOver, setFocusLeftPointerOver] = useState(false);
-  const [focusRightPointerOver, setFocusRightPointerOver] = useState(false);
-  const isLeftSidebarContentHidden = isFocusMode && !focusLeftPointerOver;
-  const isRightSidebarContentHidden = isFocusMode && !focusRightPointerOver;
+  /** While Focus mode is on, sidebar chrome is hidden until that panel is hovered or focused. */
+  const [focusLeftHovered, setFocusLeftHovered] = useState(false);
+  const [focusLeftFocused, setFocusLeftFocused] = useState(false);
+  const [focusRightHovered, setFocusRightHovered] = useState(false);
+  const [focusRightFocused, setFocusRightFocused] = useState(false);
+  const leftSidebarRevealRef = useRef<HTMLDivElement>(null);
+  const rightSidebarRevealRef = useRef<HTMLDivElement>(null);
+  const isLeftSidebarRevealed = focusLeftHovered || focusLeftFocused;
+  const isRightSidebarRevealed = focusRightHovered || focusRightFocused;
+  const isLeftSidebarContentHidden = isFocusMode && !isLeftSidebarRevealed;
+  const isRightSidebarContentHidden = isFocusMode && !isRightSidebarRevealed;
   const [horizontalPanelSizes, setHorizontalPanelSizes] = useState<
     [number, number, number]
   >(effectiveSettings.layout.panelSizes.horizontal);
@@ -1912,12 +1918,42 @@ export default function Page() {
     }
   }, [leftSidebarCollapsed, rightSidebarCollapsed]);
 
+  /** Keep sidebar visible when focus remains inside after enabling Focus mode. */
+  useEffect(() => {
+    if (!isFocusMode) {
+      setFocusLeftHovered(false);
+      setFocusLeftFocused(false);
+      setFocusRightHovered(false);
+      setFocusRightFocused(false);
+      return;
+    }
+
+    const active = document.activeElement;
+    setFocusLeftFocused(
+      leftSidebarRevealRef.current?.contains(active) ?? false,
+    );
+    setFocusRightFocused(
+      rightSidebarRevealRef.current?.contains(active) ?? false,
+    );
+  }, [isFocusMode]);
+
   /**
-   * Hides sidebar chrome until the pointer hovers each panel; layout and sizing stay the same.
+   * Hides sidebar chrome until each panel is hovered or focused; layout and sizing stay the same.
    */
   const toggleFocusMode = React.useCallback(() => {
     setIsFocusMode((current) => !current);
   }, []);
+
+  const handleSidebarRevealBlur = React.useCallback(
+    (setFocused: React.Dispatch<React.SetStateAction<boolean>>) =>
+      (event: React.FocusEvent<HTMLDivElement>) => {
+        const next = event.relatedTarget;
+        if (next == null || !event.currentTarget.contains(next)) {
+          setFocused(false);
+        }
+      },
+    [],
+  );
 
   // Add keyboard shortcuts for toggling sidebars and saving
   useEffect(() => {
@@ -2076,9 +2112,12 @@ export default function Page() {
             onExpand={handleLeftExpand}
           >
             <div
+              ref={leftSidebarRevealRef}
               className="relative h-full overflow-hidden bg-sidebar"
-              onPointerEnter={() => setFocusLeftPointerOver(true)}
-              onPointerLeave={() => setFocusLeftPointerOver(false)}
+              onPointerEnter={() => setFocusLeftHovered(true)}
+              onPointerLeave={() => setFocusLeftHovered(false)}
+              onFocus={() => setFocusLeftFocused(true)}
+              onBlur={handleSidebarRevealBlur(setFocusLeftFocused)}
             >
               <div
                 className={cn(
@@ -2597,9 +2636,12 @@ export default function Page() {
               }}
             >
               <div
+                ref={rightSidebarRevealRef}
                 className="relative h-full overflow-hidden bg-sidebar"
-                onPointerEnter={() => setFocusRightPointerOver(true)}
-                onPointerLeave={() => setFocusRightPointerOver(false)}
+                onPointerEnter={() => setFocusRightHovered(true)}
+                onPointerLeave={() => setFocusRightHovered(false)}
+                onFocus={() => setFocusRightFocused(true)}
+                onBlur={handleSidebarRevealBlur(setFocusRightFocused)}
               >
                 <div
                   className={cn(
