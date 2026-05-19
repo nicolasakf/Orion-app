@@ -6,6 +6,8 @@ import { ChevronDown } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
+import { SIDEBAR_ACCORDION_STICKY_HEADER } from "./accordion-styles";
+
 type TriggerProps = React.ComponentPropsWithoutRef<typeof AccordionPrimitive.Trigger>;
 
 export interface StickyAccordionHeaderWithToolbarProps {
@@ -36,7 +38,8 @@ export function StickyAccordionHeaderWithToolbar({
   return (
     <AccordionPrimitive.Header
       className={cn(
-        "sticky top-0 z-[1] flex w-full min-w-0 items-center gap-0 bg-sidebar border-0 p-0"
+        SIDEBAR_ACCORDION_STICKY_HEADER,
+        "flex w-full min-w-0 items-center gap-0 p-0"
       )}
     >
       <AccordionPrimitive.Trigger

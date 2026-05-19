@@ -29,6 +29,7 @@ import {
   type FileTreeSelection,
 } from "./file-tree";
 import { WorkspacePicker } from "./workspace-picker";
+import { SIDEBAR_ACCORDION_CARD, SIDEBAR_ACCORDION_STICKY_HEADER } from "./accordion-styles";
 import { StickyAccordionHeaderWithToolbar } from "./sticky-accordion-header-with-toolbar";
 import { VariablesAccordionItem } from "./variables-panel";
 import {
@@ -92,7 +93,7 @@ function StickyAccordionTrigger({
   ...props
 }: React.ComponentPropsWithoutRef<typeof AccordionTrigger>) {
   return (
-    <div className="sticky top-0 z-[1] bg-sidebar">
+    <div className={SIDEBAR_ACCORDION_STICKY_HEADER}>
       <AccordionTrigger className={className} {...props}>
         {children}
       </AccordionTrigger>
@@ -634,15 +635,15 @@ export function LeftSidebar({
           type="multiple"
           value={openAccordionItems}
           onValueChange={handleAccordionChange}
-          className="w-full"
+          className="w-full space-y-2 p-2"
         >
           {activeViews.map((viewId) => {
             switch (viewId) {
               case "files":
                 return (
-                  <AccordionItem key="files" value="files" className="border-0">
+                  <AccordionItem key="files" value="files" className={SIDEBAR_ACCORDION_CARD}>
                     <StickyAccordionHeaderWithToolbar
-                      triggerClassName="py-2 px-2 hover:no-underline data-[state=open]:border-b data-[state=open]:border-border"
+                      triggerClassName="py-2 px-2 hover:no-underline"
                       toolbar={
                         <div className="flex items-center gap-1">
                           {hasWorkspace && kernelService && (
@@ -751,9 +752,9 @@ export function LeftSidebar({
                 );
               case "search":
                 return (
-                  <AccordionItem key="search" value="search" className="border-0">
+                  <AccordionItem key="search" value="search" className={SIDEBAR_ACCORDION_CARD}>
                     <StickyAccordionHeaderWithToolbar
-                      triggerClassName="py-2 px-2 hover:no-underline data-[state=open]:border-b data-[state=open]:border-border"
+                      triggerClassName="py-2 px-2 hover:no-underline"
                       toolbar={
                         <div className="flex items-center gap-1">
                           <ToolbarButton
@@ -800,9 +801,9 @@ export function LeftSidebar({
                 );
               case "toc":
                 return (
-                  <AccordionItem key="toc" value="toc" className="border-0">
+                  <AccordionItem key="toc" value="toc" className={SIDEBAR_ACCORDION_CARD}>
                     <StickyAccordionHeaderWithToolbar
-                      triggerClassName="py-2 px-2 hover:no-underline data-[state=open]:border-b data-[state=open]:border-border"
+                      triggerClassName="py-2 px-2 hover:no-underline"
                       toolbar={
                         isNotebookOpen ? (
                           <div className="flex items-center gap-1">
@@ -897,9 +898,9 @@ export function LeftSidebar({
                 );
               case "cpu":
                 return (
-                  <AccordionItem key="cpu" value="cpu" className="border-0">
+                  <AccordionItem key="cpu" value="cpu" className={SIDEBAR_ACCORDION_CARD}>
                     <StickyAccordionHeaderWithToolbar
-                      triggerClassName="py-2 px-2 hover:no-underline data-[state=open]:border-b data-[state=open]:border-border"
+                      triggerClassName="py-2 px-2 hover:no-underline"
                       toolbar={
                         <div className="flex items-center gap-1">
                           <ConfirmPopover
@@ -1053,8 +1054,8 @@ export function LeftSidebar({
                 );
               case "dataSources":
                 return (
-                  <AccordionItem key="dataSources" value="dataSources" className="border-0">
-                    <StickyAccordionTrigger className="py-2 px-2 hover:no-underline data-[state=open]:border-b data-[state=open]:border-border">
+                  <AccordionItem key="dataSources" value="dataSources" className={SIDEBAR_ACCORDION_CARD}>
+                    <StickyAccordionTrigger className="py-2 px-2 hover:no-underline">
                       <div className="flex items-center">
                         <Database className="h-4 w-4 mr-2" />
                         <span className="text-sm font-medium">Data sources</span>
@@ -1071,8 +1072,8 @@ export function LeftSidebar({
                 );
               case "secrets":
                 return (
-                  <AccordionItem key="secrets" value="secrets" className="border-0">
-                    <StickyAccordionTrigger className="py-2 px-2 hover:no-underline data-[state=open]:border-b data-[state=open]:border-border">
+                  <AccordionItem key="secrets" value="secrets" className={SIDEBAR_ACCORDION_CARD}>
+                    <StickyAccordionTrigger className="py-2 px-2 hover:no-underline">
                       <div className="flex items-center">
                         <KeyRound className="h-4 w-4 mr-2" />
                         <span className="text-sm font-medium">Secrets</span>

@@ -5,6 +5,7 @@ import { Boxes, RefreshCw } from "lucide-react";
 
 import { useKernelVariables } from "@/hooks/use-kernel-variables";
 import { VariableDetailDialog } from "./variable-detail-dialog";
+import { SIDEBAR_ACCORDION_CARD } from "./accordion-styles";
 import { StickyAccordionHeaderWithToolbar } from "./sticky-accordion-header-with-toolbar";
 import { ToolbarButton } from "@/components/common/toolbar-button";
 import { AccordionContent, AccordionItem } from "@/components/ui/accordion";
@@ -117,9 +118,9 @@ export function VariablesAccordionItem({
   );
 
   return (
-    <AccordionItem value="vars" className="border-0">
+    <AccordionItem value="vars" className={SIDEBAR_ACCORDION_CARD}>
       <StickyAccordionHeaderWithToolbar
-        triggerClassName="py-2 px-2 hover:no-underline data-[state=open]:border-b data-[state=open]:border-border"
+        triggerClassName="py-2 px-2 hover:no-underline"
         toolbar={
           <div className="flex items-center gap-1">
             <ToolbarButton
