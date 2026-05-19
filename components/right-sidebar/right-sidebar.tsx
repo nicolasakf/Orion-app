@@ -9,7 +9,7 @@ import {
   lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
 import { OpenAI, Claude, Gemini, Grok, Ollama, LmStudio } from "@lobehub/icons";
-import { Bot, ChevronLeft, FileText } from "lucide-react";
+import { Bot, ChevronLeft } from "lucide-react";
 
 import { toast } from "sonner";
 import {
@@ -2849,19 +2849,6 @@ export function RightSidebar({
                   <span className="truncate">{activeSubagentSession.label}</span>
                 </div>
               </div>
-              {activeSubagentSession.tmpNotebookPath && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="ml-auto h-8 shrink-0 gap-1.5 px-2"
-                  onClick={() => handleOpenSubagentReport(activeSubagentSession.tmpNotebookPath!)}
-                  aria-label="Open sub-agent tmp file"
-                >
-                  <FileText className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">Open tmp file</span>
-                </Button>
-              )}
             </div>
           </div>
 
