@@ -23,10 +23,6 @@
 
 - For modules that are sensitive or must be enforced server-side only (secrets, billing, Stripe, privileged DB access, etc.), add `import "server-only"` at the top of the file so Next.js fails the build if client code imports them.
 
-## IndexedDB chat storage
-
-- When changing chat persistence schema, stores, indexes, key paths, serialization/deserialization, migrations, or persisted chat data shape in `lib/chat/chat-storage.ts`, always check whether `DB_VERSION` must be increased. IndexedDB versions are monotonic: never lower the version or forget a required bump, because browsers reject opening an on-disk database whose version is higher than the requested version.
-
 ## Documentation & Type Annotations
 
 - Document all functions/methods/classes when creating/editing them
