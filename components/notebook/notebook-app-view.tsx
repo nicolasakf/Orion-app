@@ -202,10 +202,10 @@ export function NotebookAppView({
                     <ContextMenuTrigger asChild>
                       <Card
                         className={cn(
-                          "group relative h-full overflow-hidden rounded-lg bg-background shadow-sm",
+                          "group relative h-full overflow-hidden rounded-lg",
                           appCell.cell.cell_type === CellType.MARKDOWN
-                            ? "border-0"
-                            : "border",
+                            ? "border-0 bg-sidebar shadow-none"
+                            : "border bg-background shadow-sm",
                         )}
                       >
                         <div className="notebook-app-card-drag-handle pointer-events-none absolute inset-x-0 top-0 z-20 flex h-8 cursor-move items-center gap-2 border-b bg-muted/85 px-2 opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100">

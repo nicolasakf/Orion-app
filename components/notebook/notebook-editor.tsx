@@ -2,12 +2,25 @@
 
 import type React from "react";
 
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import {
+  Fragment,
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Command,
   CommandEmpty,
@@ -69,6 +82,35 @@ import {
   KernelConnectionDialog,
   RunningKernelDialog,
 } from "./kernel-dialogs";
+import {
+  applyPendingSourceChangesById,
+  changeCellTypesById,
+  clampSelectionToNotebook,
+  createCellId,
+  deleteCellsById,
+  duplicateCellById,
+  ensureUniqueCellIds,
+  getCellId,
+  getCellIdByIndex,
+  getCellIdsByIndices,
+  getCellIndexById,
+  getCellIndicesByIds,
+  insertCellById,
+  moveCellById,
+  pasteCellsAtIndex,
+  singleCellSelection,
+  sourceTextToLines,
+  type CellId,
+  type CellSelectionState,
+} from "./notebook-commands";
+import {
+  getSubagentDisableModelInvocation,
+  getSubagentMetadata,
+  getSubagentModelId,
+  isRecord,
+  isSubagentNotebookPath,
+  validateSubagentNotebookStructure,
+} from "./subagent-validation";
 
 interface NotebookEditorProps {
   /**
@@ -98,6 +140,55 @@ interface NotebookEditorProps {
   // These will be invoked by custom events dispatched from here
 }
 
+const NOTEBOOK_SHORTCUT_GROUPS = [
+  {
+    title: "Cell Actions",
+    shortcuts: [
+      { keys: "A", description: "Add a code cell above" },
+      { keys: "B", description: "Add a code cell below" },
+      { keys: "D D", description: "Delete selected cells" },
+      { keys: "C", description: "Copy selected cells" },
+      { keys: "X", description: "Cut selected cells" },
+      { keys: "V", description: "Paste cells below" },
+      { keys: "Alt + V", description: "Paste cells above" },
+      { keys: "Alt + A", description: "Run all code cells above" },
+      { keys: "Alt + B", description: "Run selected code cell and below" },
+      { keys: "Alt + Up / Down", description: "Move selected cell" },
+      { keys: "M", description: "Change selected cells to Markdown" },
+      { keys: "Y", description: "Change selected cells to Code" },
+      { keys: "I", description: "Mention the selected cell in chat" },
+    ],
+  },
+  {
+    title: "Run & Edit",
+    shortcuts: [
+      { keys: "Enter", description: "Edit the selected cell" },
+      { keys: "Shift + Enter", description: "Run selected cells and advance" },
+      { keys: "Ctrl/Cmd + Enter", description: "Run selected cells" },
+      { keys: "Esc", description: "Leave edit mode or clear selection" },
+      { keys: "H", description: "Show notebook shortcuts" },
+    ],
+  },
+  {
+    title: "Navigation & Selection",
+    shortcuts: [
+      { keys: "Up / Down", description: "Move between cells" },
+      { keys: "Shift + Up / Down", description: "Extend cell selection" },
+      { keys: "Page Up / Page Down", description: "Jump by several cells" },
+      {
+        keys: "Shift + Page Up / Page Down",
+        description: "Extend selection by several cells",
+      },
+      { keys: "Ctrl/Cmd + Home", description: "Jump to the first cell" },
+      { keys: "Ctrl/Cmd + End", description: "Jump to the last cell" },
+      {
+        keys: "Shift + Ctrl/Cmd + Home / End",
+        description: "Extend selection to the first or last cell",
+      },
+    ],
+  },
+] as const;
+
 /** Returns true when keyboard input belongs to a text-editing control. */
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
@@ -123,158 +214,6 @@ function isNotebookKeyboardScope(
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Returns true when a notebook path opts into sub-agent settings via filename. */
-function isSubagentNotebookPath(filepath: string): boolean {
-  const name = filepath.split("/").pop() ?? filepath;
-  return name.toLowerCase().endsWith(".agent.ipynb");
-}
-
-function getSubagentMetadata(
-  metadata: NotebookType["metadata"] | undefined,
-): Record<string, unknown> | null {
-  if (!metadata || !isRecord(metadata.orion)) return null;
-  return isRecord(metadata.orion.subagent) ? metadata.orion.subagent : null;
-}
-
-function getSubagentModelId(
-  metadata: NotebookType["metadata"] | undefined,
-): string {
-  const subagent = getSubagentMetadata(metadata);
-  return typeof subagent?.model === "string" ? subagent.model : "";
-}
-
-/** Returns a notebook cell source string with surrounding whitespace removed. */
-function sourceText(cell: NotebookCellType | undefined): string {
-  return Array.isArray(cell?.source) ? cell.source.join("").trim() : "";
-}
-
-/** Removes an optional expected markdown heading before validating body text. */
-function stripAllowedLeadingHeading(
-  markdown: string,
-  allowedHeadings: ReadonlySet<string>,
-): string {
-  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
-  let firstContentIndex = lines.findIndex((line) => line.trim().length > 0);
-  if (firstContentIndex === -1) return "";
-
-  const firstLine = lines[firstContentIndex].trim();
-  const heading = firstLine.match(/^#{1,6}\s+(.+?)\s*#*\s*$/);
-  if (!heading) return markdown.trim();
-
-  const normalizedHeading = heading[1]
-    .trim()
-    .toLowerCase()
-    .replace(/[-_]+/g, " ");
-  if (!allowedHeadings.has(normalizedHeading)) return markdown.trim();
-
-  firstContentIndex += 1;
-  while (
-    firstContentIndex < lines.length &&
-    lines[firstContentIndex].trim().length === 0
-  ) {
-    firstContentIndex += 1;
-  }
-
-  return lines.slice(firstContentIndex).join("\n").trim();
-}
-
-/** Returns true when the first non-empty markdown line is an H1. */
-function startsWithH1(markdown: string): boolean {
-  const firstNonEmptyLine = markdown
-    .split(/\r?\n/)
-    .find((line) => line.trim().length > 0);
-  return /^#\s+.+/.test(firstNonEmptyLine?.trim() ?? "");
-}
-
-interface SubagentNotebookValidation {
-  issues: string[];
-  cellIssues: Map<number, string>;
-}
-
-/** Checks the required first three cells for `.agent.ipynb` sub-agent notebooks. */
-function validateSubagentNotebookStructure(
-  notebook: NotebookType | null,
-): SubagentNotebookValidation {
-  const issues: string[] = [];
-  const cellIssues = new Map<number, string>();
-  if (!notebook) return { issues, cellIssues };
-
-  const firstCell = notebook.cells[0];
-  if (!firstCell) {
-    issues.push("Cell 0 is missing. Add a markdown cell with an H1 label.");
-  } else if (firstCell.cell_type !== CellType.MARKDOWN) {
-    const message =
-      "Cell 0 must be a markdown cell with an H1 label, such as # Data Profiler.";
-    issues.push(message);
-    cellIssues.set(0, message);
-  } else if (!startsWithH1(sourceText(firstCell))) {
-    const message =
-      "Cell 0 must start with an H1 label, such as # Data Profiler.";
-    issues.push(message);
-    cellIssues.set(0, message);
-  }
-
-  const secondCell = notebook.cells[1];
-  if (!secondCell) {
-    issues.push(
-      "Cell 1 is missing. Add a markdown cell with the sub-agent description.",
-    );
-  } else if (secondCell.cell_type !== CellType.MARKDOWN) {
-    const message = "Cell 1 must be a markdown description cell.";
-    issues.push(message);
-    cellIssues.set(1, message);
-  } else {
-    const description = stripAllowedLeadingHeading(
-      sourceText(secondCell),
-      new Set(["description"]),
-    );
-    if (!description) {
-      const message =
-        "Cell 1 needs a non-empty description after any optional Description heading.";
-      issues.push(message);
-      cellIssues.set(1, message);
-    }
-  }
-
-  const thirdCell = notebook.cells[2];
-  if (!thirdCell) {
-    issues.push(
-      "Cell 2 is missing. Add a markdown cell with the sub-agent system prompt.",
-    );
-  } else if (thirdCell.cell_type !== CellType.MARKDOWN) {
-    const message = "Cell 2 must be a markdown system prompt cell.";
-    issues.push(message);
-    cellIssues.set(2, message);
-  } else {
-    const systemPrompt = stripAllowedLeadingHeading(
-      sourceText(thirdCell),
-      new Set(["system prompt", "system"]),
-    );
-    if (!systemPrompt) {
-      const message =
-        "Cell 2 needs a non-empty system prompt after any optional System Prompt heading.";
-      issues.push(message);
-      cellIssues.set(2, message);
-    }
-  }
-
-  return { issues, cellIssues };
-}
-
-/** Returns true when the notebook sub-agent should be hidden from model-chosen delegation. */
-function getSubagentDisableModelInvocation(
-  metadata: NotebookType["metadata"] | undefined,
-): boolean {
-  const subagent = getSubagentMetadata(metadata);
-  return typeof subagent?.["disable-model-invocation"] === "boolean"
-    ? subagent["disable-model-invocation"]
-    : false;
-}
-
 function SubagentOptionTooltip({
   children,
   text,
@@ -291,6 +230,50 @@ function SubagentOptionTooltip({
         </TooltipContent>
       </TooltipPortal>
     </Tooltip>
+  );
+}
+
+/** Dialog listing notebook command-mode keyboard shortcuts. */
+function NotebookShortcutsDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[85vh] max-w-3xl flex-col overflow-hidden p-0">
+        <DialogHeader className="shrink-0 px-6 py-4">
+          <DialogTitle>Notebook Shortcuts</DialogTitle>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-2">
+          <div className="grid gap-6 md:grid-cols-2">
+            {NOTEBOOK_SHORTCUT_GROUPS.map((group) => (
+              <section key={group.title} className="space-y-3">
+                <h3 className="text-sm font-bold text-foreground">
+                  {group.title}
+                </h3>
+                <dl className="grid grid-cols-[minmax(112px,max-content)_1fr] gap-x-3 gap-y-2 text-sm">
+                  {group.shortcuts.map((shortcut) => (
+                    <Fragment key={shortcut.keys}>
+                      <dt>
+                        <kbd className="inline-flex min-h-7 items-center rounded border bg-muted px-2 font-mono text-xs font-medium text-foreground shadow-sm">
+                          {shortcut.keys}
+                        </kbd>
+                      </dt>
+                      <dd className="flex min-h-7 items-center text-muted-foreground">
+                        {shortcut.description}
+                      </dd>
+                    </Fragment>
+                  ))}
+                </dl>
+              </section>
+            ))}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -323,16 +306,13 @@ export function NotebookEditor({
   const [notebook, setNotebook] = useState<NotebookType | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedCellIndices, setSelectedCellIndices] = useState<Set<number>>(
+  const [selectedCellIds, setSelectedCellIds] = useState<Set<CellId>>(
     new Set(),
   );
-  const [selectionAnchorIndex, setSelectionAnchorIndex] = useState<
-    number | null
-  >(null);
-  const [cellCursorIndex, setCellCursorIndex] = useState<number | null>(null);
-  const [editingCellIndices, setEditingCellIndices] = useState<Set<number>>(
-    new Set(),
-  );
+  const [selectionAnchorCellId, setSelectionAnchorCellId] =
+    useState<CellId | null>(null);
+  const [cellCursorId, setCellCursorId] = useState<CellId | null>(null);
+  const [editingCellIds, setEditingCellIds] = useState<Set<CellId>>(new Set());
 
   // Kernel state - now mostly controlled by parent, but some local interaction might be needed
   // const [kernelStatus, setKernelStatus] =
@@ -346,6 +326,8 @@ export function NotebookEditor({
   const [showKernelDialog, setShowKernelDialog] = useState(false); // Dialogs might remain here or be lifted too
   const [showConnectionDialog, setShowConnectionDialog] = useState(false);
   const [showRunningKernelDialog, setShowRunningKernelDialog] = useState(false);
+  const [showNotebookShortcutsDialog, setShowNotebookShortcutsDialog] =
+    useState(false);
   const [connectionError, setConnectionError] = useState("");
   const [subagentModelComboboxOpen, setSubagentModelComboboxOpen] =
     useState(false);
@@ -353,7 +335,7 @@ export function NotebookEditor({
     SubagentModelOption[]
   >([]);
 
-  const cellRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const cellRefs = useRef<Map<CellId, HTMLDivElement | null>>(new Map());
   const notebookRootRef = useRef<HTMLDivElement | null>(null);
   const showSubagentOptions = isSubagentNotebookPath(filepath);
   const subagentValidation = useMemo(
@@ -370,12 +352,66 @@ export function NotebookEditor({
   const selectedSubagentModel = subagentModelOptions.find(
     (model) => model.modelId === subagentModelId,
   );
+  const selectedCellIndices = useMemo(
+    () => new Set(getCellIndicesByIds(notebook, selectedCellIds)),
+    [notebook, selectedCellIds],
+  );
+  const cellCursorIndex = useMemo(
+    () =>
+      notebook && cellCursorId ? getCellIndexById(notebook, cellCursorId) : null,
+    [notebook, cellCursorId],
+  );
+  const selectionAnchorIndex = useMemo(
+    () =>
+      notebook && selectionAnchorCellId
+        ? getCellIndexById(notebook, selectionAnchorCellId)
+        : null,
+    [notebook, selectionAnchorCellId],
+  );
 
-  // Use a ref to track modified cells instead of state to avoid re-renders
-  const modifiedCellsRef = useRef<Set<number>>(new Set());
+  /** Applies identity-based selection returned by a notebook command. */
+  const applySelectionState = useCallback((selection: CellSelectionState) => {
+    setSelectedCellIds(new Set(selection.selectedCellIds));
+    setCellCursorId(selection.cellCursorId);
+    setSelectionAnchorCellId(selection.selectionAnchorCellId);
+  }, []);
 
-  // NEW: Store pending cell content changes without causing rerenders
-  const pendingCellChangesRef = useRef<Map<number, string>>(new Map());
+  /** Selects one current notebook cell by array index. */
+  const selectCellByIndex = useCallback(
+    (cellIndex: number | null) => {
+      const cellId = getCellIdByIndex(notebook, cellIndex);
+      applySelectionState(singleCellSelection(cellId));
+      return cellId;
+    },
+    [applySelectionState, notebook],
+  );
+
+  /** Selects multiple current notebook cells by array index. */
+  const selectCellsByIndices = useCallback(
+    (cellIndices: Iterable<number>) => {
+      const cellIds = getCellIdsByIndices(notebook, cellIndices);
+      const firstCellId = cellIds[0] ?? null;
+      applySelectionState({
+        selectedCellIds: new Set(cellIds),
+        selectionAnchorCellId: firstCellId,
+        cellCursorId: firstCellId,
+      });
+      return cellIds;
+    },
+    [applySelectionState, notebook],
+  );
+
+  /** Returns the stable id for a current cell index. */
+  const cellIdForIndex = useCallback(
+    (cellIndex: number): CellId | null => getCellIdByIndex(notebook, cellIndex),
+    [notebook],
+  );
+
+  // Use a ref to track modified cells by stable id instead of state to avoid re-renders.
+  const modifiedCellsRef = useRef<Set<CellId>>(new Set());
+
+  // Store pending cell content changes by stable id without causing rerenders.
+  const pendingCellChangesRef = useRef<Map<CellId, string>>(new Map());
 
   // Track whether there are unsaved changes so we can notify the parent once per transition
   const isUnsavedRef = useRef(false);
@@ -482,7 +518,7 @@ export function NotebookEditor({
 
   // Store refs to cell components for direct access
   const cellComponentRefs = useRef<
-    Map<number, { getSource: () => string; focusSource: () => void }>
+    Map<CellId, { getSource: () => string; focusSource: () => void }>
   >(new Map());
 
   // Clipboard for copy/paste
@@ -527,55 +563,20 @@ export function NotebookEditor({
         // the string-array format the rest of the app expects.
         const parsedNotebook = parseNotebook(JSON.stringify(model.content));
 
-        // Ensure stable IDs for each cell under metadata.orion.id
-        const withIds = (() => {
-          const nbCopy = {
-            ...parsedNotebook,
-            cells: [...parsedNotebook.cells],
-          };
-          for (let i = 0; i < nbCopy.cells.length; i++) {
-            const cell = nbCopy.cells[i];
-            const metadata = cell.metadata || {};
-            const orion = metadata.orion || {};
-            if (!orion.id) {
-              const newId =
-                typeof crypto !== "undefined" && (crypto as any).randomUUID
-                  ? (crypto as any).randomUUID()
-                  : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-              nbCopy.cells[i] = {
-                ...cell,
-                metadata: {
-                  ...metadata,
-                  orion: {
-                    ...orion,
-                    id: newId,
-                  },
-                },
-              } as any;
-            }
-          }
-          return nbCopy;
-        })();
+        const withIds = ensureUniqueCellIds(parsedNotebook, createCellId);
 
         setNotebook(withIds);
-        // Clear modified cells when loading a new notebook
+        // Clear modified/pending cells when loading a new notebook.
         modifiedCellsRef.current = new Set();
+        pendingCellChangesRef.current = new Map();
+        cellComponentRefs.current = new Map();
+        cellRefs.current = new Map();
         markClean();
-        // Initialize cursor and anchor
-        if (withIds && withIds.cells.length > 0) {
-          setCellCursorIndex(0);
-          setSelectionAnchorIndex(0);
-          setSelectedCellIndices(new Set([0]));
-        } else {
-          setCellCursorIndex(null);
-          setSelectionAnchorIndex(null);
-          setSelectedCellIndices(new Set());
-        }
+        applySelectionState(singleCellSelection(getCellId(withIds.cells[0])));
       } catch (err) {
         console.error("Error loading notebook:", err);
         setError(
-          `Failed to load the notebook: ${
-            err instanceof Error ? err.message : String(err)
+          `Failed to load the notebook: ${err instanceof Error ? err.message : String(err)
           }`,
         );
       } finally {
@@ -584,7 +585,7 @@ export function NotebookEditor({
     };
 
     loadNotebook();
-  }, [filepath, parentKernelService]);
+  }, [applySelectionState, filepath, parentKernelService, markClean]);
 
   // Notify parent when notebook changes
   useEffect(() => {
@@ -593,16 +594,43 @@ export function NotebookEditor({
     }
   }, [notebook, onNotebookChange]);
 
+  useEffect(() => {
+    const clamped = clampSelectionToNotebook(notebook, {
+      selectedCellIds,
+      selectionAnchorCellId,
+      cellCursorId,
+    });
+    const selectedUnchanged =
+      clamped.selectedCellIds.size === selectedCellIds.size &&
+      Array.from(clamped.selectedCellIds).every((id) => selectedCellIds.has(id));
+    if (
+      selectedUnchanged &&
+      clamped.selectionAnchorCellId === selectionAnchorCellId &&
+      clamped.cellCursorId === cellCursorId
+    ) {
+      return;
+    }
+    applySelectionState(clamped);
+  }, [
+    applySelectionState,
+    notebook,
+    selectedCellIds,
+    selectionAnchorCellId,
+    cellCursorId,
+  ]);
+
   /**
    * Tracks which cells have been modified using a ref to avoid re-renders
    */
   const handleCellModified = useCallback(
     (cellIndex: number) => {
-      // Simply add to the ref without causing a re-render
-      modifiedCellsRef.current.add(cellIndex);
+      const cellId = cellIdForIndex(cellIndex);
+      if (!cellId) return;
+      // Simply add to the ref without causing a re-render.
+      modifiedCellsRef.current.add(cellId);
       markDirty();
     },
-    [markDirty],
+    [cellIdForIndex, markDirty],
   );
 
   /**
@@ -613,13 +641,15 @@ export function NotebookEditor({
       cellIndex: number,
       ref: { getSource: () => string; focusSource: () => void } | null,
     ) => {
+      const cellId = cellIdForIndex(cellIndex);
+      if (!cellId) return;
       if (ref) {
-        cellComponentRefs.current.set(cellIndex, ref);
+        cellComponentRefs.current.set(cellId, ref);
       } else {
-        cellComponentRefs.current.delete(cellIndex);
+        cellComponentRefs.current.delete(cellId);
       }
     },
-    [],
+    [cellIdForIndex],
   );
 
   /**
@@ -628,9 +658,11 @@ export function NotebookEditor({
    */
   const handleCellContentChange = useCallback(
     (cellIndex: number, source: string) => {
-      pendingCellChangesRef.current.set(cellIndex, source);
+      const cellId = cellIdForIndex(cellIndex);
+      if (!cellId) return;
+      pendingCellChangesRef.current.set(cellId, source);
     },
-    [],
+    [cellIdForIndex],
   );
 
   /**
@@ -647,15 +679,23 @@ export function NotebookEditor({
         if (!prevNotebook) return null;
 
         const updatedNotebook = JSON.parse(JSON.stringify(prevNotebook));
-        updatedNotebook.cells[cellIndex].metadata = metadata;
+        const existingCellId = getCellId(updatedNotebook.cells[cellIndex]);
+        updatedNotebook.cells[cellIndex].metadata = {
+          ...(metadata ?? {}),
+          orion: {
+            ...(metadata?.orion ?? {}),
+            ...(existingCellId ? { id: existingCellId } : { id: createCellId() }),
+          },
+        };
         return updatedNotebook;
       });
 
       // Mark the cell as modified so it gets saved
-      modifiedCellsRef.current.add(cellIndex);
+      const cellId = cellIdForIndex(cellIndex);
+      if (cellId) modifiedCellsRef.current.add(cellId);
       markDirty();
     },
-    [notebook, markDirty],
+    [cellIdForIndex, notebook, markDirty],
   );
 
   /**
@@ -672,14 +712,26 @@ export function NotebookEditor({
         if (!prevNotebook) return null;
 
         const updatedNotebook = JSON.parse(JSON.stringify(prevNotebook));
-        updatedNotebook.cells[cellIndex] = cell;
+        const existingCellId = getCellId(updatedNotebook.cells[cellIndex]);
+        const nextCellId = getCellId(cell) ?? existingCellId ?? createCellId();
+        updatedNotebook.cells[cellIndex] = {
+          ...cell,
+          metadata: {
+            ...(cell.metadata ?? {}),
+            orion: {
+              ...(cell.metadata?.orion ?? {}),
+              id: nextCellId,
+            },
+          },
+        };
         return updatedNotebook;
       });
 
-      pendingCellChangesRef.current.set(cellIndex, cell.source.join(""));
+      const cellId = getCellId(cell) ?? cellIdForIndex(cellIndex);
+      if (cellId) pendingCellChangesRef.current.set(cellId, cell.source.join(""));
       markDirty();
     },
-    [notebook, markDirty],
+    [cellIdForIndex, notebook, markDirty],
   );
 
   /**
@@ -710,10 +762,11 @@ export function NotebookEditor({
         return { ...prevNotebook, cells: newCells };
       });
 
-      modifiedCellsRef.current.add(cellIndex);
+      const cellId = cellIdForIndex(cellIndex);
+      if (cellId) modifiedCellsRef.current.add(cellId);
       markDirty();
     },
-    [markDirty],
+    [cellIdForIndex, markDirty],
   );
 
   /**
@@ -725,9 +778,10 @@ export function NotebookEditor({
       if (!notebook) return;
 
       // Store the change in pending changes instead of updating state immediately
-      pendingCellChangesRef.current.set(cellIndex, source);
+      const cellId = cellIdForIndex(cellIndex);
+      if (cellId) pendingCellChangesRef.current.set(cellId, source);
     },
-    [notebook],
+    [cellIdForIndex, notebook],
   );
 
   /**
@@ -736,29 +790,10 @@ export function NotebookEditor({
    */
   const applyPendingChanges = useCallback(
     (currentNotebook: NotebookType): NotebookType => {
-      if (pendingCellChangesRef.current.size === 0) {
-        return currentNotebook;
-      }
-
-      // Create a deep copy of the notebook
-      const updatedNotebook = JSON.parse(JSON.stringify(currentNotebook));
-
-      // Apply all pending changes
-      pendingCellChangesRef.current.forEach((source, cellIndex) => {
-        if (cellIndex < updatedNotebook.cells.length) {
-          // Split the source into lines to match Jupyter notebook format
-          const lines = source
-            .split("\n")
-            .map((line, index, array) =>
-              index === array.length - 1 ? line : line + "\n",
-            );
-
-          // Update the cell's source
-          updatedNotebook.cells[cellIndex].source = lines;
-        }
-      });
-
-      return updatedNotebook;
+      return applyPendingSourceChangesById(
+        currentNotebook,
+        pendingCellChangesRef.current,
+      );
     },
     [],
   );
@@ -767,10 +802,10 @@ export function NotebookEditor({
    * Captures the latest mounted cell editor text before leaving notebook editing surfaces.
    */
   const capturePendingCellSources = useCallback(() => {
-    modifiedCellsRef.current.forEach((cellIndex) => {
-      const cellRef = cellComponentRefs.current.get(cellIndex);
+    modifiedCellsRef.current.forEach((cellId) => {
+      const cellRef = cellComponentRefs.current.get(cellId);
       if (cellRef) {
-        pendingCellChangesRef.current.set(cellIndex, cellRef.getSource());
+        pendingCellChangesRef.current.set(cellId, cellRef.getSource());
       }
     });
   }, []);
@@ -824,10 +859,11 @@ export function NotebookEditor({
           cells,
         };
       });
-      modifiedCellsRef.current.add(appCell.cellIndex);
+      const appCellId = getCellIdByIndex(notebook, appCell.cellIndex);
+      if (appCellId) modifiedCellsRef.current.add(appCellId);
       markDirty();
     },
-    [applyPendingChanges, capturePendingCellSources, markDirty],
+    [applyPendingChanges, capturePendingCellSources, markDirty, notebook],
   );
 
   useEffect(() => {
@@ -860,11 +896,11 @@ export function NotebookEditor({
 
       try {
         // Get the latest content from all modified cells directly
-        modifiedCellsRef.current.forEach((cellIndex) => {
-          const cellRef = cellComponentRefs.current.get(cellIndex);
+        modifiedCellsRef.current.forEach((cellId) => {
+          const cellRef = cellComponentRefs.current.get(cellId);
           if (cellRef) {
             const currentSource = cellRef.getSource();
-            pendingCellChangesRef.current.set(cellIndex, currentSource);
+            pendingCellChangesRef.current.set(cellId, currentSource);
           }
         });
 
@@ -934,28 +970,14 @@ export function NotebookEditor({
         const model = await contentsManager.get(filepath, { content: true });
         const parsedNotebook = parseNotebook(JSON.stringify(model.content));
 
-        // Preserve stable orion IDs on re-load
-        const withIds = {
-          ...parsedNotebook,
-          cells: parsedNotebook.cells.map((cell) => {
-            const metadata = cell.metadata || {};
-            const orion = (metadata as any).orion || {};
-            if (!orion.id) {
-              const newId =
-                typeof crypto !== "undefined" && (crypto as any).randomUUID
-                  ? (crypto as any).randomUUID()
-                  : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-              return {
-                ...cell,
-                metadata: { ...metadata, orion: { ...orion, id: newId } },
-              } as typeof cell;
-            }
-            return cell;
-          }),
-        };
+        const withIds = ensureUniqueCellIds(parsedNotebook, createCellId);
 
         setNotebook(withIds);
         modifiedCellsRef.current = new Set();
+        pendingCellChangesRef.current = new Map();
+        cellComponentRefs.current = new Map();
+        cellRefs.current = new Map();
+        applySelectionState(singleCellSelection(getCellId(withIds.cells[0])));
         markClean();
       } catch (err) {
         console.error(
@@ -975,7 +997,7 @@ export function NotebookEditor({
         handleAgentModified as EventListener,
       );
     };
-  }, [parentKernelService, filepath, markClean]);
+  }, [applySelectionState, parentKernelService, filepath, markClean]);
 
   /**
    * Navigates to a cell (and optionally a specific output within it).
@@ -996,7 +1018,8 @@ export function NotebookEditor({
         );
       }
       if (!targetElement) {
-        targetElement = cellRefs.current[cellIndex];
+        const cellId = getCellIdByIndex(notebook, cellIndex);
+        targetElement = cellId ? (cellRefs.current.get(cellId) ?? null) : null;
       }
 
       if (!targetElement) return;
@@ -1032,7 +1055,14 @@ export function NotebookEditor({
     if (notebook) {
       const sections = buildNotebookMinimap(notebook.cells);
       // Initialize refs array with the correct length
-      cellRefs.current = cellRefs.current.slice(0, notebook.cells.length);
+      const currentCellIds = new Set(
+        notebook.cells
+          .map((cell) => getCellId(cell))
+          .filter((id): id is CellId => id !== null),
+      );
+      for (const cellId of Array.from(cellRefs.current.keys())) {
+        if (!currentCellIds.has(cellId)) cellRefs.current.delete(cellId);
+      }
 
       // Broadcast the updated minimap data to any listeners (e.g. page.tsx → LeftSidebar)
       window.dispatchEvent(
@@ -1081,9 +1111,7 @@ export function NotebookEditor({
             : undefined;
 
         scrollToCell(newCellIndex, outputIndex);
-        setSelectedCellIndices(new Set([newCellIndex]));
-        setCellCursorIndex(newCellIndex);
-        setSelectionAnchorIndex(newCellIndex);
+        selectCellByIndex(newCellIndex);
       }
     };
 
@@ -1098,7 +1126,7 @@ export function NotebookEditor({
         handleNavigate as EventListener,
       );
     };
-  }, [scrollToCell]);
+  }, [scrollToCell, selectCellByIndex]);
 
   /**
    * Handles selecting a cell
@@ -1106,72 +1134,70 @@ export function NotebookEditor({
   const handleCellSelect = useCallback(
     (cellIndex: number, event?: React.MouseEvent | React.KeyboardEvent) => {
       if (!notebook) return;
+      const selectedId = getCellIdByIndex(notebook, cellIndex);
+      if (!selectedId) return;
       const newCursorIndex = cellIndex;
 
       if (event?.shiftKey && selectionAnchorIndex !== null) {
-        setCellCursorIndex(newCursorIndex);
+        setCellCursorId(selectedId);
         const start = Math.min(selectionAnchorIndex, newCursorIndex);
         const end = Math.max(selectionAnchorIndex, newCursorIndex);
         const newSelected = new Set<number>();
         for (let i = start; i <= end; i++) {
           newSelected.add(i);
         }
-        setSelectedCellIndices(newSelected);
+        setSelectedCellIds(new Set(getCellIdsByIndices(notebook, newSelected)));
       } else if (event?.metaKey || event?.ctrlKey) {
-        setSelectedCellIndices((prevSelectedIndices) => {
-          const newSelected = new Set(prevSelectedIndices);
-          if (newSelected.has(newCursorIndex)) {
-            newSelected.delete(newCursorIndex);
+        setSelectedCellIds((prevSelectedIds) => {
+          const newSelected = new Set(prevSelectedIds);
+          if (newSelected.has(selectedId)) {
+            newSelected.delete(selectedId);
           } else {
-            newSelected.add(newCursorIndex);
+            newSelected.add(selectedId);
           }
           // Update anchor and cursor based on new selection state
           if (newSelected.size === 1) {
             const singleIndex = Array.from(newSelected)[0];
-            setCellCursorIndex(singleIndex);
-            setSelectionAnchorIndex(singleIndex);
+            setCellCursorId(singleIndex);
+            setSelectionAnchorCellId(singleIndex);
           } else if (newSelected.size > 1) {
-            setCellCursorIndex(newCursorIndex); // Cursor is the last clicked one
+            setCellCursorId(selectedId); // Cursor is the last clicked one
             // Anchor could be the first item in sorted selection or remain based on prior state
             // For simplicity with ctrl/cmd clicks, let's set anchor to the current cursor if it's now part of selection
-            if (newSelected.has(newCursorIndex)) {
+            if (newSelected.has(selectedId)) {
               // If multiple selected, set anchor to the earliest selected item in the group containing the cursor.
               // This part can be complex. A simpler approach: if selectionAnchorIndex is not in newSelected, update it.
               if (
-                selectionAnchorIndex === null ||
-                !newSelected.has(selectionAnchorIndex)
+                selectionAnchorCellId === null ||
+                !newSelected.has(selectionAnchorCellId)
               ) {
-                const sortedSelected = Array.from(newSelected).sort(
-                  (a, b) => a - b,
-                );
-                setSelectionAnchorIndex(sortedSelected[0]);
+                setSelectionAnchorCellId(Array.from(newSelected)[0] ?? null);
               }
-            } else if (selectionAnchorIndex === newCursorIndex) {
+            } else if (selectionAnchorCellId === selectedId) {
               // if we just deselected the anchor
-              const sortedSelected = Array.from(newSelected).sort(
-                (a, b) => a - b,
-              );
-              setSelectionAnchorIndex(
-                sortedSelected.length > 0 ? sortedSelected[0] : null,
-              );
+              setSelectionAnchorCellId(Array.from(newSelected)[0] ?? null);
             }
           } else {
             // size is 0
-            setCellCursorIndex(null);
-            setSelectionAnchorIndex(null);
+            setCellCursorId(null);
+            setSelectionAnchorCellId(null);
           }
           return newSelected;
         });
       } else {
         // Normal click
-        setSelectedCellIndices(new Set([newCursorIndex]));
-        setCellCursorIndex(newCursorIndex);
-        setSelectionAnchorIndex(newCursorIndex);
+        applySelectionState(singleCellSelection(selectedId));
       }
       // Ensure clicked cell is visible
       // scrollToCell(newCursorIndex);
     },
-    [notebook, selectionAnchorIndex, scrollToCell],
+    [
+      applySelectionState,
+      notebook,
+      selectionAnchorCellId,
+      selectionAnchorIndex,
+      scrollToCell,
+    ],
   );
 
   /**
@@ -1179,20 +1205,22 @@ export function NotebookEditor({
    */
   const handleEditingModeChange = useCallback(
     (cellIndex: number, isEditing: boolean) => {
-      setEditingCellIndices((prevEditingIndices) => {
-        const newEditingIndices = new Set(prevEditingIndices);
+      const cellId = cellIdForIndex(cellIndex);
+      if (!cellId) return;
+      setEditingCellIds((prevEditingIds) => {
+        const newEditingIds = new Set(prevEditingIds);
         if (isEditing) {
-          newEditingIndices.add(cellIndex);
+          newEditingIds.add(cellId);
         } else {
-          newEditingIndices.delete(cellIndex);
+          newEditingIds.delete(cellId);
         }
-        return newEditingIndices;
+        return newEditingIds;
       });
     },
-    [],
+    [cellIdForIndex],
   );
 
-  const isAnyCellEditing = editingCellIndices.size > 0;
+  const isAnyCellEditing = editingCellIds.size > 0;
 
   // Effect to sync parent kernel state to local state if needed, or directly use parent state
   // This ensures that if the parent (page.tsx) updates kernel state, NotebookEditor reflects it.
@@ -1233,7 +1261,8 @@ export function NotebookEditor({
         })
         .map((idx) => {
           const cell = notebook.cells[idx];
-          const cellRef = cellComponentRefs.current.get(idx);
+          const cellId = getCellId(cell);
+          const cellRef = cellId ? cellComponentRefs.current.get(cellId) : null;
           const source = cellRef
             ? cellRef.getSource()
             : Array.isArray(cell.source)
@@ -1286,7 +1315,8 @@ export function NotebookEditor({
 
           onCellStart: (idx) => {
             // Clear outputs and set cell to RUNNING
-            const cellRef = cellComponentRefs.current.get(idx);
+            const cellId = getCellIdByIndex(notebook, idx);
+            const cellRef = cellId ? cellComponentRefs.current.get(cellId) : null;
             const source = cellRef
               ? cellRef.getSource()
               : Array.isArray(notebook.cells[idx]?.source)
@@ -1298,11 +1328,7 @@ export function NotebookEditor({
               const prevCell = prev.cells[idx];
               const updatedCell = {
                 ...prevCell,
-                source: source
-                  .split("\n")
-                  .map((line, i, arr) =>
-                    i === arr.length - 1 ? line : line + "\n",
-                  ),
+                source: sourceTextToLines(source),
                 outputs: [],
                 execution_count: null,
               } as any;
@@ -1316,7 +1342,7 @@ export function NotebookEditor({
               startTime: new Date(),
             });
 
-            modifiedCellsRef.current.add(idx);
+            if (cellId) modifiedCellsRef.current.add(cellId);
             markDirty();
           },
 
@@ -1582,52 +1608,23 @@ export function NotebookEditor({
    */
   const handleMoveCell = useCallback(
     (cellIndexToMove: number, direction: "up" | "down") => {
-      if (!notebook || cellCursorIndex === null) return;
-      const currentIdx = cellIndexToMove; // Use the explicitly passed index
+      if (!notebook) return;
+      const cellId = getCellIdByIndex(notebook, cellIndexToMove);
+      if (!cellId) return;
 
-      const newOrderedIndex =
-        direction === "up"
-          ? Math.max(0, currentIdx - 1)
-          : Math.min(notebook.cells.length - 1, currentIdx + 1);
-
-      if (newOrderedIndex === currentIdx) return;
-
-      setNotebook((prevNotebook) => {
-        if (!prevNotebook) return null;
-        const cells = prevNotebook.cells.slice();
-        const tmp = cells[currentIdx];
-        cells[currentIdx] = cells[newOrderedIndex];
-        cells[newOrderedIndex] = tmp;
-        return { ...prevNotebook, cells };
-      });
-
-      setSelectedCellIndices(new Set([newOrderedIndex]));
-      setCellCursorIndex(newOrderedIndex);
-      setSelectionAnchorIndex(newOrderedIndex);
-
-      // NEW: When cells are moved, we need to update our refs mapping
-      // Transfer any pending changes to the new indices
-      const currentChanges = pendingCellChangesRef.current.get(currentIdx);
-      const swappedChanges = pendingCellChangesRef.current.get(newOrderedIndex);
-
-      if (currentChanges !== undefined) {
-        pendingCellChangesRef.current.set(newOrderedIndex, currentChanges);
-      } else {
-        pendingCellChangesRef.current.delete(newOrderedIndex);
-      }
-
-      if (swappedChanges !== undefined) {
-        pendingCellChangesRef.current.set(currentIdx, swappedChanges);
-      } else {
-        pendingCellChangesRef.current.delete(currentIdx);
-      }
-
-      modifiedCellsRef.current.add(currentIdx);
-      modifiedCellsRef.current.add(newOrderedIndex);
+      const result = moveCellById(
+        applyPendingChanges(notebook),
+        cellId,
+        direction,
+      );
+      setNotebook(result.notebook);
+      applySelectionState(result.selection);
+      modifiedCellsRef.current.add(cellId);
       markDirty();
-      setTimeout(() => scrollToCell(newOrderedIndex), 0);
+      const nextIndex = getCellIndexById(result.notebook, cellId);
+      if (nextIndex >= 0) setTimeout(() => scrollToCell(nextIndex), 0);
     },
-    [notebook, scrollToCell, cellCursorIndex, markDirty],
+    [applyPendingChanges, applySelectionState, notebook, scrollToCell, markDirty],
   );
 
   /**
@@ -1637,12 +1634,15 @@ export function NotebookEditor({
     (indicesToCopy?: number[]) => {
       const targetIndices = indicesToCopy ?? Array.from(selectedCellIndices);
       if (!notebook || targetIndices.length === 0) return;
+      const notebookWithChanges = applyPendingChanges(notebook);
       const cellsToCopy = targetIndices
         .sort((a, b) => a - b)
-        .map((index) => JSON.parse(JSON.stringify(notebook.cells[index])));
+        .map((index) =>
+          JSON.parse(JSON.stringify(notebookWithChanges.cells[index])),
+        );
       setCopiedCells(cellsToCopy);
     },
-    [notebook, selectedCellIndices],
+    [applyPendingChanges, notebook, selectedCellIndices],
   );
 
   /**
@@ -1652,98 +1652,38 @@ export function NotebookEditor({
     (indicesToDelete?: number[]) => {
       const targetIndices = indicesToDelete ?? Array.from(selectedCellIndices);
       if (!notebook || targetIndices.length === 0) return;
-      const indicesArray = targetIndices.sort((a, b) => b - a);
-      const targetCursorIndex =
-        indicesToDelete && indicesToDelete.length > 0
-          ? Math.min(...indicesToDelete)
-          : cellCursorIndex;
-      let newCursorPosAfterDelete =
-        targetCursorIndex !== null ? targetCursorIndex : 0;
-
-      indicesArray.forEach((index) => {
-        if (targetCursorIndex !== null && index < targetCursorIndex) {
-          newCursorPosAfterDelete--;
-        }
-      });
-      newCursorPosAfterDelete = Math.max(0, newCursorPosAfterDelete);
-
-      setNotebook((prevNotebook) => {
-        if (!prevNotebook) return null;
-        // Apply any pending changes before deleting
-        const notebookWithChanges = applyPendingChanges(prevNotebook);
-        const cells = notebookWithChanges.cells.slice();
-        for (const index of indicesArray) {
-          if (index >= 0 && index < cells.length) {
-            cells.splice(index, 1);
-          }
-        }
-        return { ...notebookWithChanges, cells } as any;
-      });
+      const targetIds = getCellIdsByIndices(notebook, targetIndices);
+      const cursorForDelete = indicesToDelete
+        ? (targetIds[0] ?? cellCursorId)
+        : cellCursorId;
+      const result = deleteCellsById(
+        applyPendingChanges(notebook),
+        targetIds,
+        cursorForDelete,
+      );
+      for (const cellId of targetIds) {
+        pendingCellChangesRef.current.delete(cellId);
+        modifiedCellsRef.current.delete(cellId);
+        cellComponentRefs.current.delete(cellId);
+        cellRefs.current.delete(cellId);
+      }
+      setNotebook(result.notebook);
+      applySelectionState(result.selection);
       markDirty();
 
-      // NEW: Clean up pending changes and refs for deleted cells
-      indicesArray.forEach((index) => {
-        pendingCellChangesRef.current.delete(index);
-        modifiedCellsRef.current.delete(index);
-        cellComponentRefs.current.delete(index);
-      });
-
-      // NEW: Adjust indices for remaining cells
-      const deletedSet = new Set(indicesArray);
-      const newPendingChanges = new Map<number, string>();
-      const newModifiedCells = new Set<number>();
-      const newCellRefs = new Map<
-        number,
-        { getSource: () => string; focusSource: () => void }
-      >();
-
-      pendingCellChangesRef.current.forEach((value, key) => {
-        if (!deletedSet.has(key)) {
-          const newIndex = key - indicesArray.filter((idx) => idx < key).length;
-          newPendingChanges.set(newIndex, value);
-        }
-      });
-
-      modifiedCellsRef.current.forEach((key) => {
-        if (!deletedSet.has(key)) {
-          const newIndex = key - indicesArray.filter((idx) => idx < key).length;
-          newModifiedCells.add(newIndex);
-        }
-      });
-
-      cellComponentRefs.current.forEach((value, key) => {
-        if (!deletedSet.has(key)) {
-          const newIndex = key - indicesArray.filter((idx) => idx < key).length;
-          newCellRefs.set(newIndex, value);
-        }
-      });
-
-      pendingCellChangesRef.current = newPendingChanges;
-      modifiedCellsRef.current = newModifiedCells;
-      cellComponentRefs.current = newCellRefs;
-
-      if (notebook.cells.length - indicesArray.length > 0) {
-        const finalCursorPos = Math.min(
-          newCursorPosAfterDelete,
-          notebook.cells.length - indicesArray.length - 1,
-        );
-        const newSelection = Math.max(0, finalCursorPos);
-        setSelectedCellIndices(new Set([newSelection]));
-        setCellCursorIndex(newSelection);
-        setSelectionAnchorIndex(newSelection);
-        setTimeout(() => scrollToCell(newSelection), 0);
-      } else {
-        setSelectedCellIndices(new Set());
-        setCellCursorIndex(null);
-        setSelectionAnchorIndex(null);
-      }
+      const nextIndex =
+        result.selection.cellCursorId !== null
+          ? getCellIndexById(result.notebook, result.selection.cellCursorId)
+          : -1;
+      if (nextIndex >= 0) setTimeout(() => scrollToCell(nextIndex), 0);
     },
     [
       notebook,
       selectedCellIndices,
-      cellCursorIndex,
+      cellCursorId,
       scrollToCell,
       applyPendingChanges,
+      applySelectionState,
       markDirty,
     ],
   );
@@ -1758,45 +1698,19 @@ export function NotebookEditor({
       cellType: CellType = CellType.CODE,
     ) => {
       if (!notebook) return null;
-      let newCellActualIndex = -1;
-
-      setNotebook((prevNotebook) => {
-        if (!prevNotebook) return null;
-        const cells = prevNotebook.cells.slice();
-
-        if (baseIndex === null) {
-          // Adding to an empty notebook
-          newCellActualIndex = 0;
-        } else {
-          newCellActualIndex = position === "above" ? baseIndex : baseIndex + 1;
-        }
-        newCellActualIndex = Math.max(
-          0,
-          Math.min(newCellActualIndex, cells.length),
-        );
-
-        const newId =
-          typeof crypto !== "undefined" && (crypto as any).randomUUID
-            ? (crypto as any).randomUUID()
-            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-        const newCell: NotebookCellType = {
-          cell_type: cellType,
-          metadata: { orion: { id: newId } },
-          source: [""],
-        } as any;
-        if (newCell.cell_type === CellType.CODE) {
-          (newCell as any).outputs = [];
-          (newCell as any).execution_count = null;
-        }
-        cells.splice(newCellActualIndex, 0, newCell);
-        return { ...prevNotebook, cells };
-      });
+      const result = insertCellById(
+        applyPendingChanges(notebook),
+        getCellIdByIndex(notebook, baseIndex),
+        position,
+        cellType,
+        createCellId,
+      );
+      setNotebook(result.notebook);
+      applySelectionState(result.selection);
       markDirty();
-      // Return index for selection by caller
-      return newCellActualIndex;
+      return getCellIndexById(result.notebook, result.insertedCellId);
     },
-    [notebook, markDirty],
+    [applyPendingChanges, applySelectionState, notebook, markDirty],
   );
 
   /**
@@ -1805,41 +1719,22 @@ export function NotebookEditor({
   const handleChangeCellTypes = useCallback(
     (indicesToChange: number[], targetType: CellType) => {
       if (!notebook || indicesToChange.length === 0) return;
-      setNotebook((prevNotebook) => {
-        if (!prevNotebook) return null;
-
-        // Apply any pending changes first
-        const notebookWithChanges = applyPendingChanges(prevNotebook);
-
-        const cells = notebookWithChanges.cells.slice();
-        let changed = false;
-        indicesToChange.forEach((index) => {
-          const cell = cells[index];
-          if (cell && cell.cell_type !== targetType) {
-            const updated: any = { ...cell, cell_type: targetType };
-            if (targetType === CellType.CODE) {
-              updated.outputs = updated.outputs || [];
-              updated.execution_count = updated.execution_count || null;
-            } else {
-              delete updated.outputs;
-              delete updated.execution_count;
-            }
-            cells[index] = updated;
-            modifiedCellsRef.current.add(index);
-            changed = true;
-          }
-        });
-
-        // Clear pending changes since we've applied them
-        if (changed) {
-          pendingCellChangesRef.current.clear();
-          markDirty();
-        }
-
-        return changed ? { ...notebookWithChanges, cells } : prevNotebook;
-      });
+      const targetIds = getCellIdsByIndices(notebook, indicesToChange);
+      const result = changeCellTypesById(
+        applyPendingChanges(notebook),
+        targetIds,
+        targetType,
+      );
+      for (const cellId of result.changedCellIds) {
+        modifiedCellsRef.current.add(cellId);
+      }
+      if (result.changedCellIds.length > 0) {
+        setNotebook(result.notebook);
+        applySelectionState(result.selection);
+        markDirty();
+      }
     },
-    [notebook, applyPendingChanges, markDirty],
+    [applyPendingChanges, applySelectionState, notebook, markDirty],
   );
 
   /**
@@ -1850,10 +1745,10 @@ export function NotebookEditor({
       if (!notebook) return;
       const currentCellType =
         notebook.cells[cellIndexFromAction]?.cell_type || CellType.CODE;
+      const actionCellId = getCellIdByIndex(notebook, cellIndexFromAction);
+      if (!actionCellId) return;
       // Ensure the action targets the clicked cell by setting selection and cursor
-      setSelectedCellIndices(new Set([cellIndexFromAction]));
-      setCellCursorIndex(cellIndexFromAction);
-      setSelectionAnchorIndex(cellIndexFromAction);
+      applySelectionState(singleCellSelection(actionCellId));
       setTimeout(() => scrollToCell(cellIndexFromAction), 0); // Ensure it is visible
 
       switch (action) {
@@ -1865,9 +1760,7 @@ export function NotebookEditor({
           {
             const nextCellIndex = cellIndexFromAction + 1;
             if (nextCellIndex < notebook.cells.length) {
-              setSelectedCellIndices(new Set([nextCellIndex]));
-              setCellCursorIndex(nextCellIndex);
-              setSelectionAnchorIndex(nextCellIndex);
+              selectCellByIndex(nextCellIndex);
               setTimeout(() => scrollToCell(nextCellIndex), 0);
             } else {
               const newAddedIdx = handleAddCell(
@@ -1876,9 +1769,6 @@ export function NotebookEditor({
                 CellType.CODE,
               );
               if (newAddedIdx !== null && newAddedIdx !== -1) {
-                setSelectedCellIndices(new Set([newAddedIdx]));
-                setCellCursorIndex(newAddedIdx);
-                setSelectionAnchorIndex(newAddedIdx);
                 setTimeout(() => scrollToCell(newAddedIdx), 0);
               }
             }
@@ -1919,21 +1809,25 @@ export function NotebookEditor({
           handleMoveCell(cellIndexFromAction, "down");
           break;
         case "duplicate-cell": // This is effectively duplicate cell from action bar
-          setNotebook((prevNotebook) => {
-            if (!prevNotebook) return null;
-            const updatedNotebook = JSON.parse(JSON.stringify(prevNotebook));
-            const newCell = JSON.parse(
-              JSON.stringify(updatedNotebook.cells[cellIndexFromAction]),
+          {
+            const result = duplicateCellById(
+              applyPendingChanges(notebook),
+              actionCellId,
+              createCellId,
             );
-            const newCopiedCellIdx = cellIndexFromAction + 1;
-            updatedNotebook.cells.splice(newCopiedCellIdx, 0, newCell);
-            // Select the newly copied cell
-            setSelectedCellIndices(new Set([newCopiedCellIdx]));
-            setCellCursorIndex(newCopiedCellIdx);
-            setSelectionAnchorIndex(newCopiedCellIdx);
-            setTimeout(() => scrollToCell(newCopiedCellIdx), 0);
-            return updatedNotebook;
-          });
+            setNotebook(result.notebook);
+            applySelectionState(result.selection);
+            markDirty();
+            if (result.duplicatedCellId) {
+              const newCopiedCellIdx = getCellIndexById(
+                result.notebook,
+                result.duplicatedCellId,
+              );
+              if (newCopiedCellIdx >= 0) {
+                setTimeout(() => scrollToCell(newCopiedCellIdx), 0);
+              }
+            }
+          }
           break;
         case "copy-cell":
           handleCopySelectedCellsToClipboard([cellIndexFromAction]);
@@ -1952,9 +1846,6 @@ export function NotebookEditor({
             currentCellType,
           );
           if (newIdxBelow !== null && newIdxBelow !== -1) {
-            setSelectedCellIndices(new Set([newIdxBelow]));
-            setCellCursorIndex(newIdxBelow);
-            setSelectionAnchorIndex(newIdxBelow);
             setTimeout(() => scrollToCell(newIdxBelow), 0);
           }
           break;
@@ -1965,9 +1856,6 @@ export function NotebookEditor({
             currentCellType,
           );
           if (newIdxAbove !== null && newIdxAbove !== -1) {
-            setSelectedCellIndices(new Set([newIdxAbove]));
-            setCellCursorIndex(newIdxAbove);
-            setSelectionAnchorIndex(newIdxAbove);
             setTimeout(() => scrollToCell(newIdxAbove), 0);
           }
           break;
@@ -2001,15 +1889,15 @@ export function NotebookEditor({
 
             const nextEnabled = isCodeCell
               ? !currentCell.outputs!.every((_, outputIndex) =>
-                  isOutputInAppView(currentCell, outputIndex),
-                )
+                isOutputInAppView(currentCell, outputIndex),
+              )
               : !isCellInAppView(currentCell);
             cells[cellIndexFromAction] = isCodeCell
               ? currentCell.outputs!.reduce(
-                  (updatedCell, _, outputIndex) =>
-                    withOutputAppEnabled(updatedCell, outputIndex, nextEnabled),
-                  currentCell,
-                )
+                (updatedCell, _, outputIndex) =>
+                  withOutputAppEnabled(updatedCell, outputIndex, nextEnabled),
+                currentCell,
+              )
               : withCellAppEnabled(currentCell, nextEnabled);
 
             let nextNotebook: NotebookType = {
@@ -2029,7 +1917,7 @@ export function NotebookEditor({
 
             return nextNotebook;
           });
-          modifiedCellsRef.current.add(cellIndexFromAction);
+          modifiedCellsRef.current.add(actionCellId);
           markDirty();
           break;
         case "clear-outputs":
@@ -2038,7 +1926,7 @@ export function NotebookEditor({
             if (
               !prevNotebook.cells[cellIndexFromAction] ||
               prevNotebook.cells[cellIndexFromAction].cell_type !==
-                CellType.CODE
+              CellType.CODE
             )
               return prevNotebook;
             const cells = prevNotebook.cells.slice();
@@ -2110,7 +1998,7 @@ export function NotebookEditor({
 
               return nextNotebook;
             });
-            modifiedCellsRef.current.add(cellIndexFromAction);
+            modifiedCellsRef.current.add(actionCellId);
             markDirty();
           } else if (action.startsWith("hide-single-output:")) {
             const outputIndex = parseInt(action.split(":")[1], 10);
@@ -2184,8 +2072,9 @@ export function NotebookEditor({
    */
   const handleMentionCell = useCallback(
     (cellIndex: number) => {
+      const cellId = cellIdForIndex(cellIndex);
       const source =
-        pendingCellChangesRef.current.get(cellIndex) ??
+        (cellId ? pendingCellChangesRef.current.get(cellId) : undefined) ??
         notebook?.cells[cellIndex]?.source.join("") ??
         "";
       window.dispatchEvent(
@@ -2198,7 +2087,7 @@ export function NotebookEditor({
         }),
       );
     },
-    [filepath, notebook?.cells],
+    [cellIdForIndex, filepath, notebook?.cells],
   );
 
   // Effect for handling global keyboard shortcuts
@@ -2223,13 +2112,28 @@ export function NotebookEditor({
 
       const N_CELLS = notebook.cells.length;
       if (event.key === "Escape") {
-        setSelectedCellIndices(new Set());
-        setSelectionAnchorIndex(null);
+        applySelectionState({
+          selectedCellIds: new Set(),
+          selectionAnchorCellId: null,
+          cellCursorId: null,
+        });
         const mainContentArea = document.querySelector(
           ".notebook-editor-content-area",
         ) as HTMLElement;
         if (mainContentArea) mainContentArea.focus();
         event.preventDefault();
+        return;
+      }
+
+      if (
+        event.key.toLowerCase() === "h" &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey
+      ) {
+        setShowNotebookShortcutsDialog(true);
+        event.preventDefault();
+        event.stopPropagation();
         return;
       }
 
@@ -2258,6 +2162,60 @@ export function NotebookEditor({
       let nextCursorIndex = currentCursor;
       let currentAnchorIndex = selectionAnchorIndex;
       let newSelectedIndices = new Set(selectedCellIndices);
+      const applyIndexSelection = (
+        cursorIndex: number | null,
+        anchorIndex: number | null,
+        selectedIndices: Iterable<number>,
+      ) => {
+        setCellCursorId(getCellIdByIndex(notebook, cursorIndex));
+        setSelectionAnchorCellId(getCellIdByIndex(notebook, anchorIndex));
+        setSelectedCellIds(
+          new Set(getCellIdsByIndices(notebook, selectedIndices)),
+        );
+      };
+
+      const isOptionOnlyShortcut =
+        event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey;
+
+      if (isOptionOnlyShortcut) {
+        if (event.code === "KeyA") {
+          const codeIndicesAbove = notebook.cells
+            .map((cell, idx) =>
+              cell.cell_type === CellType.CODE && idx < currentCursor
+                ? idx
+                : -1,
+            )
+            .filter((idx) => idx !== -1);
+          handleRunCell(codeIndicesAbove);
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+
+        if (event.code === "KeyB") {
+          const codeIndicesBelow = notebook.cells
+            .map((cell, idx) =>
+              cell.cell_type === CellType.CODE && idx >= currentCursor
+                ? idx
+                : -1,
+            )
+            .filter((idx) => idx !== -1);
+          handleRunCell(codeIndicesBelow);
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+
+        if (event.code === "ArrowUp" || event.code === "ArrowDown") {
+          handleMoveCell(
+            currentCursor,
+            event.code === "ArrowUp" ? "up" : "down",
+          );
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
 
       switch (event.key) {
         case "ArrowUp":
@@ -2273,9 +2231,7 @@ export function NotebookEditor({
             newSelectedIndices.add(nextCursorIndex);
             currentAnchorIndex = nextCursorIndex; // Reset anchor
           }
-          setCellCursorIndex(nextCursorIndex);
-          setSelectionAnchorIndex(currentAnchorIndex);
-          setSelectedCellIndices(newSelectedIndices);
+          applyIndexSelection(nextCursorIndex, currentAnchorIndex, newSelectedIndices);
           break;
 
         case "ArrowDown":
@@ -2291,9 +2247,7 @@ export function NotebookEditor({
             newSelectedIndices.add(nextCursorIndex);
             currentAnchorIndex = nextCursorIndex; // Reset anchor
           }
-          setCellCursorIndex(nextCursorIndex);
-          setSelectionAnchorIndex(currentAnchorIndex);
-          setSelectedCellIndices(newSelectedIndices);
+          applyIndexSelection(nextCursorIndex, currentAnchorIndex, newSelectedIndices);
           break;
 
         case "PageUp":
@@ -2310,9 +2264,7 @@ export function NotebookEditor({
             newSelectedIndices.add(nextCursorIndex);
             currentAnchorIndex = nextCursorIndex;
           }
-          setCellCursorIndex(nextCursorIndex);
-          setSelectionAnchorIndex(currentAnchorIndex);
-          setSelectedCellIndices(newSelectedIndices);
+          applyIndexSelection(nextCursorIndex, currentAnchorIndex, newSelectedIndices);
           break;
 
         case "PageDown":
@@ -2328,9 +2280,7 @@ export function NotebookEditor({
             newSelectedIndices.add(nextCursorIndex);
             currentAnchorIndex = nextCursorIndex;
           }
-          setCellCursorIndex(nextCursorIndex);
-          setSelectionAnchorIndex(currentAnchorIndex);
-          setSelectedCellIndices(newSelectedIndices);
+          applyIndexSelection(nextCursorIndex, currentAnchorIndex, newSelectedIndices);
           break;
 
         case "Home":
@@ -2350,9 +2300,7 @@ export function NotebookEditor({
               newSelectedIndices.add(nextCursorIndex);
               currentAnchorIndex = nextCursorIndex;
             }
-            setCellCursorIndex(nextCursorIndex);
-            setSelectionAnchorIndex(currentAnchorIndex);
-            setSelectedCellIndices(newSelectedIndices);
+            applyIndexSelection(nextCursorIndex, currentAnchorIndex, newSelectedIndices);
           }
           // Simple Home without Ctrl/Cmd could also go to first cell, or top of current cell if applicable.
           // For now, only handling Ctrl/Cmd + Home.
@@ -2378,9 +2326,7 @@ export function NotebookEditor({
               newSelectedIndices.add(nextCursorIndex);
               currentAnchorIndex = nextCursorIndex;
             }
-            setCellCursorIndex(nextCursorIndex);
-            setSelectionAnchorIndex(currentAnchorIndex);
-            setSelectedCellIndices(newSelectedIndices);
+            applyIndexSelection(nextCursorIndex, currentAnchorIndex, newSelectedIndices);
           } else {
             preventDefault = false;
           }
@@ -2415,9 +2361,7 @@ export function NotebookEditor({
             CellType.CODE,
           );
           if (addedIndexA !== null && addedIndexA !== -1) {
-            setSelectedCellIndices(new Set([addedIndexA]));
-            setCellCursorIndex(addedIndexA);
-            setSelectionAnchorIndex(addedIndexA);
+            setTimeout(() => scrollToCell(addedIndexA), 0);
           }
           break;
 
@@ -2433,9 +2377,7 @@ export function NotebookEditor({
             CellType.CODE,
           );
           if (addedIndexB !== null && addedIndexB !== -1) {
-            setSelectedCellIndices(new Set([addedIndexB]));
-            setCellCursorIndex(addedIndexB);
-            setSelectionAnchorIndex(addedIndexB);
+            setTimeout(() => scrollToCell(addedIndexB), 0);
           }
           break;
 
@@ -2478,85 +2420,28 @@ export function NotebookEditor({
                 : 0;
             if (N_CELLS === 0) insertAtIndex = 0; // If empty, always insert at 0
 
-            const newPastedIndices: number[] = [];
-            setNotebook((prevNotebook) => {
-              if (!prevNotebook) return null;
+            const result = pasteCellsAtIndex(
+              applyPendingChanges(notebook),
+              copiedCells,
+              insertAtIndex,
+              createCellId,
+            );
+            setNotebook(result.notebook);
+            applySelectionState(result.selection);
+            for (const cellId of result.pastedCellIds) {
+              modifiedCellsRef.current.add(cellId);
+            }
+            markDirty();
 
-              // Apply any pending changes before pasting
-              const notebookWithChanges = applyPendingChanges(prevNotebook);
-
-              const cells = notebookWithChanges.cells.slice();
-              let currentInsertPos = insertAtIndex;
-              copiedCells.forEach((cellToPaste) => {
-                // Ensure pasted cell has an ID
-                const metadata = cellToPaste.metadata || {};
-                const orion = metadata.orion || {};
-                const id =
-                  orion.id ||
-                  (typeof crypto !== "undefined" && (crypto as any).randomUUID
-                    ? (crypto as any).randomUUID()
-                    : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
-                const cloned: any = JSON.parse(JSON.stringify(cellToPaste));
-                cloned.metadata = {
-                  ...(cloned.metadata || {}),
-                  orion: { ...(cloned.metadata?.orion || {}), id },
-                };
-                cells.splice(currentInsertPos, 0, cloned);
-                newPastedIndices.push(currentInsertPos);
-                currentInsertPos++;
-              });
-              return { ...notebookWithChanges, cells } as any;
-            });
-
-            // NEW: Adjust indices for existing pending changes and refs
-            if (newPastedIndices.length > 0) {
-              const numPasted = copiedCells.length;
-
-              // Create new maps to store adjusted indices
-              const newPendingChanges = new Map<number, string>();
-              const newModifiedCells = new Set<number>();
-              const newCellRefs = new Map<
-                number,
-                { getSource: () => string; focusSource: () => void }
-              >();
-
-              // Adjust existing indices that are >= insertAtIndex
-              pendingCellChangesRef.current.forEach((value, key) => {
-                if (key >= insertAtIndex) {
-                  newPendingChanges.set(key + numPasted, value);
-                } else {
-                  newPendingChanges.set(key, value);
-                }
-              });
-
-              modifiedCellsRef.current.forEach((key) => {
-                if (key >= insertAtIndex) {
-                  newModifiedCells.add(key + numPasted);
-                } else {
-                  newModifiedCells.add(key);
-                }
-              });
-
-              cellComponentRefs.current.forEach((value, key) => {
-                if (key >= insertAtIndex) {
-                  newCellRefs.set(key + numPasted, value);
-                } else {
-                  newCellRefs.set(key, value);
-                }
-              });
-
-              // Update refs with adjusted indices
-              pendingCellChangesRef.current = newPendingChanges;
-              modifiedCellsRef.current = newModifiedCells;
-              cellComponentRefs.current = newCellRefs;
-              markDirty();
-
-              // Clear pending changes since we've applied them
-              pendingCellChangesRef.current.clear();
-
-              setSelectedCellIndices(new Set(newPastedIndices));
-              setCellCursorIndex(newPastedIndices[0]);
-              setSelectionAnchorIndex(newPastedIndices[0]);
+            const firstPastedId = result.pastedCellIds[0];
+            if (firstPastedId) {
+              const firstPastedIndex = getCellIndexById(
+                result.notebook,
+                firstPastedId,
+              );
+              if (firstPastedIndex >= 0) {
+                setTimeout(() => scrollToCell(firstPastedIndex), 0);
+              }
             }
           }
           preventDefault = false;
@@ -2615,9 +2500,7 @@ export function NotebookEditor({
             if (lastRunIndex !== -1) {
               const nextCellToSelect = lastRunIndex + 1;
               if (nextCellToSelect < N_CELLS) {
-                setSelectedCellIndices(new Set([nextCellToSelect]));
-                setCellCursorIndex(nextCellToSelect);
-                setSelectionAnchorIndex(nextCellToSelect);
+                selectCellByIndex(nextCellToSelect);
               } else {
                 const newAddedIndex = handleAddCell(
                   lastRunIndex,
@@ -2625,16 +2508,14 @@ export function NotebookEditor({
                   CellType.CODE,
                 );
                 if (newAddedIndex !== null && newAddedIndex !== -1) {
-                  setSelectedCellIndices(new Set([newAddedIndex]));
-                  setCellCursorIndex(newAddedIndex);
-                  setSelectionAnchorIndex(newAddedIndex);
+                  setTimeout(() => scrollToCell(newAddedIndex), 0);
                 }
               }
             }
           } else {
             // Plain Enter on a selected cell should enter edit mode
-            if (cellCursorIndex !== null) {
-              const cellRef = cellComponentRefs.current.get(cellCursorIndex);
+            if (cellCursorId !== null) {
+              const cellRef = cellComponentRefs.current.get(cellCursorId);
               if (cellRef) {
                 cellRef.focusSource();
               }
@@ -2678,20 +2559,25 @@ export function NotebookEditor({
     selectedCellIndices,
     selectionAnchorIndex,
     cellCursorIndex,
+    cellCursorId,
     isAnyCellEditing,
-    editingCellIndices,
+    editingCellIds,
     handleCellSelect,
     handleAddCell,
     handleDeleteSelectedCells,
+    handleMoveCell,
     handleChangeCellTypes,
     handleRunCell,
     handleMentionCell,
     copiedCells,
     setCopiedCells,
+    setShowNotebookShortcutsDialog,
     scrollToCell,
     handleCopySelectedCellsToClipboard,
     applyPendingChanges,
+    applySelectionState,
     markDirty,
+    selectCellByIndex,
   ]);
 
   useEffect(() => {
@@ -2699,8 +2585,8 @@ export function NotebookEditor({
       return;
     }
 
-    if (cellCursorIndex !== null && cellRefs.current[cellCursorIndex]) {
-      const cellElement = cellRefs.current[cellCursorIndex];
+    if (cellCursorId !== null && cellRefs.current.get(cellCursorId)) {
+      const cellElement = cellRefs.current.get(cellCursorId);
       const activeElement = document.activeElement;
       const notebookRoot = notebookRootRef.current;
       const focusIsInsideNotebook =
@@ -2719,7 +2605,7 @@ export function NotebookEditor({
         cellElement.focus();
       }
     }
-  }, [activeNotebookView, cellCursorIndex]);
+  }, [activeNotebookView, cellCursorId]);
 
   return (
     <>
@@ -2767,6 +2653,11 @@ export function NotebookEditor({
           onOpenChange={setShowRunningKernelDialog}
           onConnect={handleConnectToRunningKernel}
           kernelService={parentKernelService || null}
+        />
+
+        <NotebookShortcutsDialog
+          open={showNotebookShortcutsDialog}
+          onOpenChange={setShowNotebookShortcutsDialog}
         />
 
         {/* Remove focus outline for the notebook editor content area and its focusable children */}
@@ -2843,7 +2734,7 @@ export function NotebookEditor({
               >
                 <div className="space-y-6 pb-[50cqh]">
                   {showSubagentOptions &&
-                  subagentValidation.issues.length > 0 ? (
+                    subagentValidation.issues.length > 0 ? (
                     <Alert className="mx-3 border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-900/70 dark:bg-amber-950/40 dark:text-amber-100">
                       <AlertTriangle className="h-4 w-4 text-amber-600 dark:text-amber-300" />
                       <AlertTitle className="text-sm">
@@ -2877,9 +2768,6 @@ export function NotebookEditor({
                               CellType.CODE,
                             );
                             if (newIndex !== null && newIndex !== -1) {
-                              setSelectedCellIndices(new Set([newIndex]));
-                              setCellCursorIndex(newIndex);
-                              setSelectionAnchorIndex(newIndex);
                               setTimeout(() => scrollToCell(newIndex), 0);
                             }
                           }}
@@ -3032,44 +2920,47 @@ export function NotebookEditor({
                           </div>
                         </TooltipProvider>
                       ) : null}
-                      {notebook.cells.map((cell, index) => (
-                        <div
-                          key={index}
-                          ref={(el) => {
-                            cellRefs.current[index] = el;
-                          }}
-                          className={cn(
-                            cellCursorIndex === index &&
+                      {notebook.cells.map((cell, index) => {
+                        const cellId = getCellId(cell) ?? `cell-${index}`;
+                        return (
+                          <div
+                            key={cellId}
+                            ref={(el) => {
+                              cellRefs.current.set(cellId, el);
+                            }}
+                            className={cn(
+                              cellCursorIndex === index &&
                               !isAnyCellEditing &&
                               "cell-cursor-active",
-                          )}
-                          tabIndex={-1}
-                        >
-                          <NotebookCell
-                            cell={cell}
-                            notebookMetadata={notebook.metadata}
-                            notebookPath={filepath}
-                            cellIndex={index}
-                            onCellModified={handleCellModified}
-                            onUpdateCell={handleUpdateCell}
-                            onCellSelect={handleCellSelect}
-                            onCellAction={handleCellAction}
-                            isSelected={selectedCellIndices.has(index)}
-                            onEditingModeChange={handleEditingModeChange}
-                            onUpdateCellMetadata={handleUpdateCellMetadata}
-                            onUpdateCellData={handleUpdateCellData}
-                            onRegisterRef={registerCellRef}
-                            onContentChange={handleCellContentChange}
-                            onMentionCell={handleMentionCell}
-                            validationIssue={subagentValidation.cellIssues.get(
-                              index,
                             )}
-                            presentationHideAllCellInputs={
-                              presentationHideAllCellInputs
-                            }
-                          />
-                        </div>
-                      ))}
+                            tabIndex={-1}
+                          >
+                            <NotebookCell
+                              cell={cell}
+                              notebookMetadata={notebook.metadata}
+                              notebookPath={filepath}
+                              cellIndex={index}
+                              onCellModified={handleCellModified}
+                              onUpdateCell={handleUpdateCell}
+                              onCellSelect={handleCellSelect}
+                              onCellAction={handleCellAction}
+                              isSelected={selectedCellIndices.has(index)}
+                              onEditingModeChange={handleEditingModeChange}
+                              onUpdateCellMetadata={handleUpdateCellMetadata}
+                              onUpdateCellData={handleUpdateCellData}
+                              onRegisterRef={registerCellRef}
+                              onContentChange={handleCellContentChange}
+                              onMentionCell={handleMentionCell}
+                              validationIssue={subagentValidation.cellIssues.get(
+                                index,
+                              )}
+                              presentationHideAllCellInputs={
+                                presentationHideAllCellInputs
+                              }
+                            />
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
