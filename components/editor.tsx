@@ -391,12 +391,12 @@ export function Editor({
           language={fileLanguage}
           lightThemeOverride={{
             colors: {
-              "editor.background": "#FCFCFC",
+              "editor.background": "#F5F5F5",
             },
           }}
           darkThemeOverride={{
             colors: {
-              "editor.background": "#0A0A0A",
+              "editor.background": "#131316",
             },
           }}
           height="100%"
@@ -419,7 +419,7 @@ export function Editor({
 
   return (
     <>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-sidebar">
         {editorContent}
       </div>
       <FileOperationErrorDialog />
