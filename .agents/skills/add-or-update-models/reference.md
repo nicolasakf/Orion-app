@@ -45,7 +45,7 @@
 ## Model ID conventions
 
 - **OpenAI**: `gpt-5.2`, `gpt-4o`, `o3`, `gpt-4o-mini`
-- **Google**: `gemini-2.5-flash`, `gemini-3-pro-preview`, `gemma-3-27b-it`
+- **Google**: `gemini-2.5-flash`, `gemini-3-flash-preview`, `gemini-3.5-flash`, `gemma-3-27b-it`
 - **Anthropic**: `claude-opus-4-6`, `claude-sonnet-4-5`, `claude-haiku-4-5` (API uses hyphenated IDs)
 - **xAI**: `grok-4-1-fast-reasoning`, `grok-3-mini`, `grok-4`
 

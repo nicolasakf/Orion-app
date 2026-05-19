@@ -139,13 +139,11 @@ const MODEL_DEFAULTS: Record<string, Partial<ModelInfo>> = {
   // Google
   "gemini-3.1-pro-preview": { contextWindow: 1048576, supportsStreaming: true },
   "gemini-3.1-flash-lite": { contextWindow: 1048576, supportsStreaming: true },
-  "gemini-3.1-flash-lite-preview": { contextWindow: 1048576, supportsStreaming: true },
-  "gemini-3-pro-preview": { contextWindow: 1048576, supportsStreaming: true },
   "gemini-3-flash-preview": { contextWindow: 1048576, supportsStreaming: true },
+  "gemini-3.5-flash": { contextWindow: 1048576, supportsStreaming: true },
   "gemini-2.5-pro": { contextWindow: 1048576, supportsStreaming: true },
   "gemini-2.5-flash": { contextWindow: 1048576, supportsStreaming: true },
   "gemini-2.5-flash-lite": { contextWindow: 1048576, supportsStreaming: true },
-  "gemini-2.0-flash": { contextWindow: 1048576, supportsStreaming: true },
   "gemma-4-31b-it": { contextWindow: 262144, supportsStreaming: true },
   "gemma-4-26b-a4b-it": { contextWindow: 262144, supportsStreaming: true },
 
@@ -706,19 +704,7 @@ export class ModelGateway {
   /**
    * Check if a model supports system messages
    */
-  private supportsSystemMessages(providerId: SupportedProvider, modelId: string): boolean {
-    // Google models that don't support system messages
-    // Primarily affects some Gemini preview models.
-    const unsupportedGoogleModels = [
-      "gemini-3-pro-preview",  // Also reported to not support system instructions
-    ];
-
-    if (providerId === "google") {
-      if (unsupportedGoogleModels.includes(modelId)) {
-        return false;
-      }
-    }
-
+  private supportsSystemMessages(_providerId: SupportedProvider, _modelId: string): boolean {
     return true;
   }
 
