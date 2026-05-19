@@ -295,6 +295,33 @@ interface DelegateToolOutput {
 
 /** Catalog id used when `orion:selectedModel` is unset and as fallback if the chosen id is not in `/api/models`. */
 const DEFAULT_SELECTED_CHAT_MODEL_ID = "gemini-3-flash-preview";
+const CURRENT_CHAT_SESSION_KEY = "orion:currentChatId";
+
+/** Reads the last selected chat for the current browser tab. */
+function loadCurrentChatIdFromSession(): string | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    return window.sessionStorage.getItem(CURRENT_CHAT_SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Stores the selected chat for this browser tab, or clears it when unavailable. */
+function saveCurrentChatIdToSession(chatId: string | null): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    if (chatId) {
+      window.sessionStorage.setItem(CURRENT_CHAT_SESSION_KEY, chatId);
+    } else {
+      window.sessionStorage.removeItem(CURRENT_CHAT_SESSION_KEY);
+    }
+  } catch {
+    // Losing the selected chat is harmless; the chat list falls back to newest.
+  }
+}
 
 // ============================================================================
 // RightSidebar
@@ -322,7 +349,7 @@ export function RightSidebar({
   recentFiles?: Array<{ name: string; path: string; openAsText?: boolean }>;
   onOpenFile?: (file: { name: string; path: string }) => void;
 } & React.HTMLAttributes<HTMLDivElement>) {
-  const { effectiveSettings, isHydrated, setUserSettings } = useOrionSettings();
+  const { effectiveSettings, setUserSettings } = useOrionSettings();
   const { openWithTab } = useOpenSettings();
 
   // State management
@@ -356,9 +383,7 @@ export function RightSidebar({
   const [autoRunConfirmOpen, setAutoRunConfirmOpen] = useState(false);
   const [showKernelPrompt, setShowKernelPrompt] = useState(false);
   const [activeSubagentToolCallId, setActiveSubagentToolCallId] = useState<string | null>(null);
-  const [toolApprovalMode, setToolApprovalMode] = useState<ToolApprovalMode>(
-    effectiveSettings.chat.toolApprovalMode
-  );
+  const toolApprovalMode = effectiveSettings.chat.toolApprovalMode;
   const [modelSettingsMap, setModelSettingsMap] = useState<ModelSettingsMap>({});
   const [isCompacting, setIsCompacting] = useState(false);
 
@@ -428,7 +453,7 @@ export function RightSidebar({
     }
     const params = new URLSearchParams(window.location.search);
     const tab = params.get("settings");
-    const validTabs: SettingsTab[] = ["appearance", "models", "providers", "storage"];
+    const validTabs: SettingsTab[] = ["appearance", "models", "providers"];
     if (tab && validTabs.includes(tab as SettingsTab)) {
       settingsUrlHandledRef.current = true;
       openWithTab(tab as SettingsTab);
@@ -470,11 +495,6 @@ export function RightSidebar({
       };
     });
   }, [models, effectiveSettings.providers?.credentials]);
-
-  useEffect(() => {
-    if (!isHydrated) return;
-    setToolApprovalMode(effectiveSettings.chat.toolApprovalMode);
-  }, [effectiveSettings.chat.toolApprovalMode, isHydrated]);
 
   useEffect(() => {
     if (models.length === 0) return;
@@ -564,11 +584,11 @@ export function RightSidebar({
   /** Change tool approval mode and persist to settings */
   const handleToolApprovalModeChange = useCallback(
     (mode: ToolApprovalMode) => {
+      if (mode === toolApprovalMode) return;
       if (mode === "auto_run") {
         setAutoRunConfirmOpen(true);
         return;
       }
-      setToolApprovalMode(mode);
       void setUserSettings((current) => ({
         ...current,
         chat: {
@@ -577,12 +597,15 @@ export function RightSidebar({
         },
       }));
     },
-    [setUserSettings]
+    [setUserSettings, toolApprovalMode]
   );
 
   /** Apply auto_run mode after user confirms the warning dialog */
   const handleAutoRunConfirm = useCallback(() => {
-    setToolApprovalMode("auto_run");
+    if (toolApprovalMode === "auto_run") {
+      setAutoRunConfirmOpen(false);
+      return;
+    }
     void setUserSettings((current) => ({
       ...current,
       chat: {
@@ -590,7 +613,8 @@ export function RightSidebar({
         toolApprovalMode: "auto_run",
       },
     }));
-  }, [setUserSettings]);
+    setAutoRunConfirmOpen(false);
+  }, [setUserSettings, toolApprovalMode]);
 
   // Auto-approve all pending tool calls when mode changes to "auto_run"
   useEffect(() => {
@@ -1493,7 +1517,7 @@ export function RightSidebar({
     return best?.name ?? null;
   }, [input, subagentSlashCommands, skillSlashCommands]);
 
-  /** Run compaction and update state + IndexedDB. Returns the new summary on success, null on failure. */
+  /** Run compaction and update state + persisted chat. Returns the new summary on success, null on failure. */
   const runCompaction = useCallback(async (opts?: { retentionTurns?: number }): Promise<CompactionSummary | null> => {
     if (compactionInFlightRef.current || !effectiveChatId) return null;
     if (!modelInfo?.provider) return null;
@@ -2066,7 +2090,7 @@ export function RightSidebar({
     }
   }, [kernelStatus, assistant, enqueueToolExecution]);
 
-  // Load chats from IndexedDB on mount
+  // Load chats from local storage on mount
   useEffect(() => {
     const loadChats = async () => {
       try {
@@ -2075,7 +2099,7 @@ export function RightSidebar({
         setChats(storedChats);
         setIsChatsLoaded(true);
       } catch (error) {
-        console.error("Failed to load chats from IndexedDB:", error);
+        console.error("Failed to load chats:", error);
         setIsChatsLoaded(true);
       }
     };
@@ -2083,7 +2107,7 @@ export function RightSidebar({
     loadChats();
   }, []);
 
-  // Persist chats to IndexedDB when they change
+  // Persist chats when they change
   useEffect(() => {
     if (!isChatsLoaded) return;
 
@@ -2091,7 +2115,7 @@ export function RightSidebar({
       try {
         await chatStorage.saveChats(chats);
       } catch (error) {
-        console.error("Failed to save chats to IndexedDB:", error);
+        console.error("Failed to save chats:", error);
       }
     };
 
@@ -2156,10 +2180,18 @@ export function RightSidebar({
     if (chats.length === 0) {
       createNewChat();
     } else if (!currentChatId) {
-      setCurrentChatId(chats[0].id);
+      const sessionChatId = loadCurrentChatIdFromSession();
+      const sessionChatExists = chats.some((chat) => chat.id === sessionChatId);
+      setCurrentChatId(sessionChatExists ? sessionChatId : chats[0].id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isChatsLoaded, chats.length]);
+
+  useEffect(() => {
+    if (!isChatsLoaded) return;
+    const currentChatExists = chats.some((chat) => chat.id === currentChatId);
+    saveCurrentChatIdToSession(currentChatExists ? currentChatId : null);
+  }, [chats, currentChatId, isChatsLoaded]);
 
   // ============================================================================
   // Chat management handlers

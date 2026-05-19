@@ -127,6 +127,113 @@ const SIDEBAR_TAB_VIEWS: SidebarViewInfo[] = [
   // { id: "secrets", title: "Secrets", icon: <KeyRound /> },
 ];
 
+const LEFT_SIDEBAR_SESSION_KEY = "orion.leftSidebar";
+const DEFAULT_ACTIVE_SIDEBAR_VIEWS: SidebarViewType[] = ["files"];
+const DEFAULT_OPEN_ACCORDION_ITEMS: SidebarViewType[] = ["files", "toc"];
+const SIDEBAR_VIEW_IDS = new Set<SidebarViewType>(
+  SIDEBAR_TAB_VIEWS.map((view) => view.id)
+);
+
+interface LeftSidebarSessionState {
+  activeViews: SidebarViewType[];
+  openAccordionItems: SidebarViewType[];
+  showHiddenFiles: boolean;
+  showMinimapOutputs: boolean;
+  minimapPreviewMode: NotebookMinimapPreviewMode;
+  isSearchCaseSensitive: boolean;
+}
+
+const DEFAULT_LEFT_SIDEBAR_SESSION_STATE: LeftSidebarSessionState = {
+  activeViews: DEFAULT_ACTIVE_SIDEBAR_VIEWS,
+  openAccordionItems: DEFAULT_OPEN_ACCORDION_ITEMS,
+  showHiddenFiles: true,
+  showMinimapOutputs: true,
+  minimapPreviewMode: "compact",
+  isSearchCaseSensitive: false,
+};
+
+/**
+ * Returns true when a stored string is one of the supported sidebar tabs.
+ */
+function isSidebarViewType(value: unknown): value is SidebarViewType {
+  return typeof value === "string" && SIDEBAR_VIEW_IDS.has(value as SidebarViewType);
+}
+
+/**
+ * Sanitizes stored sidebar tab arrays and falls back when nothing valid remains.
+ */
+function parseSidebarViewList(
+  value: unknown,
+  fallback: SidebarViewType[],
+  allowEmpty = false
+): SidebarViewType[] {
+  if (!Array.isArray(value)) return fallback;
+  const views = value.filter(isSidebarViewType);
+  if (allowEmpty && views.length === 0) return [];
+  return views.length > 0 ? views : fallback;
+}
+
+/**
+ * Reads left-sidebar-only UI preferences from the current browser tab.
+ */
+function loadLeftSidebarSessionState(): LeftSidebarSessionState {
+  if (typeof window === "undefined") {
+    return DEFAULT_LEFT_SIDEBAR_SESSION_STATE;
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(LEFT_SIDEBAR_SESSION_KEY);
+    if (!raw) return DEFAULT_LEFT_SIDEBAR_SESSION_STATE;
+    const parsed = JSON.parse(raw) as Partial<LeftSidebarSessionState>;
+    return {
+      activeViews: parseSidebarViewList(
+        parsed.activeViews,
+        DEFAULT_LEFT_SIDEBAR_SESSION_STATE.activeViews
+      ),
+      openAccordionItems: parseSidebarViewList(
+        parsed.openAccordionItems,
+        DEFAULT_LEFT_SIDEBAR_SESSION_STATE.openAccordionItems,
+        true
+      ),
+      showHiddenFiles:
+        typeof parsed.showHiddenFiles === "boolean"
+          ? parsed.showHiddenFiles
+          : DEFAULT_LEFT_SIDEBAR_SESSION_STATE.showHiddenFiles,
+      showMinimapOutputs:
+        typeof parsed.showMinimapOutputs === "boolean"
+          ? parsed.showMinimapOutputs
+          : DEFAULT_LEFT_SIDEBAR_SESSION_STATE.showMinimapOutputs,
+      minimapPreviewMode:
+        parsed.minimapPreviewMode === "miniature" ||
+        parsed.minimapPreviewMode === "compact"
+          ? parsed.minimapPreviewMode
+          : DEFAULT_LEFT_SIDEBAR_SESSION_STATE.minimapPreviewMode,
+      isSearchCaseSensitive:
+        typeof parsed.isSearchCaseSensitive === "boolean"
+          ? parsed.isSearchCaseSensitive
+          : DEFAULT_LEFT_SIDEBAR_SESSION_STATE.isSearchCaseSensitive,
+    };
+  } catch {
+    return DEFAULT_LEFT_SIDEBAR_SESSION_STATE;
+  }
+}
+
+/**
+ * Stores left-sidebar-only UI preferences for the current browser tab.
+ */
+function saveLeftSidebarSessionState(state: LeftSidebarSessionState): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.setItem(
+      LEFT_SIDEBAR_SESSION_KEY,
+      JSON.stringify(state)
+    );
+  } catch {
+    // Session UI state can fall back to defaults if storage is unavailable.
+  }
+}
+
 /**
  * Fetches the immediate children of a directory from the Jupyter ContentsManager.
  * Non-recursive — each folder child is returned with `childrenLoaded: false`
@@ -251,25 +358,32 @@ export function LeftSidebar({
   const [fileTreeData, setFileTreeData] = useState<FileTreeItem[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const [activeViews, setActiveViews] = useState<SidebarViewType[]>(["files"]);
+  const [activeViews, setActiveViews] = useState<SidebarViewType[]>(
+    DEFAULT_LEFT_SIDEBAR_SESSION_STATE.activeViews
+  );
 
-  const [openAccordionItems, setOpenAccordionItems] = useState<string[]>([
-    "files",
-    "toc",
-  ]);
+  const [openAccordionItems, setOpenAccordionItems] = useState<SidebarViewType[]>(
+    DEFAULT_LEFT_SIDEBAR_SESSION_STATE.openAccordionItems
+  );
 
   /** Controls whether all notebook minimap sections are expanded or collapsed. */
   const [allMinimapSectionsOpen, setAllMinimapSectionsOpen] = useState(true);
   /** Controls whether notebook cell output previews are visible in the minimap. */
-  const [showMinimapOutputs, setShowMinimapOutputs] = useState(true);
+  const [showMinimapOutputs, setShowMinimapOutputs] = useState(
+    DEFAULT_LEFT_SIDEBAR_SESSION_STATE.showMinimapOutputs
+  );
   /** Controls the minimap cell preview rendering mode. */
   const [minimapPreviewMode, setMinimapPreviewMode] =
-    useState<NotebookMinimapPreviewMode>("compact");
+    useState<NotebookMinimapPreviewMode>(
+      DEFAULT_LEFT_SIDEBAR_SESSION_STATE.minimapPreviewMode
+    );
   /** Tracks the currently selected notebook cell index for minimap highlighting. */
   const [selectedMinimapCellIndex, setSelectedMinimapCellIndex] = useState<number | null>(null);
 
   /** When false, dotfiles (files/folders starting with ".") are hidden from the tree. */
-  const [showHiddenFiles, setShowHiddenFiles] = useState(true);
+  const [showHiddenFiles, setShowHiddenFiles] = useState(
+    DEFAULT_LEFT_SIDEBAR_SESSION_STATE.showHiddenFiles
+  );
 
   /**
    * OS-appropriate label for the "reveal in file manager" context menu action.
@@ -287,7 +401,42 @@ export function LeftSidebar({
   const [isRefreshingKernels, setIsRefreshingKernels] = useState(false);
   const [isShuttingDownAllKernels, setIsShuttingDownAllKernels] = useState(false);
   /** True when search uses exact letter casing (off by default). */
-  const [isSearchCaseSensitive, setIsSearchCaseSensitive] = useState(false);
+  const [isSearchCaseSensitive, setIsSearchCaseSensitive] = useState(
+    DEFAULT_LEFT_SIDEBAR_SESSION_STATE.isSearchCaseSensitive
+  );
+  const [hasLoadedSidebarSessionState, setHasLoadedSidebarSessionState] =
+    useState(false);
+
+  useEffect(() => {
+    const savedState = loadLeftSidebarSessionState();
+    setActiveViews(savedState.activeViews);
+    setOpenAccordionItems(savedState.openAccordionItems);
+    setShowHiddenFiles(savedState.showHiddenFiles);
+    setShowMinimapOutputs(savedState.showMinimapOutputs);
+    setMinimapPreviewMode(savedState.minimapPreviewMode);
+    setIsSearchCaseSensitive(savedState.isSearchCaseSensitive);
+    setHasLoadedSidebarSessionState(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hasLoadedSidebarSessionState) return;
+    saveLeftSidebarSessionState({
+      activeViews,
+      openAccordionItems,
+      showHiddenFiles,
+      showMinimapOutputs,
+      minimapPreviewMode,
+      isSearchCaseSensitive,
+    });
+  }, [
+    activeViews,
+    hasLoadedSidebarSessionState,
+    isSearchCaseSensitive,
+    minimapPreviewMode,
+    openAccordionItems,
+    showHiddenFiles,
+    showMinimapOutputs,
+  ]);
 
   /** True when the editor has an `.ipynb` file open (minimap applies). */
   const isNotebookOpen =
@@ -303,7 +452,7 @@ export function LeftSidebar({
   const childrenCacheRef = useRef<Map<string, FileTreeItem[]>>(new Map());
 
   const handleAccordionChange = (value: string[]) => {
-    setOpenAccordionItems(value);
+    setOpenAccordionItems(parseSidebarViewList(value, [], true));
   };
 
   /**

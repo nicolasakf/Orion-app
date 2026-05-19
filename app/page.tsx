@@ -95,6 +95,12 @@ import { MobileToolbar } from "@/components/mobile/mobile-toolbar";
 import { SettingsDialog } from "@/components/settings-dialog/settings-dialog";
 import { TerminalPool } from "@/lib/shell/terminal-pool";
 import { openPathInSystemTerminal } from "@/lib/shell/system-commands/open-file";
+import {
+  DEFAULT_PANEL_VISIBILITY_STATE,
+  loadPanelVisibilityState,
+  savePanelVisibilityState,
+  type PanelVisibilityState,
+} from "@/lib/ui-session-state";
 
 type ActiveFile = {
   name: string;
@@ -409,7 +415,12 @@ function MobileLayout({
 }
 
 export default function Page() {
-  const { effectiveSettings, isHydrated, setUserSettings } = useOrionSettings();
+  const {
+    effectiveSettings,
+    isHydrated,
+    setUserSettings,
+    setWorkspaceSettingsSource,
+  } = useOrionSettings();
   const isMobile = useIsMobile();
   const [currentFile, setCurrentFile] = useState<ActiveFile>({
     name: "",
@@ -482,17 +493,21 @@ export default function Page() {
   const [isFileIconHovered, setIsFileIconHovered] = useState(false);
   const leftPanelRef = useRef<any>(null);
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(
-    effectiveSettings.layout.sidebars.leftCollapsed,
+    DEFAULT_PANEL_VISIBILITY_STATE.leftCollapsed,
   );
   const rightPanelRef = useRef<any>(null);
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(
-    effectiveSettings.layout.sidebars.rightCollapsed,
+    DEFAULT_PANEL_VISIBILITY_STATE.rightCollapsed,
   );
   const bottomPanelRef = useRef<any>(null);
   const [bottomSidebarCollapsed, setBottomSidebarCollapsed] = useState(
-    effectiveSettings.layout.sidebars.bottomCollapsed,
+    DEFAULT_PANEL_VISIBILITY_STATE.bottomCollapsed,
   );
-  const [isFocusMode, setIsFocusMode] = useState(false);
+  const [hasLoadedPanelVisibilityState, setHasLoadedPanelVisibilityState] =
+    useState(false);
+  const [isFocusMode, setIsFocusMode] = useState(
+    DEFAULT_PANEL_VISIBILITY_STATE.isFocusMode,
+  );
   /** While Focus mode is on, sidebar chrome is hidden until that panel is hovered or focused. */
   const [focusLeftHovered, setFocusLeftHovered] = useState(false);
   const [focusLeftFocused, setFocusLeftFocused] = useState(false);
@@ -514,27 +529,44 @@ export default function Page() {
   useEffect(() => {
     if (!isHydrated) return;
 
-    setLeftSidebarCollapsed(effectiveSettings.layout.sidebars.leftCollapsed);
-    setRightSidebarCollapsed(effectiveSettings.layout.sidebars.rightCollapsed);
-    setBottomSidebarCollapsed(
-      effectiveSettings.layout.sidebars.bottomCollapsed,
-    );
     setHorizontalPanelSizes(effectiveSettings.layout.panelSizes.horizontal);
     setVerticalPanelSizes(effectiveSettings.layout.panelSizes.vertical);
   }, [
     effectiveSettings.layout.panelSizes.horizontal,
     effectiveSettings.layout.panelSizes.vertical,
-    effectiveSettings.layout.sidebars.bottomCollapsed,
-    effectiveSettings.layout.sidebars.leftCollapsed,
-    effectiveSettings.layout.sidebars.rightCollapsed,
     isHydrated,
   ]);
 
   useEffect(() => {
-    if (!isHydrated) return;
+    const savedVisibility = loadPanelVisibilityState();
+    setLeftSidebarCollapsed(savedVisibility.leftCollapsed);
+    setRightSidebarCollapsed(savedVisibility.rightCollapsed);
+    setBottomSidebarCollapsed(savedVisibility.bottomCollapsed);
+    setIsFocusMode(savedVisibility.isFocusMode);
+    setHasLoadedPanelVisibilityState(true);
+  }, []);
+
+  useEffect(() => {
+    if (!hasLoadedPanelVisibilityState) return;
+    savePanelVisibilityState({
+      leftCollapsed: leftSidebarCollapsed,
+      rightCollapsed: rightSidebarCollapsed,
+      bottomCollapsed: bottomSidebarCollapsed,
+      isFocusMode,
+    });
+  }, [
+    bottomSidebarCollapsed,
+    hasLoadedPanelVisibilityState,
+    isFocusMode,
+    leftSidebarCollapsed,
+    rightSidebarCollapsed,
+  ]);
+
+  useEffect(() => {
+    if (!isHydrated || !hasLoadedPanelVisibilityState) return;
 
     if (leftPanelRef.current) {
-      if (effectiveSettings.layout.sidebars.leftCollapsed) {
+      if (leftSidebarCollapsed) {
         leftPanelRef.current.collapse();
       } else {
         leftPanelRef.current.expand();
@@ -542,7 +574,7 @@ export default function Page() {
     }
 
     if (rightPanelRef.current) {
-      if (effectiveSettings.layout.sidebars.rightCollapsed) {
+      if (rightSidebarCollapsed) {
         rightPanelRef.current.collapse();
       } else {
         rightPanelRef.current.expand();
@@ -550,17 +582,18 @@ export default function Page() {
     }
 
     if (bottomPanelRef.current) {
-      if (effectiveSettings.layout.sidebars.bottomCollapsed) {
+      if (bottomSidebarCollapsed) {
         bottomPanelRef.current.collapse();
       } else {
         bottomPanelRef.current.expand();
       }
     }
   }, [
-    effectiveSettings.layout.sidebars.bottomCollapsed,
-    effectiveSettings.layout.sidebars.leftCollapsed,
-    effectiveSettings.layout.sidebars.rightCollapsed,
+    bottomSidebarCollapsed,
+    hasLoadedPanelVisibilityState,
     isHydrated,
+    leftSidebarCollapsed,
+    rightSidebarCollapsed,
   ]);
 
   /**
@@ -980,6 +1013,13 @@ export default function Page() {
   >([]);
   const { serverAvailable: isJupyterServerReady } =
     useJupyterShellReady(kernelService);
+
+  useEffect(() => {
+    setWorkspaceSettingsSource(
+      kernelService?.getContentsManager() ?? null,
+      workspaceDirectory
+    );
+  }, [kernelService, setWorkspaceSettingsSource, workspaceDirectory]);
 
   /**
    * Restores the last opened workspace and file only after the Jupyter server
@@ -1769,24 +1809,24 @@ export default function Page() {
     Boolean(currentFile.path) &&
     !isJupyterPathWithinWorkspace(currentFile.path, workspaceDirectory);
 
-  const persistSidebarState = React.useCallback(
-    (next: {
-      leftCollapsed?: boolean;
-      rightCollapsed?: boolean;
-      bottomCollapsed?: boolean;
-    }) => {
-      void setUserSettings((current) => ({
-        ...current,
-        layout: {
-          ...current.layout,
-          sidebars: {
-            ...current.layout.sidebars,
-            ...next,
-          },
-        },
-      }));
+  const persistPanelVisibilityState = React.useCallback(
+    (next: Partial<PanelVisibilityState>) => {
+      if (!hasLoadedPanelVisibilityState) return;
+      savePanelVisibilityState({
+        leftCollapsed: leftSidebarCollapsed,
+        rightCollapsed: rightSidebarCollapsed,
+        bottomCollapsed: bottomSidebarCollapsed,
+        isFocusMode,
+        ...next,
+      });
     },
-    [setUserSettings],
+    [
+      bottomSidebarCollapsed,
+      hasLoadedPanelVisibilityState,
+      isFocusMode,
+      leftSidebarCollapsed,
+      rightSidebarCollapsed,
+    ],
   );
 
   const handleTogglePresentationHideAllCellInputs = React.useCallback(() => {
@@ -1840,33 +1880,33 @@ export default function Page() {
 
   const handleLeftCollapse = React.useCallback(() => {
     setLeftSidebarCollapsed(true);
-    persistSidebarState({ leftCollapsed: true });
-  }, [persistSidebarState]);
+    persistPanelVisibilityState({ leftCollapsed: true });
+  }, [persistPanelVisibilityState]);
 
   const handleLeftExpand = React.useCallback(() => {
     setLeftSidebarCollapsed(false);
-    persistSidebarState({ leftCollapsed: false });
-  }, [persistSidebarState]);
+    persistPanelVisibilityState({ leftCollapsed: false });
+  }, [persistPanelVisibilityState]);
 
   const handleRightCollapse = React.useCallback(() => {
     setRightSidebarCollapsed(true);
-    persistSidebarState({ rightCollapsed: true });
-  }, [persistSidebarState]);
+    persistPanelVisibilityState({ rightCollapsed: true });
+  }, [persistPanelVisibilityState]);
 
   const handleRightExpand = React.useCallback(() => {
     setRightSidebarCollapsed(false);
-    persistSidebarState({ rightCollapsed: false });
-  }, [persistSidebarState]);
+    persistPanelVisibilityState({ rightCollapsed: false });
+  }, [persistPanelVisibilityState]);
 
   const handleBottomCollapse = React.useCallback(() => {
     setBottomSidebarCollapsed(true);
-    persistSidebarState({ bottomCollapsed: true });
-  }, [persistSidebarState]);
+    persistPanelVisibilityState({ bottomCollapsed: true });
+  }, [persistPanelVisibilityState]);
 
   const handleBottomExpand = React.useCallback(() => {
     setBottomSidebarCollapsed(false);
-    persistSidebarState({ bottomCollapsed: false });
-  }, [persistSidebarState]);
+    persistPanelVisibilityState({ bottomCollapsed: false });
+  }, [persistPanelVisibilityState]);
 
   // Add toggle functions
   const toggleLeftSidebar = React.useCallback(() => {

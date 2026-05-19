@@ -439,8 +439,17 @@ function ApprovalModeDropdown({
   onToolApprovalModeChange: (mode: ToolApprovalMode) => void;
   visible: boolean;
 }) {
+  const [open, setOpen] = React.useState(false);
+  const currentMode: ToolApprovalMode = toolApprovalMode ?? "always_ask";
+
+  const selectMode = (mode: ToolApprovalMode) => {
+    setOpen(false);
+    if (mode === currentMode) return;
+    onToolApprovalModeChange(mode);
+  };
+
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
           type="button"
@@ -450,12 +459,12 @@ function ApprovalModeDropdown({
           )}
           aria-label="Tool approval settings"
         >
-          {toolApprovalMode === "auto_run" ? (
+          {currentMode === "auto_run" ? (
             <Play className="h-3 w-3 shrink-0" />
           ) : (
             <ShieldCheck className="h-3 w-3 shrink-0" />
           )}
-          <span>{toolApprovalMode === "auto_run" ? "Auto Run" : "Always Ask"}</span>
+          <span>{currentMode === "auto_run" ? "Auto Run" : "Always Ask"}</span>
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -467,9 +476,9 @@ function ApprovalModeDropdown({
           type="button"
           className={cn(
             "corner-squircle flex w-full items-center gap-2 rounded-sm px-2 py-1 text-xs hover:bg-accent",
-            toolApprovalMode === "always_ask" && "font-medium text-foreground"
+            currentMode === "always_ask" && "font-medium text-foreground"
           )}
-          onClick={() => onToolApprovalModeChange("always_ask")}
+          onClick={() => selectMode("always_ask")}
         >
           <ShieldCheck className="h-3 w-3" />
           Always ask
@@ -478,9 +487,9 @@ function ApprovalModeDropdown({
           type="button"
           className={cn(
             "corner-squircle flex w-full items-center gap-2 rounded-sm px-2 py-1 text-xs hover:bg-accent",
-            toolApprovalMode === "auto_run" && "font-medium text-foreground"
+            currentMode === "auto_run" && "font-medium text-foreground"
           )}
-          onClick={() => onToolApprovalModeChange("auto_run")}
+          onClick={() => selectMode("auto_run")}
         >
           <Play className="h-3 w-3" />
           Auto-run

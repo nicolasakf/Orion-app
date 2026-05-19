@@ -278,6 +278,8 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   if (!areToolMapValuesEqual(prev.message, next.message, prev.subagentReportPaths, next.subagentReportPaths)) {
     return false;
   }
+  if (prev.toolApprovalMode !== next.toolApprovalMode) return false;
+  if (prev.onToolApprovalModeChange !== next.onToolApprovalModeChange) return false;
 
   return true;
 });
