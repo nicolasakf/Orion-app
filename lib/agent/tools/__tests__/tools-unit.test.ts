@@ -980,9 +980,20 @@ await runTest("read_cell large Orion metadata uses compact fallback", async () =
 
 console.log("\n--- ExecuteCellTool ---");
 
-function makeExecuteCellTool(streamText: string): ExecuteCellTool {
-  const notebook = makeNotebook([makeCodeCell("print('hello')", [], null)]);
-  const { ks } = createStatefulKernelService({ "exec_cell.ipynb": notebook });
+function makeExecuteCellTool(streamText: string): {
+  tool: ExecuteCellTool;
+  store: Map<string, NotebookType>;
+} {
+  const cell = makeCodeCell("print('hello')", [], null);
+  cell.metadata = {
+    tags: ["keep-me"],
+    orion: {
+      id: "cell-1",
+      cellState: { isInputCollapsed: true },
+    },
+  };
+  const notebook = makeNotebook([cell]);
+  const { ks, store } = createStatefulKernelService({ "exec_cell.ipynb": notebook });
   const ksMutable = ks as unknown as {
     execute: (
       code: string,
@@ -993,6 +1004,10 @@ function makeExecuteCellTool(streamText: string): ExecuteCellTool {
     ) => Promise<{ done: Promise<void> }>;
   };
   ksMutable.execute = async (_code, onMessage) => {
+    onMessage({
+      header: { msg_type: "execute_input" },
+      content: { execution_count: 7 },
+    });
     onMessage({
       header: { msg_type: "stream" },
       content: { name: "stdout", text: streamText },
@@ -1006,11 +1021,11 @@ function makeExecuteCellTool(streamText: string): ExecuteCellTool {
 
   const mgr = new NotebookManager();
   mgr.addNotebook("main", "exec_cell.ipynb", "k1");
-  return new ExecuteCellTool(ks, null, mgr);
+  return { tool: new ExecuteCellTool(ks, null, mgr), store };
 }
 
 await runTest("execute_cell applies aggregate guardrail for oversized output", async () => {
-  const tool = makeExecuteCellTool("w".repeat(20000));
+  const { tool } = makeExecuteCellTool("w".repeat(20000));
   const result = await tool.execute({
     cellIndices: [0],
     timeoutSeconds: 10,
@@ -1019,6 +1034,35 @@ await runTest("execute_cell applies aggregate guardrail for oversized output", a
   });
   const text = result.join("\n");
   assertIncludes(text, "Content is too large to read safely", "should trigger compact fallback");
+});
+
+await runTest("execute_cell writes Orion execution info metadata", async () => {
+  const { tool, store } = makeExecuteCellTool("done\n");
+  await tool.execute({
+    cellIndices: [0],
+    timeoutSeconds: 10,
+    stream: false,
+    progressInterval: 1000,
+  });
+
+  const savedCell = store.get("exec_cell.ipynb")!.cells[0]!;
+  const executionInfo = savedCell.metadata?.orion?.cellState?.executionInfo;
+  assert(savedCell.execution_count === 7, "should use kernel execution count");
+  assert(savedCell.metadata?.tags?.[0] === "keep-me", "should preserve non-Orion metadata");
+  assert(savedCell.metadata?.orion?.id === "cell-1", "should preserve Orion cell id");
+  assert(
+    savedCell.metadata?.orion?.cellState?.isInputCollapsed === true,
+    "should preserve sibling cellState metadata"
+  );
+  assert(executionInfo?.status === "success", "should mark execution successful");
+  assert(executionInfo?.startTime instanceof Date, "should store start time");
+  assert(executionInfo?.endTime instanceof Date, "should store end time");
+  assert(executionInfo?.lastExecuted instanceof Date, "should store last executed time");
+  assert(typeof executionInfo?.duration === "number", "should store duration");
+  assert(
+    executionInfo?.statistics?.wallTime === executionInfo?.duration,
+    "should store wall time statistic"
+  );
 });
 
 // ============================================================================
