@@ -11,7 +11,9 @@ import type { SkillInfo } from "./types";
 
 import createSkillRaw from "./builtin/create-skill/SKILL.md";
 import createSubagentRaw from "./builtin/create-subagent/SKILL.md";
+import chatHistoryRaw from "./builtin/chat-history/SKILL.md";
 import orionMetadataRaw from "./builtin/orion-metadata/SKILL.md";
+import orionSettingsRaw from "./builtin/orion-settings/SKILL.md";
 
 /** Converts a bundled SKILL.md file into a registry entry. */
 function parseBuiltinSkill(raw: string): SkillInfo {
@@ -31,5 +33,7 @@ function parseBuiltinSkill(raw: string): SkillInfo {
 export const BUILTIN_SKILLS: SkillInfo[] = [
   parseBuiltinSkill(createSkillRaw),
   parseBuiltinSkill(createSubagentRaw),
+  parseBuiltinSkill(orionSettingsRaw),
+  parseBuiltinSkill(chatHistoryRaw),
   parseBuiltinSkill(orionMetadataRaw),
 ];
