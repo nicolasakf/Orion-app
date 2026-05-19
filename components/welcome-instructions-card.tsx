@@ -56,7 +56,7 @@ export function WelcomeInstructionsCard({
   };
 
   return (
-    <div className="flex h-full items-center justify-center bg-background px-6 py-10">
+    <div className="flex h-full items-center justify-center bg-sidebar px-6 py-10">
       <Card className="w-full max-w-3xl border-border/60 shadow-sm">
         <CardHeader className="space-y-3">
           <CardTitle className="text-2xl">Get started</CardTitle>
