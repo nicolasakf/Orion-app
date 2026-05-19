@@ -7,7 +7,17 @@ export const MAX_PINNED_WORKSPACE_DIRECTORY_PATHS = 50;
 
 export const ThemeSettingSchema = z.enum(["light", "dark", "system"]);
 export const InteractionModeSchema = z.enum(["Agent", "Ask", "Edit"]).catch("Agent");
-export const ToolApprovalModeSchema = z.enum(["always_ask", "auto_run"]);
+export const ToolApprovalModeSchema = z.preprocess((value) => {
+  if (typeof value !== "string") return value;
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (normalized === "always_ask" || normalized === "alwaysask") {
+    return "always_ask";
+  }
+  if (normalized === "auto_run" || normalized === "autorun") {
+    return "auto_run";
+  }
+  return value;
+}, z.enum(["always_ask", "auto_run"]));
 export const WordWrapSchema = z.enum(["off", "on", "wordWrapColumn", "bounded"]);
 
 const SortConfigSchema = z
@@ -58,8 +68,8 @@ const TableViewSchema = z.object({
 const ProviderCredentialSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("api_key"),
-    /** Encrypted at rest in localStorage — never sent to the Orion server except
-     *  as a transient value inside the /api/chat request body over HTTPS. */
+    /** Browser-only credential; never written to user/workspace settings files.
+     *  Sent to the Orion server only as a transient value inside /api/chat. */
     apiKey: z.string(),
   }),
   z.object({
@@ -91,11 +101,6 @@ const SettingsDataSchema = z.object({
     theme: ThemeSettingSchema,
   }),
   layout: z.object({
-    sidebars: z.object({
-      leftCollapsed: z.boolean(),
-      rightCollapsed: z.boolean(),
-      bottomCollapsed: z.boolean(),
-    }),
     panelSizes: z.object({
       horizontal: z
         .tuple([z.number().min(5).max(90), z.number().min(5).max(90), z.number().min(5).max(90)])
@@ -171,7 +176,7 @@ export const UserSettingsDocumentSchema = z.object({
   settings: SettingsDataSchema,
 });
 
-export const ProjectSettingsDocumentSchema = z.object({
+export const WorkspaceSettingsDocumentSchema = z.object({
   version: z.number().int().min(1),
   overrides: SettingsDataSchema.deepPartial(),
 });
@@ -182,5 +187,5 @@ export type ToolApprovalMode = z.infer<typeof ToolApprovalModeSchema>;
 export type WordWrapSetting = z.infer<typeof WordWrapSchema>;
 export type SettingsData = z.infer<typeof SettingsDataSchema>;
 export type UserSettingsDocument = z.infer<typeof UserSettingsDocumentSchema>;
-export type ProjectSettingsDocument = z.infer<typeof ProjectSettingsDocumentSchema>;
-export type ProjectSettingsOverrides = ProjectSettingsDocument["overrides"];
+export type WorkspaceSettingsDocument = z.infer<typeof WorkspaceSettingsDocumentSchema>;
+export type WorkspaceSettingsOverrides = WorkspaceSettingsDocument["overrides"];

@@ -13,7 +13,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 
-/** Appearance tab: theme, editor preferences, and layout defaults. */
+/** Appearance tab: theme, editor preferences, and persistent display defaults. */
 export function AppearanceTab() {
   const { effectiveSettings, setUserSettings } = useOrionSettings();
   const appearance = effectiveSettings.appearance;
@@ -21,7 +21,6 @@ export function AppearanceTab() {
   const fileTree = effectiveSettings.fileTree;
   const editor = effectiveSettings.editor;
   const notebook = effectiveSettings.notebook;
-  const layout = effectiveSettings.layout;
 
   const handleThemeChange = (value: "light" | "dark" | "system") => {
     void setUserSettings((current) => ({
@@ -38,7 +37,7 @@ export function AppearanceTab() {
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Appearance</h2>
         <p className="text-sm text-muted-foreground">
-          Control theme, editor defaults, and layout preferences.
+          Control theme, editor defaults, and display preferences.
         </p>
       </div>
 
@@ -271,78 +270,6 @@ export function AppearanceTab() {
           </div>
         </section>
 
-        <Separator />
-
-        <section className="space-y-3">
-          <h3 className="text-sm font-bold">Layout</h3>
-          <div className="grid gap-3 max-w-2xl">
-            <div className="corner-squircle flex items-center justify-between rounded-md border p-3">
-              <Label htmlFor="layout-left-collapsed">
-                Start with left sidebar collapsed
-              </Label>
-              <Switch
-                id="layout-left-collapsed"
-                checked={layout.sidebars.leftCollapsed}
-                onCheckedChange={(checked) =>
-                  void setUserSettings((current) => ({
-                    ...current,
-                    layout: {
-                      ...current.layout,
-                      sidebars: {
-                        ...current.layout.sidebars,
-                        leftCollapsed: checked,
-                      },
-                    },
-                  }))
-                }
-              />
-            </div>
-
-            <div className="corner-squircle flex items-center justify-between rounded-md border p-3">
-              <Label htmlFor="layout-right-collapsed">
-                Start with right sidebar collapsed
-              </Label>
-              <Switch
-                id="layout-right-collapsed"
-                checked={layout.sidebars.rightCollapsed}
-                onCheckedChange={(checked) =>
-                  void setUserSettings((current) => ({
-                    ...current,
-                    layout: {
-                      ...current.layout,
-                      sidebars: {
-                        ...current.layout.sidebars,
-                        rightCollapsed: checked,
-                      },
-                    },
-                  }))
-                }
-              />
-            </div>
-
-            <div className="corner-squircle flex items-center justify-between rounded-md border p-3">
-              <Label htmlFor="layout-bottom-collapsed">
-                Start with bottom panel collapsed
-              </Label>
-              <Switch
-                id="layout-bottom-collapsed"
-                checked={layout.sidebars.bottomCollapsed}
-                onCheckedChange={(checked) =>
-                  void setUserSettings((current) => ({
-                    ...current,
-                    layout: {
-                      ...current.layout,
-                      sidebars: {
-                        ...current.layout.sidebars,
-                        bottomCollapsed: checked,
-                      },
-                    },
-                  }))
-                }
-              />
-            </div>
-          </div>
-        </section>
       </div>
     </div>
   );

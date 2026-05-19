@@ -1,7 +1,10 @@
 "use client";
 
 import * as React from "react";
+import { RefreshCw } from "lucide-react";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -16,8 +19,8 @@ import { AppearanceTab } from "@/components/settings-dialog/appearance-tab";
 import { ModelsTab } from "@/components/settings-dialog/models-tab";
 import { ProvidersTab } from "@/components/settings-dialog/providers-tab";
 import { SettingsSidebar } from "@/components/settings-dialog/settings-sidebar";
-import { StorageTab } from "@/components/settings-dialog/storage-tab";
 import type { SettingsTab } from "@/components/settings-dialog/types";
+import { useSettingsContext } from "@/components/settings/settings-provider";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -33,6 +36,10 @@ export function SettingsDialog({
   initialTab,
 }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = React.useState<SettingsTab>("providers");
+  const { errorMessage, reloadUserSettings, userSettingsLoadStatus } =
+    useSettingsContext();
+  const settingsLoadFailed =
+    userSettingsLoadStatus === "failed" && errorMessage;
 
   React.useEffect(() => {
     if (open && initialTab) {
@@ -48,8 +55,6 @@ export function SettingsDialog({
         return <ModelsTab />;
       case "providers":
         return <ProvidersTab />;
-      case "storage":
-        return <StorageTab />;
       default:
         return <ProvidersTab />;
     }
@@ -63,6 +68,28 @@ export function SettingsDialog({
         <DialogHeader className="sr-only">
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
+        {settingsLoadFailed ? (
+          <Alert variant="destructive" className="m-3 mb-0 w-auto">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <AlertTitle>Settings failed to load</AlertTitle>
+                <AlertDescription>{errorMessage}</AlertDescription>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  void reloadUserSettings();
+                }}
+                className="shrink-0"
+              >
+                <RefreshCw className="size-4" />
+                Retry
+              </Button>
+            </div>
+          </Alert>
+        ) : null}
         <SidebarProvider
           className="flex-1 min-h-0 gap-3 p-3"
           style={

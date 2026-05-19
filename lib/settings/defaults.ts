@@ -1,4 +1,4 @@
-import type { ProjectSettingsDocument, SettingsData, UserSettingsDocument } from "@/lib/settings/schema";
+import type { SettingsData, UserSettingsDocument, WorkspaceSettingsDocument } from "@/lib/settings/schema";
 import { SETTINGS_SCHEMA_VERSION } from "@/lib/settings/schema";
 
 export const DEFAULT_SETTINGS: SettingsData = {
@@ -6,11 +6,6 @@ export const DEFAULT_SETTINGS: SettingsData = {
     theme: "system",
   },
   layout: {
-    sidebars: {
-      leftCollapsed: false,
-      rightCollapsed: false,
-      bottomCollapsed: true,
-    },
     panelSizes: {
       horizontal: [15, 50, 20],
       vertical: [70, 20],
@@ -54,14 +49,16 @@ export const DEFAULT_SETTINGS: SettingsData = {
   },
 };
 
+/** Creates an isolated user settings document from the immutable defaults. */
 export function createDefaultUserSettingsDocument(): UserSettingsDocument {
   return {
     version: SETTINGS_SCHEMA_VERSION,
-    settings: DEFAULT_SETTINGS,
+    settings: structuredClone(DEFAULT_SETTINGS),
   };
 }
 
-export function createDefaultProjectSettingsDocument(): ProjectSettingsDocument {
+/** Creates an empty workspace settings document for workspace-level overrides. */
+export function createDefaultWorkspaceSettingsDocument(): WorkspaceSettingsDocument {
   return {
     version: SETTINGS_SCHEMA_VERSION,
     overrides: {},

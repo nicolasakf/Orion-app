@@ -1,7 +1,7 @@
-import { createDefaultProjectSettingsDocument, createDefaultUserSettingsDocument, DEFAULT_SETTINGS } from "@/lib/settings/defaults";
+import { createDefaultUserSettingsDocument, createDefaultWorkspaceSettingsDocument, DEFAULT_SETTINGS } from "@/lib/settings/defaults";
 import { mergeSettings } from "@/lib/settings/merge";
-import type { ProjectSettingsDocument, ProjectSettingsOverrides, SettingsData, UserSettingsDocument } from "@/lib/settings/schema";
-import { ProjectSettingsDocumentSchema, SETTINGS_SCHEMA_VERSION, UserSettingsDocumentSchema } from "@/lib/settings/schema";
+import type { SettingsData, UserSettingsDocument, WorkspaceSettingsDocument, WorkspaceSettingsOverrides } from "@/lib/settings/schema";
+import { SETTINGS_SCHEMA_VERSION, UserSettingsDocumentSchema, WorkspaceSettingsDocumentSchema } from "@/lib/settings/schema";
 
 function safeParseJson(raw: string): unknown | null {
   try {
@@ -27,6 +27,15 @@ function stripLegacyAppearanceKeys(settings: Record<string, unknown>): void {
   }
   if ("focusMode" in appearance) {
     delete appearance.focusMode;
+  }
+}
+
+/** Drops app-shell visibility flags that now belong to browser session state. */
+function stripSessionOnlyLayoutKeys(settings: Record<string, unknown>): void {
+  const layout = asObject(settings.layout);
+  if (!layout) return;
+  if ("sidebars" in layout) {
+    delete layout.sidebars;
   }
 }
 
@@ -58,14 +67,22 @@ function stripInvalidWorkspacePins(settings: SettingsData): SettingsData {
   };
 }
 
-function normalizeProjectDocument(raw: unknown): Record<string, unknown> {
+function normalizeWorkspaceDocument(raw: unknown): Record<string, unknown> {
   const obj = asObject(raw);
   if (!obj) {
-    return createDefaultProjectSettingsDocument();
+    return createDefaultWorkspaceSettingsDocument();
   }
 
   if ("overrides" in obj) {
     return obj;
+  }
+
+  // Workspace settings may be authored in the same shape as user settings.
+  if ("settings" in obj) {
+    return {
+      version: SETTINGS_SCHEMA_VERSION,
+      overrides: obj.settings,
+    };
   }
 
   // Legacy support: treat top-level payload as override payload.
@@ -80,6 +97,7 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
   const settingsObj = asObject(normalized.settings);
   if (settingsObj) {
     stripLegacyAppearanceKeys(settingsObj);
+    stripSessionOnlyLayoutKeys(settingsObj);
   }
   const parsed = UserSettingsDocumentSchema.safeParse(normalized);
   if (parsed.success) {
@@ -102,6 +120,7 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
   }
 
   stripLegacyAppearanceKeys(partialSettings);
+  stripSessionOnlyLayoutKeys(partialSettings);
 
   const merged = mergeSettings(
     DEFAULT_SETTINGS,
@@ -115,9 +134,9 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
   };
 }
 
-export function migrateProjectSettingsDocument(raw: unknown): ProjectSettingsDocument {
-  const normalized = normalizeProjectDocument(raw);
-  const parsed = ProjectSettingsDocumentSchema.safeParse(normalized);
+export function migrateWorkspaceSettingsDocument(raw: unknown): WorkspaceSettingsDocument {
+  const normalized = normalizeWorkspaceDocument(raw);
+  const parsed = WorkspaceSettingsDocumentSchema.safeParse(normalized);
   if (parsed.success) {
     return {
       version: SETTINGS_SCHEMA_VERSION,
@@ -126,9 +145,10 @@ export function migrateProjectSettingsDocument(raw: unknown): ProjectSettingsDoc
   }
 
   const maybeOverrides = asObject(normalized.overrides) ?? {};
+  stripSessionOnlyLayoutKeys(maybeOverrides);
   return {
     version: SETTINGS_SCHEMA_VERSION,
-    overrides: maybeOverrides as ProjectSettingsOverrides,
+    overrides: maybeOverrides as WorkspaceSettingsOverrides,
   };
 }
 
@@ -137,7 +157,7 @@ export function parseUserSettingsDocumentFromJson(raw: string): UserSettingsDocu
   return migrateUserSettingsDocument(parsed);
 }
 
-export function parseProjectSettingsDocumentFromJson(raw: string): ProjectSettingsDocument {
+export function parseWorkspaceSettingsDocumentFromJson(raw: string): WorkspaceSettingsDocument {
   const parsed = safeParseJson(raw);
-  return migrateProjectSettingsDocument(parsed);
+  return migrateWorkspaceSettingsDocument(parsed);
 }

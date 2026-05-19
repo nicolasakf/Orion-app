@@ -1,4 +1,4 @@
-import type { ProjectSettingsOverrides, SettingsData } from "@/lib/settings/schema";
+import type { SettingsData, WorkspaceSettingsOverrides } from "@/lib/settings/schema";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -40,8 +40,11 @@ function deepMerge<T>(base: T, override: unknown): T {
 export function mergeSettings(
   defaults: SettingsData,
   userSettings: SettingsData,
-  projectOverrides?: ProjectSettingsOverrides
+  ...overrideLayers: Array<WorkspaceSettingsOverrides | undefined>
 ): SettingsData {
   const mergedWithUser = deepMerge(defaults, userSettings);
-  return deepMerge(mergedWithUser, projectOverrides ?? {});
+  return overrideLayers.reduce<SettingsData>(
+    (current, overrides) => deepMerge(current, overrides ?? {}),
+    mergedWithUser
+  );
 }
