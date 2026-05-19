@@ -26,6 +26,7 @@ html {
    Exclude `.orion-chat-composer-mobile`: chat composer + model picker search use the
    Appearance chat font size instead (may cause brief focus zoom on iOS below 16px). */
 @media (max-width: 767px) {
+
   textarea:not(.orion-chat-composer-mobile),
   input[type="text"]:not(.orion-chat-composer-mobile),
   input[type="search"]:not(.orion-chat-composer-mobile),
@@ -64,14 +65,12 @@ html {
 
   .ai-text-shine {
     color: hsl(var(--ai-foreground));
-    background-image: linear-gradient(
-      110deg,
-      hsl(var(--ai-foreground)) 0%,
-      hsl(var(--ai-foreground)) 35%,
-      hsl(var(--ai-foreground-hover)) 50%,
-      hsl(var(--ai-foreground)) 65%,
-      hsl(var(--ai-foreground)) 100%
-    );
+    background-image: linear-gradient(110deg,
+        hsl(var(--ai-foreground)) 0%,
+        hsl(var(--ai-foreground)) 35%,
+        hsl(var(--ai-foreground-hover)) 50%,
+        hsl(var(--ai-foreground)) 65%,
+        hsl(var(--ai-foreground)) 100%);
     background-size: 220% 100%;
     background-position: 200% 0;
     -webkit-background-clip: text;
@@ -217,7 +216,7 @@ html {
   margin: 0 0 1em;
 }
 
-.orion-rendered-html > img,
+.orion-rendered-html>img,
 .orion-rendered-html img,
 .orion-rendered-html svg {
   max-width: 100%;
@@ -231,7 +230,7 @@ html {
   line-height: 1.45;
 }
 
-.orion-rendered-html :not(pre) > code {
+.orion-rendered-html :not(pre)>code {
   background-color: hsl(var(--muted));
   padding: 1px 5px;
   border-radius: 2px;
@@ -254,13 +253,10 @@ html {
 }
 
 .notebook-app-grid {
-  background-image: radial-gradient(
-    circle at 0 0,
-    hsl(var(--muted-foreground) / 0.28) 1px,
-    transparent 1px
-  );
-  background-size: var(--notebook-app-grid-column-width, calc(100% / 12))
-    var(--notebook-app-grid-row-height, 44px);
+  background-image: radial-gradient(circle at 0 0,
+      hsl(var(--muted-foreground) / 0.28) 1px,
+      transparent 1px);
+  background-size: var(--notebook-app-grid-column-width, calc(100% / 12)) var(--notebook-app-grid-row-height, 44px);
   background-position: 0 0;
   background-origin: content-box;
   background-clip: content-box;
@@ -272,7 +268,7 @@ html {
   opacity: 0.65;
 }
 
-.notebook-app-grid .react-grid-item > .react-resizable-handle::after {
+.notebook-app-grid .react-grid-item>.react-resizable-handle::after {
   border-right-color: hsl(var(--muted-foreground) / 0.55);
   border-bottom-color: hsl(var(--muted-foreground) / 0.55);
 }
