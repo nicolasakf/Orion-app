@@ -19,6 +19,10 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { ScrollGradientOverlays, useScrollEdgeIndicators } from "@/components/right-sidebar/scroll-edge-gradient";
+import {
+  normalizeMarkdownMathSource,
+  remarkMathJaxDelimiters,
+} from "@/lib/markdown/math-delimiters";
 import { cn } from "@/lib/utils";
 
 interface ChatMarkdownRendererProps {
@@ -464,13 +468,13 @@ export function ChatMarkdownRenderer({ source, fontSize }: ChatMarkdownRendererP
       style={{ fontSize }}
     >
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkMathJaxDelimiters]}
         rehypePlugins={[rehypeRaw, rehypeSlug, rehypeKatex, rehypeMarkKatexSpans]}
         allowedElements={allowedMarkdownElements}
         components={markdownComponents}
         urlTransform={defaultUrlTransform}
       >
-        {source}
+        {normalizeMarkdownMathSource(source)}
       </ReactMarkdown>
     </div>
   );

@@ -6,6 +6,11 @@ import "katex/dist/katex.css";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 
+import {
+  normalizeMarkdownMathSource,
+  remarkMathJaxDelimiters,
+} from "@/lib/markdown/math-delimiters";
+
 interface MarkdownRendererProps {
   source: string;
   style?: React.CSSProperties;
@@ -24,8 +29,8 @@ export function MarkdownRenderer({
   return (
     <div className="prose prose-sm max-w-none dark:prose-invert">
       <MarkdownPreview
-        source={source}
-        remarkPlugins={[remarkMath]}
+        source={normalizeMarkdownMathSource(source)}
+        remarkPlugins={[remarkMath, remarkMathJaxDelimiters]}
         rehypePlugins={[rehypeKatex]}
         style={style}
       />
