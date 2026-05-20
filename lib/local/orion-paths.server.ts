@@ -25,3 +25,15 @@ export function getUserSettingsFilePath(): string {
 export function getOrionDatabasePath(): string {
   return path.join(getOrionDataDirectory(), "orion.db");
 }
+
+/** Returns the absolute path to spilled agent terminal output logs. */
+export function getTerminalOutputDirectory(): string {
+  return path.join(getOrionDataDirectory(), "terminal");
+}
+
+/** Ensures `~/.orion/terminal` exists and returns its absolute path. */
+export async function ensureTerminalOutputDirectory(): Promise<string> {
+  const directory = getTerminalOutputDirectory();
+  await mkdir(directory, { recursive: true });
+  return directory;
+}

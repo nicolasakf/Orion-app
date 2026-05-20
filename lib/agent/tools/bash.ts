@@ -350,17 +350,28 @@ export class BashTool extends BaseTool {
     }
 
     const previewOutput = this.buildLargeOutputPreview(output);
-    const filePath = `.orion_terminal_output_${Date.now()}_${Math.random()
-      .toString(36)
-      .slice(2, 8)}.log`;
     try {
-      const contents = this.kernelService.getContentsManager();
-      await contents.save(filePath, {
-        type: "file",
-        format: "text",
-        content: output,
+      const response = await fetch("/api/terminal-output", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: output }),
       });
-      return { previewOutput, outputFilePath: filePath };
+      if (!response.ok) {
+        const errorBody = (await response.json().catch(() => null)) as {
+          message?: string;
+        } | null;
+        const message =
+          errorBody?.message ?? `HTTP ${response.status} ${response.statusText}`;
+        return { previewOutput, persistError: message };
+      }
+      const payload = (await response.json()) as { filePath?: string };
+      if (!payload.filePath?.trim()) {
+        return {
+          previewOutput,
+          persistError: "Terminal output API returned no file path.",
+        };
+      }
+      return { previewOutput, outputFilePath: payload.filePath };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { previewOutput, persistError: message };
