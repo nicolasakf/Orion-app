@@ -14,6 +14,12 @@ export interface NotebookCommandResult {
   selection: CellSelectionState;
 }
 
+/** Original cell payload plus insertion index captured before a delete. */
+export interface DeletedCellSnapshot {
+  index: number;
+  cell: NotebookCellType;
+}
+
 export type CellIdFactory = () => CellId;
 
 /** Creates a browser-safe random cell id. */
@@ -236,6 +242,58 @@ export function deleteCellsById(
   return {
     notebook: nextNotebook,
     selection: singleCellSelection(nextCursorId),
+  };
+}
+
+/** Restores deleted cells near their original indices and selects them. */
+export function restoreCellsByOriginalIndex(
+  notebook: NotebookType,
+  snapshots: DeletedCellSnapshot[],
+  idFactory: CellIdFactory = createCellId,
+): NotebookCommandResult & { restoredCellIds: CellId[] } {
+  if (snapshots.length === 0) {
+    return {
+      notebook,
+      selection: clampSelectionToNotebook(notebook, singleCellSelection(null)),
+      restoredCellIds: [],
+    };
+  }
+
+  const cells = notebook.cells.slice();
+  const existingIds = new Set(
+    cells
+      .map((cell) => getCellId(cell))
+      .filter((id): id is CellId => id !== null),
+  );
+  const restoredCellIds: CellId[] = [];
+
+  for (const snapshot of snapshots
+    .slice()
+    .sort((a, b) => a.index - b.index)) {
+    const snapshotCellId = getCellId(snapshot.cell);
+    const restoredCell =
+      snapshotCellId && !existingIds.has(snapshotCellId)
+        ? (JSON.parse(JSON.stringify(snapshot.cell)) as NotebookCellType)
+        : cloneCellWithFreshId(snapshot.cell, idFactory);
+    const restoredCellId = getCellId(restoredCell);
+
+    if (restoredCellId) {
+      existingIds.add(restoredCellId);
+      restoredCellIds.push(restoredCellId);
+    }
+
+    const insertIndex = Math.max(0, Math.min(snapshot.index, cells.length));
+    cells.splice(insertIndex, 0, restoredCell);
+  }
+
+  return {
+    notebook: { ...notebook, cells },
+    selection: {
+      selectedCellIds: new Set(restoredCellIds),
+      selectionAnchorCellId: restoredCellIds[0] ?? null,
+      cellCursorId: restoredCellIds[0] ?? null,
+    },
+    restoredCellIds,
   };
 }
 

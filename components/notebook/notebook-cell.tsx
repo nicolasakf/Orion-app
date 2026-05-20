@@ -115,7 +115,7 @@ interface NotebookCellProps {
   onUpdateCell?: (cellIndex: number, source: string) => void;
   onCellSelect?: (
     cellIndex: number,
-    event: React.MouseEvent | React.KeyboardEvent,
+    event?: React.MouseEvent | React.KeyboardEvent,
   ) => void;
   onCellAction?: (action: string, cellIndex: number) => void;
   isSelected?: boolean;
@@ -887,6 +887,7 @@ function NotebookCellComponent({
   const markdownEditorInstanceRef =
     useRef<MonacoEditorApi.IStandaloneCodeEditor | null>(null);
   const shouldFocusMarkdownEditorRef = useRef(false);
+  const shouldPlaceMarkdownCursorAtStartRef = useRef(false);
   const { theme } = useTheme();
   const mimeRegistry = React.useMemo(() => getDefaultMimeRegistry(), []);
   const [isMetadataEditingMode, setIsMetadataEditingMode] = useState(false);
@@ -957,11 +958,35 @@ function NotebookCellComponent({
     cellRef.current.getSource = () => localSource;
   }, [localSource]);
 
+  /** Focuses markdown Monaco after mount and optionally places the caret at the start. */
+  const focusMarkdownEditor = useCallback(
+    (editor = markdownEditorInstanceRef.current) => {
+      if (!editor) return;
+
+      if (shouldPlaceMarkdownCursorAtStartRef.current) {
+        const firstPosition = { lineNumber: 1, column: 1 };
+        editor.setPosition(firstPosition);
+        editor.revealPositionNearTop(firstPosition);
+      }
+
+      editor.focus();
+      shouldFocusMarkdownEditorRef.current = false;
+      shouldPlaceMarkdownCursorAtStartRef.current = false;
+    },
+    [],
+  );
+
   /** Enters markdown edit mode and focuses Monaco after it mounts. */
-  const beginMarkdownEditing = useCallback(() => {
-    shouldFocusMarkdownEditorRef.current = true;
-    setIsEditingMode(true);
-  }, []);
+  const beginMarkdownEditing = useCallback(
+    (options: { placeCursorAtStart?: boolean } = {}) => {
+      shouldFocusMarkdownEditorRef.current = true;
+      shouldPlaceMarkdownCursorAtStartRef.current = Boolean(
+        options.placeCursorAtStart,
+      );
+      setIsEditingMode(true);
+    },
+    [],
+  );
 
   useEffect(() => {
     if (
@@ -973,10 +998,9 @@ function NotebookCellComponent({
     }
 
     window.requestAnimationFrame(() => {
-      markdownEditorInstanceRef.current?.focus();
-      shouldFocusMarkdownEditorRef.current = false;
+      focusMarkdownEditor();
     });
-  }, [cell.cell_type, isEditingMode]);
+  }, [cell.cell_type, focusMarkdownEditor, isEditingMode]);
 
   // Update focusSource to enter edit mode and focus the cell source
   useEffect(() => {
@@ -986,7 +1010,7 @@ function NotebookCellComponent({
           monacoEditorInstanceRef.current.focus();
         }
       } else if (cell.cell_type === CellType.MARKDOWN) {
-        beginMarkdownEditing();
+        beginMarkdownEditing({ placeCursorAtStart: true });
       }
     };
   }, [beginMarkdownEditing, cell.cell_type]);
@@ -1008,15 +1032,26 @@ function NotebookCellComponent({
   }, [isEditingMode, cellIndex, onEditingModeChange]);
 
   /**
-   * Intercepts Shift+Enter and Cmd/Ctrl+Enter in capture phase so they
-   * trigger cell execution instead of being handled by Monaco / CodeMirror
-   * as newline insertions.
+   * Intercepts editing shortcuts in capture phase before Monaco handles them.
+   * Esc returns focus to the cell shell so command-mode navigation stays active.
    */
   useEffect(() => {
     const container = cellContainerRef.current;
     if (!container || !isEditingMode) return;
 
-    const handleRunCellKeyDown = (event: KeyboardEvent) => {
+    const handleEditingKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        (document.activeElement as HTMLElement | null)?.blur();
+        setIsEditingMode(false);
+        onCellSelect?.(cellIndex);
+        window.requestAnimationFrame(() => {
+          cellContainerRef.current?.focus();
+        });
+        return;
+      }
+
       if (
         event.key === "Enter" &&
         (event.shiftKey || event.metaKey || event.ctrlKey)
@@ -1033,11 +1068,11 @@ function NotebookCellComponent({
       }
     };
 
-    container.addEventListener("keydown", handleRunCellKeyDown, true);
+    container.addEventListener("keydown", handleEditingKeyDown, true);
     return () => {
-      container.removeEventListener("keydown", handleRunCellKeyDown, true);
+      container.removeEventListener("keydown", handleEditingKeyDown, true);
     };
-  }, [isEditingMode, cellIndex, onCellAction]);
+  }, [isEditingMode, cellIndex, onCellAction, onCellSelect]);
 
   // NEW: Update contentScrollHeight when content changes or collapse state changes
   useEffect(() => {
@@ -1914,6 +1949,7 @@ function NotebookCellComponent({
     <div
       ref={cellContainerRef}
       className="relative isolate notebook-cell"
+      tabIndex={-1}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
@@ -2161,8 +2197,7 @@ function NotebookCellComponent({
                               });
                               if (shouldFocusMarkdownEditorRef.current) {
                                 window.requestAnimationFrame(() => {
-                                  editor.focus();
-                                  shouldFocusMarkdownEditorRef.current = false;
+                                  focusMarkdownEditor(editor);
                                 });
                               }
                             }}
@@ -2171,11 +2206,11 @@ function NotebookCellComponent({
                       ) : (
                         <div
                           ref={markdownRef}
-                          onDoubleClick={beginMarkdownEditing}
+                          onDoubleClick={() => beginMarkdownEditing()}
                           onKeyDown={(e) => {
                             if (e.key === "Enter" && !isEditingMode) {
                               e.preventDefault();
-                              beginMarkdownEditing();
+                              beginMarkdownEditing({ placeCursorAtStart: true });
                             }
                           }}
                           tabIndex={0}

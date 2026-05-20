@@ -98,9 +98,11 @@ import {
   insertCellById,
   moveCellById,
   pasteCellsAtIndex,
+  restoreCellsByOriginalIndex,
   singleCellSelection,
   sourceTextToLines,
   type CellId,
+  type DeletedCellSnapshot,
   type CellSelectionState,
 } from "./notebook-commands";
 import {
@@ -150,6 +152,7 @@ const NOTEBOOK_SHORTCUT_GROUPS = [
       { keys: "C", description: "Copy selected cells" },
       { keys: "X", description: "Cut selected cells" },
       { keys: "V", description: "Paste cells below" },
+      { keys: "Z", description: "Restore recently deleted cells" },
       { keys: "Alt + V", description: "Paste cells above" },
       { keys: "Alt + A", description: "Run all code cells above" },
       { keys: "Alt + B", description: "Run selected code cell and below" },
@@ -283,6 +286,13 @@ interface SubagentModelOption {
   providerId: string;
 }
 
+type CellScrollAlignment = "start" | "end";
+
+interface AddedCellResult {
+  index: number;
+  cellId: CellId;
+}
+
 /**
  * Component that displays a Jupyter notebook from a specified filepath
  */
@@ -384,6 +394,37 @@ export function NotebookEditor({
       return cellId;
     },
     [applySelectionState, notebook],
+  );
+
+  /** Focuses the selected cell wrapper so notebook command-mode shortcuts remain active. */
+  const focusNotebookCommandTarget = useCallback(
+    (targetCellId: CellId | null) => {
+      if (targetCellId) {
+        if (cellCursorId !== targetCellId || !selectedCellIds.has(targetCellId)) {
+          applySelectionState(singleCellSelection(targetCellId));
+        }
+
+        window.requestAnimationFrame(() => {
+          const cellElement = cellRefs.current.get(targetCellId);
+          if (cellElement) {
+            cellElement.focus({ preventScroll: true });
+            return;
+          }
+
+          notebookRootRef.current
+            ?.querySelector<HTMLElement>(".notebook-editor-content-area")
+            ?.focus({ preventScroll: true });
+        });
+        return;
+      }
+
+      window.requestAnimationFrame(() => {
+        notebookRootRef.current
+          ?.querySelector<HTMLElement>(".notebook-editor-content-area")
+          ?.focus({ preventScroll: true });
+      });
+    },
+    [applySelectionState, cellCursorId, selectedCellIds],
   );
 
   /** Selects multiple current notebook cells by array index. */
@@ -523,6 +564,7 @@ export function NotebookEditor({
 
   // Clipboard for copy/paste
   const [copiedCells, setCopiedCells] = useState<NotebookCellType[]>([]);
+  const deletedCellHistoryRef = useRef<DeletedCellSnapshot[][]>([]);
   const activeNotebookView = controlledActiveNotebookView ?? "notebook";
   const previousActiveNotebookViewRef = useRef(activeNotebookView);
   // For 'D' twice to delete
@@ -571,6 +613,7 @@ export function NotebookEditor({
         pendingCellChangesRef.current = new Map();
         cellComponentRefs.current = new Map();
         cellRefs.current = new Map();
+        deletedCellHistoryRef.current = [];
         markClean();
         applySelectionState(singleCellSelection(getCellId(withIds.cells[0])));
       } catch (err) {
@@ -999,32 +1042,9 @@ export function NotebookEditor({
     };
   }, [applySelectionState, parentKernelService, filepath, markClean]);
 
-  /**
-   * Navigates to a cell (and optionally a specific output within it).
-   * If the target is already fully visible in its scroll container the method
-   * only updates selection state without scrolling; otherwise it scrolls the
-   * target to the top of the visible area.
-   */
-  const scrollToCell = useCallback(
-    (cellIndex: number, outputIndex?: number) => {
-      if (cellIndex < 0 || !notebook || cellIndex >= notebook.cells.length)
-        return;
-
-      // Resolve the target element — prefer the specific output when provided
-      let targetElement: HTMLElement | null = null;
-      if (outputIndex !== undefined) {
-        targetElement = document.getElementById(
-          `output-${cellIndex}-${outputIndex}`,
-        );
-      }
-      if (!targetElement) {
-        const cellId = getCellIdByIndex(notebook, cellIndex);
-        targetElement = cellId ? (cellRefs.current.get(cellId) ?? null) : null;
-      }
-
-      if (!targetElement) return;
-
-      // Find the nearest scrollable ancestor
+  /** Scrolls a rendered cell/output only when it is not fully visible. */
+  const scrollElementIntoView = useCallback(
+    (targetElement: HTMLElement, alignment: CellScrollAlignment = "start") => {
       const getScrollContainer = (el: HTMLElement): HTMLElement => {
         let parent = el.parentElement;
         while (parent) {
@@ -1044,11 +1064,72 @@ export function NotebookEditor({
         targetRect.bottom <= containerRect.bottom;
 
       if (!isFullyVisible) {
-        // Scroll the target to the top of the scroll container viewport
-        targetElement.scrollIntoView({ behavior: "instant", block: "start" });
+        const scrollDelta =
+          alignment === "end"
+            ? targetRect.bottom - containerRect.bottom
+            : targetRect.top - containerRect.top;
+        container.scrollTop += scrollDelta;
       }
     },
-    [notebook],
+    [],
+  );
+
+  /**
+   * Navigates to a cell (and optionally a specific output within it).
+   * If the target is already fully visible in its scroll container the method
+   * only updates selection state without scrolling; otherwise it scrolls the
+   * target to the requested viewport edge.
+   */
+  const scrollToCell = useCallback(
+    (
+      cellIndex: number,
+      outputIndex?: number,
+      alignment: CellScrollAlignment = "start",
+    ) => {
+      if (cellIndex < 0 || !notebook || cellIndex >= notebook.cells.length)
+        return;
+
+      // Resolve the target element — prefer the specific output when provided
+      let targetElement: HTMLElement | null = null;
+      if (outputIndex !== undefined) {
+        targetElement = document.getElementById(
+          `output-${cellIndex}-${outputIndex}`,
+        );
+      }
+      if (!targetElement) {
+        const cellId = getCellIdByIndex(notebook, cellIndex);
+        targetElement = cellId ? (cellRefs.current.get(cellId) ?? null) : null;
+      }
+
+      if (!targetElement) return;
+      scrollElementIntoView(targetElement, alignment);
+    },
+    [notebook, scrollElementIntoView],
+  );
+
+  /** Scrolls to a cell by stable id, which works for cells inserted after this render. */
+  const scrollToCellId = useCallback(
+    (cellId: CellId, alignment: CellScrollAlignment = "start") => {
+      const targetElement = cellRefs.current.get(cellId);
+      if (!targetElement) return;
+      scrollElementIntoView(targetElement, alignment);
+    },
+    [scrollElementIntoView],
+  );
+
+  /** Re-applies id-based cell scrolling after newly mounted cells settle. */
+  const scrollToCellIdAfterLayout = useCallback(
+    (cellId: CellId, alignment: CellScrollAlignment = "start") => {
+      const scroll = () => scrollToCellId(cellId, alignment);
+      window.setTimeout(() => {
+        scroll();
+        window.requestAnimationFrame(() => {
+          scroll();
+          window.requestAnimationFrame(scroll);
+        });
+      }, 0);
+    },
+    [scrollToCellId],
   );
 
   useEffect(() => {
@@ -1621,10 +1702,15 @@ export function NotebookEditor({
       applySelectionState(result.selection);
       modifiedCellsRef.current.add(cellId);
       markDirty();
-      const nextIndex = getCellIndexById(result.notebook, cellId);
-      if (nextIndex >= 0) setTimeout(() => scrollToCell(nextIndex), 0);
+      scrollToCellIdAfterLayout(cellId, direction === "up" ? "start" : "end");
     },
-    [applyPendingChanges, applySelectionState, notebook, scrollToCell, markDirty],
+    [
+      applyPendingChanges,
+      applySelectionState,
+      notebook,
+      scrollToCellIdAfterLayout,
+      markDirty,
+    ],
   );
 
   /**
@@ -1653,14 +1739,34 @@ export function NotebookEditor({
       const targetIndices = indicesToDelete ?? Array.from(selectedCellIndices);
       if (!notebook || targetIndices.length === 0) return;
       const targetIds = getCellIdsByIndices(notebook, targetIndices);
+      if (targetIds.length === 0) return;
       const cursorForDelete = indicesToDelete
         ? (targetIds[0] ?? cellCursorId)
         : cellCursorId;
+      const notebookWithChanges = applyPendingChanges(notebook);
+      const deletedSnapshots = targetIds
+        .map((cellId) => {
+          const index = getCellIndexById(notebookWithChanges, cellId);
+          if (index === -1) return null;
+          return {
+            index,
+            cell: JSON.parse(
+              JSON.stringify(notebookWithChanges.cells[index]),
+            ) as NotebookCellType,
+          } satisfies DeletedCellSnapshot;
+        })
+        .filter((snapshot): snapshot is DeletedCellSnapshot => snapshot !== null);
       const result = deleteCellsById(
-        applyPendingChanges(notebook),
+        notebookWithChanges,
         targetIds,
         cursorForDelete,
       );
+      if (deletedSnapshots.length > 0) {
+        deletedCellHistoryRef.current = [
+          ...deletedCellHistoryRef.current,
+          deletedSnapshots,
+        ].slice(-50);
+      }
       for (const cellId of targetIds) {
         pendingCellChangesRef.current.delete(cellId);
         modifiedCellsRef.current.delete(cellId);
@@ -1671,22 +1777,54 @@ export function NotebookEditor({
       applySelectionState(result.selection);
       markDirty();
 
-      const nextIndex =
-        result.selection.cellCursorId !== null
-          ? getCellIndexById(result.notebook, result.selection.cellCursorId)
-          : -1;
-      if (nextIndex >= 0) setTimeout(() => scrollToCell(nextIndex), 0);
+      const nextCellId = result.selection.cellCursorId;
+      if (nextCellId !== null) {
+        scrollToCellIdAfterLayout(nextCellId);
+      }
     },
     [
       notebook,
       selectedCellIndices,
       cellCursorId,
-      scrollToCell,
+      scrollToCellIdAfterLayout,
       applyPendingChanges,
       applySelectionState,
       markDirty,
     ],
   );
+
+  /** Restores the most recent batch of deleted cells. */
+  const handleRestoreDeletedCells = useCallback(() => {
+    if (!notebook || deletedCellHistoryRef.current.length === 0) return;
+
+    const nextHistory = deletedCellHistoryRef.current.slice();
+    const snapshots = nextHistory.pop();
+    deletedCellHistoryRef.current = nextHistory;
+    if (!snapshots || snapshots.length === 0) return;
+
+    const result = restoreCellsByOriginalIndex(
+      applyPendingChanges(notebook),
+      snapshots,
+      createCellId,
+    );
+    setNotebook(result.notebook);
+    applySelectionState(result.selection);
+    for (const cellId of result.restoredCellIds) {
+      modifiedCellsRef.current.add(cellId);
+    }
+    markDirty();
+
+    const firstRestoredCellId = result.restoredCellIds[0];
+    if (firstRestoredCellId) {
+      scrollToCellIdAfterLayout(firstRestoredCellId);
+    }
+  }, [
+    applyPendingChanges,
+    applySelectionState,
+    notebook,
+    scrollToCellIdAfterLayout,
+    markDirty,
+  ]);
 
   /**
    * Adds a new cell above or below the current cell
@@ -1708,7 +1846,10 @@ export function NotebookEditor({
       setNotebook(result.notebook);
       applySelectionState(result.selection);
       markDirty();
-      return getCellIndexById(result.notebook, result.insertedCellId);
+      return {
+        index: getCellIndexById(result.notebook, result.insertedCellId),
+        cellId: result.insertedCellId,
+      } satisfies AddedCellResult;
     },
     [applyPendingChanges, applySelectionState, notebook, markDirty],
   );
@@ -1763,13 +1904,13 @@ export function NotebookEditor({
               selectCellByIndex(nextCellIndex);
               setTimeout(() => scrollToCell(nextCellIndex), 0);
             } else {
-              const newAddedIdx = handleAddCell(
+              const newAddedCell = handleAddCell(
                 cellIndexFromAction,
                 "below",
                 CellType.CODE,
               );
-              if (newAddedIdx !== null && newAddedIdx !== -1) {
-                setTimeout(() => scrollToCell(newAddedIdx), 0);
+              if (newAddedCell !== null && newAddedCell.index !== -1) {
+                scrollToCellIdAfterLayout(newAddedCell.cellId, "end");
               }
             }
           }
@@ -1818,14 +1959,9 @@ export function NotebookEditor({
             setNotebook(result.notebook);
             applySelectionState(result.selection);
             markDirty();
-            if (result.duplicatedCellId) {
-              const newCopiedCellIdx = getCellIndexById(
-                result.notebook,
-                result.duplicatedCellId,
-              );
-              if (newCopiedCellIdx >= 0) {
-                setTimeout(() => scrollToCell(newCopiedCellIdx), 0);
-              }
+            const duplicatedCellId = result.duplicatedCellId;
+            if (duplicatedCellId) {
+              scrollToCellIdAfterLayout(duplicatedCellId, "end");
             }
           }
           break;
@@ -1840,23 +1976,23 @@ export function NotebookEditor({
           handleDeleteSelectedCells([cellIndexFromAction]);
           break;
         case "add-cell": // Add below
-          const newIdxBelow = handleAddCell(
+          const newCellBelow = handleAddCell(
             cellIndexFromAction,
             "below",
             currentCellType,
           );
-          if (newIdxBelow !== null && newIdxBelow !== -1) {
-            setTimeout(() => scrollToCell(newIdxBelow), 0);
+          if (newCellBelow !== null && newCellBelow.index !== -1) {
+            scrollToCellIdAfterLayout(newCellBelow.cellId, "end");
           }
           break;
         case "add-cell-above":
-          const newIdxAbove = handleAddCell(
+          const newCellAbove = handleAddCell(
             cellIndexFromAction,
             "above",
             currentCellType,
           );
-          if (newIdxAbove !== null && newIdxAbove !== -1) {
-            setTimeout(() => scrollToCell(newIdxAbove), 0);
+          if (newCellAbove !== null && newCellAbove.index !== -1) {
+            scrollToCellIdAfterLayout(newCellAbove.cellId, "start");
           }
           break;
         case "change-type":
@@ -2061,6 +2197,7 @@ export function NotebookEditor({
       handleAddCell,
       handleChangeCellTypes,
       scrollToCell,
+      scrollToCellIdAfterLayout,
       capturePendingCellSources,
       applyPendingChanges,
       markDirty,
@@ -2105,7 +2242,15 @@ export function NotebookEditor({
 
       if (isAnyCellEditing || (isInputFocused && event.key !== "Escape")) {
         if (event.key === "Escape") {
+          const editingCellId =
+            (cellCursorId !== null && editingCellIds.has(cellCursorId)
+              ? cellCursorId
+              : Array.from(editingCellIds)[0]) ??
+            cellCursorId;
           activeElement?.blur();
+          focusNotebookCommandTarget(editingCellId);
+          event.preventDefault();
+          event.stopPropagation();
         }
         return;
       }
@@ -2139,9 +2284,9 @@ export function NotebookEditor({
 
       if (
         N_CELLS === 0 &&
-        !["a", "A", "b", "B", "v", "V"].includes(event.key)
+        !["a", "A", "b", "B", "v", "V", "z", "Z"].includes(event.key)
       ) {
-        // If no cells, only allow add or paste operations
+        // If no cells, only allow add, paste, or restore operations.
         if (event.key !== "Escape") event.preventDefault(); // Prevent other defaults if no cells
         return;
       }
@@ -2153,7 +2298,7 @@ export function NotebookEditor({
       const currentCursor = cellCursorIndex ?? (N_CELLS > 0 ? 0 : -1);
       if (
         currentCursor === -1 &&
-        !["a", "A", "b", "B", "v", "V"].includes(event.key)
+        !["a", "A", "b", "B", "v", "V", "z", "Z"].includes(event.key)
       ) {
         // Should not happen if N_CELLS > 0 check above is working, but as a safe guard.
         return;
@@ -2162,6 +2307,9 @@ export function NotebookEditor({
       let nextCursorIndex = currentCursor;
       let currentAnchorIndex = selectionAnchorIndex;
       let newSelectedIndices = new Set(selectedCellIndices);
+      let scrollTargetIndex: number | null = null;
+      let scrollTargetCellId: CellId | null = null;
+      let scrollAlignment: CellScrollAlignment = "start";
       const applyIndexSelection = (
         cursorIndex: number | null,
         anchorIndex: number | null,
@@ -2232,6 +2380,8 @@ export function NotebookEditor({
             currentAnchorIndex = nextCursorIndex; // Reset anchor
           }
           applyIndexSelection(nextCursorIndex, currentAnchorIndex, newSelectedIndices);
+          scrollTargetIndex = nextCursorIndex;
+          scrollAlignment = "start";
           break;
 
         case "ArrowDown":
@@ -2248,6 +2398,8 @@ export function NotebookEditor({
             currentAnchorIndex = nextCursorIndex; // Reset anchor
           }
           applyIndexSelection(nextCursorIndex, currentAnchorIndex, newSelectedIndices);
+          scrollTargetIndex = nextCursorIndex;
+          scrollAlignment = "end";
           break;
 
         case "PageUp":
@@ -2265,6 +2417,8 @@ export function NotebookEditor({
             currentAnchorIndex = nextCursorIndex;
           }
           applyIndexSelection(nextCursorIndex, currentAnchorIndex, newSelectedIndices);
+          scrollTargetIndex = nextCursorIndex;
+          scrollAlignment = "start";
           break;
 
         case "PageDown":
@@ -2281,6 +2435,8 @@ export function NotebookEditor({
             currentAnchorIndex = nextCursorIndex;
           }
           applyIndexSelection(nextCursorIndex, currentAnchorIndex, newSelectedIndices);
+          scrollTargetIndex = nextCursorIndex;
+          scrollAlignment = "end";
           break;
 
         case "Home":
@@ -2301,6 +2457,8 @@ export function NotebookEditor({
               currentAnchorIndex = nextCursorIndex;
             }
             applyIndexSelection(nextCursorIndex, currentAnchorIndex, newSelectedIndices);
+            scrollTargetIndex = nextCursorIndex;
+            scrollAlignment = "start";
           }
           // Simple Home without Ctrl/Cmd could also go to first cell, or top of current cell if applicable.
           // For now, only handling Ctrl/Cmd + Home.
@@ -2327,6 +2485,8 @@ export function NotebookEditor({
               currentAnchorIndex = nextCursorIndex;
             }
             applyIndexSelection(nextCursorIndex, currentAnchorIndex, newSelectedIndices);
+            scrollTargetIndex = nextCursorIndex;
+            scrollAlignment = "end";
           } else {
             preventDefault = false;
           }
@@ -2349,19 +2509,29 @@ export function NotebookEditor({
           }
           break;
 
+        case "z":
+        case "Z":
+          if (event.metaKey || event.ctrlKey) {
+            preventDefault = false;
+            break;
+          }
+          handleRestoreDeletedCells();
+          break;
+
         case "a":
         case "A":
           if (event.metaKey || event.ctrlKey) {
             preventDefault = false;
             break;
           }
-          const addedIndexA = handleAddCell(
+          const addedCellA = handleAddCell(
             cellCursorIndex,
             "above",
             CellType.CODE,
           );
-          if (addedIndexA !== null && addedIndexA !== -1) {
-            setTimeout(() => scrollToCell(addedIndexA), 0);
+          if (addedCellA !== null && addedCellA.index !== -1) {
+            scrollTargetCellId = addedCellA.cellId;
+            scrollAlignment = "start";
           }
           break;
 
@@ -2371,13 +2541,14 @@ export function NotebookEditor({
             preventDefault = false;
             break;
           }
-          const addedIndexB = handleAddCell(
+          const addedCellB = handleAddCell(
             cellCursorIndex,
             "below",
             CellType.CODE,
           );
-          if (addedIndexB !== null && addedIndexB !== -1) {
-            setTimeout(() => scrollToCell(addedIndexB), 0);
+          if (addedCellB !== null && addedCellB.index !== -1) {
+            scrollTargetCellId = addedCellB.cellId;
+            scrollAlignment = "end";
           }
           break;
 
@@ -2440,7 +2611,7 @@ export function NotebookEditor({
                 firstPastedId,
               );
               if (firstPastedIndex >= 0) {
-                setTimeout(() => scrollToCell(firstPastedIndex), 0);
+                scrollToCellIdAfterLayout(firstPastedId, "end");
               }
             }
           }
@@ -2501,14 +2672,17 @@ export function NotebookEditor({
               const nextCellToSelect = lastRunIndex + 1;
               if (nextCellToSelect < N_CELLS) {
                 selectCellByIndex(nextCellToSelect);
+                scrollTargetIndex = nextCellToSelect;
+                scrollAlignment = "end";
               } else {
-                const newAddedIndex = handleAddCell(
+                const newAddedCell = handleAddCell(
                   lastRunIndex,
                   "below",
                   CellType.CODE,
                 );
-                if (newAddedIndex !== null && newAddedIndex !== -1) {
-                  setTimeout(() => scrollToCell(newAddedIndex), 0);
+                if (newAddedCell !== null && newAddedCell.index !== -1) {
+                  scrollTargetCellId = newAddedCell.cellId;
+                  scrollAlignment = "end";
                 }
               }
             }
@@ -2532,20 +2706,13 @@ export function NotebookEditor({
         event.preventDefault();
         event.stopPropagation();
       }
-      // After processing key, ensure the cell cursor is visible
-      if (
-        cellCursorIndex !== null &&
-        (event.key.startsWith("Arrow") ||
-          event.key.startsWith("Page") ||
-          event.key === "Home" ||
-          event.key === "End" ||
-          event.key === "Enter" ||
-          event.key === "a" ||
-          event.key === "A" ||
-          event.key === "b" ||
-          event.key === "B")
-      ) {
-        setTimeout(() => scrollToCell(cellCursorIndex), 0);
+      if (scrollTargetCellId !== null) {
+        scrollToCellIdAfterLayout(scrollTargetCellId, scrollAlignment);
+      } else if (scrollTargetIndex !== null) {
+        setTimeout(
+          () => scrollToCell(scrollTargetIndex, undefined, scrollAlignment),
+          0,
+        );
       }
     };
 
@@ -2565,14 +2732,17 @@ export function NotebookEditor({
     handleCellSelect,
     handleAddCell,
     handleDeleteSelectedCells,
+    handleRestoreDeletedCells,
     handleMoveCell,
     handleChangeCellTypes,
     handleRunCell,
     handleMentionCell,
+    focusNotebookCommandTarget,
     copiedCells,
     setCopiedCells,
     setShowNotebookShortcutsDialog,
     scrollToCell,
+    scrollToCellIdAfterLayout,
     handleCopySelectedCellsToClipboard,
     applyPendingChanges,
     applySelectionState,
@@ -2602,7 +2772,7 @@ export function NotebookEditor({
       // Only focus the wrapper if focus is not already inside this cell,
       // to avoid stealing focus from an editor (e.g. Monaco) that the user just clicked on.
       if (cellElement && !cellElement.contains(activeElement)) {
-        cellElement.focus();
+        cellElement.focus({ preventScroll: true });
       }
     }
   }, [activeNotebookView, cellCursorId]);
@@ -2762,13 +2932,13 @@ export function NotebookEditor({
                         </div>
                         <Button
                           onClick={() => {
-                            const newIndex = handleAddCell(
+                            const newCell = handleAddCell(
                               null,
                               "below",
                               CellType.CODE,
                             );
-                            if (newIndex !== null && newIndex !== -1) {
-                              setTimeout(() => scrollToCell(newIndex), 0);
+                            if (newCell !== null && newCell.index !== -1) {
+                              scrollToCellIdAfterLayout(newCell.cellId, "end");
                             }
                           }}
                           variant="outline"

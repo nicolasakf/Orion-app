@@ -13,6 +13,7 @@ import {
   insertCellById,
   moveCellById,
   pasteCellsAtIndex,
+  restoreCellsByOriginalIndex,
 } from "./notebook-commands";
 
 function makeIdFactory(ids: string[]): () => string {
@@ -107,6 +108,38 @@ describe("notebook identity commands", () => {
       "one",
       "three",
     ]);
+  });
+
+  test("restores deleted cells at their original positions", () => {
+    const initial = notebook([
+      cell("a", "one"),
+      cell("b", "two"),
+      cell("c", "three"),
+      cell("d", "four"),
+    ]);
+    const deleted = deleteCellsById(initial, ["b", "c"], "b");
+
+    const restored = restoreCellsByOriginalIndex(deleted.notebook, [
+      { index: 1, cell: initial.cells[1] },
+      { index: 2, cell: initial.cells[2] },
+    ]);
+
+    expect(ids(restored.notebook)).toEqual(["a", "b", "c", "d"]);
+    expect(restored.restoredCellIds).toEqual(["b", "c"]);
+    expect(Array.from(restored.selection.selectedCellIds)).toEqual(["b", "c"]);
+    expect(restored.selection.cellCursorId).toBe("b");
+  });
+
+  test("restores deleted cells into an empty notebook", () => {
+    const initial = notebook([cell("a", "one")]);
+    const deleted = deleteCellsById(initial, ["a"], "a");
+
+    const restored = restoreCellsByOriginalIndex(deleted.notebook, [
+      { index: 0, cell: initial.cells[0] },
+    ]);
+
+    expect(ids(restored.notebook)).toEqual(["a"]);
+    expect(restored.selection.cellCursorId).toBe("a");
   });
 
   test("duplicates and pastes cells with fresh ids", () => {
