@@ -2197,7 +2197,7 @@ export default function Page() {
               </div>
             </ResizablePanel>
 
-            <ResizableHandle className="bg-transparent border-none w-0 transition-all" />
+            <ResizableHandle variant="sidebar" />
 
             {/* Main Content Panel */}
             <ResizablePanel defaultSize={horizontalPanelSizes[1]} minSize={30}>
@@ -2657,7 +2657,7 @@ export default function Page() {
               </ResizablePanelGroup>
             </ResizablePanel>
 
-            <ResizableHandle className="bg-transparent border-none w-0 transition-all" />
+            <ResizableHandle variant="sidebar" />
 
             {/* Right Sidebar Panel */}
             <ResizablePanel
