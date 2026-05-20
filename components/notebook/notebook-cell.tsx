@@ -1251,9 +1251,26 @@ function NotebookCellComponent({
   const defaultRightActionButtons: ActionButtonDefinition[] = [];
 
   const metadataEditRightActionButtons: ActionButtonDefinition[] = [
-    { icon: Check, label: "Save changes", action: "save-metadata" },
-    { icon: X, label: "Discard changes", action: "discard-metadata" },
+    {
+      icon: Check,
+      label: "Apply changes",
+      shortcut: [CmdOrCtrl, "Enter"],
+      action: "save-metadata",
+    },
+    {
+      icon: X,
+      label: "Discard changes",
+      shortcut: "Esc",
+      action: "discard-metadata",
+    },
   ];
+
+  /** Leaves metadata edit mode without applying the local JSON draft. */
+  const discardMetadataChanges = useCallback(() => {
+    setIsMetadataEditingMode(false);
+    setMetadataError(null);
+    onEditingModeChange?.(cellIndex, false);
+  }, [cellIndex, onEditingModeChange]);
 
   /** Starts editing the full cell JSON payload. */
   const beginMetadataEditing = useCallback(() => {
@@ -1286,7 +1303,42 @@ function NotebookCellComponent({
     onUpdateCellData?.(cellIndex, parsedCell);
     setMetadataError(null);
     setIsMetadataEditingMode(false);
-  }, [cellIndex, localMetadata, onUpdateCellData]);
+    onEditingModeChange?.(cellIndex, false);
+  }, [cellIndex, localMetadata, onEditingModeChange, onUpdateCellData]);
+
+  /**
+   * Handles metadata edit shortcuts before Monaco consumes them.
+   * Escape discards the draft; Cmd/Ctrl+Enter applies it.
+   */
+  useEffect(() => {
+    const container = cellContainerRef.current;
+    if (!container || !isMetadataEditingMode) return;
+
+    const handleMetadataEditorKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        discardMetadataChanges();
+        return;
+      }
+
+      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+        event.preventDefault();
+        event.stopPropagation();
+        saveMetadataChanges();
+      }
+    };
+
+    container.addEventListener("keydown", handleMetadataEditorKeyDown, true);
+
+    return () => {
+      container.removeEventListener(
+        "keydown",
+        handleMetadataEditorKeyDown,
+        true,
+      );
+    };
+  }, [discardMetadataChanges, isMetadataEditingMode, saveMetadataChanges]);
 
   /** Collapses the source array in the full-cell JSON editor by default. */
   const handleMetadataEditorMount = useCallback<OnMount>((monacoEditor) => {
@@ -1554,9 +1606,7 @@ function NotebookCellComponent({
     } else if (action === "save-metadata") {
       saveMetadataChanges();
     } else if (action === "discard-metadata") {
-      setIsMetadataEditingMode(false);
-      setMetadataError(null);
-      // localMetadata will be reset if view-metadata is clicked again
+      discardMetadataChanges();
     } else if (action === "mention-cell") {
       onMentionCell?.(cellIndex);
     } else if (onCellAction) {
@@ -2111,7 +2161,7 @@ function NotebookCellComponent({
                   setMetadataError(null);
                 }}
                 language="json"
-                height="200px"
+                height="auto"
                 onMount={handleMetadataEditorMount}
                 onEditorFocus={() => onEditingModeChange?.(cellIndex, true)}
                 onEditorBlur={() => onEditingModeChange?.(cellIndex, false)}
