@@ -95,8 +95,10 @@ export async function POST(req: Request) {
       description: string;
       options?: { model?: string; disableModelInvocation?: boolean };
     }>;
-    /** Skill selected via slash command and enforced for this request turn */
+    /** Skill selected via legacy slash command and enforced for this request turn */
     forcedSkillName?: string;
+    /** Skills selected via slash command and enforced for this request turn */
+    forcedSkillNames?: string[];
     /** Subagent selected via slash command and enforced for this request turn */
     forcedSubagentName?: string;
     /** Basic environment info from the connected Jupyter server */
@@ -152,6 +154,7 @@ export async function POST(req: Request) {
     availableSkills,
     availableSubagents,
     forcedSkillName: forcedSkillNameRaw,
+    forcedSkillNames: forcedSkillNamesRaw,
     forcedSubagentName: forcedSubagentNameRaw,
     agentPromptVariant,
     subagentPrompt,
@@ -224,6 +227,20 @@ export async function POST(req: Request) {
     );
   }
 
+  if (
+    forcedSkillNamesRaw !== undefined &&
+    (!Array.isArray(forcedSkillNamesRaw) ||
+      forcedSkillNamesRaw.some((name) => typeof name !== "string"))
+  ) {
+    return new Response(
+      JSON.stringify({
+        title: "Invalid Request",
+        message: "forcedSkillNames must be an array of strings when provided.",
+      }),
+      { status: 400, headers: { "Content-Type": "application/json" } }
+    );
+  }
+
   if (forcedSubagentNameRaw !== undefined && typeof forcedSubagentNameRaw !== "string") {
     return new Response(
       JSON.stringify({
@@ -238,38 +255,48 @@ export async function POST(req: Request) {
     typeof forcedSkillNameRaw === "string" && forcedSkillNameRaw.trim().length > 0
       ? forcedSkillNameRaw.trim()
       : undefined;
+  const forcedSkillNames = Array.from(
+    new Set([
+      ...(forcedSkillName ? [forcedSkillName] : []),
+      ...((Array.isArray(forcedSkillNamesRaw) ? forcedSkillNamesRaw : [])
+        .map((name) => name.trim())
+        .filter((name) => name.length > 0)),
+    ])
+  );
   const forcedSubagentName =
     typeof forcedSubagentNameRaw === "string" && forcedSubagentNameRaw.trim().length > 0
       ? forcedSubagentNameRaw.trim()
       : undefined;
+  const allowsForcedToolSelection = agentMode || rawInteractionMode === "Edit";
 
-  if (forcedSkillName && !agentMode) {
+  if (forcedSkillNames.length > 0 && !allowsForcedToolSelection) {
     return new Response(
       JSON.stringify({
         title: "Invalid Request",
-        message: "Skill enforcement requires agent mode.",
+        message: "Skill enforcement requires Agent or Edit mode.",
       }),
       { status: 400, headers: { "Content-Type": "application/json" } }
     );
   }
 
-  if (forcedSubagentName && !agentMode) {
+  if (forcedSubagentName && !allowsForcedToolSelection) {
     return new Response(
       JSON.stringify({
         title: "Invalid Request",
-        message: "Sub-agent enforcement requires agent mode.",
+        message: "Sub-agent enforcement requires Agent or Edit mode.",
       }),
       { status: 400, headers: { "Content-Type": "application/json" } }
     );
   }
 
-  if (forcedSkillName) {
+  if (forcedSkillNames.length > 0) {
     const advertised = new Set((availableSkills ?? []).map((skill) => skill.name));
-    if (!advertised.has(forcedSkillName)) {
+    const missingSkillName = forcedSkillNames.find((skillName) => !advertised.has(skillName));
+    if (missingSkillName) {
       return new Response(
         JSON.stringify({
           title: "Invalid Skill",
-          message: `Skill "${forcedSkillName}" is not available in this session.`,
+          message: `Skill "${missingSkillName}" is not available in this session.`,
         }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
@@ -589,6 +616,10 @@ export async function POST(req: Request) {
       : rawInteractionMode === "Ask" || rawInteractionMode === "Edit"
         ? rawInteractionMode
         : "Agent";
+  const missingForcedSkillNames =
+    effectiveMode !== "Ask"
+      ? forcedSkillNames.filter((skillName) => !hasLoadedSkillInHistory(skillName))
+      : [];
 
   // Log the full incoming request (messages + context metadata)
   logChatRequest({
@@ -640,7 +671,7 @@ export async function POST(req: Request) {
           workspaceDirectory,
           availableSkills,
           availableSubagents,
-          forcedSkillName,
+          forcedSkillNames: missingForcedSkillNames,
           forcedSubagentName,
           serverInfo,
           jupyterServerIsLocal,
@@ -663,7 +694,7 @@ export async function POST(req: Request) {
         workspaceDirectory,
         availableSkills,
         availableSubagents,
-        forcedSkillName,
+        forcedSkillNames: missingForcedSkillNames,
         forcedSubagentName,
         serverInfo,
         jupyterServerIsLocal,
@@ -707,8 +738,8 @@ export async function POST(req: Request) {
         : effectiveMode === "Edit"
           ? EDIT_MODE_TOOLS
           : orionTools;
-    const shouldForceLoadSkill =
-      !!(effectiveMode !== "Ask" && forcedSkillName && !hasLoadedSkillInHistory(forcedSkillName));
+    const missingForcedSkillName = missingForcedSkillNames[0];
+    const shouldForceLoadSkill = !!missingForcedSkillName;
     const shouldForceDelegate =
       !!(effectiveMode !== "Ask" && forcedSubagentName && !hasDelegatedSubagentInHistory(forcedSubagentName));
     const forcedToolChoice = shouldForceDelegate

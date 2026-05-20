@@ -179,7 +179,8 @@ ${agentLines}`;
  * @param options.workspaceDirectory - Workspace directory relative to Jupyter root
  * @param options.availableSkills - Skills to advertise in the system prompt
  * @param options.availableSubagents - Notebook-defined subagents to advertise in the system prompt
- * @param options.forcedSkillName - Skill explicitly selected by slash command for this turn
+ * @param options.forcedSkillName - Legacy single skill explicitly selected by slash command for this turn
+ * @param options.forcedSkillNames - Skills explicitly selected by slash command for this turn
  * @param options.forcedSubagentName - Subagent explicitly selected by slash command for this turn
  * @param options.serverInfo - Basic environment info from the Jupyter server (OS, Python version, etc.)
  * @param options.jupyterServerIsLocal - Client flag: Jupyter URL is loopback; with clientPlatformOs, OS may be inferred
@@ -203,6 +204,7 @@ export function buildAgentSystemPrompt(options?: {
   }>;
   /** Skill selected by user for this turn — enforce loading this skill before answering */
   forcedSkillName?: string;
+  forcedSkillNames?: string[];
   /** Subagent selected by user for this turn — enforce delegate before answering */
   forcedSubagentName?: string;
   /** Basic environment info fetched from the Jupyter server on connect */
@@ -216,6 +218,7 @@ export function buildAgentSystemPrompt(options?: {
     availableSkills,
     availableSubagents,
     forcedSkillName,
+    forcedSkillNames,
     forcedSubagentName,
     serverInfo,
     jupyterServerIsLocal,
@@ -246,11 +249,22 @@ ${skillLines}`);
     }
   }
 
-  if (forcedSkillName) {
+  const requiredSkillNames = forcedSkillNames?.length
+    ? forcedSkillNames
+    : forcedSkillName
+      ? [forcedSkillName]
+      : [];
+
+  if (requiredSkillNames.length > 0) {
+    const skillList = requiredSkillNames.map((name) => `\`${name}\``).join(", ");
+    const loadLines = requiredSkillNames
+      .map((name) => `- You MUST call \`load_skill\` with \`name: "${name}"\`.`)
+      .join("\n");
     sections.push(`## Active Skill Requirement
 
-The user explicitly selected the \`${forcedSkillName}\` skill for this turn.
-- You MUST call \`load_skill\` with \`name: "${forcedSkillName}"\` IMMEDIATELY. This MUST be the first thing you do.`);
+The user explicitly selected the ${skillList} skill${requiredSkillNames.length === 1 ? "" : "s"} for this turn.
+${loadLines}
+- Load the selected skill${requiredSkillNames.length === 1 ? "" : "s"} before doing any other work.`);
   }
 
   if (forcedSubagentName) {
@@ -323,6 +337,7 @@ export function buildEditModeSystemPrompt(options?: {
     options?: { disableModelInvocation?: boolean };
   }>;
   forcedSkillName?: string;
+  forcedSkillNames?: string[];
   forcedSubagentName?: string;
   serverInfo?: JupyterServerInfo | null;
   jupyterServerIsLocal?: boolean;
@@ -347,11 +362,22 @@ ${skillLines}`);
     }
   }
 
-  if (options?.forcedSkillName) {
+  const requiredSkillNames = options?.forcedSkillNames?.length
+    ? options.forcedSkillNames
+    : options?.forcedSkillName
+      ? [options.forcedSkillName]
+      : [];
+
+  if (requiredSkillNames.length > 0) {
+    const skillList = requiredSkillNames.map((name) => `\`${name}\``).join(", ");
+    const loadLines = requiredSkillNames
+      .map((name) => `- You MUST call \`load_skill\` with \`name: "${name}"\`.`)
+      .join("\n");
     sections.push(`## Active Skill Requirement
 
-The user explicitly selected the \`${options.forcedSkillName}\` skill for this turn.
-- You MUST call \`load_skill\` with \`name: "${options.forcedSkillName}"\` IMMEDIATELY. This MUST be the first thing you do.`);
+The user explicitly selected the ${skillList} skill${requiredSkillNames.length === 1 ? "" : "s"} for this turn.
+${loadLines}
+- Load the selected skill${requiredSkillNames.length === 1 ? "" : "s"} before doing any other work.`);
   }
 
   if (options?.forcedSubagentName) {

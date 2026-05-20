@@ -177,6 +177,83 @@ function normalizeReferenceSearchText(value: string): string {
   return value.toLowerCase().replace(/[\s#]+/g, "");
 }
 
+interface SlashTokenMatch {
+  start: number;
+  query: string;
+  hasTextBeforeToken: boolean;
+}
+
+interface SelectedSkillChip {
+  name: string;
+  label: string;
+}
+
+type SlashCommandCategory = NonNullable<SlashCommand["category"]>;
+
+const SLASH_CHIP_CLASS_BY_CATEGORY: Record<SlashCommandCategory, string> = {
+  builtin: "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-200",
+  subagent: "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-950 dark:text-blue-200",
+  skill: "border-slash-border bg-slash text-slash-foreground",
+};
+
+/** Normalizes missing categories to the built-in command group. */
+function slashCommandCategory(command: SlashCommand): SlashCommandCategory {
+  return command.category ?? "builtin";
+}
+
+/** Finds a trailing slash token so commands can be selected after existing message text. */
+function findTrailingSlashToken(value: string): SlashTokenMatch | null {
+  const match = value.match(/(^|\s)\/([\w-]*)$/);
+  if (!match || match.index === undefined) return null;
+
+  const start = match.index + match[1].length;
+  return {
+    start,
+    query: match[2],
+    hasTextBeforeToken: value.slice(0, start).trim().length > 0,
+  };
+}
+
+/** Escapes user-typed slash command search text for safe regex filtering. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Pulls selected skill command tokens out of the editable message body. */
+function extractSelectedSkillChips(
+  value: string,
+  skillCommands: SlashCommand[]
+): { chips: SelectedSkillChip[]; message: string } {
+  if (skillCommands.length === 0 || !value.includes("/")) {
+    return { chips: [], message: value };
+  }
+
+  const labelToCommand = new Map(skillCommands.map((command) => [command.label, command]));
+  const seen = new Set<string>();
+  const chips: SelectedSkillChip[] = [];
+  const message = value
+    .replace(/(^|\s)(\/[\w-]+)(?=\s|$)/g, (match, leading: string, label: string) => {
+      const command = labelToCommand.get(label);
+      if (!command) return match;
+      const name = command.name.slice("skill:".length);
+      if (!seen.has(name)) {
+        seen.add(name);
+        chips.push({ name, label: command.label });
+      }
+      return leading;
+    })
+    .replace(/[ \t]{2,}/g, " ");
+
+  return { chips, message };
+}
+
+/** Keeps skill-chip tokens in the hidden input while showing only prose in the textarea. */
+function composeMessageWithSkillChips(message: string, chips: SelectedSkillChip[]): string {
+  if (chips.length === 0) return message;
+  const chipText = chips.map((chip) => chip.label).join(" ");
+  return message.length > 0 ? `${chipText} ${message}` : `${chipText} `;
+}
+
 export function ChatTextbox({
   input,
   handleInputChange,
@@ -257,18 +334,20 @@ export function ChatTextbox({
 
   /**
    * Slash query: non-null when the user is mid-typing a command (e.g. "/rep").
-   * Becomes null once a full command + space is committed or input doesn't start with "/".
+   * Becomes null once a full command + space is committed or the trailing token is not a slash.
    */
   const slashQuery = React.useMemo(() => {
-    const trimmed = input.trimStart();
-    const match = trimmed.match(/^\/([\w-]*)$/);
-    return match ? match[1] : null;
+    return findTrailingSlashToken(input)?.query ?? null;
   }, [input]);
 
   /** All available slash commands — static built-ins plus any dynamic extras (e.g. skills). */
   const allSlashCommands = React.useMemo(
     () => [...SLASH_COMMANDS, ...extraSlashCommands],
     [extraSlashCommands]
+  );
+  const skillSlashCommands = React.useMemo(
+    () => allSlashCommands.filter((cmd) => cmd.category === "skill"),
+    [allSlashCommands]
   );
 
   /**
@@ -289,10 +368,23 @@ export function ChatTextbox({
     if (nextChar && !/\s/.test(nextChar)) return null;
 
     const message = nextChar ? trimmed.slice(activeCommand.label.length + 1) : "";
-    return { label: activeCommand.label, message, leadingWhitespace };
+    return {
+      name: activeCommand.name,
+      label: activeCommand.label,
+      message,
+      leadingWhitespace,
+      category: slashCommandCategory(activeCommand),
+    };
   }, [activeSlashCommand, allSlashCommands, input]);
+  const selectedSubagentName = slashChip?.category === "subagent" ? slashChip.name : null;
 
-  const textareaValue = slashChip ? slashChip.message : input;
+  const bodyInputValue = slashChip ? slashChip.message : input;
+  const selectedSkillProjection = React.useMemo(
+    () => extractSelectedSkillChips(bodyInputValue, skillSlashCommands),
+    [bodyInputValue, skillSlashCommands]
+  );
+  const selectedSkillChips = selectedSkillProjection.chips;
+  const textareaValue = selectedSkillProjection.message;
 
   /** Commands filtered by the current slash query (match on the path after `/`). */
   const slashMatchesByGroup = React.useMemo(() => {
@@ -304,7 +396,7 @@ export function ChatTextbox({
       };
     }
     const q = slashQuery.toLowerCase();
-    const regex = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+    const regex = new RegExp(escapeRegExp(q), "i");
     const filtered = allSlashCommands.filter((c) => {
       const key = c.label.replace(/^\//, "");
       return regex.test(key);
@@ -405,10 +497,33 @@ export function ChatTextbox({
     el?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [hasReferenceMatches, highlightedReferenceIndex, isReferenceTypeaheadOpen]);
 
-  /** Commit a slash command by filling the input with its label + space. */
+  /** Commit a slash command by replacing the active trailing slash token. */
   const selectSlashCommand = React.useCallback(
-    (cmdLabel: string) => {
-      const newValue = cmdLabel + " ";
+    (cmd: SlashCommand) => {
+      if (
+        cmd.category === "subagent" &&
+        selectedSubagentName !== null
+      ) {
+        return;
+      }
+
+      const slashToken = findTrailingSlashToken(input);
+      const cmdLabel = cmd.label;
+      let newValue = cmdLabel + " ";
+
+      if (slashToken) {
+        const beforeToken = input.slice(0, slashToken.start);
+        const hasTextAfterLeadingCommand =
+          slashToken.hasTextBeforeToken && activeSlashCommand != null;
+
+        if (cmd.category === "skill" || hasTextAfterLeadingCommand) {
+          newValue = `${beforeToken}${cmdLabel} `;
+        } else if (slashToken.hasTextBeforeToken) {
+          const messageBeforeToken = beforeToken.trimStart();
+          newValue = `${cmdLabel} ${messageBeforeToken}`;
+        }
+      }
+
       // Synthesize a change event so useChat's handleInputChange updates internal state
       const nativeSet = Object.getOwnPropertyDescriptor(
         window.HTMLTextAreaElement.prototype,
@@ -425,7 +540,7 @@ export function ChatTextbox({
       handleInputChange(syntheticEvent);
       textareaRef.current?.focus();
     },
-    [handleInputChange, textareaRef]
+    [activeSlashCommand, handleInputChange, input, selectedSubagentName, textareaRef]
   );
 
   /** Auto-resize textarea to fit content while keeping a max height. */
@@ -471,6 +586,27 @@ export function ChatTextbox({
     [handleInputChange]
   );
 
+  const updateComposerText = React.useCallback(
+    (message: string, chips: SelectedSkillChip[] = selectedSkillChips) => {
+      const nextBody = composeMessageWithSkillChips(message, chips);
+      if (slashChip) {
+        updateInputValue(`${slashChip.leadingWhitespace}${slashChip.label} ${nextBody}`);
+      } else {
+        updateInputValue(nextBody);
+      }
+    },
+    [selectedSkillChips, slashChip, updateInputValue]
+  );
+
+  const removeSelectedSkillChip = React.useCallback(
+    (chipName: string) => {
+      const nextChips = selectedSkillChips.filter((chip) => chip.name !== chipName);
+      updateComposerText(textareaValue, nextChips);
+      textareaRef.current?.focus();
+    },
+    [selectedSkillChips, textareaRef, textareaValue, updateComposerText]
+  );
+
   const selectReference = React.useCallback(
     (option: ChatReferenceOption) => {
       onReferencesChange?.([...references, option.reference]);
@@ -499,10 +635,9 @@ export function ChatTextbox({
    * `onEscapeKeyDown` so dismiss happens before global key handlers blur the textarea.
    */
   const dismissSlashTypeahead = React.useCallback(() => {
-    const leading = input.match(/^\s*/)?.[0] ?? "";
-    const trimmed = input.slice(leading.length);
-    if (!trimmed.match(/^\/[\w-]*$/)) return;
-    updateInputValue(leading);
+    const slashToken = findTrailingSlashToken(input);
+    if (!slashToken) return;
+    updateInputValue(input.slice(0, slashToken.start));
     textareaRef.current?.focus();
   }, [input, updateInputValue, textareaRef]);
 
@@ -679,23 +814,52 @@ export function ChatTextbox({
           <Popover open={isTypeaheadOpen || isReferenceTypeaheadOpen}>
             <PopoverAnchor asChild>
               <div className="w-full flex flex-col">
-                {slashChip && (
+                {(slashChip || selectedSkillChips.length > 0) && (
                   <div className="flex items-center gap-1 px-3 pt-2 pb-0">
-                    <span className="corner-squircle inline-flex h-5 shrink-0 max-w-[55%] items-center gap-1 rounded-md border border-slash-border bg-slash px-1.5 text-inherit font-medium leading-none text-slash-foreground">
-                      <span className="truncate">{slashChip.label}</span>
-                      <button
-                        type="button"
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          updateInputValue(slashChip.message);
-                          textareaRef.current?.focus();
-                        }}
-                        className="flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity"
-                        aria-label="Remove slash command"
+                    {slashChip && (
+                      <span
+                        className={cn(
+                          "corner-squircle inline-flex h-5 shrink-0 max-w-[55%] items-center gap-1 rounded-md border px-1.5 text-inherit font-medium leading-none",
+                          SLASH_CHIP_CLASS_BY_CATEGORY[slashChip.category]
+                        )}
                       >
-                        <X className="h-2.5 w-2.5" />
-                      </button>
-                    </span>
+                        <span className="truncate">{slashChip.label}</span>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            updateInputValue(slashChip.message);
+                            textareaRef.current?.focus();
+                          }}
+                          className="flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity"
+                          aria-label="Remove slash command"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </span>
+                    )}
+                    {selectedSkillChips.map((chip) => (
+                      <span
+                        key={chip.name}
+                        className={cn(
+                          "corner-squircle inline-flex h-5 shrink-0 max-w-[55%] items-center gap-1 rounded-md border px-1.5 text-inherit font-medium leading-none",
+                          SLASH_CHIP_CLASS_BY_CATEGORY.skill
+                        )}
+                      >
+                        <span className="truncate">{chip.label}</span>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            removeSelectedSkillChip(chip.name);
+                          }}
+                          className="flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity"
+                          aria-label={`Remove ${chip.label}`}
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </span>
+                    ))}
                   </div>
                 )}
                 {references.length > 0 && (
@@ -732,13 +896,7 @@ export function ChatTextbox({
                     value={textareaValue}
                     style={chatBoxFont}
                     onChange={(e) => {
-                      if (slashChip) {
-                        updateInputValue(
-                          `${slashChip.leadingWhitespace}${slashChip.label} ${e.target.value}`
-                        );
-                      } else {
-                        handleInputChange(e);
-                      }
+                      updateComposerText(e.target.value);
                       resizeTextarea();
                     }}
                     placeholder={placeholder}
@@ -762,7 +920,8 @@ export function ChatTextbox({
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
                           e.stopPropagation();
-                          selectSlashCommand(orderedSlashMatches[highlightedIndex].label);
+                          const command = orderedSlashMatches[highlightedIndex];
+                          if (command) selectSlashCommand(command);
                           return;
                         }
                         if (e.key === "Escape") {
@@ -774,7 +933,8 @@ export function ChatTextbox({
                         if (e.key === "Tab") {
                           e.preventDefault();
                           e.stopPropagation();
-                          selectSlashCommand(orderedSlashMatches[highlightedIndex].label);
+                          const command = orderedSlashMatches[highlightedIndex];
+                          if (command) selectSlashCommand(command);
                           return;
                         }
                       }
@@ -814,6 +974,21 @@ export function ChatTextbox({
                           e.preventDefault();
                           e.stopPropagation();
                           updateInputValue(input.replace(/(^|\s)@([\w./#-]*)$/, "$1"));
+                          return;
+                        }
+                      }
+
+                      if (selectedSkillChips.length > 0 && e.key === "Backspace") {
+                        const target = e.target as HTMLTextAreaElement;
+                        const isEmptyComposer =
+                          textareaValue.length === 0 &&
+                          target.selectionStart === 0 &&
+                          target.selectionEnd === 0;
+                        if (isEmptyComposer) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const lastChip = selectedSkillChips[selectedSkillChips.length - 1];
+                          if (lastChip) removeSelectedSkillChip(lastChip.name);
                           return;
                         }
                       }
@@ -1021,6 +1196,27 @@ export function ChatTextbox({
                           : undefined;
                       const showDefinitionEdit =
                         Boolean(definitionPath) && typeof onOpenSlashDefinition === "function";
+                      const isDisabledSubagent =
+                        group === "subagent" && selectedSubagentName !== null;
+                      const commandButton = (
+                        <button
+                          type="button"
+                          aria-disabled={isDisabledSubagent}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            if (isDisabledSubagent) return;
+                            selectSlashCommand(cmd);
+                          }}
+                          className={cn(
+                            "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-inherit",
+                            showDefinitionEdit && !isDisabledSubagent && "pr-7",
+                            isDisabledSubagent && "cursor-not-allowed"
+                          )}
+                        >
+                          <Icon className="h-3 w-3 shrink-0 opacity-60" />
+                          <span className="font-medium truncate">{cmd.label}</span>
+                        </button>
+                      );
                       return (
                         <React.Fragment key={cmd.name}>
                           {showGroupLabel && (
@@ -1047,26 +1243,26 @@ export function ChatTextbox({
                             onMouseEnter={() => setHighlightedIndex(i)}
                             className={cn(
                               "group corner-squircle relative flex w-full min-w-0 items-stretch rounded-md transition-colors",
-                              i === highlightedIndex
-                                ? "bg-muted text-foreground"
-                                : "text-muted-foreground hover:bg-muted/60"
+                              isDisabledSubagent
+                                ? "cursor-not-allowed text-muted-foreground/35"
+                                : i === highlightedIndex
+                                  ? "bg-muted text-foreground"
+                                  : "text-muted-foreground hover:bg-muted/60"
                             )}
                           >
-                            <button
-                              type="button"
-                              onMouseDown={(e) => {
-                                e.preventDefault();
-                                selectSlashCommand(cmd.label);
-                              }}
-                              className={cn(
-                                "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-inherit",
-                                showDefinitionEdit && "pr-7",
-                              )}
-                            >
-                              <Icon className="h-3 w-3 shrink-0 opacity-60" />
-                              <span className="font-medium truncate">{cmd.label}</span>
-                            </button>
-                            {showDefinitionEdit && definitionPath ? (
+                            {isDisabledSubagent ? (
+                              <TooltipProvider delayDuration={250}>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>{commandButton}</TooltipTrigger>
+                                  <TooltipContent side="left">
+                                    <p>Only one subagent at a time</p>
+                                  </TooltipContent>
+                                </Tooltip>
+                              </TooltipProvider>
+                            ) : (
+                              commandButton
+                            )}
+                            {showDefinitionEdit && definitionPath && !isDisabledSubagent ? (
                               <button
                                 type="button"
                                 onMouseDown={(e) => {

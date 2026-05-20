@@ -74,6 +74,7 @@ import {
   SLASH_COMMANDS,
   buildSkillSlashCommands,
   buildSubagentSlashCommands,
+  type SlashCommand,
 } from "./slash-commands";
 import { resolveSubagentExecutionModel } from "./subagent-model-resolution";
 import type { EditingState, InteractionMode, LLM, ModelSettings, ModelSettingsMap } from "./types";
@@ -242,6 +243,42 @@ type SerializedSkill = {
   description: string;
   disableModelInvocation?: boolean;
 };
+
+/** Pulls selected skill slash tokens out of a user message while preserving message text. */
+function extractSkillSlashCommands(
+  value: string,
+  skillCommands: SlashCommand[]
+): { skillNames: string[]; message: string } {
+  if (skillCommands.length === 0 || !value.includes("/")) {
+    return { skillNames: [], message: value.trim() };
+  }
+
+  const labelToName = new Map(
+    skillCommands.map((command) => [command.label, command.name.slice("skill:".length)])
+  );
+  const skillNames: string[] = [];
+  const seen = new Set<string>();
+  const message = value
+    .replace(/(^|\s)(\/[\w-]+)(?=\s|$)/g, (match, leading: string, label: string) => {
+      const skillName = labelToName.get(label);
+      if (!skillName) return match;
+      if (!seen.has(skillName)) {
+        seen.add(skillName);
+        skillNames.push(skillName);
+      }
+      return leading;
+    })
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+
+  return { skillNames, message };
+}
+
+/** Human-friendly fallback request when the user submits only selected skills. */
+function formatApplySkillsRequest(skillNames: string[]): string {
+  if (skillNames.length === 1) return `Apply the ${skillNames[0]} skill.`;
+  return `Apply the ${skillNames.join(", ")} skills.`;
+}
 
 type NotebookCellMentionEventDetail = {
   notebookPath?: unknown;
@@ -2488,17 +2525,17 @@ export function RightSidebar({
       }
     }
 
-    // Handle skill slash commands: /<name> <message>
-    // Strip the command prefix and enforce skill loading server-side via hidden metadata.
-    if (activeSlashCommand?.startsWith("skill:")) {
-      const skillName = activeSlashCommand.slice("skill:".length);
-      const commandLabel = `/${skillName}`;
-      const userMessage = input.trimStart().slice(commandLabel.length).trimStart();
-
-      const skill = assistant?.availableSkills.find((s) => s.name === skillName);
-      if (skill && !isInputLocked) {
+    // Handle skill slash commands anywhere in the message as skill mentions.
+    // Strip the command tokens and enforce loading server-side via hidden metadata.
+    const selectedSkills = extractSkillSlashCommands(input, skillSlashCommands);
+    if (selectedSkills.skillNames.length > 0) {
+      const allSelectedSkillsAvailable = selectedSkills.skillNames.every((skillName) =>
+        assistant?.availableSkills.some((skill) => skill.name === skillName)
+      );
+      if (allSelectedSkillsAvailable && !isInputLocked) {
         stopRequestedRef.current = false;
-        const plainUserText = userMessage || `Apply the ${skill.name} skill.`;
+        const plainUserText =
+          selectedSkills.message || formatApplySkillsRequest(selectedSkills.skillNames);
 
         setInput("");
         forcedSubagentForCurrentTurnRef.current = null;
@@ -2519,7 +2556,7 @@ export function RightSidebar({
               workspaceDirectory: workspaceDirectory ?? undefined,
               availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
               availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
-              forcedSkillName: skill.name,
+              forcedSkillNames: selectedSkills.skillNames,
               serverInfo: assistant?.serverInfo ?? undefined,
               jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
               clientPlatformOs,
