@@ -20,51 +20,6 @@ export const ToolApprovalModeSchema = z.preprocess((value) => {
 }, z.enum(["always_ask", "auto_run"]));
 export const WordWrapSchema = z.enum(["off", "on", "wordWrapColumn", "bounded"]);
 
-const SortConfigSchema = z
-  .object({
-    key: z.string(),
-    direction: z.enum(["asc", "desc"]),
-  })
-  .nullable();
-
-const AdvancedFilterSchema = z.object({
-  id: z.string(),
-  value: z.string(),
-  operation: z.enum([
-    "contains",
-    "doesNotContain",
-    "equals",
-    "notEquals",
-    "greaterThan",
-    "greaterThanOrEqual",
-    "lessThan",
-    "lessThanOrEqual",
-    "blank",
-    "notBlank",
-    "regex",
-    "pandas",
-  ]),
-});
-
-const ColumnFilterSchema = z.object({
-  filters: z.array(AdvancedFilterSchema),
-  condition: z.enum(["AND", "OR"]),
-});
-
-const TableViewSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  filterConfig: z.record(z.string()),
-  advancedFilterConfig: z.record(ColumnFilterSchema),
-  sortConfig: SortConfigSchema,
-  searchTerm: z.string(),
-  visibleColumns: z.array(z.string()),
-  columnWidths: z.record(z.number()),
-  freezeHeader: z.boolean(),
-  fontSize: z.number().int().min(10).max(32),
-  rowHeight: z.number().int().min(20).max(200),
-});
-
 const ProviderCredentialSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("api_key"),
@@ -100,16 +55,6 @@ const SettingsDataSchema = z.object({
   appearance: z.object({
     theme: ThemeSettingSchema,
   }),
-  layout: z.object({
-    panelSizes: z.object({
-      horizontal: z
-        .tuple([z.number().min(5).max(90), z.number().min(5).max(90), z.number().min(5).max(90)])
-        .describe("Left, center, right panel sizes"),
-      vertical: z
-        .tuple([z.number().min(5).max(95), z.number().min(5).max(95)])
-        .describe("Top, bottom panel sizes in center stack"),
-    }),
-  }),
   chat: z.object({
     toolApprovalMode: ToolApprovalModeSchema,
     /** Model IDs pinned to the top of the model selector. Order preserved. */
@@ -120,17 +65,6 @@ const SettingsDataSchema = z.object({
   /** Left sidebar file list typography. */
   fileTree: z.object({
     fontSize: z.number().int().min(10).max(20),
-  }),
-  table: z.object({
-    display: z.object({
-      freezeHeader: z.boolean(),
-      toolbarVisible: z.boolean(),
-      visibleRowCount: z.number().int().min(5).max(200),
-      rowHeight: z.number().int().min(20).max(120),
-      fontSize: z.number().int().min(10).max(24),
-      columnWidths: z.record(z.number().min(30).max(2000)),
-    }),
-    views: z.array(TableViewSchema),
   }),
   editor: z.object({
     fontSize: z.number().int().min(10).max(28),

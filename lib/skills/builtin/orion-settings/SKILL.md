@@ -1,6 +1,6 @@
 ---
 name: orion-settings
-description: Operates Orion user and workspace settings safely. Use when reading, creating, validating, or changing `~/.orion/settings.json` or `<workspace>/.orion/settings.json`, settings overrides, model pins, layout preferences, provider config, or workspace-level settings.
+description: Operates Orion user and workspace settings safely. Use when reading, creating, validating, or changing `~/.orion/settings.json` or `<workspace>/.orion/settings.json`, settings overrides, model pins, provider config, or workspace-level settings.
 ---
 
 # Orion settings
@@ -66,51 +66,6 @@ const InteractionModeSchema = z.enum(["Agent", "Ask", "Edit"]).catch("Agent");
 const ToolApprovalModeSchema = z.enum(["always_ask", "auto_run"]);
 const WordWrapSchema = z.enum(["off", "on", "wordWrapColumn", "bounded"]);
 
-const SortConfigSchema = z
-  .object({
-    key: z.string(),
-    direction: z.enum(["asc", "desc"]),
-  })
-  .nullable();
-
-const AdvancedFilterSchema = z.object({
-  id: z.string(),
-  value: z.string(),
-  operation: z.enum([
-    "contains",
-    "doesNotContain",
-    "equals",
-    "notEquals",
-    "greaterThan",
-    "greaterThanOrEqual",
-    "lessThan",
-    "lessThanOrEqual",
-    "blank",
-    "notBlank",
-    "regex",
-    "pandas",
-  ]),
-});
-
-const ColumnFilterSchema = z.object({
-  filters: z.array(AdvancedFilterSchema),
-  condition: z.enum(["AND", "OR"]),
-});
-
-const TableViewSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  filterConfig: z.record(z.string()),
-  advancedFilterConfig: z.record(ColumnFilterSchema),
-  sortConfig: SortConfigSchema,
-  searchTerm: z.string(),
-  visibleColumns: z.array(z.string()),
-  columnWidths: z.record(z.number()),
-  freezeHeader: z.boolean(),
-  fontSize: z.number().int().min(10).max(32),
-  rowHeight: z.number().int().min(20).max(200),
-});
-
 const ProviderCredentialSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("api_key"), apiKey: z.string() }),
   z.object({
@@ -133,19 +88,6 @@ const SettingsDataSchema = z.object({
   appearance: z.object({
     theme: ThemeSettingSchema,
   }),
-  layout: z.object({
-    panelSizes: z.object({
-      horizontal: z.tuple([
-        z.number().min(5).max(90),
-        z.number().min(5).max(90),
-        z.number().min(5).max(90),
-      ]),
-      vertical: z.tuple([
-        z.number().min(5).max(95),
-        z.number().min(5).max(95),
-      ]),
-    }),
-  }),
   chat: z.object({
     toolApprovalMode: ToolApprovalModeSchema,
     pinnedModelIds: z.array(z.string()),
@@ -153,17 +95,6 @@ const SettingsDataSchema = z.object({
   }),
   fileTree: z.object({
     fontSize: z.number().int().min(10).max(20),
-  }),
-  table: z.object({
-    display: z.object({
-      freezeHeader: z.boolean(),
-      toolbarVisible: z.boolean(),
-      visibleRowCount: z.number().int().min(5).max(200),
-      rowHeight: z.number().int().min(20).max(120),
-      fontSize: z.number().int().min(10).max(24),
-      columnWidths: z.record(z.number().min(30).max(2000)),
-    }),
-    views: z.array(TableViewSchema),
   }),
   editor: z.object({
     fontSize: z.number().int().min(10).max(28),

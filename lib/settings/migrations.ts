@@ -30,12 +30,25 @@ function stripLegacyAppearanceKeys(settings: Record<string, unknown>): void {
   }
 }
 
-/** Drops app-shell visibility flags that now belong to browser session state. */
+/** Drops legacy notebook table settings removed with the DataTable UI. */
+function stripRemovedTableSettings(settings: Record<string, unknown>): void {
+  if ("table" in settings) {
+    delete settings.table;
+  }
+}
+
+/** Drops app-shell layout keys that belong to browser session state. */
 function stripSessionOnlyLayoutKeys(settings: Record<string, unknown>): void {
   const layout = asObject(settings.layout);
   if (!layout) return;
   if ("sidebars" in layout) {
     delete layout.sidebars;
+  }
+  if ("panelSizes" in layout) {
+    delete layout.panelSizes;
+  }
+  if (Object.keys(layout).length === 0) {
+    delete settings.layout;
   }
 }
 
@@ -98,6 +111,7 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
   if (settingsObj) {
     stripLegacyAppearanceKeys(settingsObj);
     stripSessionOnlyLayoutKeys(settingsObj);
+    stripRemovedTableSettings(settingsObj);
   }
   const parsed = UserSettingsDocumentSchema.safeParse(normalized);
   if (parsed.success) {
@@ -121,6 +135,7 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
 
   stripLegacyAppearanceKeys(partialSettings);
   stripSessionOnlyLayoutKeys(partialSettings);
+  stripRemovedTableSettings(partialSettings);
 
   const merged = mergeSettings(
     DEFAULT_SETTINGS,
@@ -146,6 +161,7 @@ export function migrateWorkspaceSettingsDocument(raw: unknown): WorkspaceSetting
 
   const maybeOverrides = asObject(normalized.overrides) ?? {};
   stripSessionOnlyLayoutKeys(maybeOverrides);
+  stripRemovedTableSettings(maybeOverrides);
   return {
     version: SETTINGS_SCHEMA_VERSION,
     overrides: maybeOverrides as WorkspaceSettingsOverrides,

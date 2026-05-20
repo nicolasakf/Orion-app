@@ -5,12 +5,6 @@ export const DEFAULT_SETTINGS: SettingsData = {
   appearance: {
     theme: "system",
   },
-  layout: {
-    panelSizes: {
-      horizontal: [15, 50, 20],
-      vertical: [70, 20],
-    },
-  },
   chat: {
     toolApprovalMode: "always_ask",
     pinnedModelIds: [],
@@ -18,17 +12,6 @@ export const DEFAULT_SETTINGS: SettingsData = {
   },
   fileTree: {
     fontSize: 12,
-  },
-  table: {
-    display: {
-      freezeHeader: true,
-      toolbarVisible: true,
-      visibleRowCount: 15,
-      rowHeight: 40,
-      fontSize: 14,
-      columnWidths: {},
-    },
-    views: [],
   },
   editor: {
     fontSize: 12,
