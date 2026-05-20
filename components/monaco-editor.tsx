@@ -157,25 +157,35 @@ export function MonacoEditor({
     referenceContextRef.current = { referencePath, referenceNotebookCellIndex };
   }, [referenceNotebookCellIndex, referencePath]);
 
-  /** Dispatches the active highlighted editor range as a chat attachment reference. */
+  /** Dispatches the active editor selection, or current line, as a chat attachment reference. */
   const dispatchSelectedReference = useCallback((): boolean => {
     const editor = editorInstanceRef.current;
     const model = editor?.getModel?.();
     const selection = editor?.getSelection?.();
     const context = referenceContextRef.current;
-    if (!model || !selection || selection.isEmpty() || !context.referencePath) {
+    if (!model || !selection || !context.referencePath) {
       return false;
     }
 
-    const selectedText = model.getValueInRange(selection);
+    let lineStart = selection.startLineNumber;
+    let lineEnd = selection.endLineNumber;
+    let selectedText = model.getValueInRange(selection);
+    if (selection.isEmpty()) {
+      const position = editor?.getPosition?.();
+      if (!position) return false;
+      lineStart = position.lineNumber;
+      lineEnd = position.lineNumber;
+      selectedText = model.getLineContent(position.lineNumber);
+    }
+
     if (!selectedText.trim()) return false;
 
     window.dispatchEvent(
       new CustomEvent("orion:attach-editor-selection", {
         detail: {
           path: context.referencePath,
-          lineStart: selection.startLineNumber,
-          lineEnd: selection.endLineNumber,
+          lineStart,
+          lineEnd,
           selectedText,
           notebookCellIndex: context.referenceNotebookCellIndex,
         },
