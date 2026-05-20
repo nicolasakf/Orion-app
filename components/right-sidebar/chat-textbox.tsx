@@ -67,12 +67,12 @@ const REFERENCE_TABS: Array<{
   label: string;
   icon?: React.ComponentType<{ className?: string }>;
 }> = [
-  { value: "all", label: "All" },
-  { value: "files", label: "Files", icon: Folder },
-  { value: "cells", label: "Cells", icon: StretchHorizontal },
-  { value: "variables", label: "Variables", icon: Boxes },
-  { value: "terminal", label: "Terminal", icon: Terminal },
-];
+    { value: "all", label: "All" },
+    { value: "files", label: "Files", icon: Folder },
+    { value: "cells", label: "Cells", icon: StretchHorizontal },
+    { value: "variables", label: "Variables", icon: Boxes },
+    { value: "terminal", label: "Terminal", icon: Terminal },
+  ];
 
 const MODES = [
   {
@@ -924,13 +924,13 @@ export function ChatTextbox({
                                 Icon && !selected
                                   ? "w-6"
                                   : Icon
-                                  ? "gap-1 px-2"
-                                  : "px-2",
+                                    ? "gap-1 px-2"
+                                    : "px-2",
                                 isDisabled
                                   ? "cursor-not-allowed text-muted-foreground/30"
                                   : selected
-                                  ? "bg-muted text-foreground"
-                                  : "text-muted-foreground hover:bg-muted/60"
+                                    ? "bg-muted text-foreground"
+                                    : "text-muted-foreground hover:bg-muted/60"
                               )}
                             >
                               {Icon ? (
@@ -1072,6 +1072,7 @@ export function ChatTextbox({
                                 onMouseDown={(e) => {
                                   e.preventDefault();
                                   e.stopPropagation();
+                                  dismissSlashTypeahead();
                                   onOpenSlashDefinition(definitionPath);
                                 }}
                                 className={cn(
