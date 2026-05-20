@@ -293,6 +293,12 @@ interface AddedCellResult {
   cellId: CellId;
 }
 
+interface ScrollPositionSnapshot {
+  container: HTMLElement;
+  scrollTop: number;
+  scrollLeft: number;
+}
+
 /**
  * Component that displays a Jupyter notebook from a specified filepath
  */
@@ -347,6 +353,8 @@ export function NotebookEditor({
 
   const cellRefs = useRef<Map<CellId, HTMLDivElement | null>>(new Map());
   const notebookRootRef = useRef<HTMLDivElement | null>(null);
+  const mouseSelectionScrollSnapshotRef =
+    useRef<ScrollPositionSnapshot | null>(null);
   const showSubagentOptions = isSubagentNotebookPath(filepath);
   const subagentValidation = useMemo(
     () =>
@@ -394,6 +402,58 @@ export function NotebookEditor({
       return cellId;
     },
     [applySelectionState, notebook],
+  );
+
+  /** Finds the notebook scroll container for a cell or nested editor element. */
+  const getScrollContainer = useCallback((el: HTMLElement): HTMLElement => {
+    let parent = el.parentElement;
+    while (parent) {
+      const overflow = window.getComputedStyle(parent).overflowY;
+      if (overflow === "auto" || overflow === "scroll") return parent;
+      parent = parent.parentElement;
+    }
+    return document.documentElement as HTMLElement;
+  }, []);
+
+  /** Restores scroll after mouse-originated selection so clicks never reposition the notebook. */
+  const restoreMouseSelectionScroll = useCallback(() => {
+    const snapshot = mouseSelectionScrollSnapshotRef.current;
+    if (!snapshot) return;
+
+    const restore = () => {
+      snapshot.container.scrollTop = snapshot.scrollTop;
+      snapshot.container.scrollLeft = snapshot.scrollLeft;
+    };
+
+    restore();
+    window.requestAnimationFrame(() => {
+      restore();
+      window.requestAnimationFrame(restore);
+    });
+    window.setTimeout(restore, 0);
+    window.setTimeout(restore, 25);
+    window.setTimeout(() => {
+      restore();
+      if (mouseSelectionScrollSnapshotRef.current === snapshot) {
+        mouseSelectionScrollSnapshotRef.current = null;
+      }
+    }, 100);
+  }, []);
+
+  /** Captures the current scroll position before click/focus side effects can move it. */
+  const handleCellMouseDownCapture = useCallback(
+    (_cellIndex: number, event: React.MouseEvent) => {
+      if (event.button !== 0) return;
+
+      const container = getScrollContainer(event.currentTarget as HTMLElement);
+      mouseSelectionScrollSnapshotRef.current = {
+        container,
+        scrollTop: container.scrollTop,
+        scrollLeft: container.scrollLeft,
+      };
+      restoreMouseSelectionScroll();
+    },
+    [getScrollContainer, restoreMouseSelectionScroll],
   );
 
   /** Focuses the selected cell wrapper so notebook command-mode shortcuts remain active. */
@@ -1045,16 +1105,6 @@ export function NotebookEditor({
   /** Scrolls a rendered cell/output only when it is not fully visible. */
   const scrollElementIntoView = useCallback(
     (targetElement: HTMLElement, alignment: CellScrollAlignment = "start") => {
-      const getScrollContainer = (el: HTMLElement): HTMLElement => {
-        let parent = el.parentElement;
-        while (parent) {
-          const overflow = window.getComputedStyle(parent).overflowY;
-          if (overflow === "auto" || overflow === "scroll") return parent;
-          parent = parent.parentElement;
-        }
-        return document.documentElement as HTMLElement;
-      };
-
       const container = getScrollContainer(targetElement);
       const targetRect = targetElement.getBoundingClientRect();
       const containerRect = container.getBoundingClientRect();
@@ -1071,7 +1121,7 @@ export function NotebookEditor({
         container.scrollTop += scrollDelta;
       }
     },
-    [],
+    [getScrollContainer],
   );
 
   /**
@@ -1215,6 +1265,7 @@ export function NotebookEditor({
   const handleCellSelect = useCallback(
     (cellIndex: number, event?: React.MouseEvent | React.KeyboardEvent) => {
       if (!notebook) return;
+      const isMouseSelection = event?.type.startsWith("mouse") ?? false;
       const selectedId = getCellIdByIndex(notebook, cellIndex);
       if (!selectedId) return;
       const newCursorIndex = cellIndex;
@@ -1271,10 +1322,14 @@ export function NotebookEditor({
       }
       // Ensure clicked cell is visible
       // scrollToCell(newCursorIndex);
+      if (isMouseSelection) {
+        restoreMouseSelectionScroll();
+      }
     },
     [
       applySelectionState,
       notebook,
+      restoreMouseSelectionScroll,
       selectionAnchorCellId,
       selectionAnchorIndex,
       scrollToCell,
@@ -1288,6 +1343,9 @@ export function NotebookEditor({
     (cellIndex: number, isEditing: boolean) => {
       const cellId = cellIdForIndex(cellIndex);
       if (!cellId) return;
+      if (isEditing) {
+        restoreMouseSelectionScroll();
+      }
       setEditingCellIds((prevEditingIds) => {
         const newEditingIds = new Set(prevEditingIds);
         if (isEditing) {
@@ -1298,7 +1356,7 @@ export function NotebookEditor({
         return newEditingIds;
       });
     },
-    [cellIdForIndex],
+    [cellIdForIndex, restoreMouseSelectionScroll],
   );
 
   const isAnyCellEditing = editingCellIds.size > 0;
@@ -3113,6 +3171,7 @@ export function NotebookEditor({
                               onCellModified={handleCellModified}
                               onUpdateCell={handleUpdateCell}
                               onCellSelect={handleCellSelect}
+                              onCellMouseDownCapture={handleCellMouseDownCapture}
                               onCellAction={handleCellAction}
                               isSelected={selectedCellIndices.has(index)}
                               onEditingModeChange={handleEditingModeChange}

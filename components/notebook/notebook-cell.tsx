@@ -117,6 +117,10 @@ interface NotebookCellProps {
     cellIndex: number,
     event?: React.MouseEvent | React.KeyboardEvent,
   ) => void;
+  onCellMouseDownCapture?: (
+    cellIndex: number,
+    event: React.MouseEvent,
+  ) => void;
   onCellAction?: (action: string, cellIndex: number) => void;
   isSelected?: boolean;
   onEditingModeChange?: (cellIndex: number, isEditing: boolean) => void;
@@ -852,6 +856,7 @@ function NotebookCellComponent({
   onCellModified,
   onUpdateCell,
   onCellSelect,
+  onCellMouseDownCapture,
   onCellAction,
   isSelected = false,
   onEditingModeChange,
@@ -2000,6 +2005,9 @@ function NotebookCellComponent({
       ref={cellContainerRef}
       className="relative isolate notebook-cell"
       tabIndex={-1}
+      onMouseDownCapture={(event) =>
+        onCellMouseDownCapture?.(cellIndex, event)
+      }
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
