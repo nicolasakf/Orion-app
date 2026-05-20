@@ -2,7 +2,7 @@
   <img src="./public/assets/Cover%20Photo%204.png" width="800" alt="Orion — Master your data, speed your research">
 </p>
 
-**Orion** is the first open-source AI coding agent built specifically for **data scientists, analysts, and researchers** — not app developers.
+**Orion** is the first open-source AI coding agent built specifically for **data scientists, analysts, and researchers**.
 
 General-purpose coding agents weren't designed for data-heavy research workflows. They guess at column names, choke on large datasets, and optimize for *code that runs* rather than *results that make sense*. The root cause is the **context gap** between what a model can read from source files and what it can't see — your runtime state, live variable values, cell outputs, and actual data.
 
