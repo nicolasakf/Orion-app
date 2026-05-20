@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="./public/assets/Cover%20Photo%203.png" width="800" alt="Orion — Master your data, speed your research">
+  <img src="./public/assets/Cover%20Photo%204.png" width="800" alt="Orion — Master your data, speed your research">
 </p>
 
-**Orion** is an open-source AI coding agent built for **data scientists, analysts, and researchers**—inside a notebook IDE that understands both your **code** and **runtime notebook state** (cells, outputs, tracebacks, structure, and run order). The goal is to **close the context gap**: fewer wrong columns, guessed names, or edits that look fine but do not match what actually executed.
+**Orion** is the first open-source AI coding agent built specifically for **data scientists, analysts, and researchers** — not app developers.
 
-- Connect from the browser to **your local Jupyter** environment—same notebooks, kernels, and env; no file uploads or redoing setup for Orion’s sake.
-- Use **frontier models** from providers you choose, or **local inference** (e.g. LM Studio, Ollama). Credentials are configured in the app; **self-hosted usage does not require an Orion account or hosted backend**.
-- **Privacy:** Orion does not use your notebooks, data, or code to train or improve the product ([website](https://www.orion-agent.ai)).
+General-purpose coding agents weren't designed for data-heavy research workflows. They guess at column names, choke on large datasets, and optimize for *code that runs* rather than *results that make sense*. The root cause is the **context gap** between what a model can read from source files and what it can't see — your runtime state, live variable values, cell outputs, and actual data.
+
+Orion closes that gap. Built around a modern notebook IDE, it feeds the right context to the model at the right time: variable inspector state, cell execution order, rich outputs, tracebacks, and dataframe structure. The agent iterates alongside you like a research partner — observing inputs, checking results, and adjusting until the outcome actually looks right.
 
 ## Quick start
 
