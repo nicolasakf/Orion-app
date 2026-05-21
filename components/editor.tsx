@@ -10,7 +10,7 @@ import {
 import { NotebookEditor } from "@/components/notebook/notebook-editor";
 import { MonacoEditor } from "@/components/monaco-editor";
 import { WelcomeInstructionsCard } from "@/components/welcome-instructions-card";
-import { Monaco } from "@monaco-editor/react";
+import type { Monaco } from "@monaco-editor/react";
 import { extname } from "path";
 import {
   Dialog,
@@ -25,14 +25,8 @@ import type { KernelStatus, KernelInfo, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { Dispatch, SetStateAction, MutableRefObject } from "react";
 import { isSkillDefinitionPath } from "@/lib/skills/paths";
+import { getMonacoLanguageForFilepath } from "@/lib/editor/monaco-language";
 import { useNotebookViewMode } from "@/contexts/notebook-view-mode-context";
-
-// Add a global declaration for monaco
-declare global {
-  interface Window {
-    monaco?: Monaco;
-  }
-}
 
 interface EditorProps {
   /**
@@ -64,76 +58,6 @@ interface EditorProps {
    * Notebook only: hide all code cell inputs in the UI without persisting to metadata.
    */
   presentationHideAllCellInputs?: boolean;
-}
-
-const MONACO_LANGUAGE_BY_EXTENSION: Partial<Record<string, string>> = {
-  bash: "shell",
-  c: "c",
-  cc: "cpp",
-  cpp: "cpp",
-  cs: "csharp",
-  css: "css",
-  cts: "typescript",
-  cxx: "cpp",
-  go: "go",
-  h: "c",
-  hpp: "cpp",
-  html: "html",
-  htm: "html",
-  ini: "ini",
-  java: "java",
-  js: "javascript",
-  json: "json",
-  jsx: "javascript",
-  less: "less",
-  lua: "lua",
-  md: "markdown",
-  markdown: "markdown",
-  mjs: "javascript",
-  mts: "typescript",
-  php: "php",
-  ps1: "powershell",
-  py: "python",
-  r: "r",
-  rb: "ruby",
-  rs: "rust",
-  sass: "scss",
-  scss: "scss",
-  sh: "shell",
-  sql: "sql",
-  swift: "swift",
-  ts: "typescript",
-  tsx: "typescript",
-  txt: "plaintext",
-  xml: "xml",
-  yaml: "yaml",
-  yml: "yaml",
-  zsh: "shell",
-};
-
-/**
- * Resolves a Monaco language id without depending on Monaco already being mounted.
- */
-function getLanguageForExtension(extension: string): string {
-  const normalizedExtension = extension.toLowerCase().replace(/^\./, "");
-  const fallbackLanguage =
-    MONACO_LANGUAGE_BY_EXTENSION[normalizedExtension] ?? "plaintext";
-
-  if (
-    typeof window === "undefined" ||
-    !window.monaco ||
-    !window.monaco.languages
-  ) {
-    return fallbackLanguage;
-  }
-
-  const languages = window.monaco.languages.getLanguages();
-  const monacoExtension = `.${normalizedExtension}`;
-  const foundLang = languages.find((lang) =>
-    lang.extensions?.includes(monacoExtension),
-  );
-
-  return foundLang?.id ?? fallbackLanguage;
 }
 
 /**
@@ -203,7 +127,7 @@ export function Editor({
           setFileLanguage(
             currentExt === "ipynb" && openNotebookAsText
               ? "json"
-              : getLanguageForExtension(currentExt),
+              : getMonacoLanguageForFilepath(filepath),
           );
 
           // Read file content via Jupyter's ContentsManager
@@ -341,6 +265,16 @@ export function Editor({
     [pathExtension],
   );
 
+  /** Re-resolve language once Monaco is mounted (extension lookup needs its registry). */
+  const handleMonacoMount = useCallback(
+    (_editor: unknown, monaco: Monaco) => {
+      if (filepath) {
+        setFileLanguage(getMonacoLanguageForFilepath(filepath, monaco));
+      }
+    },
+    [filepath],
+  );
+
   const FileOperationErrorDialog = () => {
     return (
       <Dialog open={showErrorDialog} onOpenChange={setShowErrorDialog}>
@@ -403,6 +337,7 @@ export function Editor({
           className="w-full h-full"
           isNotebook={false}
           onRunInTerminal={handleRunInTerminal}
+          onMount={handleMonacoMount}
           referencePath={filepath}
         />
       );
