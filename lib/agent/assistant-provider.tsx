@@ -579,6 +579,40 @@ export function AssistantProvider({
         return skill.content;
       }
 
+      if (toolName === "web_fetch" || toolName === "web_search") {
+        const requestId = typeof crypto !== "undefined" ? crypto.randomUUID() : `tool-${Date.now()}`;
+        const startMs = Date.now();
+        const sanitizedParams = sanitizeToolParams(params);
+        const path = toolName === "web_fetch" ? "/api/tools/web-fetch" : "/api/tools/web-search";
+
+        logToolDispatch({ requestId, toolName, params }, chatIdRef.current);
+
+        try {
+          const response = await fetch(path, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(sanitizedParams ?? {}),
+          });
+          const data = await response.json().catch(() => ({})) as { output?: unknown; error?: unknown };
+          if (!response.ok) {
+            throw new Error(typeof data.error === "string" ? data.error : `Request failed with status ${response.status}`);
+          }
+
+          const finalResult = guardToolResult(
+            typeof data.output === "string" ? data.output : JSON.stringify(data.output ?? "")
+          ) as string;
+          const durationMs = Date.now() - startMs;
+          logToolResult({ requestId, toolName, params, result: finalResult, durationMs }, chatIdRef.current);
+          return finalResult;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          const durationMs = Date.now() - startMs;
+          logToolError({ requestId, toolName, params, error: message, durationMs }, chatIdRef.current);
+          console.error(`Tool execution error [${toolName}]:`, err);
+          return guardToolResult({ error: `Tool execution failed: ${message}` });
+        }
+      }
+
       const toolSet = toolSetRef.current;
       if (!toolSet) {
         return { error: "Tool set not initialized. Please connect a kernel first." };

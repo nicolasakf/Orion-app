@@ -22,7 +22,9 @@ import {
   Notebook,
   Brain,
   Bot,
-  Hourglass
+  Hourglass,
+  Globe,
+  Search,
 } from "lucide-react";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 
@@ -132,6 +134,8 @@ export const TOOL_META: Record<OrionToolName, ToolMeta> = {
   await_command: { labelPending: "Awaiting command", labelDone: "Awaited command", icon: Hourglass },
   read_file: { labelPending: "Reading file", labelDone: "Read file", icon: FileText },
   edit_file: { labelPending: "Editing file", labelDone: "Edited file", icon: PenLine },
+  web_fetch: { labelPending: "Fetching web page", labelDone: "Fetched web page", icon: Globe },
+  web_search: { labelPending: "Searching web", labelDone: "Searched web", icon: Search },
   read_cell_output: { labelPending: "Reading output", labelDone: "Read output", icon: Eye },
   load_skill: { labelPending: "Loading skill", labelDone: "Loaded skill", icon: Brain },
   delegate: { labelPending: "Running sub-agent", labelDone: "Sub-agent finished", icon: Bot },
@@ -268,6 +272,8 @@ const TOOLS_WITH_EXPANDED_ARGS_PREVIEW = new Set<OrionToolName>([
   "read_notebook",
   "read_file",
   "edit_file",
+  "web_fetch",
+  "web_search",
   "load_skill",
 ]);
 
@@ -471,6 +477,14 @@ export function buildExpandedArgsPreview(
         range = "lines ?";
       }
       return { short: `${filePath} · ${range}` };
+    }
+    case "web_fetch": {
+      const url = argStr(args.url);
+      return { short: url ? `Web Fetch ${truncateForPreview(url, 100)}` : "Web Fetch" };
+    }
+    case "web_search": {
+      const query = argStr(args.query);
+      return { short: query ? `Web Search "${truncateForPreview(query, 100)}"` : "Web Search" };
     }
     case "load_skill": {
       const name = argStr(args.name);

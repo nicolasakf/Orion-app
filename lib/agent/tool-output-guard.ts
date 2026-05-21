@@ -5,7 +5,7 @@
  * slicing, without parsing or summarization.
  */
 
-export const TOOL_OUTPUT_TEXT_CHAR_BUDGET = 12000;
+export const TOOL_OUTPUT_TEXT_CHAR_BUDGET = 10000 * 4;  // rule of thumb: 4 chars per token
 export const TOOL_OUTPUT_IMAGE_BASE64_CHAR_BUDGET = 100000;
 export const TOOL_OUTPUT_MAX_OMITTED_RATIO = 1 / 3;
 

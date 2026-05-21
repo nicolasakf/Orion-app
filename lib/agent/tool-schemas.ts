@@ -452,6 +452,30 @@ export const orionTools = {
   }),
 
   // ============================================================================
+  // Web Access
+  // ============================================================================
+
+  web_fetch: tool({
+    description:
+      "Fetch a public web URL and return readable page content. Use this for specific documentation pages, articles, or links the user provides. Only http and https URLs are supported.",
+    inputSchema: z.object({
+      url: z
+        .string()
+        .describe("Fully formed public URL to fetch, starting with http:// or https://."),
+    }),
+  }),
+
+  web_search: tool({
+    description:
+      "Search the public web for up-to-date information using Exa. Use this when you need to discover relevant current pages before reading specific URLs.",
+    inputSchema: z.object({
+      query: z
+        .string()
+        .describe("Concise web search query. Include the current year when searching for recent information."),
+    }),
+  }),
+
+  // ============================================================================
   // Sub-agent Delegation
   // ============================================================================
 
@@ -500,6 +524,8 @@ export type OrionToolName = keyof typeof orionTools;
  */
 export const NO_DEPENDENCY_TOOLS: ReadonlySet<OrionToolName> = new Set<OrionToolName>([
   "load_skill",
+  "web_fetch",
+  "web_search",
   // delegate spawns a client-side sub-agent and does not need a Jupyter server or
   // kernel — the sub-agent itself acquires whatever tools it needs.
   "delegate",
@@ -545,6 +571,8 @@ export const ASK_MODE_TOOLS: Pick<
   | "list_notebooks"
   | "bash"
   | "await_command"
+  | "web_fetch"
+  | "web_search"
 > = {
   read_file: orionTools.read_file,
   read_notebook: orionTools.read_notebook,
@@ -553,6 +581,8 @@ export const ASK_MODE_TOOLS: Pick<
   list_notebooks: orionTools.list_notebooks,
   bash: orionTools.bash,
   await_command: orionTools.await_command,
+  web_fetch: orionTools.web_fetch,
+  web_search: orionTools.web_search,
 };
 
 /** Tool names excluded from Edit mode (notebook cell execution). */
