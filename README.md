@@ -35,8 +35,11 @@ Orion closes that gap. Built around a modern notebook IDE, it feeds the right co
 **Prerequisites:** Node.js 20+
 
 ```bash
+git clone https://github.com/nicolasakf/Orion-app.git
+cd Orion-app
 npm install
-npm run dev
+npm run build
+npm run start
 ```
 
 Open [http://localhost:3001](http://localhost:3001), then go to **Settings → Providers** to add your API keys.

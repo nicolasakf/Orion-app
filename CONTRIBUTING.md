@@ -9,12 +9,16 @@ Thanks for helping improve Orion.
 
 ## Setup
 
+Clone the repo, install dependencies, then run the dev server (hot reload, Turbopack):
+
 ```bash
+git clone https://github.com/nicolasakf/Orion-app.git
+cd Orion-app
 npm install
 npm run dev
 ```
 
-The dev server runs on port 3001 by default.
+The dev server runs on port 3001 by default. For a production-like local run, use `npm run build` and `npm run start` instead (see [README](./README.md#quick-start)).
 
 Configure model credentials inside the app under **Settings → Providers**.
 
