@@ -8,6 +8,23 @@ General-purpose coding agents weren't designed for data-heavy research workflows
 
 Orion closes that gap. Built around a modern notebook IDE, it feeds the right context to the model at the right time: variable inspector state, cell execution order, rich outputs, tracebacks, and dataframe structure. The agent iterates alongside you like a research partner — observing inputs, checking results, and adjusting until the outcome actually looks right.
 
+## Demo
+
+**Make focused edits with confidence, or generate entire notebooks from scratch.**
+
+<p align="center">
+  <img src="./public/assets/Orion%20README.gif" width="800" alt="Orion — Master your data, speed your research">
+</p>
+
+**Use any model, from any provider.**  
+**Mention cells, variables, files, and more.**  
+**Invoke commands, skills and sub-agents with slash commands.**
+
+<p align="center">
+  <img src="./public/assets/Orion%20README%202.gif" width="800" alt="Orion — Master your data, speed your research">
+</p>
+
+
 ## Quick start
 
 **Prerequisites:** Node.js 20+
