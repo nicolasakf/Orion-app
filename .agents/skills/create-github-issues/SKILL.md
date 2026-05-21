@@ -7,7 +7,7 @@ description: Creates GitHub issues for the Orion repo following project conventi
 
 ## Quick Start
 
-When creating issues for the Orion repo (https://github.com/nicolasakf/Orion):
+When creating issues for the Orion-app repo (https://github.com/nicolasakf/Orion-app):
 
 1. Use the body template below
 2. Add exactly 2 labels: one type (bug, new-feature, refactor) and one status (backlog, not-started, in-progress)
@@ -62,13 +62,13 @@ Every issue has **exactly 2 labels**: one type label and one status label.
 ## Creating via CLI
 
 ```bash
-gh issue create --repo nicolasakf/Orion --title "Title" --body "$BODY" --label "label1" --label "label2"
+gh issue create --repo nicolasakf/Orion-app --title "Title" --body "$BODY" --label "label1" --label "label2"
 ```
 
 Or with a body file:
 
 ```bash
-gh issue create --repo nicolasakf/Orion --title "Title" --body-file issue-body.md --label "new-feature" --label "not-started"
+gh issue create --repo nicolasakf/Orion-app --title "Title" --body-file issue-body.md --label "new-feature" --label "not-started"
 ```
 
 ## Examples
