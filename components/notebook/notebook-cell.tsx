@@ -98,6 +98,7 @@ import { useTheme } from "next-themes";
 import { CellContextMenu } from "./cell-context-menu";
 import { CellOutputToolbar } from "./cell-output-toolbar";
 import {
+  getOutputPersistedCollapsed,
   getOutputTextLength,
   TEXT_OUTPUT_AUTO_COLLAPSE_THRESHOLD,
 } from "@/components/notebook/utils";
@@ -923,8 +924,8 @@ function NotebookCellComponent({
   );
   const hideToolbarTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Per-output collapse state (keyed by output index)
-  const [perOutputCollapsed, setPerOutputCollapsed] = useState<
+  // Ephemeral auto-collapse for large outputs without persisted metadata
+  const [autoCollapsedOutputs, setAutoCollapsedOutputs] = useState<
     Record<number, boolean>
   >({});
 
@@ -1123,24 +1124,36 @@ function NotebookCellComponent({
   }, [
     cell.outputs,
     isOutputHidden,
-    perOutputCollapsed,
+    autoCollapsedOutputs,
     isOutputCollapsed,
     updateOutputScrollMetrics,
   ]);
 
+  /** Resolves collapsed UI state from saved metadata or ephemeral auto-collapse. */
+  const isOutputCollapsedAtIndex = useCallback(
+    (outputIndex: number) => {
+      const output = cell.outputs?.[outputIndex];
+      if (!output) return false;
+      const persisted = getOutputPersistedCollapsed(output);
+      if (persisted !== undefined) return persisted;
+      return !!autoCollapsedOutputs[outputIndex];
+    },
+    [cell.outputs, autoCollapsedOutputs],
+  );
+
   // Auto-collapse large text outputs and reset state when outputs are cleared
   useEffect(() => {
     if (!cell.outputs || cell.outputs.length === 0) {
-      setPerOutputCollapsed({});
+      setAutoCollapsedOutputs({});
       return;
     }
 
-    setPerOutputCollapsed((prev) => {
+    setAutoCollapsedOutputs((prev) => {
       const updated = { ...prev };
       let changed = false;
 
       cell.outputs!.forEach((output, idx) => {
-        // Only auto-collapse outputs that haven't had their state set yet
+        if (getOutputPersistedCollapsed(output) !== undefined) return;
         if (idx in updated) return;
         const len = getOutputTextLength(output);
         if (len > TEXT_OUTPUT_AUTO_COLLAPSE_THRESHOLD) {
@@ -1886,13 +1899,18 @@ function NotebookCellComponent({
     handleToggleOutputHidden();
   };
 
-  /** Toggles the collapsed state for a single output by index. */
-  const handleTogglePerOutputCollapse = useCallback((outputIdx: number) => {
-    setPerOutputCollapsed((prev) => ({
-      ...prev,
-      [outputIdx]: !prev[outputIdx],
-    }));
-  }, []);
+  /** Toggles the collapsed state for a single output and persists it in output metadata. */
+  const handleTogglePerOutputCollapse = useCallback(
+    (outputIdx: number) => {
+      if (!onCellAction) return;
+      const nextCollapsed = !isOutputCollapsedAtIndex(outputIdx);
+      onCellAction(
+        `set-output-collapsed:${outputIdx}:${nextCollapsed}`,
+        cellIndex,
+      );
+    },
+    [cellIndex, isOutputCollapsedAtIndex, onCellAction],
+  );
 
   /** Shows the output toolbar for the hovered output, cancelling any pending hide */
   const handleOutputMouseEnter = useCallback((idx: number) => {
@@ -2381,7 +2399,7 @@ function NotebookCellComponent({
                                     handleToggleOutputAppView
                                   }
                                   isInAppView={isOutputInAppView(cell, idx)}
-                                  isCollapsed={!!perOutputCollapsed[idx]}
+                                  isCollapsed={isOutputCollapsedAtIndex(idx)}
                                   onToggleCollapse={() =>
                                     handleTogglePerOutputCollapse(idx)
                                   }
@@ -2389,7 +2407,7 @@ function NotebookCellComponent({
                                     output.output_type === OutputType.ERROR &&
                                     getOutputTextLength(output) >
                                       TEXT_OUTPUT_AUTO_COLLAPSE_THRESHOLD &&
-                                    !!perOutputCollapsed[idx]
+                                    isOutputCollapsedAtIndex(idx)
                                   }
                                 />
                               </div>

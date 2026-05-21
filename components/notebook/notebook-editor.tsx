@@ -2242,6 +2242,34 @@ export function NotebookEditor({
               }
               return prevNotebook;
             });
+          } else if (action.startsWith("set-output-collapsed:")) {
+            const [, outputIndexStr, collapsedStr] = action.split(":");
+            const outputIndex = parseInt(outputIndexStr, 10);
+            const collapsed = collapsedStr === "true";
+            if (Number.isNaN(outputIndex)) {
+              return;
+            }
+
+            setNotebook((prevNotebook) => {
+              if (!prevNotebook) return null;
+              const cells = prevNotebook.cells.slice();
+              const cell = cells[cellIndexFromAction] as any;
+              if (cell && cell.outputs && cell.outputs[outputIndex]) {
+                const out = { ...cell.outputs[outputIndex] } as any;
+                out.metadata = out.metadata || {};
+                out.metadata.orion = {
+                  ...(out.metadata.orion || {}),
+                  isCollapsed: collapsed,
+                };
+                const newOutputs = cell.outputs.slice();
+                newOutputs[outputIndex] = out;
+                cells[cellIndexFromAction] = { ...cell, outputs: newOutputs };
+                return { ...prevNotebook, cells } as any;
+              }
+              return prevNotebook;
+            });
+            modifiedCellsRef.current.add(actionCellId);
+            markDirty();
           }
           break;
       }
