@@ -4,7 +4,7 @@
 
 **Orion** is the first open-source AI coding agent built specifically for **data scientists, analysts, and researchers**.
 
-General-purpose coding agents weren't designed for data-heavy research workflows. They guess at column names, choke on large datasets, and optimize for *code that runs* rather than *results that make sense*. The root cause is the **context gap** between what a model can read from source files and what it can't see — your runtime state, live variable values, cell outputs, and actual data.
+General-purpose coding agents weren't designed for data-heavy research workflows. They guess at column names, choke on large datasets, and optimize for *code that runs* rather than *results that make sense*. The root cause is the **context gap** between what a model can read from source files and what it can't see: your runtime state, live variable values, cell outputs. The actual data you're working with.
 
 Orion closes that gap. Built around a modern notebook IDE, it feeds the right context to the model at the right time: variable inspector state, cell execution order, rich outputs, tracebacks, and dataframe structure. The agent iterates alongside you like a research partner — observing inputs, checking results, and adjusting until the outcome actually looks right.
 
@@ -16,12 +16,17 @@ Orion closes that gap. Built around a modern notebook IDE, it feeds the right co
   <img src="./public/assets/Orion%20README.gif" width="800" alt="Orion — Master your data, speed your research">
 </p>
 
-**Use any model, from any provider.**  
-**Mention cells, variables, files, and more.**  
-**Invoke commands, skills and sub-agents with slash commands.**
+**Use any model, from any provider. Choose remote or local inference.**  
+**Mention cells, variables, files, etc. so you and the agent are always on the same page.**  
 
 <p align="center">
   <img src="./public/assets/Orion%20README%202.gif" width="800" alt="Orion — Master your data, speed your research">
+</p>
+
+**Invoke commands, skills and sub-agents with slash commands.**
+
+<p align="center">
+  <img src="./public/assets/Orion%20README%203.gif" width="800" alt="Orion — Master your data, speed your research">
 </p>
 
 
