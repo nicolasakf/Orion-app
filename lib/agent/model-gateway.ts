@@ -624,32 +624,82 @@ export class ModelGateway {
    * Remove AI SDK message/part provider metadata before replaying history.
    *
    * ChatGPT OAuth requests cannot reuse OpenAI item references because the
-   * upstream request must set `store: false`. Stripping providerOptions forces
+   * upstream request must set `store: false`. Stripping item metadata forces
    * the SDK to serialize prior turns as literal content instead of opaque IDs.
+   * Reasoning parts are the exception: encrypted content can be replayed safely,
+   * while bare reasoning summaries must be omitted to avoid OpenAI Responses
+   * warnings about unsupported non-OpenAI reasoning parts.
    */
   private stripMessageProviderOptions(messages: ModelMessage[]): ModelMessage[] {
-    return messages.map((message) => {
-      const messageRecord = message as ModelMessage & { providerOptions?: Record<string, unknown> };
-      const { providerOptions: _messageProviderOptions, ...messageWithoutProviderOptions } = messageRecord;
+    /** Extract the OpenAI metadata bag from AI SDK provider metadata fields. */
+    const readOpenAIOptions = (metadata: unknown): Record<string, unknown> | undefined => {
+      if (typeof metadata !== "object" || metadata === null) return undefined;
+      const openai = (metadata as Record<string, unknown>).openai;
+      return typeof openai === "object" && openai !== null
+        ? openai as Record<string, unknown>
+        : undefined;
+    };
+
+    return messages.flatMap((message): ModelMessage[] => {
+      const messageRecord = message as ModelMessage & {
+        providerOptions?: Record<string, unknown>;
+        providerMetadata?: Record<string, unknown>;
+      };
+      const {
+        providerOptions: _messageProviderOptions,
+        providerMetadata: _messageProviderMetadata,
+        ...messageWithoutProviderOptions
+      } = messageRecord;
 
       if (!Array.isArray(message.content)) {
-        return messageWithoutProviderOptions as ModelMessage;
+        return [messageWithoutProviderOptions as ModelMessage];
       }
 
-      const strippedContent = message.content.map((part) => {
-        if (typeof part !== "object" || part === null || !("providerOptions" in part)) {
-          return part;
+      const strippedContent = message.content.flatMap((part): unknown[] => {
+        if (typeof part !== "object" || part === null) {
+          return [part];
         }
 
-        const { providerOptions: _partProviderOptions, ...partWithoutProviderOptions } =
-          part as unknown as Record<string, unknown>;
-        return partWithoutProviderOptions;
+        const partRecord = part as unknown as Record<string, unknown>;
+        const {
+          providerOptions: _partProviderOptions,
+          providerMetadata: _partProviderMetadata,
+          ...partWithoutProviderOptions
+        } = partRecord;
+
+        if (partRecord.type !== "reasoning") {
+          return [partWithoutProviderOptions];
+        }
+
+        const openaiOptions =
+          readOpenAIOptions(partRecord.providerOptions) ??
+          readOpenAIOptions(partRecord.providerMetadata);
+        const encryptedContent = openaiOptions?.reasoningEncryptedContent;
+
+        if (typeof encryptedContent !== "string") {
+          return [];
+        }
+
+        return [
+          {
+            ...partWithoutProviderOptions,
+            providerOptions: {
+              openai: { reasoningEncryptedContent: encryptedContent },
+            },
+          },
+        ];
       });
 
-      return {
-        ...messageWithoutProviderOptions,
-        content: strippedContent,
-      } as ModelMessage;
+      if (strippedContent.length === 0) {
+        return [];
+      }
+
+      return [
+        {
+          ...messageWithoutProviderOptions,
+          content: strippedContent,
+        } as ModelMessage,
+      ];
     });
   }
 
