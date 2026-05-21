@@ -89,6 +89,7 @@ const SettingsDataSchema = z.object({
     theme: ThemeSettingSchema,
   }),
   chat: z.object({
+    chatGenerationModelId: z.string().min(1),
     toolApprovalMode: ToolApprovalModeSchema,
     pinnedModelIds: z.array(z.string()),
     fontSize: z.number().int().min(10).max(20),
@@ -145,13 +146,14 @@ Set workspace chat font size:
 }
 ```
 
-Set workspace model pins:
+Set workspace chat model and model pins:
 
 ```json
 {
   "version": 1,
   "overrides": {
     "chat": {
+      "chatGenerationModelId": "gemini-3-flash-preview",
       "pinnedModelIds": ["gpt-5.4", "claude-sonnet-4-5"]
     }
   }

@@ -56,6 +56,8 @@ const SettingsDataSchema = z.object({
     theme: ThemeSettingSchema,
   }),
   chat: z.object({
+    /** Model ID used for normal chat generation. */
+    chatGenerationModelId: z.string().min(1),
     toolApprovalMode: ToolApprovalModeSchema,
     /** Model IDs pinned to the top of the model selector. Order preserved. */
     pinnedModelIds: z.array(z.string()),

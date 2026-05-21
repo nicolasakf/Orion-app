@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { DEFAULT_CHAT_GENERATION_MODEL_ID } from "@/lib/settings/defaults";
+import { parseUserSettingsDocumentFromJson } from "@/lib/settings/migrations";
 import { ToolApprovalModeSchema } from "@/lib/settings/schema";
 
 describe("ToolApprovalModeSchema", () => {
@@ -12,5 +14,27 @@ describe("ToolApprovalModeSchema", () => {
     ["Autorun", "auto_run"],
   ])("normalizes %s to %s", (input, expected) => {
     expect(ToolApprovalModeSchema.parse(input)).toBe(expected);
+  });
+});
+
+describe("settings migrations", () => {
+  it("backfills the chat generation model for older user settings", () => {
+    const migrated = parseUserSettingsDocumentFromJson(
+      JSON.stringify({
+        version: 1,
+        settings: {
+          appearance: { theme: "system" },
+          chat: {
+            toolApprovalMode: "always_ask",
+            pinnedModelIds: [],
+            fontSize: 12,
+          },
+        },
+      })
+    );
+
+    expect(migrated.settings.chat.chatGenerationModelId).toBe(
+      DEFAULT_CHAT_GENERATION_MODEL_ID
+    );
   });
 });

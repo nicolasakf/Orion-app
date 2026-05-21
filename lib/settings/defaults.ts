@@ -1,11 +1,14 @@
 import type { SettingsData, UserSettingsDocument, WorkspaceSettingsDocument } from "@/lib/settings/schema";
 import { SETTINGS_SCHEMA_VERSION } from "@/lib/settings/schema";
 
+export const DEFAULT_CHAT_GENERATION_MODEL_ID = "gemini-3.1-flash-lite";
+
 export const DEFAULT_SETTINGS: SettingsData = {
   appearance: {
     theme: "system",
   },
   chat: {
+    chatGenerationModelId: DEFAULT_CHAT_GENERATION_MODEL_ID,
     toolApprovalMode: "always_ask",
     pinnedModelIds: [],
     fontSize: 12,
