@@ -494,6 +494,10 @@ export default function Page() {
   const [isSaved, setIsSaved] = useState<boolean>(false);
   const [recentFiles, setRecentFiles] = useState<ActiveFile[]>([]);
   const [open, setOpen] = useState(false);
+  const [recentFilesSelectionPath, setRecentFilesSelectionPath] = useState("");
+  const recentFilesSelectionPathRef = useRef("");
+  const recentFilesCommandInputRef = useRef<HTMLInputElement>(null);
+  const recentFilesShortcutActiveRef = useRef(false);
   const [isFileIconHovered, setIsFileIconHovered] = useState(false);
   const leftPanelRef = useRef<any>(null);
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(
@@ -838,6 +842,114 @@ export default function Page() {
     },
     [currentFile.openAsText, currentFile.path, hasUnsavedChanges, selectFile],
   );
+
+  /**
+   * Keeps the selected recent-file path available to keyboard event handlers
+   * without waiting for React state to flush.
+   */
+  const updateRecentFilesSelection = useCallback((path: string) => {
+    recentFilesSelectionPathRef.current = path;
+    setRecentFilesSelectionPath(path);
+  }, []);
+
+  /**
+   * Moves the recent-files combobox selection by index.
+   */
+  const selectRecentFileAtIndex = useCallback(
+    (index: number) => {
+      const file = recentFiles[index];
+      updateRecentFilesSelection(file?.path ?? "");
+    },
+    [recentFiles, updateRecentFilesSelection],
+  );
+
+  /**
+   * Opens the currently highlighted recent file and ends the shortcut cycle.
+   */
+  const commitSelectedRecentFile = useCallback(() => {
+    const selectedPath = recentFilesSelectionPathRef.current;
+    const selectedFile = recentFiles.find((file) => file.path === selectedPath);
+
+    recentFilesShortcutActiveRef.current = false;
+    if (!selectedFile) {
+      setOpen(false);
+      return;
+    }
+
+    if (
+      selectedFile.path === currentFile.path &&
+      selectedFile.openAsText === currentFile.openAsText
+    ) {
+      setOpen(true);
+      window.requestAnimationFrame(() => {
+        recentFilesCommandInputRef.current?.focus();
+      });
+      return;
+    }
+
+    handleFileSelect(selectedFile);
+    setOpen(false);
+  }, [
+    currentFile.openAsText,
+    currentFile.path,
+    handleFileSelect,
+    recentFiles,
+  ]);
+
+  /**
+   * Cycles recent files with Cmd/Ctrl+D, then opens the highlighted file when
+   * the shortcut modifier is released.
+   */
+  useEffect(() => {
+    const isRecentFilesShortcut = (event: KeyboardEvent) =>
+      ((event.metaKey && !event.ctrlKey) ||
+        (!event.metaKey && event.ctrlKey)) &&
+      !event.altKey &&
+      !event.shiftKey &&
+      event.code === "KeyD";
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isRecentFilesShortcut(event)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (event.repeat || recentFiles.length === 0) return;
+
+      const selectedIndex = recentFiles.findIndex(
+        (file) => file.path === recentFilesSelectionPathRef.current,
+      );
+      const nextIndex = recentFilesShortcutActiveRef.current
+        ? (Math.max(selectedIndex, -1) + 1) % recentFiles.length
+        : 0;
+
+      recentFilesShortcutActiveRef.current = true;
+      setOpen(true);
+      selectRecentFileAtIndex(nextIndex);
+    };
+
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (!recentFilesShortcutActiveRef.current) return;
+      if (event.metaKey || event.ctrlKey) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      commitSelectedRecentFile();
+    };
+
+    const handleWindowBlur = () => {
+      recentFilesShortcutActiveRef.current = false;
+    };
+
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    window.addEventListener("keyup", handleKeyUp, { capture: true });
+    window.addEventListener("blur", handleWindowBlur);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, { capture: true });
+      window.removeEventListener("keyup", handleKeyUp, { capture: true });
+      window.removeEventListener("blur", handleWindowBlur);
+    };
+  }, [commitSelectedRecentFile, recentFiles, selectRecentFileAtIndex]);
 
   /**
    * Opens a file and scrolls to a specific line number.
@@ -2240,7 +2352,20 @@ export default function Page() {
                               open={open}
                               onOpenChange={(next) => {
                                 setOpen(next);
-                                if (!next) setIsFileIconHovered(false);
+                                if (next) {
+                                  if (
+                                    recentFiles.length > 0 &&
+                                    !recentFilesSelectionPathRef.current
+                                  ) {
+                                    updateRecentFilesSelection(
+                                      recentFiles[0].path,
+                                    );
+                                  }
+                                } else {
+                                  recentFilesShortcutActiveRef.current = false;
+                                  updateRecentFilesSelection("");
+                                  setIsFileIconHovered(false);
+                                }
                               }}
                             >
                               <PopoverTrigger asChild>
@@ -2312,7 +2437,10 @@ export default function Page() {
                                 </Button>
                               </PopoverTrigger>
                               <PopoverContent className="w-80 p-1">
-                                <Command>
+                                <Command
+                                  value={recentFilesSelectionPath}
+                                  onValueChange={updateRecentFilesSelection}
+                                >
                                   {currentFileOutsideWorkspace && (
                                     <div
                                       className="corner-squircle mx-1 mb-1 flex gap-2 rounded-md border border-amber-300/90 bg-amber-100/90 px-2 py-2 text-xs text-amber-950 dark:border-amber-700 dark:bg-amber-900/45 dark:text-amber-50"
@@ -2325,7 +2453,10 @@ export default function Page() {
                                       </p>
                                     </div>
                                   )}
-                                  <CommandInput placeholder="Search recent files..." />
+                                  <CommandInput
+                                    ref={recentFilesCommandInputRef}
+                                    placeholder="Search recent files..."
+                                  />
                                   <CommandEmpty>
                                     No recent files found.
                                   </CommandEmpty>
@@ -2336,6 +2467,8 @@ export default function Page() {
                                           key={`${file.path}-${index}`}
                                           value={file.path}
                                           onSelect={() => {
+                                            recentFilesShortcutActiveRef.current =
+                                              false;
                                             handleFileSelect(file);
                                             setOpen(false);
                                           }}
