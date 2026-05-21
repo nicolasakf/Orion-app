@@ -82,7 +82,8 @@ export async function compactConversation(
     opts.previousSummary?.text,
     opts.userCredential,
     opts.model,
-    opts.provider
+    opts.provider,
+    opts.chatId
   );
 
   // Estimate tokens after: synthetic summary pair + recent turns

@@ -424,6 +424,8 @@ export function RightSidebar({
   const [modelSettingsMap, setModelSettingsMap] = useState<ModelSettingsMap>({});
   const [isCompacting, setIsCompacting] = useState(false);
 
+  /** Shared request id for model calls triggered by the current user turn. */
+  const modelRequestIdRef = useRef<string | undefined>(undefined);
   /** Ref holding the latest compaction summary for the transport interceptor. */
   const compactionSummaryRef = useRef<CompactionSummary | undefined>(undefined);
   /** Prevents concurrent compaction runs. */
@@ -1324,6 +1326,7 @@ export function RightSidebar({
         interactionMode,
         agentMode: interactionMode === "Agent",
         chatId: effectiveChatId ?? undefined,
+        modelRequestId: modelRequestIdRef.current,
         modelSettings: modelSettingsMap[selectedModel],
         notebookPath,
         activeFilePath,
@@ -1347,6 +1350,7 @@ export function RightSidebar({
       interactionMode,
       agentMode: interactionMode === "Agent",
       chatId: effectiveChatId ?? undefined,
+      modelRequestId: modelRequestIdRef.current,
       modelSettings: modelSettingsMap[selectedModel],
       notebookPath,
       activeFilePath,
@@ -2390,6 +2394,8 @@ export function RightSidebar({
       if (!input.trim()) return;
       const userInput = input;
       const referencesForSubmit = draftReferences;
+      const modelRequestId = crypto.randomUUID();
+      modelRequestIdRef.current = modelRequestId;
       stopRequestedRef.current = false;
       forcedSubagentForCurrentTurnRef.current = null;
       setInput("");
@@ -2410,7 +2416,11 @@ export function RightSidebar({
       }
 
       // Update bodyRef with fresh credential before sending.
-      bodyRef.current = { ...bodyRef.current, userCredential: freshCredential };
+      bodyRef.current = {
+        ...bodyRef.current,
+        modelRequestId,
+        userCredential: freshCredential,
+      };
 
       const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
       await sendMessage(
@@ -2427,6 +2437,7 @@ export function RightSidebar({
             interactionMode,
             agentMode: interactionMode === "Agent",
             chatId: effectiveChatId ?? undefined,
+            modelRequestId,
             modelSettings: modelSettingsMap[selectedModel],
             notebookPath,
             activeFilePath,
@@ -2492,10 +2503,13 @@ export function RightSidebar({
       const subagent = assistant?.availableSubagents.find((s) => s.name === subagentName);
       if (subagent && !isInputLocked) {
         stopRequestedRef.current = false;
+        const modelRequestId = crypto.randomUUID();
+        modelRequestIdRef.current = modelRequestId;
         const plainUserText = userMessage || `Run the ${subagent.name} sub-agent.`;
 
         setInput("");
         forcedSubagentForCurrentTurnRef.current = subagent.name;
+        bodyRef.current = { ...bodyRef.current, modelRequestId };
 
         const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
         await sendMessage(
@@ -2507,6 +2521,7 @@ export function RightSidebar({
               interactionMode,
               agentMode: interactionMode === "Agent",
               chatId: effectiveChatId ?? undefined,
+              modelRequestId,
               modelSettings: modelSettingsMap[selectedModel],
               notebookPath,
               activeFilePath,
@@ -2534,11 +2549,14 @@ export function RightSidebar({
       );
       if (allSelectedSkillsAvailable && !isInputLocked) {
         stopRequestedRef.current = false;
+        const modelRequestId = crypto.randomUUID();
+        modelRequestIdRef.current = modelRequestId;
         const plainUserText =
           selectedSkills.message || formatApplySkillsRequest(selectedSkills.skillNames);
 
         setInput("");
         forcedSubagentForCurrentTurnRef.current = null;
+        bodyRef.current = { ...bodyRef.current, modelRequestId };
 
         const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
         await sendMessage(
@@ -2550,6 +2568,7 @@ export function RightSidebar({
               interactionMode,
               agentMode: interactionMode === "Agent",
               chatId: effectiveChatId ?? undefined,
+              modelRequestId,
               modelSettings: modelSettingsMap[selectedModel],
               notebookPath,
               activeFilePath,
@@ -2579,6 +2598,8 @@ export function RightSidebar({
 
     if (editingState && currentChatId) {
       stopRequestedRef.current = false;
+      const modelRequestId = crypto.randomUUID();
+      modelRequestIdRef.current = modelRequestId;
       const currentMessages = messages;
       const editIndex = editingState.messageIndex;
 
@@ -2603,6 +2624,7 @@ export function RightSidebar({
           interactionMode,
           agentMode: interactionMode === "Agent",
           chatId: effectiveChatId ?? undefined,
+          modelRequestId,
           modelSettings: modelSettingsMap[selectedModel],
           notebookPath,
           activeFilePath,

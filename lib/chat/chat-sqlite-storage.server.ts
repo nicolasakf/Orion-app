@@ -1,5 +1,7 @@
 import "server-only";
 
+import { randomUUID } from "crypto";
+
 import Database from "better-sqlite3";
 
 import {
@@ -29,17 +31,28 @@ interface SubagentSessionRow {
   session_json: string;
 }
 
+export type ChatSessionStatus = "idle" | "processing" | "completed" | "error";
+
+export interface ModelUsageInsert {
+  requestId?: string | null;
+  modelId: string;
+  providerId: string;
+  tokensIn?: number | null;
+  tokensOut?: number | null;
+  costUsd?: number | null;
+  cacheReadTokens?: number | null;
+  cacheCreationTokens?: number | null;
+  reasoningTokens?: number | null;
+  isByok: boolean;
+}
+
+const CURRENT_SCHEMA_VERSION = 1;
+
 let database: Database.Database | null = null;
 
-/** Opens Orion's local SQLite database and initializes the chat schema. */
-export async function getChatDatabase(): Promise<Database.Database> {
-  if (database) return database;
-
-  await ensureOrionDataDirectory();
-  database = new Database(getOrionDatabasePath());
-  database.pragma("journal_mode = WAL");
-  database.pragma("foreign_keys = ON");
-  database.exec(`
+/** Creates the durable chat tables that existed before SQLite schema versioning. */
+function createBaseChatSchema(db: Database.Database): void {
+  db.exec(`
     create table if not exists chats (
       id text primary key,
       title text not null,
@@ -74,6 +87,90 @@ export async function getChatDatabase(): Promise<Database.Database> {
     create index if not exists chats_updated_at_idx on chats(updated_at);
     create index if not exists subagent_sessions_chat_id_idx on subagent_sessions(chat_id);
   `);
+}
+
+/** Adds local analogs of the hosted usage tables and marks the DB as v1. */
+function migrateToVersion1(db: Database.Database): void {
+  const migrate = db.transaction(() => {
+    createBaseChatSchema(db);
+    db.exec(`
+      create table if not exists chat_session (
+        id text primary key,
+        local_chat_id text not null unique,
+        status text not null default 'idle'
+          check (status in ('idle', 'processing', 'completed', 'error')),
+        created_at text not null,
+        updated_at text not null
+      );
+
+      create index if not exists chat_session_processing_idx
+        on chat_session(status) where status = 'processing';
+
+      create table if not exists model_request (
+        id text primary key,
+        chat_session_id text,
+        origin text not null,
+        created_at text not null,
+        foreign key (chat_session_id) references chat_session(id) on delete set null
+      );
+
+      create index if not exists model_request_chat_session_id_idx
+        on model_request(chat_session_id) where chat_session_id is not null;
+
+      create table if not exists model_usage (
+        id text primary key,
+        request_id text,
+        model_id text not null,
+        provider_id text not null,
+        tokens_in integer,
+        tokens_out integer,
+        cost_usd real,
+        cache_read_tokens integer,
+        cache_creation_tokens integer,
+        reasoning_tokens integer,
+        is_byok integer not null default 0 check (is_byok in (0, 1)),
+        created_at text not null,
+        foreign key (request_id) references model_request(id) on delete set null
+      );
+
+      create index if not exists model_usage_request_id_idx
+        on model_usage(request_id) where request_id is not null;
+      create index if not exists model_usage_created_at_idx on model_usage(created_at);
+      create index if not exists model_usage_model_created_at_idx
+        on model_usage(model_id, created_at);
+      create index if not exists model_usage_cost_daily_idx
+        on model_usage(created_at) where cost_usd is not null;
+
+      pragma user_version = 1;
+    `);
+  });
+
+  migrate();
+}
+
+/** Runs all pending local SQLite migrations in order. */
+function migrateDatabase(db: Database.Database): void {
+  const version = db.pragma("user_version", { simple: true }) as number;
+  if (version > CURRENT_SCHEMA_VERSION) {
+    throw new Error(
+      `Unsupported Orion database schema version ${version}. Expected ${CURRENT_SCHEMA_VERSION} or lower.`
+    );
+  }
+
+  if (version < 1) {
+    migrateToVersion1(db);
+  }
+}
+
+/** Opens Orion's local SQLite database and initializes the chat schema. */
+export async function getChatDatabase(): Promise<Database.Database> {
+  if (database) return database;
+
+  await ensureOrionDataDirectory();
+  database = new Database(getOrionDatabasePath());
+  database.pragma("journal_mode = WAL");
+  database.pragma("foreign_keys = ON");
+  migrateDatabase(database);
 
   return database;
 }
@@ -258,4 +355,126 @@ export async function updateCompactionSummary(
     new Date().toISOString(),
     chatId
   );
+}
+
+/** Resolves or creates a local chat session row for usage tracking. */
+export async function resolveOrCreateChatSession(
+  localChatId: string | undefined,
+  status: ChatSessionStatus = "processing"
+): Promise<{ sessionId: string } | null> {
+  if (!localChatId) return null;
+
+  const db = await getChatDatabase();
+  const now = new Date().toISOString();
+  const sessionId = randomUUID();
+  db.prepare(
+    `
+      insert into chat_session (id, local_chat_id, status, created_at, updated_at)
+      values (@id, @localChatId, @status, @createdAt, @updatedAt)
+      on conflict(local_chat_id) do update set
+        status = excluded.status,
+        updated_at = excluded.updated_at
+    `
+  ).run({
+    id: sessionId,
+    localChatId,
+    status,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const row = db
+    .prepare("select id from chat_session where local_chat_id = ?")
+    .get(localChatId) as { id: string } | undefined;
+
+  return row ? { sessionId: row.id } : null;
+}
+
+/** Updates a local chat session status without blocking the caller on failures. */
+export async function updateChatSessionStatus(
+  sessionId: string,
+  status: ChatSessionStatus
+): Promise<void> {
+  const db = await getChatDatabase();
+  db.prepare(
+    `
+      update chat_session
+      set status = ?, updated_at = ?
+      where id = ?
+    `
+  ).run(status, new Date().toISOString(), sessionId);
+}
+
+/** Resolves or creates a model request row for one logical model invocation group. */
+export async function resolveOrCreateModelRequest(options: {
+  id?: string | null;
+  origin: string;
+  chatSessionId?: string | null;
+}): Promise<{ requestId: string }> {
+  const db = await getChatDatabase();
+  const requestId = options.id ?? randomUUID();
+  db.prepare(
+    `
+      insert into model_request (id, chat_session_id, origin, created_at)
+      values (@id, @chatSessionId, @origin, @createdAt)
+      on conflict(id) do update set
+        chat_session_id = coalesce(model_request.chat_session_id, excluded.chat_session_id)
+    `
+  ).run({
+    id: requestId,
+    chatSessionId: options.chatSessionId ?? null,
+    origin: options.origin,
+    createdAt: new Date().toISOString(),
+  });
+
+  return { requestId };
+}
+
+/** Inserts one local model usage row. */
+export async function insertModelUsage(usage: ModelUsageInsert): Promise<void> {
+  const db = await getChatDatabase();
+  db.prepare(
+    `
+      insert into model_usage (
+        id,
+        request_id,
+        model_id,
+        provider_id,
+        tokens_in,
+        tokens_out,
+        cost_usd,
+        cache_read_tokens,
+        cache_creation_tokens,
+        reasoning_tokens,
+        is_byok,
+        created_at
+      ) values (
+        @id,
+        @requestId,
+        @modelId,
+        @providerId,
+        @tokensIn,
+        @tokensOut,
+        @costUsd,
+        @cacheReadTokens,
+        @cacheCreationTokens,
+        @reasoningTokens,
+        @isByok,
+        @createdAt
+      )
+    `
+  ).run({
+    id: randomUUID(),
+    requestId: usage.requestId ?? null,
+    modelId: usage.modelId,
+    providerId: usage.providerId,
+    tokensIn: usage.tokensIn ?? null,
+    tokensOut: usage.tokensOut ?? null,
+    costUsd: usage.costUsd ?? null,
+    cacheReadTokens: usage.cacheReadTokens ?? null,
+    cacheCreationTokens: usage.cacheCreationTokens ?? null,
+    reasoningTokens: usage.reasoningTokens ?? null,
+    isByok: usage.isByok ? 1 : 0,
+    createdAt: new Date().toISOString(),
+  });
 }

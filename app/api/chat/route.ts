@@ -9,6 +9,17 @@ import {
 import type { CredentialMode, SupportedProvider } from "@/lib/agent/model-gateway-types";
 import { getModelCatalogEntry, isKnownProvider } from "@/lib/agent/model-catalog";
 import { orionTools, ASK_MODE_TOOLS, EDIT_MODE_TOOLS } from "@/lib/agent/tool-schemas";
+import {
+  calculateCostUsd,
+  extractTokenBreakdown,
+  type ModelPricing,
+} from "@/lib/agent/cost-calculator";
+import {
+  insertModelUsage,
+  resolveOrCreateChatSession,
+  resolveOrCreateModelRequest,
+  updateChatSessionStatus,
+} from "@/lib/chat/chat-sqlite-storage.server";
 
 // ── Zod schema for user-provided credentials (BYOK or ChatGPT OAuth) ──────────
 // Must mirror ProviderCredentialSchema in lib/settings/schema.ts.
@@ -82,6 +93,8 @@ export async function POST(req: Request) {
     activeFilePath?: string;
     /** Workspace directory relative to Jupyter root (injected into agent system prompt) */
     workspaceDirectory?: string;
+    /** Client-generated UUID shared across all LLM calls for the same user message turn. */
+    modelRequestId?: string;
     /** "user" (default) or "title_generation" */
     origin?: string;
     /** Provider-specific model settings from the client popover */
@@ -149,6 +162,7 @@ export async function POST(req: Request) {
     notebookPath,
     activeFilePath,
     workspaceDirectory,
+    modelRequestId: clientModelRequestId,
     origin,
     modelSettings,
     availableSkills,
@@ -488,6 +502,46 @@ export async function POST(req: Request) {
     logSessionStart(fileId);
   }
 
+  const requestOrigin = origin ?? "user";
+  const isByok =
+    resolvedCredential?.type === "byok" ||
+    resolvedCredential?.type === "chatgpt_oauth";
+
+  const safeToken = (n: number | undefined | null): number | null =>
+    n == null || !Number.isFinite(n) ? null : n;
+
+  /** Stores one completed model call in the local usage tables. */
+  const logLocalModelUsage = async (options: {
+    resolvedModelRequestId: string | null;
+    modelPricing: ModelPricing;
+    usage: Parameters<typeof extractTokenBreakdown>[0];
+    providerMetadata: Parameters<typeof extractTokenBreakdown>[1];
+  }): Promise<number | null> => {
+    const tokensIn = safeToken(options.usage.inputTokens);
+    const tokensOut = safeToken(options.usage.outputTokens);
+    const tokenBreakdown = extractTokenBreakdown(
+      options.usage,
+      options.providerMetadata,
+      providerId
+    );
+    const costUsd = calculateCostUsd(options.modelPricing, tokenBreakdown);
+
+    await insertModelUsage({
+      requestId: options.resolvedModelRequestId,
+      modelId,
+      providerId,
+      tokensIn,
+      tokensOut,
+      costUsd,
+      cacheReadTokens: tokenBreakdown.cacheReadTokens,
+      cacheCreationTokens: tokenBreakdown.cacheCreationTokens,
+      reasoningTokens: tokenBreakdown.reasoningTokens,
+      isByok,
+    });
+
+    return costUsd;
+  };
+
   // Returns a plain JSON response using the caller's selected model and credential.
   if (origin === "compaction") {
     if (!resolvedCredential) {
@@ -514,6 +568,12 @@ export async function POST(req: Request) {
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
+
+    const chatSession = await resolveOrCreateChatSession(chatId);
+    const modelRequest = await resolveOrCreateModelRequest({
+      origin: "compaction",
+      chatSessionId: chatSession?.sessionId,
+    });
 
     try {
       const gateway = getModelGateway();
@@ -564,6 +624,22 @@ export async function POST(req: Request) {
         maxOutputTokens: 1000,
       });
 
+      await logLocalModelUsage({
+        resolvedModelRequestId: modelRequest.requestId,
+        modelPricing: catalogModel,
+        usage: result.usage,
+        providerMetadata: result.providerMetadata,
+      }).catch((error) => {
+        console.error("Failed to log compaction usage:", error);
+      });
+      if (chatSession) {
+        await updateChatSessionStatus(chatSession.sessionId, "completed").catch(
+          (error) => {
+            console.error("Failed to update compaction chat session:", error);
+          }
+        );
+      }
+
       const summary = result.text.trim();
       const tokensUsed = result.usage?.inputTokens ?? 0;
 
@@ -572,6 +648,13 @@ export async function POST(req: Request) {
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
     } catch (error) {
+      if (chatSession) {
+        await updateChatSessionStatus(chatSession.sessionId, "error").catch(
+          (sessionError) => {
+            console.error("Failed to update compaction chat session:", sessionError);
+          }
+        );
+      }
       console.error("Compaction error:", error);
       return new Response(
         JSON.stringify({ title: "Compaction Failed", message: "Failed to generate conversation summary." }),
@@ -620,6 +703,13 @@ export async function POST(req: Request) {
     effectiveMode !== "Ask"
       ? forcedSkillNames.filter((skillName) => !hasLoadedSkillInHistory(skillName))
       : [];
+
+  const chatSession = await resolveOrCreateChatSession(chatId);
+  const modelRequest = await resolveOrCreateModelRequest({
+    id: requestOrigin === "user" ? clientModelRequestId : undefined,
+    origin: requestOrigin,
+    chatSessionId: chatSession?.sessionId,
+  });
 
   // Log the full incoming request (messages + context metadata)
   logChatRequest({
@@ -772,14 +862,22 @@ export async function POST(req: Request) {
       onFinish: async ({ usage, providerMetadata }) => {
         const durationMs = Date.now() - requestStartMs;
 
-        /** Converts NaN/undefined/null to null so the DB receives a clean integer or null */
-        const safeToken = (n: number | undefined | null): number | null =>
-          n == null || !Number.isFinite(n) ? null : n;
-
         const tokensIn = safeToken(usage.inputTokens);
         const tokensOut = safeToken(usage.outputTokens);
-
-        void providerMetadata;
+        let costUsd: number | null = null;
+        try {
+          costUsd = await logLocalModelUsage({
+            resolvedModelRequestId: modelRequest.requestId,
+            modelPricing: catalogModel,
+            usage,
+            providerMetadata,
+          });
+          if (chatSession) {
+            await updateChatSessionStatus(chatSession.sessionId, "completed");
+          }
+        } catch (error) {
+          console.error("Failed to log usage:", error);
+        }
 
         logChatFinish({
           fileId,
@@ -790,10 +888,17 @@ export async function POST(req: Request) {
           completionTokens: tokensOut ?? 0,
           totalTokens: (tokensIn ?? 0) + (tokensOut ?? 0),
           durationMs,
-          costUsd: null,
+          costUsd,
         });
       },
       onError: (error) => {
+        if (chatSession) {
+          void updateChatSessionStatus(chatSession.sessionId, "error").catch(
+            (sessionError) => {
+              console.error("Failed to update errored chat session:", sessionError);
+            }
+          );
+        }
         logChatError({
           fileId,
           requestId,
@@ -810,6 +915,13 @@ export async function POST(req: Request) {
       sendReasoning: true,
     });
   } catch (error: unknown) {
+    if (chatSession) {
+      await updateChatSessionStatus(chatSession.sessionId, "error").catch(
+        (sessionError) => {
+          console.error("Failed to update errored chat session:", sessionError);
+        }
+      );
+    }
     logChatError({
       fileId,
       requestId,

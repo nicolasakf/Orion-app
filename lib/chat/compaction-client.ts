@@ -25,13 +25,15 @@ export async function callCompactionApi(
   previousSummaryText?: string,
   userCredential?: unknown,
   model?: string,
-  provider?: SupportedProvider
+  provider?: SupportedProvider,
+  chatId?: string
 ): Promise<CompactionApiResult> {
   const payload: Record<string, unknown> = {
     messages,
     origin: "compaction",
     ...(model && { model }),
     ...(provider && { provider }),
+    ...(chatId && { chatId }),
     ...(previousSummaryText && { previousSummaryText }),
     ...(userCredential !== undefined && { userCredential }),
   };
