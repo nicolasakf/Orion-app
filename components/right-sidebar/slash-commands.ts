@@ -1,4 +1,4 @@
-import { Bot, Brain, Bug, Minimize2, type LucideIcon } from "lucide-react";
+import { Bot, Brain, Bug, DollarSign, Minimize2, type LucideIcon } from "lucide-react";
 
 /** GitHub issues page for reporting bugs in Orion. */
 export const ORION_GITHUB_ISSUES_URL = "https://github.com/nicolasakf/Orion-app/issues/new";
@@ -28,6 +28,13 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     label: "/compact",
     description: "Summarize conversation history to free context window space",
     icon: Minimize2,
+    category: "builtin",
+  },
+  {
+    name: "cost",
+    label: "/cost",
+    description: "Show cost and request totals for this session",
+    icon: DollarSign,
     category: "builtin",
   },
   {

@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import {
   ChatWireSchema,
   deserializeChat,
@@ -11,6 +13,36 @@ import {
 } from "@/lib/chat/chat-types";
 
 const CHATS_API_PATH = "/api/chats";
+
+export interface ChatCostSummaryModel {
+  modelId: string;
+  providerId: string;
+  requestCount: number;
+  totalCostUsd: number | null;
+  unknownCostRequestCount: number;
+}
+
+export interface ChatCostSummary {
+  totalCostUsd: number | null;
+  requestCount: number;
+  unknownCostRequestCount: number;
+  models: ChatCostSummaryModel[];
+}
+
+const ChatCostSummarySchema = z.object({
+  totalCostUsd: z.number().nullable(),
+  requestCount: z.number(),
+  unknownCostRequestCount: z.number(),
+  models: z.array(
+    z.object({
+      modelId: z.string(),
+      providerId: z.string(),
+      requestCount: z.number(),
+      totalCostUsd: z.number().nullable(),
+      unknownCostRequestCount: z.number(),
+    })
+  ),
+});
 
 /** Parses a JSON response body and throws a useful error for failed chat API calls. */
 async function parseJsonResponse(response: Response): Promise<unknown> {
@@ -148,6 +180,24 @@ class ChatStorage {
     if (!response.ok) {
       throw new Error(`Failed to update compaction summary: ${response.status}`);
     }
+  }
+
+  /** Get the recorded model cost summary for a specific chat. */
+  async getChatCostSummary(chatId: string): Promise<ChatCostSummary> {
+    const response = await fetch(
+      `${CHATS_API_PATH}/${encodeURIComponent(chatId)}/cost`,
+      { method: "GET" }
+    );
+    const raw = await parseJsonResponse(response);
+    const parsed = ChatCostSummarySchema.safeParse(
+      raw && typeof raw === "object" && "summary" in raw
+        ? (raw as { summary: unknown }).summary
+        : raw
+    );
+    if (!parsed.success) {
+      throw new Error("Chat API returned an invalid cost summary.");
+    }
+    return parsed.data;
   }
 
   /** Legacy migration is intentionally disabled for the local storage refactor. */

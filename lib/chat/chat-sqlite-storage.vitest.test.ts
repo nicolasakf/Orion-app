@@ -13,6 +13,7 @@ import {
   closeChatDatabase,
   deleteChat,
   getChat,
+  getChatCostSummary,
   getChatDatabase,
   getChatMetas,
   getChats,
@@ -301,6 +302,94 @@ describe("SQLite chat storage", () => {
       is_byok: 1,
     });
     expect(sessionRow).toMatchObject({ status: "completed" });
+  });
+
+  it("summarizes model cost by local chat session", async () => {
+    const session = await resolveOrCreateChatSession("chat-1");
+    const firstRequest = await resolveOrCreateModelRequest({
+      id: "request-1",
+      origin: "user",
+      chatSessionId: session?.sessionId,
+    });
+    const secondRequest = await resolveOrCreateModelRequest({
+      id: "request-2",
+      origin: "compaction",
+      chatSessionId: session?.sessionId,
+    });
+    const otherSession = await resolveOrCreateChatSession("chat-2");
+    const otherRequest = await resolveOrCreateModelRequest({
+      id: "request-other",
+      origin: "user",
+      chatSessionId: otherSession?.sessionId,
+    });
+
+    await insertModelUsage({
+      requestId: firstRequest.requestId,
+      modelId: "gpt-5.5",
+      providerId: "openai",
+      tokensIn: 100,
+      tokensOut: 25,
+      costUsd: 0.001,
+      isByok: true,
+    });
+    await insertModelUsage({
+      requestId: secondRequest.requestId,
+      modelId: "gpt-5.5",
+      providerId: "openai",
+      tokensIn: 200,
+      tokensOut: 50,
+      costUsd: 0.002,
+      isByok: true,
+    });
+    await insertModelUsage({
+      requestId: secondRequest.requestId,
+      modelId: "gpt-5.5",
+      providerId: "openai",
+      tokensIn: 50,
+      tokensOut: 10,
+      costUsd: 0.0005,
+      isByok: true,
+    });
+    await insertModelUsage({
+      requestId: secondRequest.requestId,
+      modelId: "claude-sonnet-4-6",
+      providerId: "anthropic",
+      tokensIn: 300,
+      tokensOut: 75,
+      costUsd: null,
+      isByok: true,
+    });
+    await insertModelUsage({
+      requestId: otherRequest.requestId,
+      modelId: "gpt-5.5",
+      providerId: "openai",
+      tokensIn: 999,
+      tokensOut: 999,
+      costUsd: 10,
+      isByok: true,
+    });
+
+    await expect(getChatCostSummary("chat-1")).resolves.toEqual({
+      totalCostUsd: 0.0035,
+      requestCount: 2,
+      unknownCostRequestCount: 1,
+      models: [
+        {
+          modelId: "gpt-5.5",
+          providerId: "openai",
+          requestCount: 2,
+          totalCostUsd: 0.0035,
+          unknownCostRequestCount: 0,
+        },
+        {
+          modelId: "claude-sonnet-4-6",
+          providerId: "anthropic",
+          requestCount: 1,
+          totalCostUsd: null,
+          unknownCostRequestCount: 1,
+        },
+      ],
+    });
   });
 });
 

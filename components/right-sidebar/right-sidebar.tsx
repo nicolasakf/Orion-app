@@ -16,6 +16,7 @@ import {
   chatStorage,
   getTextContent,
   type Chat,
+  type ChatCostSummary,
   type ChatMessage,
   type CompactionSummary,
   type SubagentSession,
@@ -280,6 +281,67 @@ function formatApplySkillsRequest(skillNames: string[]): string {
   return `Apply the ${skillNames.join(", ")} skills.`;
 }
 
+/** Formats a model request count with the correct singular/plural label. */
+function formatRequestCount(count: number): string {
+  return `${count} model ${count === 1 ? "request" : "requests"}`;
+}
+
+/** Formats a USD cost value compactly while keeping tiny session costs visible. */
+function formatUsd(costUsd: number | null): string {
+  if (costUsd == null) return "Unknown";
+  const maximumFractionDigits = costUsd === 0 ? 2 : costUsd < 0.01 ? 6 : 4;
+  return costUsd.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits,
+  });
+}
+
+/** Adds an unknown-cost note when some requests did not return priced usage. */
+function formatCostWithUnknowns(costUsd: number | null, unknownCount: number): string {
+  const formatted = formatUsd(costUsd);
+  if (unknownCount === 0) return formatted;
+  const unknownText = `${formatRequestCount(unknownCount)} unknown`;
+  return costUsd == null ? `${formatted} (${unknownText})` : `${formatted} known (${unknownText})`;
+}
+
+/** Builds the assistant-style markdown shown by the `/cost` slash command. */
+function formatCostSummaryMessage(
+  summary: ChatCostSummary,
+  modelLabels: Map<string, string>
+): string {
+  if (summary.requestCount === 0) {
+    return [
+      "Session cost",
+      "",
+      "No model requests have been recorded for this chat yet.",
+    ].join("\n");
+  }
+
+  const modelLines = summary.models.map((model) => {
+    const label = modelLabels.get(model.modelId) ?? model.modelId;
+    const modelName = label === model.modelId ? label : `${label} (${model.modelId})`;
+    return `- ${modelName}: ${formatCostWithUnknowns(
+      model.totalCostUsd,
+      model.unknownCostRequestCount
+    )} across ${formatRequestCount(model.requestCount)}`;
+  });
+
+  return [
+    "Session cost",
+    "",
+    `Total cost: ${formatCostWithUnknowns(
+      summary.totalCostUsd,
+      summary.unknownCostRequestCount
+    )}`,
+    `Model requests: ${summary.requestCount}`,
+    "",
+    "Cost per model:",
+    ...modelLines,
+  ].join("\n");
+}
+
 type NotebookCellMentionEventDetail = {
   notebookPath?: unknown;
   cellIndex?: unknown;
@@ -423,6 +485,10 @@ export function RightSidebar({
   const toolApprovalMode = effectiveSettings.chat.toolApprovalMode;
   const [modelSettingsMap, setModelSettingsMap] = useState<ModelSettingsMap>({});
   const [isCompacting, setIsCompacting] = useState(false);
+  const [ephemeralCostMessage, setEphemeralCostMessage] = useState<{
+    chatId: string;
+    message: UIMessage;
+  } | null>(null);
 
   /** Shared request id for model calls triggered by the current user turn. */
   const modelRequestIdRef = useRef<string | undefined>(undefined);
@@ -1598,10 +1664,42 @@ export function RightSidebar({
     }
   }, [effectiveChatId, currentChat?.compactionSummary, userCredential, selectedModel, modelInfo?.provider, setChats]);
 
+  /** Fetches recorded usage for this chat and renders it as a temporary assistant row. */
+  const showCostSummary = useCallback(async (): Promise<void> => {
+    if (!effectiveChatId) return;
+
+    try {
+      const summary = await chatStorage.getChatCostSummary(effectiveChatId);
+      const modelLabels = new Map(
+        modelsWithAccess.map((model) => [model.value, model.label])
+      );
+      const content = formatCostSummaryMessage(summary, modelLabels);
+      setEphemeralCostMessage({
+        chatId: effectiveChatId,
+        message: {
+          id: `cost-summary-${Date.now()}`,
+          role: "assistant",
+          parts: [{ type: "text", text: content }],
+        },
+      });
+    } catch (error) {
+      console.error("Failed to load cost summary:", error);
+      toast.error("Failed to load session cost summary.");
+    }
+  }, [effectiveChatId, modelsWithAccess]);
+
   // Keep messagesRef up to date
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+
+  const visibleMessages = React.useMemo(
+    () =>
+      ephemeralCostMessage?.chatId === effectiveChatId
+        ? [...messages, ephemeralCostMessage.message]
+        : messages,
+    [effectiveChatId, ephemeralCostMessage, messages]
+  );
 
   // Keep addToolOutputRef in sync so async callbacks always use the latest closure
   useEffect(() => {
@@ -2400,6 +2498,7 @@ export function RightSidebar({
       forcedSubagentForCurrentTurnRef.current = null;
       setInput("");
       setDraftReferences([]);
+      setEphemeralCostMessage(null);
 
       // Refresh OAuth token if needed before sending
       const freshCredential = await refreshCredentialForProviderIfNeeded(modelInfo?.provider);
@@ -2483,12 +2582,20 @@ export function RightSidebar({
     // Intercept slash commands before normal chat submission.
     if (activeSlashCommand === "compact") {
       setInput("");
+      setEphemeralCostMessage(null);
       await runCompaction();
+      return;
+    }
+
+    if (activeSlashCommand === "cost") {
+      setInput("");
+      await showCostSummary();
       return;
     }
 
     if (activeSlashCommand === "report-bug") {
       setInput("");
+      setEphemeralCostMessage(null);
       window.open(ORION_GITHUB_ISSUES_URL, "_blank", "noopener,noreferrer");
       return;
     }
@@ -2508,6 +2615,7 @@ export function RightSidebar({
         const plainUserText = userMessage || `Run the ${subagent.name} sub-agent.`;
 
         setInput("");
+        setEphemeralCostMessage(null);
         forcedSubagentForCurrentTurnRef.current = subagent.name;
         bodyRef.current = { ...bodyRef.current, modelRequestId };
 
@@ -2555,6 +2663,7 @@ export function RightSidebar({
           selectedSkills.message || formatApplySkillsRequest(selectedSkills.skillNames);
 
         setInput("");
+        setEphemeralCostMessage(null);
         forcedSubagentForCurrentTurnRef.current = null;
         bodyRef.current = { ...bodyRef.current, modelRequestId };
 
@@ -2613,6 +2722,7 @@ export function RightSidebar({
 
       setMessages(newMessages);
       setInput("");
+      setEphemeralCostMessage(null);
       setEditingState(null);
 
       try {
@@ -3004,7 +3114,7 @@ export function RightSidebar({
           <ChatBody
             key="main-chat-body"
             viewKey={`main:${effectiveChatId ?? "no-chat"}`}
-            messages={messages}
+            messages={visibleMessages}
             error={error}
             isLoading={isLoading}
             onUserMessageClick={handleUserMessageClick}
@@ -3050,7 +3160,7 @@ export function RightSidebar({
             activeSlashCommand={activeSlashCommand}
             extraSlashCommands={[...subagentSlashCommands, ...skillSlashCommands]}
             onOpenSlashDefinition={handleOpenSlashDefinition}
-            hasMessages={messages.length > 0}
+            hasMessages={visibleMessages.length > 0}
             contextEstimate={contextEstimate}
             onCompact={runCompaction}
             isOverContextBudget={isCompacting}

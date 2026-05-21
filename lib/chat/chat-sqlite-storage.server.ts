@@ -46,6 +46,21 @@ export interface ModelUsageInsert {
   isByok: boolean;
 }
 
+export interface ChatCostSummaryModel {
+  modelId: string;
+  providerId: string;
+  requestCount: number;
+  totalCostUsd: number | null;
+  unknownCostRequestCount: number;
+}
+
+export interface ChatCostSummary {
+  totalCostUsd: number | null;
+  requestCount: number;
+  unknownCostRequestCount: number;
+  models: ChatCostSummaryModel[];
+}
+
 const CURRENT_SCHEMA_VERSION = 1;
 
 let database: Database.Database | null = null;
@@ -477,4 +492,73 @@ export async function insertModelUsage(usage: ModelUsageInsert): Promise<void> {
     isByok: usage.isByok ? 1 : 0,
     createdAt: new Date().toISOString(),
   });
+}
+
+/** Aggregates cost by usage rows, but counts distinct logical model requests. */
+export async function getChatCostSummary(
+  localChatId: string
+): Promise<ChatCostSummary> {
+  const db = await getChatDatabase();
+  const rows = db
+    .prepare(
+      `
+        select
+          usage.model_id as modelId,
+          usage.provider_id as providerId,
+          count(distinct request.id) as requestCount,
+          sum(coalesce(usage.cost_usd, 0)) as totalCostUsd,
+          sum(case when usage.cost_usd is not null then 1 else 0 end) as knownCostUsageCount,
+          count(distinct case when usage.cost_usd is null then request.id end) as unknownCostRequestCount
+        from model_usage usage
+        join model_request request on request.id = usage.request_id
+        join chat_session session on session.id = request.chat_session_id
+        where session.local_chat_id = ?
+        group by usage.model_id, usage.provider_id
+        order by totalCostUsd desc, requestCount desc, usage.model_id asc
+      `
+    )
+    .all(localChatId) as Array<{
+      modelId: string;
+      providerId: string;
+      requestCount: number;
+      totalCostUsd: number;
+      knownCostUsageCount: number;
+      unknownCostRequestCount: number;
+    }>;
+  const totalRow = db
+    .prepare(
+      `
+        select
+          count(distinct request.id) as requestCount,
+          count(distinct case when usage.id is null or usage.cost_usd is null then request.id end) as unknownCostRequestCount
+        from model_request request
+        join chat_session session on session.id = request.chat_session_id
+        left join model_usage usage on usage.request_id = request.id
+        where session.local_chat_id = ?
+      `
+    )
+    .get(localChatId) as
+    | { requestCount: number; unknownCostRequestCount: number }
+    | undefined;
+
+  const requestCount = totalRow?.requestCount ?? 0;
+  const unknownCostRequestCount = totalRow?.unknownCostRequestCount ?? 0;
+  const knownCostTotal = rows.reduce((sum, row) => sum + row.totalCostUsd, 0);
+  const knownCostUsageCount = rows.reduce(
+    (sum, row) => sum + row.knownCostUsageCount,
+    0
+  );
+
+  return {
+    totalCostUsd: knownCostUsageCount === 0 ? null : knownCostTotal,
+    requestCount,
+    unknownCostRequestCount,
+    models: rows.map((row) => ({
+      modelId: row.modelId,
+      providerId: row.providerId,
+      requestCount: row.requestCount,
+      totalCostUsd: row.knownCostUsageCount === 0 ? null : row.totalCostUsd,
+      unknownCostRequestCount: row.unknownCostRequestCount,
+    })),
+  };
 }
