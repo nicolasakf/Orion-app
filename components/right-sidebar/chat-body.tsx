@@ -305,6 +305,8 @@ export function ChatBody({
   onOpenSubagentReport,
 }: ChatBodyProps) {
   const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
+  const isAtBottomRef = React.useRef(true);
+  const previousViewKeyRef = React.useRef(viewKey);
   const [isAtBottom, setIsAtBottom] = React.useState(true);
   const showError = !isLoading && error && messages.at(-1)?.role === "user";
 
@@ -358,30 +360,63 @@ export function ChatBody({
   });
   const virtualItems = rowVirtualizer.getVirtualItems();
 
+  /** Check whether a scroll container is close enough to its bottom edge. */
+  const isElementAtBottom = React.useCallback((element: HTMLDivElement) => {
+    const distanceFromBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight;
+    return distanceFromBottom <= 48;
+  }, []);
+
+  /** Store bottom state in both a ref and React state for render-time controls. */
+  const setBottomState = React.useCallback((nextIsAtBottom: boolean) => {
+    isAtBottomRef.current = nextIsAtBottom;
+    setIsAtBottom(nextIsAtBottom);
+  }, []);
+
   /** Update whether the chat scroller is close enough to the bottom. */
   const updateBottomState = React.useCallback(() => {
     const element = scrollParentRef.current;
     if (!element) return;
 
-    const distanceFromBottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight;
-    setIsAtBottom(distanceFromBottom <= 48);
-  }, []);
+    setBottomState(isElementAtBottom(element));
+  }, [isElementAtBottom, setBottomState]);
+
+  /** Move the virtualized list to the newest rendered row without animation. */
+  const scrollToBottomNow = React.useCallback(() => {
+    const element = scrollParentRef.current;
+    if (!element) return;
+
+    const lastIndex = rowItems.length - 1;
+    if (lastIndex >= 0) {
+      rowVirtualizer.scrollToIndex(lastIndex, { align: "end" });
+    } else {
+      element.scrollTop = element.scrollHeight;
+    }
+    setBottomState(true);
+  }, [rowItems.length, rowVirtualizer, setBottomState]);
 
   /** Jump to the newest message in the chat list. */
   const scrollToBottom = React.useCallback(() => {
     window.requestAnimationFrame(() => {
-      const element = scrollParentRef.current;
-      if (!element) return;
-      const lastIndex = rowItems.length - 1;
-      if (lastIndex >= 0) {
-        rowVirtualizer.scrollToIndex(lastIndex, { align: "end" });
-      } else {
-        element.scrollTop = element.scrollHeight;
-      }
+      scrollToBottomNow();
       updateBottomState();
     });
-  }, [rowItems.length, rowVirtualizer, updateBottomState]);
+  }, [scrollToBottomNow, updateBottomState]);
+
+  React.useLayoutEffect(() => {
+    if (previousViewKeyRef.current !== viewKey) {
+      previousViewKeyRef.current = viewKey;
+      scrollToBottomNow();
+      return;
+    }
+
+    if (!isAtBottomRef.current) {
+      updateBottomState();
+      return;
+    }
+
+    scrollToBottomNow();
+  }, [rowItems, scrollToBottomNow, updateBottomState, viewKey]);
 
   React.useEffect(() => {
     const frame = window.requestAnimationFrame(updateBottomState);

@@ -691,6 +691,73 @@ export async function POST(req: Request) {
     );
   }
 
+  if (origin === "title_generation") {
+    const chatSession = await resolveOrCreateChatSession(chatId);
+    const modelRequest = await resolveOrCreateModelRequest({
+      origin: "title_generation",
+      chatSessionId: chatSession?.sessionId,
+    });
+
+    try {
+      const gateway = getModelGateway();
+      const { model, messages: processedMessages, providerOptions } =
+        gateway.processRequest({
+          messages,
+          modelId,
+          providerId: providerId as SupportedProvider,
+          agentSystemPrompt: undefined,
+          requestId,
+          modelSettings: undefined,
+          credentials: resolvedCredential,
+        });
+
+      const result = await generateText({
+        model,
+        messages: processedMessages,
+        providerOptions,
+        maxOutputTokens: 48,
+      });
+
+      await logLocalModelUsage({
+        resolvedModelRequestId: modelRequest.requestId,
+        modelPricing: catalogModel,
+        usage: result.usage,
+        providerMetadata: result.providerMetadata,
+      }).catch((error) => {
+        console.error("Failed to log title generation usage:", error);
+      });
+
+      if (chatSession) {
+        await updateChatSessionStatus(chatSession.sessionId, "completed").catch(
+          (error) => {
+            console.error("Failed to update title generation chat session:", error);
+          }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ title: result.text.trim() }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    } catch (error) {
+      if (chatSession) {
+        await updateChatSessionStatus(chatSession.sessionId, "error").catch(
+          (sessionError) => {
+            console.error("Failed to update errored title generation chat session:", sessionError);
+          }
+        );
+      }
+      console.error("Title generation error:", error);
+      return new Response(
+        JSON.stringify({
+          title: "Title Generation Failed",
+          message: "Failed to generate a chat title.",
+        }),
+        { status: 500, headers: { "Content-Type": "application/json" } }
+      );
+    }
+  }
+
   // Derive effective mode early so it's available for logging and the request handler.
   // Sub-agent requests always behave as full Agent mode regardless of what the UI sent.
   const effectiveMode: "Agent" | "Ask" | "Edit" =

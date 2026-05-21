@@ -43,6 +43,7 @@ import { NO_DEPENDENCY_TOOLS, SERVER_ONLY_TOOLS } from "@/lib/agent/tool-schemas
 import { isReadOnlyBashBlocked } from "@/lib/agent/read-only-bash-guard";
 import { needsApproval } from "@/lib/agent/tool-approval";
 import type { ProviderCredential, ToolApprovalMode } from "@/lib/settings/schema";
+import { DEFAULT_CHAT_GENERATION_MODEL_ID } from "@/lib/settings/defaults";
 import type { KernelStatus, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
@@ -392,8 +393,8 @@ interface DelegateToolOutput {
   reconnected: boolean;
 }
 
-/** Catalog id used when `orion:selectedModel` is unset and as fallback if the chosen id is not in `/api/models`. */
-const DEFAULT_SELECTED_CHAT_MODEL_ID = "gemini-3-flash-preview";
+/** Catalog id used when saved chat model settings are missing or invalid. */
+const DEFAULT_SELECTED_CHAT_MODEL_ID = DEFAULT_CHAT_GENERATION_MODEL_ID;
 const CURRENT_CHAT_SESSION_KEY = "orion:currentChatId";
 
 /** Reads the last selected chat for the current browser tab. */
@@ -448,7 +449,11 @@ export function RightSidebar({
   recentFiles?: Array<{ name: string; path: string; openAsText?: boolean }>;
   onOpenFile?: (file: { name: string; path: string }) => void;
 } & React.HTMLAttributes<HTMLDivElement>) {
-  const { effectiveSettings, setUserSettings } = useOrionSettings();
+  const {
+    effectiveSettings,
+    isHydrated: settingsHydrated,
+    setUserSettings,
+  } = useOrionSettings();
   const { openWithTab } = useOpenSettings();
 
   // State management
@@ -471,7 +476,7 @@ export function RightSidebar({
       const stored = sessionStorage.getItem(SESSION_MODEL_KEY);
       if (stored) return stored;
     }
-    return DEFAULT_SELECTED_CHAT_MODEL_ID;
+    return effectiveSettings.chat.chatGenerationModelId;
   });
   const [editingState, setEditingState] = useState<EditingState | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -611,7 +616,24 @@ export function RightSidebar({
 
     setSelectedModel(fallbackModel);
     sessionStorage.setItem(SESSION_MODEL_KEY, fallbackModel);
-  }, [models, selectedModel]);
+    if (settingsHydrated) {
+      void setUserSettings((current) => ({
+        ...current,
+        chat: {
+          ...current.chat,
+          chatGenerationModelId: fallbackModel,
+        },
+      }));
+    }
+  }, [models, selectedModel, setUserSettings, settingsHydrated]);
+
+  useEffect(() => {
+    if (!settingsHydrated) return;
+    const savedModel = effectiveSettings.chat.chatGenerationModelId;
+    if (!savedModel || savedModel === selectedModel) return;
+    setSelectedModel(savedModel);
+    sessionStorage.setItem(SESSION_MODEL_KEY, savedModel);
+  }, [effectiveSettings.chat.chatGenerationModelId, selectedModel, settingsHydrated]);
 
   const handleInteractionModeChange = useCallback(
     (nextMode: InteractionMode) => {
@@ -638,8 +660,17 @@ export function RightSidebar({
     (nextModel: string) => {
       setSelectedModel(nextModel);
       sessionStorage.setItem(SESSION_MODEL_KEY, nextModel);
+      if (settingsHydrated) {
+        void setUserSettings((current) => ({
+          ...current,
+          chat: {
+            ...current.chat,
+            chatGenerationModelId: nextModel,
+          },
+        }));
+      }
     },
-    []
+    [setUserSettings, settingsHydrated]
   );
 
   /** Opens settings directly on Providers for BYOK setup. */
@@ -733,7 +764,7 @@ export function RightSidebar({
     setPendingApprovalIds(new Set());
   }, [toolApprovalMode]);
 
-  /** Generate and persist a short title for a newly created chat */
+  /** Generate and persist a short title for a newly created chat. */
   const generateAndSetTitle = async (
     chatMessages: ChatMessage[],
     chatId: string
@@ -752,11 +783,15 @@ export function RightSidebar({
 
     const titlePrompt = `Based on the following conversation, create a short, descriptive title for the chat session. The title must be in the same language as the user's message. Return only the title, no other text. The title must be 45 characters or less.\n\nUser: ${userText}\nAssistant: ${assistantText}\n\nTitle:`;
 
-    const titleGenerationModel = getModel("gemma-4-31b-it");
+    const titleGenerationModel = getModel(selectedModel);
     if (!titleGenerationModel) {
       console.error("Title generation model not found");
       return;
     }
+
+    const titleCredential = await refreshCredentialForProviderIfNeeded(
+      titleGenerationModel.provider
+    );
 
     const bodyPayload = {
       messages: [{ role: "user", content: titlePrompt }],
@@ -764,6 +799,7 @@ export function RightSidebar({
       model: titleGenerationModel.value,
       chatId,
       origin: "title_generation",
+      userCredential: titleCredential,
     };
 
     try {
@@ -777,8 +813,16 @@ export function RightSidebar({
         throw new Error(`Failed to generate title: ${response.statusText}`);
       }
 
-      const rawResponse = await response.text();
-      let newTitle = parseTitleFromChatStreamResponse(rawResponse);
+      const contentType = response.headers.get("Content-Type") ?? "";
+      let newTitle = "";
+
+      if (contentType.includes("application/json")) {
+        const json = (await response.json()) as { title?: unknown };
+        newTitle = typeof json.title === "string" ? json.title : "";
+      } else {
+        const rawResponse = await response.text();
+        newTitle = parseTitleFromChatStreamResponse(rawResponse);
+      }
 
       newTitle = newTitle.replace(/^"|"$/g, "").trim();
 
@@ -2405,22 +2449,31 @@ export function RightSidebar({
     }
   };
 
+  /** Optimistically removes a chat from the UI while SQLite deletion completes. */
   const handleDeleteChat = async (chatId: string) => {
+    const chatToDelete = chats.find((chat) => chat.id === chatId);
+    if (!chatToDelete) return;
+
+    const previousCurrentChatId = currentChatId;
+    const remainingChats = chats.filter((chat) => chat.id !== chatId);
+
+    if (previousCurrentChatId === chatId) {
+      setCurrentChatId(remainingChats[0]?.id ?? null);
+    }
+    setChats(remainingChats);
+
     try {
       await chatStorage.deleteChat(chatId);
-      setChats((prev) => {
-        const newChats = prev.filter((chat) => chat.id !== chatId);
-        if (currentChatId === chatId) {
-          if (newChats.length > 0) {
-            setCurrentChatId(newChats[0].id);
-          } else {
-            createNewChat();
-          }
-        }
-        return newChats;
-      });
     } catch (error) {
       console.error("Failed to delete chat:", error);
+      toast.error("Failed to delete chat.");
+      setChats((prev) => {
+        if (prev.some((chat) => chat.id === chatId)) return prev;
+        return [chatToDelete, ...prev].sort(
+          (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
+        );
+      });
+      setCurrentChatId((prev) => prev ?? previousCurrentChatId);
     }
   };
 
