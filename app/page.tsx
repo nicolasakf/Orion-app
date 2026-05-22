@@ -55,6 +55,8 @@ import {
   saveKernelConnection,
   getStoredKernelConnections,
 } from "@/lib/kernel/kernel-storage";
+import { getAutoConnectionCandidates } from "@/lib/kernel/connection-candidates";
+import { fetchLauncherJupyterConnection } from "@/lib/kernel/launcher-connection";
 import { AssistantProvider } from "@/lib/agent";
 import type { NotebookType } from "@/lib/types";
 import {
@@ -1419,24 +1421,37 @@ export default function Page() {
   );
 
   /**
-   * Attempts to auto-connect to stored kernel connections on page load
+   * Attempts to auto-connect to CLI-managed and stored Jupyter connections.
    */
   const attemptAutoConnection = React.useCallback(async () => {
     if (autoConnectionAttemptedRef.current) return false;
     autoConnectionAttemptedRef.current = true;
 
+    let launcherConnection = null;
+    try {
+      launcherConnection = await fetchLauncherJupyterConnection();
+    } catch (error) {
+      console.warn("Failed to load CLI-managed Jupyter connection:", error);
+    }
+
     const recentConnections = getStoredKernelConnections();
-    if (recentConnections.length === 0) return false;
+    const connectionCandidates = getAutoConnectionCandidates(
+      launcherConnection,
+      recentConnections,
+    );
+    if (connectionCandidates.length === 0) return false;
 
     setIsAutoConnecting(true);
     console.log(
-      `Attempting auto-connection to ${recentConnections.length} stored kernel(s)...`,
+      `Attempting auto-connection to ${connectionCandidates.length} Jupyter connection(s)...`,
     );
 
     try {
-      for (let i = 0; i < Math.min(3, recentConnections.length); i++) {
-        const connection = recentConnections[i];
-        console.log(`Trying connection ${i + 1}: ${connection.baseUrl}`);
+      for (let i = 0; i < connectionCandidates.length; i++) {
+        const connection = connectionCandidates[i];
+        console.log(
+          `Trying ${connection.source} connection ${i + 1}: ${connection.baseUrl}`,
+        );
         let service: KernelService | null = null;
         let keepService = false;
 
@@ -1509,7 +1524,7 @@ export default function Page() {
           setKernelStatus("disconnected");
         } catch (error) {
           console.log(`Connection ${i + 1} failed with error:`, error);
-          if (i === Math.min(3, recentConnections.length) - 1) {
+          if (i === connectionCandidates.length - 1) {
             // Last attempt failed
             console.log("All auto-connection attempts failed");
             setKernelStatus("disconnected");

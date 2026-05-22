@@ -31,9 +31,26 @@ export function getTerminalOutputDirectory(): string {
   return path.join(getOrionDataDirectory(), "terminal");
 }
 
+/** Returns the absolute path to Orion's managed runtime directory. */
+export function getOrionRuntimeDirectory(): string {
+  return path.join(getOrionDataDirectory(), "runtime");
+}
+
+/** Returns the absolute path to the CLI-managed Jupyter connection file. */
+export function getJupyterConnectionFilePath(): string {
+  return path.join(getOrionRuntimeDirectory(), "jupyter-connection.json");
+}
+
 /** Ensures `~/.orion/terminal` exists and returns its absolute path. */
 export async function ensureTerminalOutputDirectory(): Promise<string> {
   const directory = getTerminalOutputDirectory();
+  await mkdir(directory, { recursive: true });
+  return directory;
+}
+
+/** Ensures `~/.orion/runtime` exists and returns its absolute path. */
+export async function ensureOrionRuntimeDirectory(): Promise<string> {
+  const directory = getOrionRuntimeDirectory();
   await mkdir(directory, { recursive: true });
   return directory;
 }
