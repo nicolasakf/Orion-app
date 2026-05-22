@@ -8,6 +8,11 @@ import {
 } from "@/lib/agent/model-gateway";
 import type { CredentialMode, SupportedProvider } from "@/lib/agent/model-gateway-types";
 import { getModelCatalogEntry, isKnownProvider } from "@/lib/agent/model-catalog";
+import {
+  decodeLocalModelCatalogId,
+  getStaticLocalModelId,
+  isLocalProvider,
+} from "@/lib/agent/local-provider-models";
 import { orionTools, ASK_MODE_TOOLS, EDIT_MODE_TOOLS } from "@/lib/agent/tool-schemas";
 import {
   calculateCostUsd,
@@ -37,6 +42,13 @@ const UserCredentialSchema = z.discriminatedUnion("type", [
     baseUrl: z.string().min(1),
     modelId: z.string().min(1),
     label: z.string().optional(),
+    models: z.array(
+      z.object({
+        modelId: z.string().min(1),
+        label: z.string().optional(),
+        enabled: z.boolean().optional(),
+      })
+    ).optional(),
     apiKey: z.string().optional(),
   }),
 ]);
@@ -47,6 +59,7 @@ import {
   buildAgentEnvironmentContextPrompt,
   buildSubagentSystemPrompt,
 } from "@/lib/agent/agent-system-prompt";
+import { AgentCommunicationStyleSchema, type AgentCommunicationStyle } from "@/lib/settings/schema";
 import type { SubagentPromptPayload } from "@/lib/agent/subagents";
 import type { JupyterServerInfo } from "@/lib/kernel/kernel-service";
 import type { PlatformOS } from "@/lib/utils";
@@ -73,6 +86,42 @@ function parseClientPlatformOs(raw: unknown): PlatformOS | undefined {
     return raw;
   }
   return undefined;
+}
+
+/** Allows static catalog models plus per-endpoint local runtime model IDs. */
+function isAvailableModelSelection(
+  providerId: SupportedProvider,
+  modelId: string,
+  credential: CredentialMode | undefined
+): boolean {
+  const catalogModel = getModelCatalogEntry(modelId);
+  if (catalogModel?.provider_id === providerId) return true;
+
+  if (!isLocalProvider(providerId) || credential?.type !== "local_endpoint") {
+    return false;
+  }
+
+  const decoded = decodeLocalModelCatalogId(modelId);
+  return decoded?.provider === providerId && decoded.providerModelId === credential.modelId;
+}
+
+/** Uses the static local provider row for pricing when a runtime model is dynamic. */
+function getPricingCatalogModel(providerId: SupportedProvider, modelId: string): ModelPricing {
+  const catalogModel =
+    getModelCatalogEntry(modelId) ??
+    (isLocalProvider(providerId)
+      ? getModelCatalogEntry(getStaticLocalModelId(providerId))
+      : undefined);
+
+  return catalogModel ?? {
+    provider_id: providerId,
+    input_price_per_1m: null,
+    output_price_per_1m: null,
+    cached_price_per_1m: null,
+    long_context_threshold: null,
+    long_context_input_price_per_1m: null,
+    long_context_output_price_per_1m: null,
+  };
 }
 
 export async function POST(req: Request) {
@@ -135,6 +184,8 @@ export async function POST(req: Request) {
     userCredential?: unknown;
     /** For origin === "compaction": text of a prior compaction summary to extend. */
     previousSummaryText?: string;
+    /** Communication style preset for the agent's response narration. */
+    agentCommunicationStyle?: unknown;
   };
 
   try {
@@ -179,7 +230,11 @@ export async function POST(req: Request) {
     subagentStepIndex: subagentStepIndexRaw,
     userCredential: rawUserCredential,
     previousSummaryText,
+    agentCommunicationStyle: rawAgentCommunicationStyle,
   } = body;
+
+  const agentCommunicationStyle: AgentCommunicationStyle =
+    AgentCommunicationStyleSchema.parse(rawAgentCommunicationStyle);
 
   // Validate user credential if provided and convert to CredentialMode.
   let resolvedCredential: CredentialMode | undefined;
@@ -561,13 +616,13 @@ export async function POST(req: Request) {
       );
     }
 
-    const catalogModel = getModelCatalogEntry(modelId);
-    if (!catalogModel || catalogModel.provider_id !== providerId) {
+    if (!isAvailableModelSelection(providerId, modelId, resolvedCredential)) {
       return new Response(
         JSON.stringify({ title: "Invalid Model", message: "The selected model is not available." }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
+    const catalogModel = getPricingCatalogModel(providerId, modelId);
 
     const chatSession = await resolveOrCreateChatSession(chatId);
     const modelRequest = await resolveOrCreateModelRequest({
@@ -680,8 +735,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const catalogModel = getModelCatalogEntry(modelId);
-  if (!catalogModel || catalogModel.provider_id !== providerId) {
+  if (!isAvailableModelSelection(providerId, modelId, resolvedCredential)) {
     return new Response(
       JSON.stringify({
         title: "Invalid Model",
@@ -690,6 +744,7 @@ export async function POST(req: Request) {
       { status: 400, headers: { "Content-Type": "application/json" } }
     );
   }
+  const catalogModel = getPricingCatalogModel(providerId, modelId);
 
   if (origin === "title_generation") {
     const chatSession = await resolveOrCreateChatSession(chatId);
@@ -833,6 +888,7 @@ export async function POST(req: Request) {
           serverInfo,
           jupyterServerIsLocal,
           clientPlatformOs,
+          communicationStyle: agentCommunicationStyle,
         });
       }
     } else if (effectiveMode === "Ask") {
@@ -843,6 +899,7 @@ export async function POST(req: Request) {
         serverInfo,
         jupyterServerIsLocal,
         clientPlatformOs,
+        communicationStyle: agentCommunicationStyle,
       });
     } else if (effectiveMode === "Edit") {
       agentSystemPrompt = buildEditModeSystemPrompt({
@@ -856,6 +913,7 @@ export async function POST(req: Request) {
         serverInfo,
         jupyterServerIsLocal,
         clientPlatformOs,
+        communicationStyle: agentCommunicationStyle,
       });
     }
     // Process request through the gateway (injects agent system prompt into messages)

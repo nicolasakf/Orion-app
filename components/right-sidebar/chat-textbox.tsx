@@ -690,12 +690,12 @@ export function ChatTextbox({
     return { pinnedModels: pinned, unpinnedModels: unpinned };
   }, [models, pinnedModelIds]);
 
-  /** Popover height: pinned-only by default; user scrolls to see unpinned. Expand when searching. */
+  /** Keep unpinned models discoverable; pinning should order favorites, not hide the rest. */
   const listMaxHeight =
     modelSearchQuery.trim().length > 0
       ? 300
-      : pinnedModels.length > 0
-        ? pinnedModels.length * 29 + 29 // tight fit: heading + items only
+      : pinnedModels.length > 0 || unpinnedModels.length > 0
+        ? 300
         : 120;
 
   const handlePinnedDragStart = (e: React.DragEvent, index: number) => {

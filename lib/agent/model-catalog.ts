@@ -53,6 +53,38 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     created_at: CATALOG_CREATED_AT,
   },
   {
+    model_id: "mlx-local",
+    label: "MLX",
+    provider_id: "mlx",
+    input_price_per_1m: 0,
+    output_price_per_1m: 0,
+    cached_price_per_1m: null,
+    context_window: 32768,
+    max_output_tokens: null,
+    long_context_threshold: null,
+    long_context_input_price_per_1m: null,
+    long_context_output_price_per_1m: null,
+    client_avail: true,
+    pinned_by_default: false,
+    created_at: CATALOG_CREATED_AT,
+  },
+  {
+    model_id: "custom-local",
+    label: "Custom Endpoint",
+    provider_id: "custom",
+    input_price_per_1m: 0,
+    output_price_per_1m: 0,
+    cached_price_per_1m: null,
+    context_window: 32768,
+    max_output_tokens: null,
+    long_context_threshold: null,
+    long_context_input_price_per_1m: null,
+    long_context_output_price_per_1m: null,
+    client_avail: true,
+    pinned_by_default: false,
+    created_at: CATALOG_CREATED_AT,
+  },
+  {
     model_id: "gpt-5.5",
     label: "GPT-5.5",
     provider_id: "openai",
@@ -711,6 +743,8 @@ export function isKnownProvider(provider: string): provider is SupportedProvider
     provider === "google" ||
     provider === "xai" ||
     provider === "ollama" ||
-    provider === "lmstudio"
+    provider === "lmstudio" ||
+    provider === "mlx" ||
+    provider === "custom"
   );
 }

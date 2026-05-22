@@ -30,6 +30,7 @@ import type { ModelMessage } from "@ai-sdk/provider-utils";
 import type { LanguageModel } from "ai";
 
 import type { CredentialMode, SupportedProvider } from "./model-gateway-types";
+import { isLocalProvider } from "./local-provider-models";
 
 export type { CredentialMode, SupportedProvider } from "./model-gateway-types";
 
@@ -116,6 +117,8 @@ const PROVIDER_INFO: Record<SupportedProvider, { name: string }> = {
   xai: { name: "xAI" },
   ollama: { name: "Ollama" },
   lmstudio: { name: "LM Studio" },
+  mlx: { name: "MLX" },
+  custom: { name: "Custom Endpoint" },
 };
 
 // Default model configurations
@@ -123,6 +126,8 @@ const MODEL_DEFAULTS: Record<string, Partial<ModelInfo>> = {
   // Local providers
   "ollama-local": { contextWindow: 32768, supportsStreaming: true },
   "lmstudio-local": { contextWindow: 32768, supportsStreaming: true },
+  "mlx-local": { contextWindow: 32768, supportsStreaming: true },
+  "custom-local": { contextWindow: 32768, supportsStreaming: true },
 
   // xAI
   "grok-4.20-0309-reasoning": { contextWindow: 2000000, supportsStreaming: true },
@@ -192,7 +197,7 @@ export class ModelGateway {
     modelId: string,
     config: ProviderConfig
   ): LanguageModel {
-    if (!config?.apiKey && providerId !== "ollama" && providerId !== "lmstudio") {
+    if (!config?.apiKey && !isLocalProvider(providerId)) {
       throw new GatewayConfigError(
         `${PROVIDER_INFO[providerId]?.name || providerId} API key not configured`,
         providerId
@@ -214,6 +219,8 @@ export class ModelGateway {
 
       case "ollama":
       case "lmstudio":
+      case "mlx":
+      case "custom":
         return this.createLocalOpenAICompatibleModel(config, modelId);
 
       default:
@@ -552,6 +559,8 @@ export class ModelGateway {
 
       case "ollama":
       case "lmstudio":
+      case "mlx":
+      case "custom":
         return {};
 
       default:

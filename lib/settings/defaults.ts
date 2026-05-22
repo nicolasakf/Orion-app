@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
     toolApprovalMode: "always_ask",
     pinnedModelIds: [],
     fontSize: 12,
+    communicationStyle: "default" as const,
   },
   fileTree: {
     fontSize: 12,

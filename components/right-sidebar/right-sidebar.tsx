@@ -8,8 +8,8 @@ import {
   DefaultChatTransport,
   lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
-import { OpenAI, Claude, Gemini, Grok, Ollama, LmStudio } from "@lobehub/icons";
-import { Bot, ChevronLeft } from "lucide-react";
+import { OpenAI, Claude, Gemini, Grok, Ollama, LmStudio, Apple } from "@lobehub/icons";
+import { Bot, ChevronLeft, Globe2 } from "lucide-react";
 
 import { toast } from "sonner";
 import {
@@ -32,6 +32,13 @@ import {
 import { compactConversation } from "@/lib/agent/context-manager";
 import { buildWirePayload } from "@/lib/agent/context-optimizer";
 import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
+import {
+  decodeLocalModelCatalogId,
+  encodeLocalModelCatalogId,
+  isLocalProvider,
+  normalizeLocalEndpointModels,
+  resolveLocalRuntimeModelId,
+} from "@/lib/agent/local-provider-models";
 import {
   estimateMessageTokens,
   HARD_CAP_TOKENS,
@@ -139,6 +146,10 @@ function parseTitleFromChatStreamResponse(raw: string): string {
     }
   }
   return out;
+}
+
+function isStaticLocalModelValue(modelId: string): boolean {
+  return decodeLocalModelCatalogId(modelId) === undefined;
 }
 
 /**
@@ -511,6 +522,8 @@ export function RightSidebar({
       case "xai": return Grok;
       case "ollama": return Ollama;
       case "lmstudio": return LmStudio;
+      case "mlx": return Apple;
+      case "custom": return Globe2;
       default: return undefined;
     }
   };
@@ -563,16 +576,17 @@ export function RightSidebar({
     }
     const params = new URLSearchParams(window.location.search);
     const tab = params.get("settings");
-    const validTabs: SettingsTab[] = ["appearance", "models", "providers"];
+    const validTabs: SettingsTab[] = [
+      "appearance",
+      "models",
+      "providers",
+      "settings-file",
+    ];
     if (tab && validTabs.includes(tab as SettingsTab)) {
       settingsUrlHandledRef.current = true;
       openWithTab(tab as SettingsTab);
     }
   }, [modelsCatalogLoaded, openWithTab]);
-
-  const getModel = (modelName: string) => {
-    return models.find((model) => model.value === modelName);
-  };
 
   /** When user has no pinned models, use models with pinned_by_default from DB. */
   const pinnedModelIds = React.useMemo(() => {
@@ -583,6 +597,46 @@ export function RightSidebar({
       .map((m) => m.model_id);
   }, [effectiveSettings.chat.pinnedModelIds, modelRows]);
 
+  const configuredLocalProviderModels = React.useMemo<LLM[]>(() => {
+    const credentials = effectiveSettings.providers?.credentials ?? {};
+    const rows: LLM[] = [];
+
+    for (const [providerId, credential] of Object.entries(credentials)) {
+      if (!isLocalProvider(providerId) || credential?.type !== "local_endpoint") continue;
+
+      for (const model of normalizeLocalEndpointModels(providerId, credential)) {
+        if (model.enabled === false) continue;
+        rows.push({
+          value: encodeLocalModelCatalogId(providerId, model.modelId),
+          label: model.label ?? getLocalModelLabel(providerId, model.modelId) ?? model.modelId,
+          provider: providerId,
+          inputPrice: 0,
+          outputPrice: 0,
+          icon: getProviderIcon(providerId),
+          contextWindow: 32768,
+        });
+      }
+    }
+
+    return rows;
+  }, [effectiveSettings.providers?.credentials]);
+
+  const allModels = React.useMemo<LLM[]>(() => {
+    const configuredLocalProviders = new Set(
+      configuredLocalProviderModels.map((model) => model.provider)
+    );
+    const staticModels = models.filter(
+      (model) => !(isLocalProvider(model.provider) && configuredLocalProviders.has(model.provider))
+    );
+
+    return [...staticModels, ...configuredLocalProviderModels];
+  }, [configuredLocalProviderModels, models]);
+
+  const getModel = useCallback(
+    (modelName: string) => allModels.find((model) => model.value === modelName),
+    [allModels]
+  );
+
   /**
    * Models enriched with reactive `isAccessible` based on local credentials.
    * Recomputes whenever credentials change (e.g. user adds/removes a provider key).
@@ -591,27 +645,27 @@ export function RightSidebar({
     const credentials = effectiveSettings.providers?.credentials ?? {};
     const hasByokForProvider = (providerId: string) => !!credentials[providerId];
 
-    return models.map((m) => {
+    return allModels.map((m) => {
       const credential = credentials[m.provider];
       const localLabel =
-        credential?.type === "local_endpoint"
+        credential?.type === "local_endpoint" && isLocalProvider(m.provider)
           ? credential.label ?? getLocalModelLabel(m.provider, credential.modelId) ?? credential.modelId
           : undefined;
 
       return {
         ...m,
-        ...(localLabel && { label: localLabel }),
+        ...(localLabel && isStaticLocalModelValue(m.value) && { label: localLabel }),
         isAccessible: hasByokForProvider(m.provider),
       };
     });
-  }, [models, effectiveSettings.providers?.credentials]);
+  }, [allModels, effectiveSettings.providers?.credentials]);
 
   useEffect(() => {
-    if (models.length === 0) return;
+    if (allModels.length === 0) return;
     if (getModel(selectedModel)) return;
 
-    const preferred = models.find((m) => m.value === DEFAULT_SELECTED_CHAT_MODEL_ID);
-    const fallbackModel = preferred?.value ?? models[0]?.value;
+    const preferred = allModels.find((m) => m.value === DEFAULT_SELECTED_CHAT_MODEL_ID);
+    const fallbackModel = preferred?.value ?? allModels[0]?.value;
     if (!fallbackModel) return;
 
     setSelectedModel(fallbackModel);
@@ -625,7 +679,7 @@ export function RightSidebar({
         },
       }));
     }
-  }, [models, selectedModel, setUserSettings, settingsHydrated]);
+  }, [allModels, getModel, selectedModel, setUserSettings, settingsHydrated]);
 
   useEffect(() => {
     if (!settingsHydrated) return;
@@ -790,7 +844,8 @@ export function RightSidebar({
     }
 
     const titleCredential = await refreshCredentialForProviderIfNeeded(
-      titleGenerationModel.provider
+      titleGenerationModel.provider,
+      titleGenerationModel.value
     );
 
     const bodyPayload = {
@@ -1360,23 +1415,47 @@ export function RightSidebar({
     };
   }, [addDraftReference]);
 
-  // User credential for the currently selected provider (BYOK or ChatGPT OAuth).
-  // Sent with every chat request so the server can use the user's own key.
-  const userCredential = modelInfo?.provider
-    ? (effectiveSettings.providers?.credentials?.[modelInfo.provider] ?? undefined)
-    : undefined;
+  const getCredentialForModel = useCallback(
+    (
+      provider: LLM["provider"] | undefined,
+      modelId: string | undefined
+    ): ProviderCredential | undefined => {
+      if (!provider) return undefined;
+      const credential = effectiveSettings.providers?.credentials?.[provider] ?? undefined;
+      if (credential?.type !== "local_endpoint" || !isLocalProvider(provider) || !modelId) {
+        return credential;
+      }
+
+      const runtimeModelId = resolveLocalRuntimeModelId(provider, modelId, credential);
+      if (!runtimeModelId) return credential;
+
+      const configuredModel = normalizeLocalEndpointModels(provider, credential).find(
+        (model) => model.modelId === runtimeModelId
+      );
+
+      return {
+        ...credential,
+        modelId: runtimeModelId,
+        label: configuredModel?.label ?? getLocalModelLabel(provider, runtimeModelId) ?? runtimeModelId,
+      };
+    },
+    [effectiveSettings.providers?.credentials]
+  );
+
+  // User credential for the currently selected provider (BYOK, OAuth, or local endpoint).
+  // Local endpoint credentials are resolved to the selected runtime model.
+  const userCredential = getCredentialForModel(modelInfo?.provider, selectedModel);
 
   /**
    * Refresh a provider's ChatGPT OAuth access token if needed. BYOK credentials
    * and providers without credentials are returned as-is.
    */
   const refreshCredentialForProviderIfNeeded = useCallback(async (
-    provider: LLM["provider"] | undefined
+    provider: LLM["provider"] | undefined,
+    modelId?: string
   ): Promise<ProviderCredential | undefined> => {
     if (!provider) return undefined;
-    const credential = provider
-      ? (effectiveSettings.providers?.credentials?.[provider] ?? undefined)
-      : undefined;
+    const credential = getCredentialForModel(provider, modelId);
     if (credential?.type !== "chatgpt_oauth") return credential;
 
     // Refresh 60 seconds before expiry to avoid races.
@@ -1424,7 +1503,9 @@ export function RightSidebar({
       // The server will return a 401 which will be shown to the user.
       return credential;
     }
-  }, [effectiveSettings.providers?.credentials, setUserSettings]);
+  }, [getCredentialForModel, setUserSettings]);
+
+  const agentCommunicationStyle = effectiveSettings.chat.communicationStyle;
 
   // Ref for dynamic body values — read by the transport function at send time
   const bodyRef = useRef<Record<string, unknown>>(
@@ -1447,6 +1528,7 @@ export function RightSidebar({
         jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
         clientPlatformOs,
         userCredential,
+        agentCommunicationStyle,
       };
     })()
   );
@@ -1471,6 +1553,7 @@ export function RightSidebar({
       jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
       clientPlatformOs,
       userCredential,
+      agentCommunicationStyle,
     };
   }, [
     modelInfo?.provider,
@@ -1486,6 +1569,7 @@ export function RightSidebar({
     assistant?.jupyterServerIsLocal,
     clientPlatformOs,
     userCredential,
+    agentCommunicationStyle,
   ]);
 
   // Stable transport instance — uses bodyRef for dynamic body values.
@@ -1861,7 +1945,8 @@ export function RightSidebar({
               return;
             }
             const effectiveUserCredential = await refreshCredentialForProviderIfNeeded(
-              modelResolution.providerId
+              modelResolution.providerId,
+              modelResolution.modelId
             );
 
             const existingSubagentSessions = currentChat?.subagentSessions ?? {};
@@ -2554,7 +2639,7 @@ export function RightSidebar({
       setEphemeralCostMessage(null);
 
       // Refresh OAuth token if needed before sending
-      const freshCredential = await refreshCredentialForProviderIfNeeded(modelInfo?.provider);
+      const freshCredential = await refreshCredentialForProviderIfNeeded(modelInfo?.provider, selectedModel);
 
       // Pre-send context budget check: auto-compact if the estimated wire payload
       // exceeds COMPACTION_AUTO_THRESHOLD × cap before sending.
@@ -2600,6 +2685,7 @@ export function RightSidebar({
             jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
             clientPlatformOs,
             userCredential: freshCredential,
+            agentCommunicationStyle,
           },
         }
       );
@@ -2622,6 +2708,7 @@ export function RightSidebar({
       assistant?.jupyterServerIsLocal,
       clientPlatformOs,
       userCredential,
+      agentCommunicationStyle,
       refreshCredentialForProviderIfNeeded,
       runCompaction,
       getModel,
@@ -2694,6 +2781,7 @@ export function RightSidebar({
               jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
               clientPlatformOs,
               userCredential,
+              agentCommunicationStyle,
             },
           }
         );
@@ -2742,6 +2830,7 @@ export function RightSidebar({
               jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
               clientPlatformOs,
               userCredential,
+              agentCommunicationStyle,
             },
           }
         );
@@ -3244,10 +3333,13 @@ export function RightSidebar({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel onClick={() => setStopConfirmAction(null)}>
+            <AlertDialogCancel
+              onClick={() => setStopConfirmAction(null)}
+              shortcut="Escape"
+            >
               Cancel
             </AlertDialogCancel>
-            <AlertDialogAction onClick={handleStopConfirm}>
+            <AlertDialogAction onClick={handleStopConfirm} shortcut="Enter">
               Stop and continue
             </AlertDialogAction>
           </AlertDialogFooter>

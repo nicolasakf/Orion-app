@@ -12,7 +12,63 @@ import type { JupyterServerInfo } from "@/lib/kernel/kernel-service";
 import { formatPlatformOsForPrompt, type PlatformOS } from "@/lib/utils";
 import { filterDiscoverableSubagents } from "@/lib/agent/subagents/discovery";
 import { filterModelInvocableSkills } from "@/lib/skills/discovery";
+import type { AgentCommunicationStyle } from "@/lib/settings/schema";
 export { buildSubagentSystemPrompt } from "@/lib/agent/subagents";
+
+/**
+ * Communication style section blocks injected into the agent system prompt.
+ * The "default" preset injects minimal narration rules; other presets expand on tone.
+ */
+const COMMUNICATION_STYLE_SECTIONS: Record<AgentCommunicationStyle, string> = {
+  default: "",
+
+  narrative: `## Communication Style
+
+You must narrate your work so the user can follow along. This is critical for building trust and keeping the user informed.
+
+**Rules:**
+- Before each tool call (or group of related tool calls), write a brief 1-2 sentence explanation of what you're doing and why.
+- After receiving tool results, briefly acknowledge what you found before moving on.
+- Use natural, conversational language (e.g., "Let me check the data file...", "Found 3 columns with missing values, fixing those now...").
+- Keep messages short and action-oriented — don't be verbose or overly formal.
+- Never make tool calls without at least a brief preceding explanation.
+
+**Good example:**
+> "Let me read the notebook to understand the current state."
+> → [read_notebook]
+> "I see you have a DataFrame loaded with sales data. Let me check its shape and columns."
+> → [execute_code]
+> "The data has 1,000 rows and 5 columns. I'll add a new cell to start the analysis."
+> → [insert_cell]
+
+**Bad example (avoid this):**
+> → [read_notebook] → [execute_code] → [insert_cell] → "Done, I added the analysis."`,
+
+  friendly: `## Communication Style
+
+Be warm, encouraging, and approachable — like a knowledgeable colleague who enjoys helping.
+
+**Rules:**
+- Before each tool call (or group), write a short, upbeat explanation of what you're about to do.
+- After results, respond with a friendly acknowledgment before moving on (e.g., "Great — found it!", "Looks good so far!").
+- Use warm, conversational language — avoid sounding robotic or overly formal.
+- Keep messages concise and positive; don't pad with excessive reassurances.`,
+
+  pragmatic: `## Communication Style
+
+Be direct and minimal. State exactly what you're doing and what you found — nothing more.
+
+**Rules:**
+- One sentence before each tool call group describing the action.
+- One sentence after results stating the key finding.
+- No filler words, pleasantries, or verbose explanations.
+- Prefer bullet points over prose where possible.`,
+};
+
+/** Returns the communication style prompt section for the given preset. */
+function buildCommunicationStyleSection(style?: AgentCommunicationStyle): string {
+  return COMMUNICATION_STYLE_SECTIONS[style ?? "default"];
+}
 
 /** Non-placeholder values only — omit fields we could not determine. */
 function isKnownEnvString(value: string | undefined): boolean {
@@ -103,8 +159,7 @@ export function buildAgentEnvironmentContextPrompt(options: {
 
 Your workspace directory is: \`${workspaceDirectory}\`
 - When creating notebooks with \`use_notebook\`, always prefix the notebookPath with this directory (e.g. \`${workspaceDirectory}/new_notebook.ipynb\`).
-- Use \`bash\` for shell commands. Pass \`terminalName: ""\` to create a fresh chat-scoped terminal. When you want that fresh terminal to start in the workspace, also pass \`cwd: "${workspaceDirectory}"\`. Reuse is explicit: only pass a non-empty \`terminalName\` when copying the exact value returned by \`bash\` or \`await_command\`; never invent one or assume an unnamed terminal will be reused.
-- For long or background commands, use \`await_command\` with the same \`terminalName\` instead of re-running \`bash\`.
+- Use \`bash\` for shell commands. For a fresh terminal in this workspace, pass \`terminalName: ""\` and \`cwd: "${workspaceDirectory}"\`; follow the \`bash\` / \`await_command\` tool descriptions for terminal reuse and long-running commands.
 - All file paths you reference should be relative to the Jupyter root, starting with this directory.`);
   }
 
@@ -185,6 +240,7 @@ ${agentLines}`;
  * @param options.serverInfo - Basic environment info from the Jupyter server (OS, Python version, etc.)
  * @param options.jupyterServerIsLocal - Client flag: Jupyter URL is loopback; with clientPlatformOs, OS may be inferred
  * @param options.clientPlatformOs - Browser OS; used when local server and server OS unknown
+ * @param options.communicationStyle - Communication style preset ("default" | "narrative" | "friendly" | "pragmatic")
  * @returns Formatted system prompt string
  */
 export function buildAgentSystemPrompt(options?: {
@@ -211,6 +267,8 @@ export function buildAgentSystemPrompt(options?: {
   serverInfo?: JupyterServerInfo | null;
   jupyterServerIsLocal?: boolean;
   clientPlatformOs?: PlatformOS;
+  /** Communication style preset; omitting or "default" uses minimal narration instructions */
+  communicationStyle?: AgentCommunicationStyle;
 }): string {
   const {
     notebookPath,
@@ -223,12 +281,16 @@ export function buildAgentSystemPrompt(options?: {
     serverInfo,
     jupyterServerIsLocal,
     clientPlatformOs,
+    communicationStyle,
   } = options ?? {};
 
   // XOR enforcement: a request has either a notebook or a file, never both.
   // If both are somehow provided, notebookPath takes precedence.
   const activeFilePath = notebookPath ? undefined : options?.activeFilePath;
   const sections: string[] = [ORION_AGENT_SYSTEM_PROMPT];
+
+  const styleSection = buildCommunicationStyleSection(communicationStyle);
+  if (styleSection) sections.push(styleSection);
 
   const subagentSection = buildSubagentDelegationSection(availableSubagents);
   if (subagentSection) sections.push(subagentSection);
@@ -299,6 +361,8 @@ interface ModeModePromptOptions {
   serverInfo?: JupyterServerInfo | null;
   jupyterServerIsLocal?: boolean;
   clientPlatformOs?: PlatformOS;
+  /** Communication style preset; omitting or "default" uses minimal narration instructions */
+  communicationStyle?: AgentCommunicationStyle;
 }
 
 /**
@@ -307,6 +371,9 @@ interface ModeModePromptOptions {
  */
 export function buildAskModeSystemPrompt(options?: ModeModePromptOptions): string {
   const sections: string[] = [ORION_AGENT_SYSTEM_PROMPT_ASK];
+
+  const styleSection = buildCommunicationStyleSection(options?.communicationStyle);
+  if (styleSection) sections.push(styleSection);
 
   const envContext = buildAgentEnvironmentContextPrompt({
     serverInfo: options?.serverInfo,
@@ -342,8 +409,13 @@ export function buildEditModeSystemPrompt(options?: {
   serverInfo?: JupyterServerInfo | null;
   jupyterServerIsLocal?: boolean;
   clientPlatformOs?: PlatformOS;
+  /** Communication style preset; omitting or "default" uses minimal narration instructions */
+  communicationStyle?: AgentCommunicationStyle;
 }): string {
   const sections: string[] = [ORION_AGENT_SYSTEM_PROMPT_EDIT];
+
+  const styleSection = buildCommunicationStyleSection(options?.communicationStyle);
+  if (styleSection) sections.push(styleSection);
 
   const subagentSection = buildSubagentDelegationSection(options?.availableSubagents);
   if (subagentSection) sections.push(subagentSection);

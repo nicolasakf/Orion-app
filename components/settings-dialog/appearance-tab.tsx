@@ -12,6 +12,38 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import { cn } from "@/lib/utils";
+import type { AgentCommunicationStyle } from "@/lib/settings/schema";
+
+const COMMUNICATION_STYLE_OPTIONS: {
+  value: AgentCommunicationStyle;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "default",
+    label: "Default",
+    description: "Use the model's default communication style.",
+  },
+  {
+    value: "narrative",
+    label: "Narrative",
+    description:
+      "Step-by-step narration before and after each tool call, so you can follow along with every action.",
+  },
+  {
+    value: "friendly",
+    label: "Friendly",
+    description:
+      "Warm, encouraging, and approachable — like a knowledgeable colleague who enjoys helping.",
+  },
+  {
+    value: "pragmatic",
+    label: "Pragmatic",
+    description:
+      "Direct and minimal. Only essential information — no filler, no pleasantries.",
+  },
+];
 
 /** Appearance tab: theme, editor preferences, and persistent display defaults. */
 export function AppearanceTab() {
@@ -21,6 +53,7 @@ export function AppearanceTab() {
   const fileTree = effectiveSettings.fileTree;
   const editor = effectiveSettings.editor;
   const notebook = effectiveSettings.notebook;
+  const communicationStyle = chat.communicationStyle;
 
   const handleThemeChange = (value: "light" | "dark" | "system") => {
     void setUserSettings((current) => ({
@@ -267,6 +300,43 @@ export function AppearanceTab() {
                 }
               />
             </div>
+          </div>
+        </section>
+
+        <Separator />
+
+        <section className="space-y-3">
+          <h3 className="text-sm font-bold">Agent</h3>
+          <p className="text-xs text-muted-foreground max-w-2xl">
+            Choose how the agent communicates during a session. Applies to all interaction modes.
+          </p>
+          <div className="grid gap-2 sm:grid-cols-2 max-w-2xl">
+            {COMMUNICATION_STYLE_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() =>
+                  void setUserSettings((current) => ({
+                    ...current,
+                    chat: {
+                      ...current.chat,
+                      communicationStyle: option.value,
+                    },
+                  }))
+                }
+                className={cn(
+                  "corner-squircle flex flex-col items-start gap-1 rounded-md border p-3 text-left transition-colors",
+                  communicationStyle === option.value
+                    ? "border-primary bg-primary/5"
+                    : "hover:bg-muted/50"
+                )}
+              >
+                <span className="text-sm font-medium">{option.label}</span>
+                <span className="text-xs text-muted-foreground leading-relaxed">
+                  {option.description}
+                </span>
+              </button>
+            ))}
           </div>
         </section>
 

@@ -9,7 +9,9 @@ export type SupportedProvider =
   | "google"
   | "xai"
   | "ollama"
-  | "lmstudio";
+  | "lmstudio"
+  | "mlx"
+  | "custom";
 
 /**
  * Credential mode for a gateway request.

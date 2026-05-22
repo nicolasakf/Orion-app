@@ -7,6 +7,16 @@ export const MAX_PINNED_WORKSPACE_DIRECTORY_PATHS = 50;
 
 export const ThemeSettingSchema = z.enum(["light", "dark", "system"]);
 export const InteractionModeSchema = z.enum(["Agent", "Ask", "Edit"]).catch("Agent");
+/**
+ * Communication style preset for the agent's responses.
+ * - "default": minimal narration before and after tool calls
+ * - "narrative": step-by-step narration before and after each tool call
+ * - "friendly": warm, encouraging, and approachable tone
+ * - "pragmatic": direct and minimal — only essential information
+ */
+export const AgentCommunicationStyleSchema = z
+  .enum(["default", "narrative", "friendly", "pragmatic"])
+  .catch("default");
 export const ToolApprovalModeSchema = z.preprocess((value) => {
   if (typeof value !== "string") return value;
   const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
@@ -19,6 +29,15 @@ export const ToolApprovalModeSchema = z.preprocess((value) => {
   return value;
 }, z.enum(["always_ask", "auto_run"]));
 export const WordWrapSchema = z.enum(["off", "on", "wordWrapColumn", "bounded"]);
+
+const LocalEndpointModelSchema = z.object({
+  /** Runtime-specific model ID returned by the local OpenAI-compatible server. */
+  modelId: z.string().min(1),
+  /** User-facing label for this runtime model. */
+  label: z.string().optional(),
+  /** Whether this model should appear in model pickers. */
+  enabled: z.boolean().optional(),
+});
 
 const ProviderCredentialSchema = z.discriminatedUnion("type", [
   z.object({
@@ -40,10 +59,12 @@ const ProviderCredentialSchema = z.discriminatedUnion("type", [
     type: z.literal("local_endpoint"),
     /** OpenAI-compatible local server URL, usually ending in /v1. */
     baseUrl: z.string().min(1),
-    /** Runtime-specific model ID to send to the local server. */
+    /** Default runtime model ID to send to the local server. */
     modelId: z.string().min(1),
-    /** User-facing label for the configured local model. */
+    /** User-facing label for the default configured local model. */
     label: z.string().optional(),
+    /** Runtime models enabled for this local provider connection. */
+    models: z.array(LocalEndpointModelSchema).optional(),
     /** Optional bearer token for local servers configured with auth. */
     apiKey: z.string().optional(),
   }),
@@ -63,6 +84,8 @@ const SettingsDataSchema = z.object({
     pinnedModelIds: z.array(z.string()),
     /** Font size in pixels for the chat message stream and composer. */
     fontSize: z.number().int().min(10).max(20),
+    /** Communication style preset injected into the agent system prompt. */
+    communicationStyle: AgentCommunicationStyleSchema,
   }),
   /** Left sidebar file list typography. */
   fileTree: z.object({
@@ -99,7 +122,7 @@ const SettingsDataSchema = z.object({
        * Per-provider user credentials (BYOK API keys, ChatGPT OAuth tokens, or
        * local OpenAI-compatible endpoint settings).
        * Keyed by provider_id ("openai" | "anthropic" | "google" | "xai" |
-       * "ollama" | "lmstudio").
+       * "ollama" | "lmstudio" | "mlx" | "custom").
        * Stored client-side only; never persisted on the server.
        */
       credentials: z.record(ProviderCredentialSchema).default({}),
@@ -121,6 +144,7 @@ export type ThemeSetting = z.infer<typeof ThemeSettingSchema>;
 export type InteractionModeSetting = z.infer<typeof InteractionModeSchema>;
 export type ToolApprovalMode = z.infer<typeof ToolApprovalModeSchema>;
 export type WordWrapSetting = z.infer<typeof WordWrapSchema>;
+export type AgentCommunicationStyle = z.infer<typeof AgentCommunicationStyleSchema>;
 export type SettingsData = z.infer<typeof SettingsDataSchema>;
 export type UserSettingsDocument = z.infer<typeof UserSettingsDocumentSchema>;
 export type WorkspaceSettingsDocument = z.infer<typeof WorkspaceSettingsDocumentSchema>;

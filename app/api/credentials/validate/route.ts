@@ -7,14 +7,21 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { normalizeOpenAICompatibleBaseUrl } from "@/lib/agent/model-gateway";
 
 const RequestSchema = z.object({
-  provider: z.enum(["openai", "anthropic", "google", "xai", "ollama", "lmstudio"]),
+  provider: z.enum(["openai", "anthropic", "google", "xai", "ollama", "lmstudio", "mlx", "custom"]),
   apiKey: z.string().optional(),
   baseUrl: z.string().optional(),
   modelId: z.string().optional(),
 });
 
 const OpenAIModelListSchema = z.object({
-  data: z.array(z.object({ id: z.string() })).default([]),
+  data: z.array(
+    z.object({
+      id: z.string(),
+      object: z.string().optional(),
+      created: z.number().optional(),
+      owned_by: z.string().optional(),
+    })
+  ).default([]),
 });
 
 /**
@@ -45,8 +52,8 @@ export async function POST(req: Request) {
   const { provider, apiKey, baseUrl, modelId } = parsed.data;
 
   try {
-    await validateProviderCredential(provider, { apiKey, baseUrl, modelId });
-    return new Response(JSON.stringify({ valid: true }), {
+    const result = await validateProviderCredential(provider, { apiKey, baseUrl, modelId });
+    return new Response(JSON.stringify({ valid: true, ...result }), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
@@ -69,7 +76,7 @@ interface ValidateProviderCredentialOptions {
 async function validateProviderCredential(
   provider: string,
   options: ValidateProviderCredentialOptions
-): Promise<void> {
+): Promise<{ models?: string[] }> {
   const { apiKey, baseUrl, modelId } = options;
 
   switch (provider) {
@@ -91,7 +98,7 @@ async function validateProviderCredential(
         throw new Error(data?.error?.message ?? `HTTP ${res.status}`);
       }
       void openai; // used for type import side-effect only
-      break;
+      return {};
     }
 
     case "anthropic": {
@@ -110,7 +117,7 @@ async function validateProviderCredential(
         const data = await res.json().catch(() => ({})) as { error?: { message?: string } };
         throw new Error(data?.error?.message ?? `HTTP ${res.status}`);
       }
-      break;
+      return {};
     }
 
     case "google": {
@@ -126,16 +133,19 @@ async function validateProviderCredential(
         const data = await res.json().catch(() => ({})) as { error?: { message?: string } };
         throw new Error(data?.error?.message ?? `HTTP ${res.status}`);
       }
-      break;
+      return {};
     }
 
     case "ollama":
-    case "lmstudio": {
+    case "lmstudio":
+    case "mlx":
+    case "custom": {
       if (!baseUrl) {
         throw new Error("Base URL is required.");
       }
-      await validateOpenAICompatibleEndpoint(baseUrl, modelId, apiKey);
-      break;
+      return {
+        models: await validateOpenAICompatibleEndpoint(baseUrl, modelId, apiKey),
+      };
     }
 
     default:
@@ -148,7 +158,7 @@ async function validateOpenAICompatibleEndpoint(
   baseUrl: string,
   modelId: string | undefined,
   apiKey: string | undefined
-): Promise<void> {
+): Promise<string[]> {
   const normalizedBaseUrl = normalizeOpenAICompatibleBaseUrl(baseUrl);
   const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined;
   const res = await fetch(`${normalizedBaseUrl}/models`, {
@@ -167,10 +177,12 @@ async function validateOpenAICompatibleEndpoint(
   }
 
   const trimmedModelId = modelId?.trim();
-  if (!trimmedModelId) return;
-
   const availableModelIds = parsed.data.data.map((model) => model.id);
+  if (!trimmedModelId) return availableModelIds;
+
   if (availableModelIds.length > 0 && !availableModelIds.includes(trimmedModelId)) {
     throw new Error(`Model "${trimmedModelId}" was not found at this endpoint.`);
   }
+
+  return availableModelIds;
 }

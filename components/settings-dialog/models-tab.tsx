@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useState, useCallback } from "react";
-import { RefreshCw, Search, LayoutGrid, List, Pin } from "lucide-react";
+import { RefreshCw, Search, LayoutGrid, List, Pin, Globe2 } from "lucide-react";
 import {
   cn,
   scheduleAfterMinDuration,
@@ -28,8 +28,14 @@ import { AutoRunConfirmDialog } from "@/components/common/auto-run-confirm-dialo
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
 import { toast } from "sonner";
-import { OpenAI, Claude, Gemini, Grok, Ollama, LmStudio } from "@lobehub/icons";
+import { OpenAI, Claude, Gemini, Grok, Ollama, LmStudio, Apple } from "@lobehub/icons";
 import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
+import {
+  decodeLocalModelCatalogId,
+  encodeLocalModelCatalogId,
+  isLocalProvider,
+  normalizeLocalEndpointModels,
+} from "@/lib/agent/local-provider-models";
 import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
 
 type ProviderId = SupportedProvider;
@@ -56,6 +62,10 @@ function getProviderIcon(provider: ProviderId) {
       return Ollama;
     case "lmstudio":
       return LmStudio;
+    case "mlx":
+      return Apple;
+    case "custom":
+      return Globe2;
     default:
       return undefined;
   }
@@ -69,8 +79,14 @@ function getProviderDisplayName(providerId: string): string {
     xai: "xAI",
     ollama: "Ollama",
     lmstudio: "LM Studio",
+    mlx: "MLX",
+    custom: "Custom Endpoint",
   };
   return names[providerId] ?? providerId;
+}
+
+function isStaticLocalModelValue(modelId: string): boolean {
+  return decodeLocalModelCatalogId(modelId) === undefined;
 }
 
 /** Pin control aligned with workspace picker: outline pin appears on row hover; filled when pinned. */
@@ -127,6 +143,40 @@ export function ModelsTab() {
       .map((m) => m.model_id);
   }, [effectiveSettings.chat.pinnedModelIds, models]);
 
+  const configuredLocalModelRows = React.useMemo<ModelRow[]>(() => {
+    const credentials = effectiveSettings.providers?.credentials ?? {};
+    const rows: ModelRow[] = [];
+    const now = new Date().toISOString();
+
+    for (const [providerId, credential] of Object.entries(credentials)) {
+      if (!isLocalProvider(providerId) || credential?.type !== "local_endpoint") continue;
+
+      for (const model of normalizeLocalEndpointModels(providerId, credential)) {
+        if (model.enabled === false) continue;
+        rows.push({
+          model_id: encodeLocalModelCatalogId(providerId, model.modelId),
+          label: model.label ?? getLocalModelLabel(providerId, model.modelId) ?? model.modelId,
+          provider_id: providerId,
+          created_at: now,
+          pinned_by_default: false,
+        });
+      }
+    }
+
+    return rows;
+  }, [effectiveSettings.providers?.credentials]);
+
+  const allModels = React.useMemo<ModelRow[]>(() => {
+    const configuredLocalProviders = new Set(
+      configuredLocalModelRows.map((model) => model.provider_id)
+    );
+    const staticRows = models.filter(
+      (model) => !(isLocalProvider(model.provider_id) && configuredLocalProviders.has(model.provider_id))
+    );
+
+    return [...staticRows, ...configuredLocalModelRows];
+  }, [configuredLocalModelRows, models]);
+
   const fetchModels = useCallback(async () => {
     setIsLoading(true);
     const start = Date.now();
@@ -165,8 +215,8 @@ export function ModelsTab() {
   const modelsWithConfiguredLabels = React.useMemo(() => {
     const credentials = effectiveSettings.providers?.credentials ?? {};
 
-    return models.map((model) => {
-      if (model.provider_id !== "ollama" && model.provider_id !== "lmstudio") {
+    return allModels.map((model) => {
+      if (!isLocalProvider(model.provider_id) || !isStaticLocalModelValue(model.model_id)) {
         return model;
       }
 
@@ -178,7 +228,7 @@ export function ModelsTab() {
         label: credential.label ?? getLocalModelLabel(model.provider_id, credential.modelId) ?? credential.modelId,
       };
     });
-  }, [effectiveSettings.providers?.credentials, models]);
+  }, [allModels, effectiveSettings.providers?.credentials]);
 
   const filteredModels = React.useMemo(() => {
     const q = searchQuery.trim().toLowerCase();

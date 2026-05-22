@@ -1,6 +1,6 @@
 import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
 
-type LocalProvider = Extract<SupportedProvider, "ollama" | "lmstudio">;
+type LocalProvider = Extract<SupportedProvider, "ollama" | "lmstudio" | "mlx" | "custom">;
 
 export const LOCAL_PROVIDER_MODEL_LABELS: Record<LocalProvider, Record<string, string>> = {
   ollama: {
@@ -59,6 +59,13 @@ export const LOCAL_PROVIDER_MODEL_LABELS: Record<LocalProvider, Record<string, s
     "qwen3.5-9b": "Qwen 3.5 9B",
     "qwen3.5-35b-a3b": "Qwen 3.5 35B A3B",
   },
+  mlx: {
+    "mlx-community/qwen3-8b-4bit": "Qwen 3 8B MLX 4-bit",
+    "mlx-community/qwen3-coder-30b-a3b-instruct-4bit": "Qwen 3 Coder 30B MLX 4-bit",
+    "mlx-community/llama-3.2-3b-instruct-4bit": "Llama 3.2 3B MLX 4-bit",
+    "mlx-community/mistral-nemo-instruct-2407-4bit": "Mistral NeMo MLX 4-bit",
+  },
+  custom: {},
 };
 
 /** Looks up a friendly label for common local model IDs. */
@@ -66,7 +73,14 @@ export function getLocalModelLabel(
   provider: SupportedProvider,
   modelId: string
 ): string | undefined {
-  if (provider !== "ollama" && provider !== "lmstudio") return undefined;
+  if (
+    provider !== "ollama" &&
+    provider !== "lmstudio" &&
+    provider !== "mlx" &&
+    provider !== "custom"
+  ) {
+    return undefined;
+  }
 
   const normalized = modelId.trim().toLowerCase();
   const aliases = LOCAL_PROVIDER_MODEL_LABELS[provider];

@@ -2,8 +2,20 @@
 
 import * as React from "react";
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Eye, EyeOff, Check, X, Loader2, ExternalLink, Copy, CheckCheck } from "lucide-react";
-import { OpenAI, Anthropic, Google, XAI, Ollama, LmStudio } from "@lobehub/icons";
+import {
+  Eye,
+  EyeOff,
+  Check,
+  X,
+  Loader2,
+  ExternalLink,
+  Copy,
+  CheckCheck,
+  Globe2,
+  RefreshCw,
+  Plus,
+} from "lucide-react";
+import { OpenAI, Anthropic, Google, XAI, Ollama, LmStudio, Apple } from "@lobehub/icons";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +26,11 @@ import { toast } from "sonner";
 import { useSettingsContext } from "@/components/settings/settings-provider";
 import type { ProviderCredential } from "@/lib/settings/schema";
 import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
+import {
+  type LocalEndpointModel,
+  isLocalProvider,
+  normalizeLocalEndpointModels,
+} from "@/lib/agent/local-provider-models";
 import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
 
 // ── Provider metadata ─────────────────────────────────────────────────────────
@@ -29,6 +46,14 @@ interface ProviderMeta {
   defaultBaseUrl?: string;
   defaultModelId?: string;
   endpointHint?: string;
+}
+
+interface LocalEndpointDraft {
+  baseUrl: string;
+  modelId: string;
+  label?: string;
+  apiKey?: string;
+  models?: LocalEndpointModel[];
 }
 
 const PROVIDERS: ProviderMeta[] = [
@@ -92,6 +117,30 @@ const PROVIDERS: ProviderMeta[] = [
     defaultModelId: "local-model",
     endpointHint: "Use the model ID returned by LM Studio's local server.",
   },
+  {
+    id: "mlx",
+    name: "MLX",
+    icon: Apple,
+    credentialKind: "local_endpoint",
+    keyPlaceholder: "Optional bearer token",
+    keyHint: "Optional API key",
+    supportsOAuth: false,
+    defaultBaseUrl: "http://localhost:8080/v1",
+    defaultModelId: "mlx-community/qwen3-8b-4bit",
+    endpointHint: "Use the model ID served by your MLX OpenAI-compatible server.",
+  },
+  {
+    id: "custom",
+    name: "Custom Endpoint",
+    icon: Globe2,
+    credentialKind: "local_endpoint",
+    keyPlaceholder: "Optional bearer token",
+    keyHint: "Optional API key",
+    supportsOAuth: false,
+    defaultBaseUrl: "http://localhost:8080/v1",
+    defaultModelId: "local-model",
+    endpointHint: "Use any OpenAI-compatible local or LAN endpoint.",
+  },
 ];
 
 const REMOTE_PROVIDERS = PROVIDERS.filter((p) => p.credentialKind === "api_key");
@@ -102,6 +151,44 @@ const LOCAL_PROVIDERS = PROVIDERS.filter((p) => p.credentialKind === "local_endp
 function maskApiKey(key: string): string {
   if (key.length <= 8) return "••••••••";
   return key.slice(0, 6) + "••••••••" + key.slice(-4);
+}
+
+interface LocalModelDraftRow {
+  id: string;
+  modelId: string;
+  label: string;
+}
+
+function createLocalModelDraftRow(
+  provider: SupportedProvider,
+  modelId = "",
+  label?: string
+): LocalModelDraftRow {
+  const trimmedModelId = modelId.trim();
+  return {
+    id: crypto.randomUUID(),
+    modelId: trimmedModelId,
+    label: label?.trim() || getLocalModelLabel(provider, trimmedModelId) || trimmedModelId,
+  };
+}
+
+/** Deduplicates local model rows while preserving row order and labels. */
+function normalizeLocalModelDraftRows(rows: LocalModelDraftRow[]): LocalModelDraftRow[] {
+  const seen = new Set<string>();
+  const normalized: LocalModelDraftRow[] = [];
+
+  for (const row of rows) {
+    const modelId = row.modelId.trim();
+    if (!modelId || seen.has(modelId)) continue;
+    seen.add(modelId);
+    normalized.push({
+      ...row,
+      modelId,
+      label: row.label.trim(),
+    });
+  }
+
+  return normalized;
 }
 
 // ── Device Flow State ─────────────────────────────────────────────────────────
@@ -313,7 +400,7 @@ interface ProviderRowProps {
   onSaveKey: (provider: SupportedProvider, key: string) => Promise<void>;
   onSaveLocalEndpoint: (
     provider: SupportedProvider,
-    endpoint: { baseUrl: string; modelId: string; label?: string; apiKey?: string }
+    endpoint: LocalEndpointDraft
   ) => Promise<void>;
   onRemove: (provider: SupportedProvider) => void;
   onSaveOAuthCredential: (provider: SupportedProvider, credential: ProviderCredential) => void;
@@ -327,7 +414,7 @@ interface ProviderGroupSectionProps {
   onSaveKey: (provider: SupportedProvider, key: string) => Promise<void>;
   onSaveLocalEndpoint: (
     provider: SupportedProvider,
-    endpoint: { baseUrl: string; modelId: string; label?: string; apiKey?: string }
+    endpoint: LocalEndpointDraft
   ) => Promise<void>;
   onRemove: (provider: SupportedProvider) => void;
   onSaveOAuthCredential: (provider: SupportedProvider, credential: ProviderCredential) => void;
@@ -384,11 +471,12 @@ function ProviderRow({
   const [isEditing, setIsEditing] = useState(false);
   const [keyInput, setKeyInput] = useState("");
   const [baseUrlInput, setBaseUrlInput] = useState("");
-  const [modelIdInput, setModelIdInput] = useState("");
-  const [labelInput, setLabelInput] = useState("");
-  const [labelManuallyEdited, setLabelManuallyEdited] = useState(false);
+  const [modelRows, setModelRows] = useState<LocalModelDraftRow[]>(() => [
+    createLocalModelDraftRow(provider.id, provider.defaultModelId ?? ""),
+  ]);
   const [showKey, setShowKey] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDiscovering, setIsDiscovering] = useState(false);
   const [showDeviceFlow, setShowDeviceFlow] = useState(false);
 
   const Icon = provider.icon;
@@ -399,25 +487,30 @@ function ProviderRow({
   const handleSave = useCallback(async () => {
     if (provider.credentialKind === "local_endpoint") {
       const baseUrl = baseUrlInput.trim();
-      const modelId = modelIdInput.trim();
-      const label = labelInput.trim();
+      const normalizedRows = normalizeLocalModelDraftRows(modelRows);
       const apiKey = keyInput.trim();
 
       if (!baseUrl) {
         toast.error("Please enter a base URL.");
         return;
       }
-      if (!modelId) {
-        toast.error("Please enter a model ID.");
+      if (normalizedRows.length === 0) {
+        toast.error("Please enter at least one model ID.");
         return;
       }
 
       setIsSaving(true);
       try {
+        const [defaultRow] = normalizedRows;
         await onSaveLocalEndpoint(provider.id, {
           baseUrl,
-          modelId,
-          ...(label && { label }),
+          modelId: defaultRow.modelId,
+          ...(defaultRow.label && { label: defaultRow.label }),
+          models: normalizedRows.map((row) => ({
+            modelId: row.modelId,
+            label: row.label || getLocalModelLabel(provider.id, row.modelId) || row.modelId,
+            enabled: true,
+          })),
           ...(apiKey && { apiKey }),
         });
         setIsEditing(false);
@@ -444,8 +537,7 @@ function ProviderRow({
   }, [
     baseUrlInput,
     keyInput,
-    labelInput,
-    modelIdInput,
+    modelRows,
     onSaveKey,
     onSaveLocalEndpoint,
     provider.credentialKind,
@@ -456,20 +548,93 @@ function ProviderRow({
     setIsEditing(false);
     setKeyInput("");
     setBaseUrlInput("");
-    setModelIdInput("");
-    setLabelInput("");
-    setLabelManuallyEdited(false);
-  }, []);
+    setModelRows([createLocalModelDraftRow(provider.id, provider.defaultModelId ?? "")]);
+  }, [provider.defaultModelId, provider.id]);
 
-  const handleLocalModelIdChange = useCallback(
-    (value: string) => {
-      setModelIdInput(value);
-      if (labelManuallyEdited) return;
+  const handleAddModelRow = useCallback(() => {
+    setModelRows((rows) => [...rows, createLocalModelDraftRow(provider.id)]);
+  }, [provider.id]);
 
-      setLabelInput(getLocalModelLabel(provider.id, value) ?? "");
-    },
-    [labelManuallyEdited, provider.id]
-  );
+  const handleRemoveModelRow = useCallback((rowId: string) => {
+    setModelRows((rows) => {
+      const nextRows = rows.filter((row) => row.id !== rowId);
+      return nextRows.length > 0 ? nextRows : [createLocalModelDraftRow(provider.id)];
+    });
+  }, [provider.id]);
+
+  const handleModelRowChange = useCallback((
+    rowId: string,
+    patch: Partial<Pick<LocalModelDraftRow, "modelId" | "label">>
+  ) => {
+    setModelRows((rows) =>
+      rows.map((row) => {
+        if (row.id !== rowId) return row;
+
+        const nextModelId = patch.modelId ?? row.modelId;
+        const modelIdChanged = patch.modelId !== undefined && patch.modelId !== row.modelId;
+        return {
+          ...row,
+          ...patch,
+          label: modelIdChanged && row.label === ""
+            ? getLocalModelLabel(provider.id, nextModelId) ?? nextModelId
+            : patch.label ?? row.label,
+        };
+      })
+    );
+  }, [provider.id]);
+
+  /** Reads `/v1/models` from a local endpoint and fills the model list. */
+  const handleDiscoverModels = useCallback(async () => {
+    const baseUrl = baseUrlInput.trim();
+    if (!baseUrl) {
+      toast.error("Please enter a base URL first.");
+      return;
+    }
+
+    setIsDiscovering(true);
+    try {
+      const res = await fetch("/api/credentials/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: provider.id,
+          baseUrl,
+          apiKey: keyInput.trim() || undefined,
+        }),
+      });
+      const data = await res.json() as {
+        valid?: boolean;
+        error?: string;
+        models?: string[];
+      };
+
+      if (!res.ok || !data.valid) {
+        toast.error(`Could not list models: ${data.error ?? "Endpoint rejected the request."}`);
+        return;
+      }
+
+      const discovered = data.models ?? [];
+      if (discovered.length === 0) {
+        toast.error("No models were returned by this endpoint.");
+        return;
+      }
+
+      setModelRows((rows) => {
+        const existingByModelId = new Map(
+          normalizeLocalModelDraftRows(rows).map((row) => [row.modelId, row])
+        );
+        return discovered.map((modelId) => {
+          const existing = existingByModelId.get(modelId);
+          return existing ?? createLocalModelDraftRow(provider.id, modelId);
+        });
+      });
+      toast.success(`Found ${discovered.length} model${discovered.length === 1 ? "" : "s"}.`);
+    } catch {
+      toast.error("Could not reach the local endpoint.");
+    } finally {
+      setIsDiscovering(false);
+    }
+  }, [baseUrlInput, keyInput, provider.id]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -530,7 +695,14 @@ function ProviderRow({
             )}
             {hasLocalEndpoint && credential.type === "local_endpoint" && (
               <p className="text-xs text-muted-foreground mt-0.5">
-                {credential.label ? `${credential.label} (${credential.modelId})` : credential.modelId} at {credential.baseUrl}
+                {(() => {
+                  if (!isLocalProvider(provider.id)) return null;
+                  const configuredModels = normalizeLocalEndpointModels(provider.id, credential);
+                  const firstModel = configuredModels[0];
+                  const firstLabel = firstModel?.label ?? firstModel?.modelId ?? credential.modelId;
+                  const extraCount = Math.max(0, configuredModels.length - 1);
+                  return `${firstLabel}${extraCount > 0 ? ` + ${extraCount} more` : ""} at ${credential.baseUrl}`;
+                })()}
               </p>
             )}
           </div>
@@ -546,9 +718,7 @@ function ProviderRow({
                   setKeyInput("");
                   setBaseUrlInput(provider.defaultBaseUrl ?? "");
                   const defaultModelId = provider.defaultModelId ?? "";
-                  setModelIdInput(defaultModelId);
-                  setLabelInput(getLocalModelLabel(provider.id, defaultModelId) ?? "");
-                  setLabelManuallyEdited(false);
+                  setModelRows([createLocalModelDraftRow(provider.id, defaultModelId)]);
                   setIsEditing(true);
                 }}
                 className="text-xs"
@@ -568,17 +738,17 @@ function ProviderRow({
                       ? credential.baseUrl
                       : provider.defaultBaseUrl ?? ""
                   );
-                  setModelIdInput(
-                    hasLocalEndpoint
-                      ? credential.modelId
-                      : provider.defaultModelId ?? ""
+                  const configuredModels = hasLocalEndpoint
+                    && isLocalProvider(provider.id)
+                    ? normalizeLocalEndpointModels(provider.id, credential)
+                    : [];
+                  setModelRows(
+                    configuredModels.length > 0
+                      ? configuredModels.map((model) =>
+                          createLocalModelDraftRow(provider.id, model.modelId, model.label)
+                        )
+                      : [createLocalModelDraftRow(provider.id, provider.defaultModelId ?? "")]
                   );
-                  setLabelInput(
-                    hasLocalEndpoint
-                      ? credential.label ?? getLocalModelLabel(provider.id, credential.modelId) ?? ""
-                      : getLocalModelLabel(provider.id, provider.defaultModelId ?? "") ?? ""
-                  );
-                  setLabelManuallyEdited(false);
                   setIsEditing(true);
                 }}
                 className="text-xs"
@@ -625,32 +795,80 @@ function ProviderRow({
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Model ID</Label>
-                <Input
-                  value={modelIdInput}
-                  onChange={(e) => handleLocalModelIdChange(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={provider.defaultModelId}
-                  className="font-mono text-sm"
-                />
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="text-xs text-muted-foreground">Models</Label>
+                  <div className="flex items-center gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1.5 text-xs"
+                      onClick={handleAddModelRow}
+                    >
+                      <Plus className="h-3 w-3" />
+                      Add
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 gap-1.5 text-xs"
+                      onClick={() => void handleDiscoverModels()}
+                      disabled={isDiscovering || !baseUrlInput.trim()}
+                    >
+                      {isDiscovering ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3 w-3" />
+                      )}
+                      Refresh
+                    </Button>
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  {modelRows.map((row, index) => (
+                    <div
+                      key={row.id}
+                      className="grid grid-cols-[minmax(0,1fr)_minmax(0,0.8fr)_auto] items-center gap-2"
+                    >
+                      <Input
+                        value={row.modelId}
+                        onChange={(e) =>
+                          handleModelRowChange(row.id, { modelId: e.target.value })
+                        }
+                        onKeyDown={handleKeyDown}
+                        placeholder={index === 0 ? provider.defaultModelId : "model-id"}
+                        className="font-mono text-sm"
+                        aria-label="Model ID"
+                      />
+                      <Input
+                        value={row.label}
+                        onChange={(e) =>
+                          handleModelRowChange(row.id, { label: e.target.value })
+                        }
+                        onKeyDown={handleKeyDown}
+                        placeholder="Label"
+                        className="text-sm"
+                        aria-label="Model label"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        onClick={() => handleRemoveModelRow(row.id)}
+                        aria-label="Remove model"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
                 {provider.endpointHint && (
                   <p className="text-xs text-muted-foreground">
                     {provider.endpointHint}
                   </p>
                 )}
-              </div>
-              <div className="space-y-1">
-                <Label className="text-xs text-muted-foreground">Label</Label>
-                <Input
-                  value={labelInput}
-                  onChange={(e) => {
-                    setLabelInput(e.target.value);
-                    setLabelManuallyEdited(true);
-                  }}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Display name"
-                  className="text-sm"
-                />
               </div>
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">{provider.keyHint}</Label>
@@ -677,7 +895,11 @@ function ProviderRow({
                 <Button
                   size="sm"
                   onClick={() => void handleSave()}
-                  disabled={isSaving || !baseUrlInput.trim() || !modelIdInput.trim()}
+                  disabled={
+                    isSaving ||
+                    !baseUrlInput.trim() ||
+                    normalizeLocalModelDraftRows(modelRows).length === 0
+                  }
                 >
                   {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                 </Button>
@@ -817,7 +1039,7 @@ export function ProvidersTab() {
   const handleSaveLocalEndpoint = useCallback(
     async (
       provider: SupportedProvider,
-      endpoint: { baseUrl: string; modelId: string; label?: string; apiKey?: string }
+      endpoint: LocalEndpointDraft
     ) => {
       let validationFailed = false;
       try {
@@ -832,10 +1054,19 @@ export function ProvidersTab() {
           }),
         });
         if (res.ok) {
-          const data = await res.json() as { valid: boolean; error?: string };
+          const data = await res.json() as { valid: boolean; error?: string; models?: string[] };
           if (!data.valid) {
             toast.error(`Local endpoint unavailable: ${data.error ?? "Endpoint rejected the request."}`);
             validationFailed = true;
+          } else if (data.models && data.models.length > 0) {
+            const availableModels = new Set(data.models);
+            const missingModel = (endpoint.models ?? [{ modelId: endpoint.modelId }]).find(
+              (model) => !availableModels.has(model.modelId)
+            );
+            if (missingModel) {
+              toast.error(`Local endpoint unavailable: model "${missingModel.modelId}" was not found.`);
+              validationFailed = true;
+            }
           }
         }
       } catch {
@@ -855,6 +1086,7 @@ export function ProvidersTab() {
               baseUrl: endpoint.baseUrl,
               modelId: endpoint.modelId,
               label: endpoint.label ?? getLocalModelLabel(provider, endpoint.modelId) ?? endpoint.modelId,
+              models: endpoint.models,
               ...(endpoint.apiKey && { apiKey: endpoint.apiKey }),
             },
           },
