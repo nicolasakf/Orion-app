@@ -1,14 +1,18 @@
 import type { SettingsData, UserSettingsDocument, WorkspaceSettingsDocument } from "@/lib/settings/schema";
 import { SETTINGS_SCHEMA_VERSION } from "@/lib/settings/schema";
 
-export const DEFAULT_CHAT_GENERATION_MODEL_ID = "gemini-3.1-flash-lite";
+/** Default model for generating short chat titles. */
+export const DEFAULT_TITLE_GENERATION_MODEL_ID = "gemini-3.1-flash-lite";
+
+/** Session-only default when no model is stored in sessionStorage. */
+export const DEFAULT_SELECTED_CHAT_MODEL_ID = DEFAULT_TITLE_GENERATION_MODEL_ID;
 
 export const DEFAULT_SETTINGS: SettingsData = {
   appearance: {
     theme: "system",
   },
   chat: {
-    chatGenerationModelId: DEFAULT_CHAT_GENERATION_MODEL_ID,
+    titleGenerationModelId: DEFAULT_TITLE_GENERATION_MODEL_ID,
     toolApprovalMode: "always_ask",
     pinnedModelIds: [],
     fontSize: 12,

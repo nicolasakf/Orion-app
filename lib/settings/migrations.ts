@@ -128,9 +128,23 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
 
   // Migrate enabledModelIds -> pinnedModelIds (toggle -> pin)
   const chat = asObject(partialSettings.chat);
-  if (chat && "enabledModelIds" in chat && Array.isArray(chat.enabledModelIds)) {
-    chat.pinnedModelIds = chat.enabledModelIds;
-    delete chat.enabledModelIds;
+  if (chat) {
+    if ("enabledModelIds" in chat && Array.isArray(chat.enabledModelIds)) {
+      chat.pinnedModelIds = chat.enabledModelIds;
+      delete chat.enabledModelIds;
+    }
+
+    // chatGenerationModelId was removed; preserve its value for title generation.
+    if (
+      "chatGenerationModelId" in chat &&
+      typeof chat.chatGenerationModelId === "string" &&
+      !("titleGenerationModelId" in chat)
+    ) {
+      chat.titleGenerationModelId = chat.chatGenerationModelId;
+    }
+    if ("chatGenerationModelId" in chat) {
+      delete chat.chatGenerationModelId;
+    }
   }
 
   stripLegacyAppearanceKeys(partialSettings);

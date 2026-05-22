@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { AutoRunConfirmDialog } from "@/components/common/auto-run-confirm-dialog";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import { DEFAULT_TITLE_GENERATION_MODEL_ID } from "@/lib/settings/defaults";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
 import { toast } from "sonner";
 import { OpenAI, Claude, Gemini, Grok, Ollama, LmStudio, Apple } from "@lobehub/icons";
@@ -212,6 +213,26 @@ export function ModelsTab() {
     void fetchModels();
   }, [fetchModels]);
 
+  React.useEffect(() => {
+    if (allModels.length === 0) return;
+    const currentId = effectiveSettings.chat.titleGenerationModelId;
+    if (allModels.some((model) => model.model_id === currentId)) return;
+
+    const preferred = allModels.find(
+      (model) => model.model_id === DEFAULT_TITLE_GENERATION_MODEL_ID
+    );
+    const fallbackId = preferred?.model_id ?? allModels[0]?.model_id;
+    if (!fallbackId) return;
+
+    void setUserSettings((current) => ({
+      ...current,
+      chat: {
+        ...current.chat,
+        titleGenerationModelId: fallbackId,
+      },
+    }));
+  }, [allModels, effectiveSettings.chat.titleGenerationModelId, setUserSettings]);
+
   const modelsWithConfiguredLabels = React.useMemo(() => {
     const credentials = effectiveSettings.providers?.credentials ?? {};
 
@@ -229,6 +250,12 @@ export function ModelsTab() {
       };
     });
   }, [allModels, effectiveSettings.providers?.credentials]);
+
+  const titleGenerationModels = React.useMemo(() => {
+    return [...modelsWithConfiguredLabels].sort((a, b) =>
+      a.label.localeCompare(b.label)
+    );
+  }, [modelsWithConfiguredLabels]);
 
   const filteredModels = React.useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -347,6 +374,45 @@ export function ModelsTab() {
             <SelectContent>
               <SelectItem value="always_ask">Always ask</SelectItem>
               <SelectItem value="auto_run">Auto-run</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div className="border-t" />
+
+      {/* Title generation section */}
+      <div className="space-y-2">
+        <h2 className="text-lg font-semibold">Chat titles</h2>
+        <div className="flex items-center justify-between max-w-xl">
+          <div className="space-y-0.5">
+            <p className="text-sm font-medium">Title generation model</p>
+            <p className="text-xs text-muted-foreground">
+              Used when generating short titles for new chats.
+            </p>
+          </div>
+          <Select
+            value={effectiveSettings.chat.titleGenerationModelId}
+            onValueChange={(modelId) => {
+              void setUserSettings((current) => ({
+                ...current,
+                chat: {
+                  ...current.chat,
+                  titleGenerationModelId: modelId,
+                },
+              }));
+            }}
+            disabled={isLoading || titleGenerationModels.length === 0}
+          >
+            <SelectTrigger className="w-[220px]">
+              <SelectValue placeholder="Select model" />
+            </SelectTrigger>
+            <SelectContent>
+              {titleGenerationModels.map((model) => (
+                <SelectItem key={model.model_id} value={model.model_id}>
+                  {model.label}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>

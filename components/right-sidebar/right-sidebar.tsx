@@ -50,7 +50,10 @@ import { NO_DEPENDENCY_TOOLS, SERVER_ONLY_TOOLS } from "@/lib/agent/tool-schemas
 import { isReadOnlyBashBlocked } from "@/lib/agent/read-only-bash-guard";
 import { needsApproval } from "@/lib/agent/tool-approval";
 import type { ProviderCredential, ToolApprovalMode } from "@/lib/settings/schema";
-import { DEFAULT_CHAT_GENERATION_MODEL_ID } from "@/lib/settings/defaults";
+import {
+  DEFAULT_SELECTED_CHAT_MODEL_ID,
+  DEFAULT_TITLE_GENERATION_MODEL_ID,
+} from "@/lib/settings/defaults";
 import type { KernelStatus, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
@@ -404,8 +407,8 @@ interface DelegateToolOutput {
   reconnected: boolean;
 }
 
-/** Catalog id used when saved chat model settings are missing or invalid. */
-const DEFAULT_SELECTED_CHAT_MODEL_ID = DEFAULT_CHAT_GENERATION_MODEL_ID;
+/** Catalog id used when the session-selected chat model is missing or invalid. */
+const SESSION_FALLBACK_CHAT_MODEL_ID = DEFAULT_SELECTED_CHAT_MODEL_ID;
 const CURRENT_CHAT_SESSION_KEY = "orion:currentChatId";
 
 /** Reads the last selected chat for the current browser tab. */
@@ -487,7 +490,7 @@ export function RightSidebar({
       const stored = sessionStorage.getItem(SESSION_MODEL_KEY);
       if (stored) return stored;
     }
-    return effectiveSettings.chat.chatGenerationModelId;
+    return SESSION_FALLBACK_CHAT_MODEL_ID;
   });
   const [editingState, setEditingState] = useState<EditingState | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -664,30 +667,13 @@ export function RightSidebar({
     if (allModels.length === 0) return;
     if (getModel(selectedModel)) return;
 
-    const preferred = allModels.find((m) => m.value === DEFAULT_SELECTED_CHAT_MODEL_ID);
+    const preferred = allModels.find((m) => m.value === SESSION_FALLBACK_CHAT_MODEL_ID);
     const fallbackModel = preferred?.value ?? allModels[0]?.value;
     if (!fallbackModel) return;
 
     setSelectedModel(fallbackModel);
     sessionStorage.setItem(SESSION_MODEL_KEY, fallbackModel);
-    if (settingsHydrated) {
-      void setUserSettings((current) => ({
-        ...current,
-        chat: {
-          ...current.chat,
-          chatGenerationModelId: fallbackModel,
-        },
-      }));
-    }
-  }, [allModels, getModel, selectedModel, setUserSettings, settingsHydrated]);
-
-  useEffect(() => {
-    if (!settingsHydrated) return;
-    const savedModel = effectiveSettings.chat.chatGenerationModelId;
-    if (!savedModel || savedModel === selectedModel) return;
-    setSelectedModel(savedModel);
-    sessionStorage.setItem(SESSION_MODEL_KEY, savedModel);
-  }, [effectiveSettings.chat.chatGenerationModelId, selectedModel, settingsHydrated]);
+  }, [allModels, getModel, selectedModel]);
 
   const handleInteractionModeChange = useCallback(
     (nextMode: InteractionMode) => {
@@ -714,17 +700,8 @@ export function RightSidebar({
     (nextModel: string) => {
       setSelectedModel(nextModel);
       sessionStorage.setItem(SESSION_MODEL_KEY, nextModel);
-      if (settingsHydrated) {
-        void setUserSettings((current) => ({
-          ...current,
-          chat: {
-            ...current.chat,
-            chatGenerationModelId: nextModel,
-          },
-        }));
-      }
     },
-    [setUserSettings, settingsHydrated]
+    []
   );
 
   /** Opens settings directly on Providers for BYOK setup. */
@@ -837,7 +814,9 @@ export function RightSidebar({
 
     const titlePrompt = `Based on the following conversation, create a short, descriptive title for the chat session. The title must be in the same language as the user's message. Return only the title, no other text. The title must be 45 characters or less.\n\nUser: ${userText}\nAssistant: ${assistantText}\n\nTitle:`;
 
-    const titleGenerationModel = getModel(selectedModel);
+    const titleModelId = effectiveSettings.chat.titleGenerationModelId;
+    const titleGenerationModel =
+      getModel(titleModelId) ?? getModel(DEFAULT_TITLE_GENERATION_MODEL_ID);
     if (!titleGenerationModel) {
       console.error("Title generation model not found");
       return;

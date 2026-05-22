@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_CHAT_GENERATION_MODEL_ID } from "@/lib/settings/defaults";
+import { DEFAULT_TITLE_GENERATION_MODEL_ID } from "@/lib/settings/defaults";
 import { parseUserSettingsDocumentFromJson } from "@/lib/settings/migrations";
 import { ToolApprovalModeSchema } from "@/lib/settings/schema";
 
@@ -18,7 +18,7 @@ describe("ToolApprovalModeSchema", () => {
 });
 
 describe("settings migrations", () => {
-  it("backfills the chat generation model for older user settings", () => {
+  it("backfills the title generation model for older user settings", () => {
     const migrated = parseUserSettingsDocumentFromJson(
       JSON.stringify({
         version: 1,
@@ -33,8 +33,45 @@ describe("settings migrations", () => {
       })
     );
 
-    expect(migrated.settings.chat.chatGenerationModelId).toBe(
-      DEFAULT_CHAT_GENERATION_MODEL_ID
+    expect(migrated.settings.chat.titleGenerationModelId).toBe(
+      DEFAULT_TITLE_GENERATION_MODEL_ID
     );
+  });
+
+  it("migrates chatGenerationModelId to titleGenerationModelId", () => {
+    const migrated = parseUserSettingsDocumentFromJson(
+      JSON.stringify({
+        version: 1,
+        settings: {
+          appearance: { theme: "system" },
+          chat: {
+            chatGenerationModelId: "gpt-4o-mini",
+            toolApprovalMode: "always_ask",
+            pinnedModelIds: [],
+            fontSize: 12,
+            communicationStyle: "default",
+          },
+          fileTree: { fontSize: 12 },
+          editor: {
+            fontSize: 12,
+            wordWrap: "off",
+            minimapEnabled: false,
+            tabSize: 2,
+            insertSpaces: true,
+          },
+          notebook: {
+            scrollbarVisible: true,
+            presentationHideAllCellInputs: false,
+          },
+          workspace: { pinnedDirectoryPaths: [] },
+          providers: { credentials: {} },
+        },
+      })
+    );
+
+    expect(migrated.settings.chat.titleGenerationModelId).toBe("gpt-4o-mini");
+    expect(
+      "chatGenerationModelId" in migrated.settings.chat
+    ).toBe(false);
   });
 });
