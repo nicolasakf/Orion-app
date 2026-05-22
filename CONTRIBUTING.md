@@ -79,7 +79,7 @@ Orion ships two packages that both install the `orion` command:
 | Channel | Package name | What ships in the package |
 | --- | --- | --- |
 | npm | `@nicolasakf/orion-agent` | CLI + full app bundle (`dist/orion-app`) |
-| PyPI | `orion-agent` | Python launcher only; app bundle downloaded on first run |
+| PyPI | `orion-notebook` | Python launcher only; app bundle downloaded on first run |
 
 Keep version numbers in sync across `package.json`, `python/pyproject.toml`, and `python/orion_agent/cli.py` (`VERSION`).
 
@@ -142,7 +142,7 @@ Create the release with [GitHub CLI](https://cli.github.com/):
 gh release create v0.4.0 dist/orion-app-0.4.0.tar.gz --title "v0.4.0"
 ```
 
-Without that release asset, `pip install orion-agent` users will fail when the CLI tries to download the app bundle.
+Without that release asset, `pip install orion-notebook` users will fail when the CLI tries to download the app bundle.
 
 To test the PyPI flow locally before release, point at a local archive:
 

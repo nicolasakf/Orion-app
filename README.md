@@ -60,7 +60,7 @@ orion --yes
 ### Install via pip
 
 ```bash
-pip install orion-agent
+pip install orion-notebook
 orion
 ```
 

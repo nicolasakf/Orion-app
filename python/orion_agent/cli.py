@@ -1,4 +1,4 @@
-"""Command-line launcher for the PyPI `orion-agent` package."""
+"""Command-line launcher for the PyPI `orion-notebook` package."""
 
 from __future__ import annotations
 

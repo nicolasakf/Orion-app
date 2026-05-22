@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 
 - `orion` CLI launcher with npm packaging (`@nicolasakf/orion-agent`)
-- PyPI `orion-agent` Python launcher shim that downloads the app bundle from GitHub releases
+- PyPI `orion-notebook` Python launcher shim that downloads the app bundle from GitHub releases
 - Auto-connect to CLI-managed Jupyter on kernel launch
 - Chat: mention workspace paths from file tree context menu
 - Terminal: close all agent terminals action

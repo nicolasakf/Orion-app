@@ -1,11 +1,11 @@
-# orion-agent
+# orion-notebook
 
 Python launcher for [Orion](https://www.orion-agent.ai). Installs the `orion` command on PyPI.
 
 ## Install
 
 ```bash
-pip install orion-agent
+pip install orion-notebook
 orion
 ```
 
