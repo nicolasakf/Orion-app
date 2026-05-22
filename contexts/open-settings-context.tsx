@@ -10,6 +10,10 @@ interface OpenSettingsContextValue {
   openWithTab: (tab: SettingsTab) => void;
   /** Tab to show when dialog opens (cleared after use). */
   initialTab: SettingsTab | null;
+  /** Opens the user settings JSON file in the main editor. */
+  openUserSettingsFile: () => void;
+  /** Registers the handler that opens the user settings file in the editor. */
+  registerOpenUserSettingsFileHandler: (handler: (() => void) | null) => void;
 }
 
 const OpenSettingsContext =
@@ -18,6 +22,7 @@ const OpenSettingsContext =
 export function OpenSettingsProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = React.useState(false);
   const [initialTab, setInitialTab] = React.useState<SettingsTab | null>(null);
+  const openUserSettingsFileHandlerRef = React.useRef<(() => void) | null>(null);
 
   /** ⌘⌥, (Windows: Win+Alt+,): toggle the settings dialog from anywhere in the app shell. */
   React.useEffect(() => {
@@ -53,9 +58,34 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
     }
   }, []);
 
+  const registerOpenUserSettingsFileHandler = React.useCallback(
+    (handler: (() => void) | null) => {
+      openUserSettingsFileHandlerRef.current = handler;
+    },
+    [],
+  );
+
+  const openUserSettingsFile = React.useCallback(() => {
+    openUserSettingsFileHandlerRef.current?.();
+  }, []);
+
   const value = React.useMemo(
-    () => ({ open, onOpenChange, openWithTab, initialTab }),
-    [open, onOpenChange, openWithTab, initialTab]
+    () => ({
+      open,
+      onOpenChange,
+      openWithTab,
+      initialTab,
+      openUserSettingsFile,
+      registerOpenUserSettingsFileHandler,
+    }),
+    [
+      open,
+      onOpenChange,
+      openWithTab,
+      initialTab,
+      openUserSettingsFile,
+      registerOpenUserSettingsFileHandler,
+    ],
   );
 
   return (

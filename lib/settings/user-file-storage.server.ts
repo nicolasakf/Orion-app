@@ -7,8 +7,12 @@ import {
   ensureOrionDataDirectory,
   getUserSettingsFilePath,
 } from "@/lib/local/orion-paths.server";
+import { formatHomeRelativePath } from "@/lib/local/terminal-output-storage.server";
 import { createDefaultUserSettingsDocument } from "@/lib/settings/defaults";
-import { migrateUserSettingsDocument } from "@/lib/settings/migrations";
+import {
+  migrateUserSettingsDocument,
+  parseUserSettingsDocumentFromJson,
+} from "@/lib/settings/migrations";
 import type { UserSettingsDocument } from "@/lib/settings/schema";
 
 export type UserSettingsFileLoadResult = {
@@ -85,4 +89,33 @@ export async function saveUserSettingsDocument(
 /** Deletes the local user settings document so Orion falls back to defaults. */
 export async function clearUserSettingsFile(): Promise<void> {
   await rm(getUserSettingsFilePath(), { force: true });
+}
+
+export type UserSettingsRawFile = {
+  path: string;
+  content: string;
+  exists: boolean;
+};
+
+/** Loads the on-disk user settings JSON for editor display. */
+export async function loadUserSettingsRawFile(): Promise<UserSettingsRawFile> {
+  const filePath = getUserSettingsFilePath();
+  const path = formatHomeRelativePath(filePath);
+
+  try {
+    const content = await readFile(filePath, "utf8");
+    return { path, content, exists: true };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      const content = `${JSON.stringify(createDefaultUserSettingsDocument(), null, 2)}\n`;
+      return { path, content, exists: false };
+    }
+    throw error;
+  }
+}
+
+/** Parses, validates, and atomically saves raw user settings JSON from the editor. */
+export async function saveUserSettingsRawFile(raw: string): Promise<UserSettingsDocument> {
+  const document = parseUserSettingsDocumentFromJson(raw);
+  return saveUserSettingsDocument(document);
 }

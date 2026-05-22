@@ -18,9 +18,11 @@ import {
 import { AppearanceTab } from "@/components/settings-dialog/appearance-tab";
 import { ModelsTab } from "@/components/settings-dialog/models-tab";
 import { ProvidersTab } from "@/components/settings-dialog/providers-tab";
+import { SettingsFileTab } from "@/components/settings-dialog/settings-file-tab";
 import { SettingsSidebar } from "@/components/settings-dialog/settings-sidebar";
 import type { SettingsTab } from "@/components/settings-dialog/types";
 import { useSettingsContext } from "@/components/settings/settings-provider";
+import { useOpenSettings } from "@/contexts/open-settings-context";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -38,14 +40,32 @@ export function SettingsDialog({
   const [activeTab, setActiveTab] = React.useState<SettingsTab>("providers");
   const { errorMessage, reloadUserSettings, userSettingsLoadStatus } =
     useSettingsContext();
+  const { openUserSettingsFile, onOpenChange: setSettingsOpen } = useOpenSettings();
   const settingsLoadFailed =
     userSettingsLoadStatus === "failed" && errorMessage;
 
   React.useEffect(() => {
     if (open && initialTab) {
+      if (initialTab === "settings-file") {
+        openUserSettingsFile();
+        setSettingsOpen(false);
+        return;
+      }
       setActiveTab(initialTab);
     }
-  }, [open, initialTab]);
+  }, [open, initialTab, openUserSettingsFile, setSettingsOpen]);
+
+  const handleTabChange = React.useCallback(
+    (tab: SettingsTab) => {
+      if (tab === "settings-file") {
+        openUserSettingsFile();
+        setSettingsOpen(false);
+        return;
+      }
+      setActiveTab(tab);
+    },
+    [openUserSettingsFile, setSettingsOpen],
+  );
 
   const renderTabContent = () => {
     switch (activeTab) {
@@ -55,6 +75,8 @@ export function SettingsDialog({
         return <ModelsTab />;
       case "providers":
         return <ProvidersTab />;
+      case "settings-file":
+        return <SettingsFileTab />;
       default:
         return <ProvidersTab />;
     }
@@ -98,7 +120,7 @@ export function SettingsDialog({
             } as React.CSSProperties
           }
         >
-          <SettingsSidebar activeTab={activeTab} onTabChange={setActiveTab} />
+          <SettingsSidebar activeTab={activeTab} onTabChange={handleTabChange} />
           <SidebarInset className="min-h-0 flex-1 overflow-auto scrollbar-hide">
             {renderTabContent()}
           </SidebarInset>

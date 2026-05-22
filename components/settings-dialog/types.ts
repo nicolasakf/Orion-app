@@ -1,4 +1,5 @@
 export type SettingsTab =
   | "appearance"
   | "models"
-  | "providers";
+  | "providers"
+  | "settings-file";

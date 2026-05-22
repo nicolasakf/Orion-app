@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Palette, Box, Key } from "lucide-react";
+import { Palette, Box, Key, FileJson } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -18,6 +18,7 @@ const SETTINGS_NAV_BASE: { id: SettingsTab; title: string; icon: React.ElementTy
   { id: "appearance", title: "Appearance", icon: Palette },
   { id: "models", title: "Models", icon: Box },
   { id: "providers", title: "Providers", icon: Key },
+  { id: "settings-file", title: "Settings JSON", icon: FileJson },
 ];
 
 interface SettingsSidebarProps extends React.ComponentProps<typeof Sidebar> {

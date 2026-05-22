@@ -195,6 +195,23 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   }, [reloadUserSettings]);
 
   React.useEffect(() => {
+    const handleUserSettingsFileChanged = () => {
+      void reloadUserSettings();
+    };
+
+    window.addEventListener(
+      "orion:user-settings-file-changed",
+      handleUserSettingsFileChanged,
+    );
+    return () => {
+      window.removeEventListener(
+        "orion:user-settings-file-changed",
+        handleUserSettingsFileChanged,
+      );
+    };
+  }, [reloadUserSettings]);
+
+  React.useEffect(() => {
     if (!isHydrated) return;
     const desiredTheme = effectiveSettings.appearance.theme;
     if (theme !== desiredTheme) {
