@@ -32,19 +32,72 @@ Orion closes that gap. Built around a modern notebook IDE, it feeds the right co
 
 ## Quick start
 
-**Prerequisites:** Node.js 20+
+**Prerequisites:** Node.js 20+ and Python 3.8+ (for notebooks)
+
+Running `orion` starts Jupyter, launches Orion locally, opens your browser, and auto-connects to the Jupyter server. All managed files live under `~/.orion` (Windows: `%USERPROFILE%\.orion`).
+
+### Install via npm (recommended)
+
+```bash
+npm install -g @nicolasakf/orion-agent
+orion
+```
+
+Or run once without installing globally:
+
+```bash
+npx @nicolasakf/orion-agent
+```
+
+The npm package ships the full Orion app bundle, so no separate app download is needed. You only need Node.js 20+ installed; Python 3.8+ is required for notebook execution.
+
+**First run:** if Orion does not find a compatible Jupyter setup, it prompts to create an Orion-managed environment under `~/.orion/runtime/venv`. That step installs Jupyter into Orion's venv (not your global Python) and can take a few minutes. Approve automatically with:
+
+```bash
+orion --yes
+```
+
+### Install via pip
+
+```bash
+pip install orion-agent
+orion
+```
+
+The PyPI wheel is small by design. On first run it may:
+
+1. download the Orion app bundle into `~/.orion/app/<version>`
+2. download portable Node.js 20+ into `~/.orion/runtime/node` if Node is missing
+3. create an Orion-managed Jupyter venv under `~/.orion/runtime/venv` if needed
+
+Each step prompts before downloading or installing unless you pass `--yes`:
+
+```bash
+orion --yes
+```
+
+After the first successful setup, later runs are much faster.
+
+### Adding yourAPI Keys
+
+Open Orion in your browser, then go to **Settings → Providers** to add your API keys.
+
+For manual Jupyter setup instead of the CLI, connect a Jupyter server in the GUI (supports Jupyter Server 1.x and 2.x when required APIs are available).
+
+
+### Run from source (developers)
 
 ```bash
 git clone https://github.com/nicolasakf/Orion-app.git
 cd Orion-app
 npm install
 npm run build
-npm run start
+npm run build:cli
+npm run prepare:app-bundle
+node dist/cli/cli/orion.js
 ```
 
-Open [http://localhost:3001](http://localhost:3001), then go to **Settings → Providers** to add your API keys.
-
-For notebook execution, connect a Jupyter server (supports Jupyter ≥ 2.0.0). Follow the instructions in the GUI.
+See [Contributing](./CONTRIBUTING.md#cli-development) for CLI flags, publishing, and local development details.
 
 ## Links
 
@@ -55,7 +108,8 @@ For notebook execution, connect a Jupyter server (supports Jupyter ≥ 2.0.0). F
 
 ## Documentation
 
-- [Contributing](./CONTRIBUTING.md) — setup, tests, pull requests
+- [Contributing](./CONTRIBUTING.md) — setup, CLI development, publishing, pull requests
+- [PyPI package](./python/README.md) — pip install details and first-run behavior
 - [Architecture](./docs/architecture.md) — how the app fits together
 - [Agent API](./docs/agent-api.md) — tools, skills, sub-agents, adding models
 
