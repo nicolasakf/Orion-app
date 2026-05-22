@@ -21,7 +21,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 NODE_VERSION = "v22.12.0"
 DEFAULT_APP_BUNDLE_URL = (
     f"https://github.com/nicolasakf/Orion-app/releases/download/"

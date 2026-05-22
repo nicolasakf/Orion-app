@@ -4,6 +4,18 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.5.1] - 2026-05-22
+
+### Fixed
+
+- Exclude dev logs from packaged app bundle (avoids npm registry size limit errors)
+
+### Changed
+
+- PyPI package name is `orion-notebook` (install with `pip install orion-notebook`)
+
+[0.5.1]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.5.1
+
 ## [0.5.0] - 2026-05-22
 
 ### Added
