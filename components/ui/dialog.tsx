@@ -5,6 +5,14 @@ import * as DialogPrimitive from "@radix-ui/react-dialog"
 import { X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { Button, type ButtonProps } from "@/components/ui/button"
+import {
+  composeRefs,
+  DialogShortcutBadge,
+  DialogShortcutProvider,
+  type DialogShortcutProps,
+  useDialogShortcutRegistration,
+} from "@/components/ui/dialog-shortcuts"
 
 const Dialog = DialogPrimitive.Root
 
@@ -38,22 +46,24 @@ const DialogContent = React.forwardRef<
 >(({ className, children, hideCloseButton, ...props }, ref) => (
   <DialogPortal>
     <DialogOverlay />
-    <DialogPrimitive.Content
-      ref={ref}
-      className={cn(
-        "corner-squircle fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] rounded-lg",
-        className
-      )}
-      {...props}
-    >
-      {children}
-      {!hideCloseButton && (
-        <DialogPrimitive.Close className="corner-squircle absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-none focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
-          <X className="h-4 w-4" />
-          <span className="sr-only">Close</span>
-        </DialogPrimitive.Close>
-      )}
-    </DialogPrimitive.Content>
+    <DialogShortcutProvider>
+      <DialogPrimitive.Content
+        ref={ref}
+        className={cn(
+          "corner-squircle fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] rounded-lg",
+          className
+        )}
+        {...props}
+      >
+        {children}
+        {!hideCloseButton && (
+          <DialogPrimitive.Close className="corner-squircle absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-none focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
+            <X className="h-4 w-4" />
+            <span className="sr-only">Close</span>
+          </DialogPrimitive.Close>
+        )}
+      </DialogPrimitive.Content>
+    </DialogShortcutProvider>
   </DialogPortal>
 ))
 DialogContent.displayName = DialogPrimitive.Content.displayName
@@ -113,6 +123,45 @@ const DialogDescription = React.forwardRef<
 ))
 DialogDescription.displayName = DialogPrimitive.Description.displayName
 
+/**
+ * Regular dialog button variant that can render and register an option shortcut.
+ */
+const DialogShortcutButton = React.forwardRef<
+  HTMLButtonElement,
+  ButtonProps & DialogShortcutProps
+>(
+  (
+    {
+      allowShortcutFromEditableTarget,
+      children,
+      disabled,
+      shortcut,
+      ...props
+    },
+    ref
+  ) => {
+    const localRef = React.useRef<HTMLButtonElement>(null)
+    const trigger = React.useCallback(() => {
+      localRef.current?.click()
+    }, [])
+
+    useDialogShortcutRegistration({
+      allowEditableTarget: allowShortcutFromEditableTarget,
+      disabled,
+      shortcut,
+      trigger,
+    })
+
+    return (
+      <Button ref={composeRefs(localRef, ref)} disabled={disabled} {...props}>
+        {children}
+        {shortcut && <DialogShortcutBadge shortcut={shortcut} />}
+      </Button>
+    )
+  }
+)
+DialogShortcutButton.displayName = "DialogShortcutButton"
+
 export {
   Dialog,
   DialogPortal,
@@ -124,4 +173,5 @@ export {
   DialogFooter,
   DialogTitle,
   DialogDescription,
+  DialogShortcutButton,
 }

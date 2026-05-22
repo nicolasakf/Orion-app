@@ -44,14 +44,19 @@ export function EditorReloadDialog({
         </AlertDialogHeader>
 
         <AlertDialogFooter>
-          <AlertDialogCancel onClick={onCancel}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel onClick={onCancel} shortcut="Escape">
+            Cancel
+          </AlertDialogCancel>
           <AlertDialogAction
             onClick={onDiscard}
+            shortcut="Backspace"
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
             Discard
           </AlertDialogAction>
-          <AlertDialogAction onClick={onSave}>Save</AlertDialogAction>
+          <AlertDialogAction onClick={onSave} shortcut="Enter">
+            Save
+          </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

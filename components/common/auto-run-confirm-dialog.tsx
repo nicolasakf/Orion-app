@@ -61,8 +61,8 @@ export function AutoRunConfirmDialog({
         </Alert>
 
         <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={handleConfirm}>
+          <AlertDialogCancel shortcut="Escape">Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={handleConfirm} shortcut="Enter">
             Enable auto-run
           </AlertDialogAction>
         </AlertDialogFooter>
