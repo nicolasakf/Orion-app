@@ -3,4 +3,4 @@ version = 1
 name = "Orion"
 
 [setup]
-script = "npm install --legacy-peer-deps"
+script = "npm install"
