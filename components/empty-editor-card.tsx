@@ -4,7 +4,6 @@ import * as React from "react";
 import {
   FilePlusCorner,
   Folder,
-  FolderPlus,
   History,
   Pin,
   Plus,
@@ -12,8 +11,17 @@ import {
 import { toast } from "sonner";
 import type { ContentsManager } from "@jupyterlab/services";
 
+import { CustomIcon } from "@/components/common/custom-icon";
 import { FileIcon } from "@/components/common/file-icon";
 import { Button } from "@/components/ui/button";
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbLink,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb";
 import {
   Dialog,
   DialogContent,
@@ -62,6 +70,78 @@ function workspacePathLabel(path: string): string {
 
   const segments = path.split("/").filter(Boolean);
   return segments.length > 0 ? segments[segments.length - 1]! : path;
+}
+
+interface WorkspaceBreadcrumbSegment {
+  label: string;
+  path: string;
+}
+
+/**
+ * Builds breadcrumb segments for the active Jupyter workspace directory.
+ */
+function buildWorkspaceBreadcrumbSegments(
+  workspaceRoot: string
+): WorkspaceBreadcrumbSegment[] {
+  const parts = workspaceRoot.split("/").filter(Boolean);
+
+  return parts.map((part, index) => ({
+    label: part,
+    path: parts.slice(0, index + 1).join("/"),
+  }));
+}
+
+interface WorkspaceBreadcrumbProps {
+  workspaceRoot: string;
+  onWorkspaceChange?: (path: string) => void;
+}
+
+/**
+ * Renders the current workspace as a breadcrumb with navigable parent segments.
+ */
+function WorkspaceBreadcrumb({
+  workspaceRoot,
+  onWorkspaceChange,
+}: WorkspaceBreadcrumbProps) {
+  const segments = React.useMemo(
+    () => buildWorkspaceBreadcrumbSegments(workspaceRoot),
+    [workspaceRoot]
+  );
+
+  if (segments.length === 0) {
+    return null;
+  }
+
+  return (
+    <Breadcrumb>
+      <BreadcrumbList className="ml-2">
+        {segments.map((segment, index) => {
+          const isLast = index === segments.length - 1;
+
+          return (
+            <React.Fragment key={segment.path}>
+              <BreadcrumbItem>
+                {isLast ? (
+                  <BreadcrumbPage>{segment.label}</BreadcrumbPage>
+                ) : (
+                  <BreadcrumbLink asChild>
+                    <button
+                      type="button"
+                      className="font-normal"
+                      onClick={() => onWorkspaceChange?.(segment.path)}
+                    >
+                      {segment.label}
+                    </button>
+                  </BreadcrumbLink>
+                )}
+              </BreadcrumbItem>
+              {!isLast ? <BreadcrumbSeparator /> : null}
+            </React.Fragment>
+          );
+        })}
+      </BreadcrumbList>
+    </Breadcrumb>
+  );
 }
 
 /**
@@ -139,9 +219,13 @@ export function EmptyEditorCard({
     workspaceDirectory !== null && workspaceDirectory !== undefined
       ? workspaceDirectory
       : "";
-  const pinnedWorkspaces = effectiveSettings.workspace.pinnedDirectoryPaths.slice(
-    0,
-    PINNED_WORKSPACE_LIMIT
+  /** Server root (`""`) is never pinned; show up to five pins without an inner scroll cap. */
+  const pinnedWorkspaces = React.useMemo(
+    () =>
+      effectiveSettings.workspace.pinnedDirectoryPaths
+        .filter((path) => path !== "")
+        .slice(0, PINNED_WORKSPACE_LIMIT),
+    [effectiveSettings.workspace.pinnedDirectoryPaths]
   );
   const topRecentFiles = recentFiles.slice(0, RECENT_FILE_LIMIT);
 
@@ -214,13 +298,13 @@ export function EmptyEditorCard({
 
   return (
     <div className="flex min-h-0 flex-1 items-center justify-center overflow-auto bg-sidebar p-6">
-      <div className="corner-squircle w-full max-w-xl rounded-lg border bg-background p-5 shadow-sm">
+      <div className="flex w-full max-w-2xl flex-col gap-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h2 className="text-base font-semibold leading-6">Current Workspace</h2>
-            <p className="mt-1 truncate text-sm text-muted-foreground">
-              {workspaceRoot === "" ? "Workspace: Server root" : workspaceRoot}
-            </p>
+          <div className="min-w-0 flex-1">
+            <WorkspaceBreadcrumb
+              workspaceRoot={workspaceRoot}
+              onWorkspaceChange={onWorkspaceChange}
+            />
           </div>
 
           <DropdownMenu>
@@ -236,16 +320,16 @@ export function EmptyEditorCard({
                 New file
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => openCreateDialog("folder")}>
-                <FolderPlus className="mr-2 h-4 w-4" />
+                <CustomIcon filename="folder-plus-corner" className="mr-2 h-4 w-4" />
                 New folder
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
 
-        <div className="mt-5 grid gap-5 sm:grid-cols-2">
-          <section className="min-w-0">
-            <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+        <div className="grid gap-5 sm:grid-cols-2">
+          <section className="corner-squircle min-w-0 rounded-md border border-sidebar-border bg-transparent p-4">
+            <div className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground">
               <History className="h-4 w-4 text-muted-foreground" />
               Recent files
             </div>
@@ -280,13 +364,13 @@ export function EmptyEditorCard({
             )}
           </section>
 
-          <section className="min-w-0">
-            <div className="mb-2 flex items-center gap-2 text-sm font-medium">
+          <section className="corner-squircle min-w-0 rounded-md border border-sidebar-border bg-transparent p-4">
+            <div className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground">
               <Pin className="h-4 w-4 text-muted-foreground" />
               Pinned workspaces
             </div>
             {pinnedWorkspaces.length > 0 ? (
-              <div className="max-h-40 space-y-1 overflow-y-auto pr-1">
+              <div className="space-y-1">
                 {pinnedWorkspaces.map((path) => (
                   <button
                     key={path}
