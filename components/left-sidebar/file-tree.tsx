@@ -14,6 +14,7 @@ import {
   FolderSearch,
   FileText,
   SquareArrowOutUpRight,
+  AtSign,
 } from "lucide-react";
 import { toast } from "sonner";
 import { DEFAULT_SETTINGS } from "@/lib/settings/defaults";
@@ -496,6 +497,19 @@ function FileTreeNode({
     onFileSelect?.({ name: item.name, path: item.path, openAsText: true });
   }, [item.name, item.path, onFileSelect]);
 
+  /** Requests that the chat composer attach this file or folder as a mention. */
+  const handleMentionInChat = React.useCallback(() => {
+    window.dispatchEvent(
+      new CustomEvent("orion:mention-workspace-path", {
+        detail: {
+          path: item.path,
+          itemType: item.type,
+          name: item.name,
+        },
+      }),
+    );
+  }, [item.name, item.path, item.type]);
+
   const visibleChildren = shouldShowDotfiles
     ? children
     : children.filter((child) => !child.name.startsWith("."));
@@ -671,6 +685,15 @@ function FileTreeNode({
               Open with text editor
             </ContextMenuItem>
           )}
+
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            className="outline-none ring-0 focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0"
+            onSelect={handleMentionInChat}
+          >
+            <AtSign className="mr-2 h-4 w-4" />
+            Mention in chat
+          </ContextMenuItem>
 
           {!isTopLevel && (
             <>

@@ -363,6 +363,12 @@ type NotebookCellMentionEventDetail = {
   preview?: unknown;
 };
 
+type WorkspacePathMentionEventDetail = {
+  path?: unknown;
+  itemType?: unknown;
+  name?: unknown;
+};
+
 type EditorSelectionAttachEventDetail = {
   path?: unknown;
   lineStart?: unknown;
@@ -1322,6 +1328,54 @@ export function RightSidebar({
     window.addEventListener("orion:mention-notebook-cell", handleMentionNotebookCell);
     return () => {
       window.removeEventListener("orion:mention-notebook-cell", handleMentionNotebookCell);
+    };
+  }, [addDraftReference]);
+
+  useEffect(() => {
+    const handleMentionWorkspacePath = (event: Event) => {
+      const detail = (event as CustomEvent<WorkspacePathMentionEventDetail>).detail;
+      if (typeof detail?.path !== "string" || detail.path.length === 0) {
+        return;
+      }
+      if (detail.itemType !== "file" && detail.itemType !== "folder") {
+        return;
+      }
+
+      const label =
+        typeof detail.name === "string" && detail.name.length > 0
+          ? detail.name
+          : fileNameFromPath(detail.path);
+
+      if (detail.itemType === "folder") {
+        addDraftReference(
+          makeReference(
+            "folder",
+            label,
+            { type: "folder", path: detail.path },
+            `Folder: ${detail.path}`,
+            `Use bash with safe read-only commands scoped to "${detail.path}" when exact folder contents are needed.`
+          )
+        );
+        return;
+      }
+
+      const isNotebook = detail.path.endsWith(".ipynb");
+      addDraftReference(
+        makeReference(
+          "file",
+          label,
+          { type: "file", path: detail.path },
+          `File: ${detail.path}`,
+          isNotebook
+            ? `Use use_notebook with notebookPath="${detail.path}", then read_notebook or read_cell for exact cells.`
+            : `Use read_file with path="${detail.path}" for exact contents.`
+        )
+      );
+    };
+
+    window.addEventListener("orion:mention-workspace-path", handleMentionWorkspacePath);
+    return () => {
+      window.removeEventListener("orion:mention-workspace-path", handleMentionWorkspacePath);
     };
   }, [addDraftReference]);
 
