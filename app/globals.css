@@ -101,6 +101,36 @@ html {
   border-radius: 0.5rem !important;
 }
 
+[data-sonner-toast] [data-content] {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  row-gap: 2px;
+  column-gap: 0.75rem;
+  align-items: center;
+}
+
+[data-sonner-toast] [data-title],
+[data-sonner-toast] [data-description] {
+  grid-column: 1;
+  min-width: 0;
+}
+
+[data-sonner-toast] [data-content]::after {
+  content: "Esc to dismiss";
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  justify-self: end;
+  align-self: center;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.6875rem;
+  font-weight: 400;
+  line-height: 1;
+  opacity: 0.72;
+  white-space: nowrap;
+}
+
 @supports (corner-shape: squircle) {
   [data-sonner-toast] button[data-button].corner-squircle {
     corner-shape: squircle !important;

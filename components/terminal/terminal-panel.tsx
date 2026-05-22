@@ -241,7 +241,7 @@ export function TerminalPanel({
    */
   const sendToTerminalRef = useRef<
     (code: string, preLaunch?: string) => Promise<void>
-  >(async () => {});
+  >(async () => { });
 
   // Keep the ref up-to-date with current state/callbacks on every render
   sendToTerminalRef.current = async (code: string, preLaunch?: string) => {
@@ -525,7 +525,8 @@ export function TerminalPanel({
                   <Command>
                     <CommandInput
                       placeholder="Search agent terminals..."
-                      className="h-8 rounded-none"
+                      className="h-8 rounded-none text-xs"
+
                     />
                     <CommandEmpty>No agent terminals found.</CommandEmpty>
                     <CommandList className="max-h-[220px] overflow-y-auto">

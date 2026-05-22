@@ -13,13 +13,10 @@ import {
 } from "@/components/ui/resizable";
 import type { NotebookMinimapSection } from "@/components/notebook/notebook-minimap";
 import { Editor } from "@/components/editor";
+import { resolveOrionEditorDefinition } from "@/components/editors/editor-definitions";
 import {
   Save,
   Check,
-  Play,
-  Square,
-  RotateCcw,
-  RefreshCw,
   Circle,
   ChevronDown,
   Scan,
@@ -28,16 +25,14 @@ import {
   X,
   AlertTriangle,
   History,
-  Eye,
-  EyeOff,
 } from "lucide-react";
 import { ToolbarButton } from "@/components/common/toolbar-button";
-import { NotebookViewToggle } from "@/components/notebook/notebook-view-toggle";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
+  isTooltipReopenFromOverlaySuppressed,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { KernelStatus, KernelInfo } from "@/lib/types";
@@ -77,13 +72,16 @@ import {
 } from "@/components/ui/command";
 import { FileIcon } from "@/components/common/file-icon";
 import { KernelIcon } from "@/components/common/kernel-icon";
-import { AltOrOption } from "@/components/common/keyboard-icons";
+import { AltOrOption, CmdOrCtrl } from "@/components/common/keyboard-icons";
+import { TooltipPortal } from "@radix-ui/react-tooltip";
 import { EditorReloadDialog } from "@/components/editor-reload-dialog";
 import { useJupyterShellReady } from "@/hooks/use-jupyter-shell-ready";
+import { useRegisterOpenUserSettingsFile } from "@/hooks/use-register-open-user-settings-file";
 import {
   OpenSettingsProvider,
   useOpenSettings,
 } from "@/contexts/open-settings-context";
+import { MarkdownEditorViewModeProvider } from "@/contexts/markdown-editor-view-mode-context";
 import { NotebookViewModeProvider } from "@/contexts/notebook-view-mode-context";
 import { TerminalPanel } from "@/components/terminal/terminal-panel";
 import { useIsMobile } from "@/hooks/use-platform";
@@ -105,6 +103,7 @@ import {
   type PanelLayoutState,
   type PanelVisibilityState,
 } from "@/lib/ui-session-state";
+import { isUserSettingsEditorPath } from "@/lib/settings/user-settings-editor-path";
 
 type ActiveFile = {
   name: string;
@@ -186,6 +185,16 @@ function parseStoredCurrentFile(raw: string | null): ActiveFile | null {
   } catch {
     return null;
   }
+}
+
+/** Registers the handler that opens user settings JSON from the settings dialog. */
+function RegisterOpenUserSettingsFile({
+  onOpenFile,
+}: {
+  onOpenFile: (file: ActiveFile) => void;
+}) {
+  useRegisterOpenUserSettingsFile({ onOpenFile });
+  return null;
 }
 
 /**
@@ -312,6 +321,7 @@ function MobileLayout({
 
   return (
     <div className="flex flex-col h-dvh w-full overflow-hidden">
+      <RegisterOpenUserSettingsFile onOpenFile={handleMobileFileSelect} />
       <MobileToolbar
         title={
           activeMobileView === "chat"
@@ -383,6 +393,10 @@ function MobileLayout({
               hasWorkspace={hasWorkspaceOpen}
               hasServerConnection={hasServerConnection}
               onConnectServer={openConnectionDialog}
+              workspaceDirectory={workspaceDirectory}
+              recentFiles={recentFiles}
+              onOpenFile={handleMobileFileSelect}
+              onWorkspaceChange={onWorkspaceChange}
               kernelService={kernelService}
               currentKernel={currentKernel}
               kernelStatus={kernelStatus}
@@ -494,10 +508,13 @@ export default function Page() {
   const [isSaved, setIsSaved] = useState<boolean>(false);
   const [recentFiles, setRecentFiles] = useState<ActiveFile[]>([]);
   const [open, setOpen] = useState(false);
+  const [recentFilesTooltipOpen, setRecentFilesTooltipOpen] = useState(false);
   const [recentFilesSelectionPath, setRecentFilesSelectionPath] = useState("");
   const recentFilesSelectionPathRef = useRef("");
   const recentFilesCommandInputRef = useRef<HTMLInputElement>(null);
   const recentFilesShortcutActiveRef = useRef(false);
+  /** Cmd/Ctrl+D taps in the current hold cycle; commit on release only when > 1. */
+  const recentFilesShortcutPressCountRef = useRef(0);
   const [isFileIconHovered, setIsFileIconHovered] = useState(false);
   const leftPanelRef = useRef<any>(null);
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(
@@ -864,15 +881,56 @@ export default function Page() {
   );
 
   /**
+   * Moves keyboard focus into the active editor after the recent-files combobox
+   * closes. Retries briefly so Monaco/notebook mounts can receive the event.
+   */
+  const requestEditorFocus = useCallback(() => {
+    const dispatchFocus = () => {
+      window.dispatchEvent(new CustomEvent("orion:focusEditor"));
+    };
+    dispatchFocus();
+    window.requestAnimationFrame(dispatchFocus);
+    setTimeout(dispatchFocus, 150);
+    setTimeout(dispatchFocus, 400);
+  }, []);
+
+  /**
+   * Returns whether selecting a recent file should move focus to the editor
+   * (skips when an unsaved-changes dialog blocks the switch).
+   */
+  const shouldFocusEditorAfterRecentFileSelect = useCallback(
+    (file: ActiveFile) => {
+      const isSameFile =
+        file.path === currentFile.path &&
+        file.openAsText === currentFile.openAsText;
+      return isSameFile || !hasUnsavedChanges;
+    },
+    [currentFile.openAsText, currentFile.path, hasUnsavedChanges],
+  );
+
+  /**
    * Opens the currently highlighted recent file and ends the shortcut cycle.
    */
   const commitSelectedRecentFile = useCallback(() => {
     const selectedPath = recentFilesSelectionPathRef.current;
     const selectedFile = recentFiles.find((file) => file.path === selectedPath);
+    const shortcutPressCount = recentFilesShortcutPressCountRef.current;
 
     recentFilesShortcutActiveRef.current = false;
+    recentFilesShortcutPressCountRef.current = 0;
+
     if (!selectedFile) {
+      setRecentFilesTooltipOpen(false);
       setOpen(false);
+      return;
+    }
+
+    // Single Cmd/Ctrl+D leaves the combobox open for arrow keys / search.
+    if (shortcutPressCount <= 1) {
+      setRecentFilesTooltipOpen(false);
+      window.requestAnimationFrame(() => {
+        recentFilesCommandInputRef.current?.focus();
+      });
       return;
     }
 
@@ -880,25 +938,30 @@ export default function Page() {
       selectedFile.path === currentFile.path &&
       selectedFile.openAsText === currentFile.openAsText
     ) {
-      setOpen(true);
-      window.requestAnimationFrame(() => {
-        recentFilesCommandInputRef.current?.focus();
-      });
+      setRecentFilesTooltipOpen(false);
+      setOpen(false);
+      requestEditorFocus();
       return;
     }
 
+    setRecentFilesTooltipOpen(false);
     handleFileSelect(selectedFile);
     setOpen(false);
+    if (shouldFocusEditorAfterRecentFileSelect(selectedFile)) {
+      requestEditorFocus();
+    }
   }, [
     currentFile.openAsText,
     currentFile.path,
     handleFileSelect,
     recentFiles,
+    requestEditorFocus,
+    shouldFocusEditorAfterRecentFileSelect,
   ]);
 
   /**
-   * Cycles recent files with Cmd/Ctrl+D, then opens the highlighted file when
-   * the shortcut modifier is released.
+   * Cycles recent files with Cmd/Ctrl+D. One press opens the combobox for
+   * keyboard search; two or more presses in the same hold open the highlight on release.
    */
   useEffect(() => {
     const isRecentFilesShortcut = (event: KeyboardEvent) =>
@@ -919,10 +982,18 @@ export default function Page() {
       const selectedIndex = recentFiles.findIndex(
         (file) => file.path === recentFilesSelectionPathRef.current,
       );
-      const nextIndex = recentFilesShortcutActiveRef.current
+      const isCycling =
+        recentFilesShortcutActiveRef.current ||
+        recentFilesSelectionPathRef.current !== "";
+      const nextIndex = isCycling
         ? (Math.max(selectedIndex, -1) + 1) % recentFiles.length
         : 0;
 
+      if (recentFilesShortcutActiveRef.current) {
+        recentFilesShortcutPressCountRef.current += 1;
+      } else {
+        recentFilesShortcutPressCountRef.current = 1;
+      }
       recentFilesShortcutActiveRef.current = true;
       setOpen(true);
       selectRecentFileAtIndex(nextIndex);
@@ -939,6 +1010,7 @@ export default function Page() {
 
     const handleWindowBlur = () => {
       recentFilesShortcutActiveRef.current = false;
+      recentFilesShortcutPressCountRef.current = 0;
     };
 
     window.addEventListener("keydown", handleKeyDown, { capture: true });
@@ -975,6 +1047,10 @@ export default function Page() {
    */
   const handleEditorFileLoadError = useCallback(
     (failedFilepath: string): boolean => {
+      if (isUserSettingsEditorPath(failedFilepath)) {
+        return false;
+      }
+
       const openedExternally = openFileExternally(failedFilepath);
       const pendingSelection = pendingFileSelectionRef.current;
       const fallbackFile =
@@ -1930,6 +2006,8 @@ export default function Page() {
     workspaceDirectory != null &&
     Boolean(currentFile.path) &&
     !isJupyterPathWithinWorkspace(currentFile.path, workspaceDirectory);
+  const activeEditor = resolveOrionEditorDefinition(currentFile);
+  const ActiveEditorToolbar = activeEditor?.Toolbar;
 
   const persistPanelVisibilityState = React.useCallback(
     (next: Partial<PanelVisibilityState>) => {
@@ -2149,6 +2227,35 @@ export default function Page() {
         e.preventDefault();
         toggleBothSidebars();
       } else if (
+        e.altKey &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.shiftKey &&
+        e.key === "Escape" &&
+        isNotebookFile(currentFile)
+      ) {
+        e.preventDefault();
+        void handleStopKernel();
+      } else if (
+        e.altKey &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.shiftKey &&
+        e.code === "KeyO" &&
+        isNotebookFile(currentFile)
+      ) {
+        e.preventDefault();
+        handleTogglePresentationHideAllCellInputs();
+      } else if (
+        ((e.metaKey && !e.ctrlKey) || (!e.metaKey && e.ctrlKey)) &&
+        e.altKey &&
+        !e.shiftKey &&
+        e.code === "Enter" &&
+        isNotebookFile(currentFile)
+      ) {
+        e.preventDefault();
+        handleRunAll(true);
+      } else if (
         !e.altKey &&
         !e.shiftKey &&
         ((((e.metaKey && !e.ctrlKey) || (!e.metaKey && e.ctrlKey)) &&
@@ -2172,75 +2279,81 @@ export default function Page() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [
+    currentFile,
     toggleFocusMode,
     toggleLeftSidebar,
     toggleRightSidebar,
     toggleBothSidebars,
     toggleBottomSidebar,
     handleSave,
+    handleRunAll,
+    handleStopKernel,
+    handleTogglePresentationHideAllCellInputs,
   ]);
 
   if (isMobile) {
     return (
       <OpenSettingsProvider>
         <NotebookViewModeProvider>
-          <MobileLayoutProvider>
-            <MobileLayout
-              currentFile={currentFile}
-              recentFiles={recentFiles}
-              onFileSelect={handleFileSelect}
-              onNavigateToLine={handleNavigateToLine}
-              notebookMinimap={notebookMinimap}
-              onMinimapNavigate={handleMinimapNavigate}
-              runningKernels={runningKernels}
-              onSessionSelect={handleSessionSelect}
-              onSessionShutdown={handleSessionShutdown}
-              onShutdownAllKernels={handleShutdownAllKernels}
-              onRefreshKernels={handleRefreshKernels}
-              kernelService={kernelService}
-              workspaceDirectory={workspaceDirectory}
-              onWorkspaceChange={setWorkspaceDirectory}
-              onOpenKernelDropdown={
-                !currentKernel
-                  ? openConnectionDialog
-                  : () => setIsKernelDropdownOpen(true)
-              }
-              currentKernel={currentKernel}
-              kernelStatus={kernelStatus}
-              notebook={notebook}
-              hasWorkspaceOpen={hasWorkspaceOpen}
-              hasServerConnection={hasServerConnection}
-              openConnectionDialog={openConnectionDialog}
-              isRunning={isRunning}
-              executionCountRef={executionCountRef}
-              onKernelStatusChange={setKernelStatus}
-              onCurrentKernelChange={setCurrentKernel}
-              onIsRunningChange={setIsRunning}
-              onNotebookChange={setNotebook}
-              onUnsavedChangesChange={setHasUnsavedChanges}
-              notebookPresentationHideAllInputs={
-                effectiveSettings.notebook.presentationHideAllCellInputs
-              }
-              onFileLoadError={handleEditorFileLoadError}
-              onWorkspacePathRenamed={handleWorkspacePathRenamed}
-              onWorkspacePathDeleted={handleWorkspacePathDeleted}
-            />
+          <MarkdownEditorViewModeProvider>
+            <MobileLayoutProvider>
+              <MobileLayout
+                currentFile={currentFile}
+                recentFiles={recentFiles}
+                onFileSelect={handleFileSelect}
+                onNavigateToLine={handleNavigateToLine}
+                notebookMinimap={notebookMinimap}
+                onMinimapNavigate={handleMinimapNavigate}
+                runningKernels={runningKernels}
+                onSessionSelect={handleSessionSelect}
+                onSessionShutdown={handleSessionShutdown}
+                onShutdownAllKernels={handleShutdownAllKernels}
+                onRefreshKernels={handleRefreshKernels}
+                kernelService={kernelService}
+                workspaceDirectory={workspaceDirectory}
+                onWorkspaceChange={setWorkspaceDirectory}
+                onOpenKernelDropdown={
+                  !currentKernel
+                    ? openConnectionDialog
+                    : () => setIsKernelDropdownOpen(true)
+                }
+                currentKernel={currentKernel}
+                kernelStatus={kernelStatus}
+                notebook={notebook}
+                hasWorkspaceOpen={hasWorkspaceOpen}
+                hasServerConnection={hasServerConnection}
+                openConnectionDialog={openConnectionDialog}
+                isRunning={isRunning}
+                executionCountRef={executionCountRef}
+                onKernelStatusChange={setKernelStatus}
+                onCurrentKernelChange={setCurrentKernel}
+                onIsRunningChange={setIsRunning}
+                onNotebookChange={setNotebook}
+                onUnsavedChangesChange={setHasUnsavedChanges}
+                notebookPresentationHideAllInputs={
+                  effectiveSettings.notebook.presentationHideAllCellInputs
+                }
+                onFileLoadError={handleEditorFileLoadError}
+                onWorkspacePathRenamed={handleWorkspacePathRenamed}
+                onWorkspacePathDeleted={handleWorkspacePathDeleted}
+              />
 
-            <KernelConnectionDialog
-              open={showConnectionDialog}
-              onOpenChange={setShowConnectionDialog}
-              onConnect={handleConnectToKernelUrlDialog}
-              error={connectionError}
-            />
+              <KernelConnectionDialog
+                open={showConnectionDialog}
+                onOpenChange={setShowConnectionDialog}
+                onConnect={handleConnectToKernelUrlDialog}
+                error={connectionError}
+              />
 
-            <EditorReloadDialog
-              open={unsavedDialogIntent !== null}
-              filename={currentFile.name || undefined}
-              onSave={handleUnsavedDialogSave}
-              onDiscard={handleUnsavedDialogDiscard}
-              onCancel={() => setUnsavedDialogIntent(null)}
-            />
-          </MobileLayoutProvider>
+              <EditorReloadDialog
+                open={unsavedDialogIntent !== null}
+                filename={currentFile.name || undefined}
+                onSave={handleUnsavedDialogSave}
+                onDiscard={handleUnsavedDialogDiscard}
+                onCancel={() => setUnsavedDialogIntent(null)}
+              />
+            </MobileLayoutProvider>
+          </MarkdownEditorViewModeProvider>
         </NotebookViewModeProvider>
       </OpenSettingsProvider>
     );
@@ -2249,621 +2362,567 @@ export default function Page() {
   return (
     <OpenSettingsProvider>
       <NotebookViewModeProvider>
-        <div className="h-screen">
-          {hasLoadedPanelVisibilityState ? (
-          <ResizablePanelGroup
-            direction="horizontal"
-            className="h-full"
-            onLayout={handleHorizontalLayout}
-          >
-            {/* Left Sidebar Panel */}
-            <ResizablePanel
-              ref={leftPanelRef}
-              defaultSize={horizontalPanelSizes[0]}
-              minSize={10}
-              maxSize={40}
-              collapsible={true}
-              onCollapse={handleLeftCollapse}
-              onExpand={handleLeftExpand}
-            >
-              <div
-                ref={leftSidebarRevealRef}
-                className="relative h-full overflow-hidden bg-sidebar"
-                onPointerEnter={() => setFocusLeftHovered(true)}
-                onPointerLeave={() => setFocusLeftHovered(false)}
-                onFocus={() => setFocusLeftFocused(true)}
-                onBlur={handleSidebarRevealBlur(setFocusLeftFocused)}
-              >
-                <div
-                  className={cn(
-                    "relative h-full transition-opacity duration-300",
-                    isLeftSidebarContentHidden && "pointer-events-none opacity-0",
-                  )}
-                  aria-hidden={isLeftSidebarContentHidden}
-                >
-                  <LeftSidebar
-                    currentFile={currentFile}
-                    onFileSelect={handleFileSelect}
-                    onNavigateToLine={handleNavigateToLine}
-                    notebookMinimap={notebookMinimap}
-                    onMinimapNavigate={handleMinimapNavigate}
-                    kernelSessions={runningKernels}
-                    onSessionSelect={handleSessionSelect}
-                    onSessionShutdown={handleSessionShutdown}
-                    onShutdownAllKernels={handleShutdownAllKernels}
-                    onRefreshKernels={handleRefreshKernels}
-                    kernelService={kernelService}
-                    workspaceDirectory={workspaceDirectory}
-                    onWorkspaceChange={setWorkspaceDirectory}
-                    onWorkspacePathRenamed={handleWorkspacePathRenamed}
-                    onWorkspacePathDeleted={handleWorkspacePathDeleted}
-                    onOpenKernelDropdown={
-                      !currentKernel
-                        ? openConnectionDialog
-                        : () => setIsKernelDropdownOpen(true)
-                    }
-                    onToggleTerminalPanel={toggleBottomSidebar}
-                    isTerminalPanelOpen={!bottomSidebarCollapsed}
-                  />
-                </div>
-              </div>
-            </ResizablePanel>
-
-            <ResizableHandle variant="sidebar" />
-
-            {/* Main Content Panel */}
-            <ResizablePanel defaultSize={horizontalPanelSizes[1]} minSize={30}>
+        <MarkdownEditorViewModeProvider>
+          <div className="h-screen">
+            <RegisterOpenUserSettingsFile onOpenFile={handleFileSelect} />
+            {hasLoadedPanelVisibilityState ? (
               <ResizablePanelGroup
-                direction="vertical"
-                onLayout={handleVerticalLayout}
+                direction="horizontal"
+                className="h-full"
+                onLayout={handleHorizontalLayout}
               >
-                {/* Top Panel - Toolbar and Editor */}
-                <ResizablePanel defaultSize={verticalPanelSizes[0]} minSize={30}>
-                  <div className="flex flex-col h-full">
-                    {/* Unified Toolbar */}
+                {/* Left Sidebar Panel */}
+                <ResizablePanel
+                  ref={leftPanelRef}
+                  defaultSize={horizontalPanelSizes[0]}
+                  minSize={10}
+                  maxSize={40}
+                  collapsible={true}
+                  onCollapse={handleLeftCollapse}
+                  onExpand={handleLeftExpand}
+                >
+                  <div
+                    ref={leftSidebarRevealRef}
+                    className="relative h-full overflow-hidden bg-sidebar"
+                    onPointerEnter={() => setFocusLeftHovered(true)}
+                    onPointerLeave={() => setFocusLeftHovered(false)}
+                    onFocus={() => setFocusLeftFocused(true)}
+                    onBlur={handleSidebarRevealBlur(setFocusLeftFocused)}
+                  >
                     <div
-                      className={`bg-sidebar ${leftSidebarCollapsed && rightSidebarCollapsed
-                        ? "pt-0"
-                        : "pt-2"
-                        }`}
+                      className={cn(
+                        "relative h-full transition-opacity duration-300",
+                        isLeftSidebarContentHidden && "pointer-events-none opacity-0",
+                      )}
+                      aria-hidden={isLeftSidebarContentHidden}
                     >
-                      <div
-                        className="corner-squircle sticky top-0 z-10 mx-1 flex h-11 min-w-0 shrink-0 items-center gap-1.5 rounded-md border bg-background px-2 shadow-md"
-                      >
-                        <div className="flex min-w-0 flex-1 items-center gap-1.5">
-                          <ToolbarButton
-                            onClick={toggleLeftSidebar}
-                            toolTipLabel={
-                              leftSidebarCollapsed
-                                ? "Show Sidebar"
-                                : "Hide Sidebar"
-                            }
-                            toolTipShortcut={[[AltOrOption, "1"]]}
-                          >
-                            <PanelLeft className="h-4 w-4" />
-                          </ToolbarButton>
-                          <Separator
-                            orientation="vertical"
-                            className="bg-toolbar-separator-foreground h-6"
-                          />
-                          {/* Recent Files Combobox — shown when a file is open or when there are recents (empty editor) */}
-                          {(currentFile.name || recentFiles.length > 0) && (
-                            <Popover
-                              open={open}
-                              onOpenChange={(next) => {
-                                setOpen(next);
-                                if (next) {
-                                  if (
-                                    recentFiles.length > 0 &&
-                                    !recentFilesSelectionPathRef.current
-                                  ) {
-                                    updateRecentFilesSelection(
-                                      recentFiles[0].path,
-                                    );
-                                  }
-                                } else {
-                                  recentFilesShortcutActiveRef.current = false;
-                                  updateRecentFilesSelection("");
-                                  setIsFileIconHovered(false);
-                                }
-                              }}
-                            >
-                              <PopoverTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  role="combobox"
-                                  aria-expanded={open}
-                                  aria-label={
-                                    currentFile.name
-                                      ? `Current file: ${currentFile.name}. Open recent files`
-                                      : "Open recent files"
-                                  }
-                                  className={cn(
-                                    "h-8 max-w-[min(100%,15rem)] min-w-0 shrink px-2 justify-between font-normal",
-                                    currentFileOutsideWorkspace &&
-                                    "border bg-amber-50 dark:bg-amber-950/35 border-amber-200/90 dark:border-amber-800/80 hover:bg-amber-100/90 dark:hover:bg-amber-900/45",
-                                  )}
-                                  disabled={
-                                    !currentFile.name && recentFiles.length === 0
-                                  }
-                                  onMouseEnter={() => setIsFileIconHovered(true)}
-                                  onMouseLeave={() => setIsFileIconHovered(false)}
-                                >
-                                  <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-                                    {currentFile.name ? (
-                                      <>
-                                        <TooltipProvider delayDuration={300}>
-                                          <Tooltip>
-                                            <TooltipTrigger asChild>
-                                              <button
-                                                type="button"
-                                                className="corner-squircle flex items-center justify-center w-5 h-5 shrink-0 rounded cursor-pointer hover:bg-muted transition-colors text-red-500/50 hover:text-red-500"
-                                                onClick={handleCloseFile}
-                                                aria-label="Close file"
-                                              >
-                                                {open || isFileIconHovered ? (
-                                                  <X className="h-4 w-4" />
-                                                ) : (
-                                                  <FileIcon
-                                                    filename={
-                                                      currentFile.name || ""
-                                                    }
-                                                  />
-                                                )}
-                                              </button>
-                                            </TooltipTrigger>
-                                            <TooltipContent>
-                                              <p>Close file</p>
-                                            </TooltipContent>
-                                          </Tooltip>
-                                        </TooltipProvider>
-                                        <span
-                                          className="min-w-0 flex-1 truncate text-left"
-                                          title={currentFile.name}
-                                        >
-                                          {currentFile.name}
-                                        </span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <History className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                        <span className="min-w-0 flex-1 truncate text-left text-muted-foreground">
-                                          Recent files
-                                        </span>
-                                      </>
-                                    )}
-                                  </div>
-                                  <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
-                                </Button>
-                              </PopoverTrigger>
-                              <PopoverContent className="w-80 p-1">
-                                <Command
-                                  value={recentFilesSelectionPath}
-                                  onValueChange={updateRecentFilesSelection}
-                                >
-                                  {currentFileOutsideWorkspace && (
-                                    <div
-                                      className="corner-squircle mx-1 mb-1 flex gap-2 rounded-md border border-amber-300/90 bg-amber-100/90 px-2 py-2 text-xs text-amber-950 dark:border-amber-700 dark:bg-amber-900/45 dark:text-amber-50"
-                                      role="status"
-                                    >
-                                      <AlertTriangle className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-400" />
-                                      <p className="leading-snug">
-                                        This file is not inside the workspace
-                                        folder open in the Files sidebar.
-                                      </p>
-                                    </div>
-                                  )}
-                                  <CommandInput
-                                    ref={recentFilesCommandInputRef}
-                                    placeholder="Search recent files..."
-                                  />
-                                  <CommandEmpty>
-                                    No recent files found.
-                                  </CommandEmpty>
-                                  <CommandList>
-                                    <CommandGroup heading="Recent Files">
-                                      {recentFiles.map((file, index) => (
-                                        <CommandItem
-                                          key={`${file.path}-${index}`}
-                                          value={file.path}
-                                          onSelect={() => {
-                                            recentFilesShortcutActiveRef.current =
-                                              false;
-                                            handleFileSelect(file);
-                                            setOpen(false);
-                                          }}
-                                          className="flex items-center gap-2"
-                                        >
-                                          <FileIcon filename={file.name} />
-                                          <div className="flex flex-col min-w-0 flex-1">
-                                            <span className="truncate font-medium">
-                                              {file.name}
-                                            </span>
-                                            <span className="text-xs text-muted-foreground truncate">
-                                              {file.path}
-                                            </span>
-                                          </div>
-                                          {currentFile.path === file.path && (
-                                            <Check className="h-4 w-4 text-green-500" />
-                                          )}
-                                        </CommandItem>
-                                      ))}
-                                    </CommandGroup>
-                                  </CommandList>
-                                </Command>
-                              </PopoverContent>
-                            </Popover>
-                          )}
-                          {/* Save File Button */}
-                          {currentFile.path && kernelService && (
-                            <>
-                              <ToolbarButton
-                                onClick={handleSave}
-                                toolTipLabel="Save File"
-                              >
-                                <div className="relative w-4 h-4">
-                                  <Save
-                                    className={cn(
-                                      "h-4 w-4 absolute transition-all duration-300",
-                                      isSaved
-                                        ? "opacity-0 scale-0 rotate-45"
-                                        : "opacity-100 scale-100 rotate-0",
-                                    )}
-                                  />
-                                  <Check
-                                    className={cn(
-                                      "h-4 w-4 absolute text-green-500 transition-all duration-300",
-                                      isSaved
-                                        ? "opacity-100 scale-100 rotate-0"
-                                        : "opacity-0 scale-0 rotate-45",
-                                    )}
-                                  />
-                                </div>
-                              </ToolbarButton>
-                            </>
-                          )}
-                          {/* Notebook action buttons */}
-                          {currentFile.name.endsWith(".ipynb") &&
-                            !currentFile.openAsText && (
-                              <>
-                                {/* Run All Cells — split button (single chrome; inner segments square — avoids doubled borders + corner-squircle on Button). */}
-                                <TooltipProvider delayDuration={300}>
-                                  <div
-                                    role="group"
-                                    aria-label="Run all cells"
-                                    className="inline-flex h-8 overflow-hidden rounded-md border border-border/50 bg-background shadow-sm"
-                                  >
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Button
-                                          variant="outline"
-                                          size="icon"
-                                          className="h-8 w-7 shrink-0 !rounded-none border-0 border-e border-border/50 bg-background px-0 shadow-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10"
-                                          onClick={() => handleRunAll(true)}
-                                          disabled={
-                                            !currentKernel ||
-                                            kernelStatus !== "connected" ||
-                                            isRunning
-                                          }
-                                        >
-                                          <Play className="h-4 w-4" />
-                                        </Button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        <p>Run All Cells</p>
-                                      </TooltipContent>
-                                    </Tooltip>
-
-                                    <DropdownMenu>
-                                      <DropdownMenuTrigger asChild>
-                                        <Button
-                                          variant="outline"
-                                          size="icon"
-                                          className="h-8 w-4 shrink-0 !rounded-none border-0 bg-background px-0 shadow-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10"
-                                          disabled={
-                                            !currentKernel ||
-                                            kernelStatus !== "connected" ||
-                                            isRunning
-                                          }
-                                        >
-                                          <ChevronDown className="h-3 w-3" />
-                                        </Button>
-                                      </DropdownMenuTrigger>
-                                      <DropdownMenuContent
-                                        align="start"
-                                        className="w-56"
-                                      >
-                                        <DropdownMenuItem
-                                          onClick={() => handleRunAll(true)}
-                                        >
-                                          <Play className="h-4 w-4 mr-2" />
-                                          Run All Cells
-                                        </DropdownMenuItem>
-                                        <DropdownMenuItem
-                                          onClick={() => handleRunAll(false)}
-                                        >
-                                          <Play className="h-4 w-4 mr-2 text-yellow-500" />
-                                          Run All Cells (Ignore Errors)
-                                        </DropdownMenuItem>
-                                      </DropdownMenuContent>
-                                    </DropdownMenu>
-                                  </div>
-                                </TooltipProvider>
-                                <ToolbarButton
-                                  onClick={handleStopKernel}
-                                  disabled={
-                                    !currentKernel ||
-                                    kernelStatus === "disconnected" ||
-                                    kernelStatus === "connecting"
-                                  }
-                                  toolTipLabel="Interrupt Kernel"
-                                >
-                                  <Square className="h-4 w-4" />
-                                </ToolbarButton>
-                                <ToolbarButton
-                                  onClick={handleRestartKernel}
-                                  disabled={
-                                    !currentKernel ||
-                                    kernelStatus === "disconnected" ||
-                                    kernelStatus === "connecting"
-                                  }
-                                  toolTipLabel="Restart Kernel"
-                                >
-                                  <RotateCcw className="h-4 w-4" />
-                                </ToolbarButton>
-                                <ToolbarButton
-                                  onClick={handleRestartAndRunAll}
-                                  disabled={
-                                    !currentKernel ||
-                                    kernelStatus === "disconnected" ||
-                                    kernelStatus === "connecting" ||
-                                    isRunning
-                                  }
-                                  toolTipLabel="Restart Kernel and Run All Cells"
-                                >
-                                  <RefreshCw className="h-4 w-4" />
-                                </ToolbarButton>
-                                <ToolbarButton
-                                  onClick={
-                                    handleTogglePresentationHideAllCellInputs
-                                  }
-                                  aria-pressed={
-                                    effectiveSettings.notebook
-                                      .presentationHideAllCellInputs
-                                  }
-                                  className="bg-transparent hover:bg-transparent focus-visible:bg-transparent active:bg-transparent"
-                                  toolTipLabel={
-                                    effectiveSettings.notebook
-                                      .presentationHideAllCellInputs
-                                      ? "Show cell inputs"
-                                      : "Hide cell inputs"
-                                  }
-                                >
-                                  {effectiveSettings.notebook
-                                    .presentationHideAllCellInputs ? (
-                                    <EyeOff className="h-4 w-4" />
-                                  ) : (
-                                    <Eye className="h-4 w-4" />
-                                  )}
-                                </ToolbarButton>
-                                <NotebookViewToggle />
-                              </>
-                            )}
-                        </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          {/* Jupyter Server Connection */}
-                          {currentKernel ? (
-                            <DropdownMenu
-                              open={isKernelDropdownOpen}
-                              modal={false}
-                              onOpenChange={setIsKernelDropdownOpen}
-                            >
-                              <DropdownMenuTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 gap-1.5 px-2 text-sm font-normal"
-                                  title={
-                                    currentKernel.displayName ||
-                                    currentKernel.name
-                                  }
-                                >
-                                  {getStatusIcon()}
-                                  <KernelIcon
-                                    language={currentKernel.language}
-                                    name={currentKernel.name}
-                                    size={16}
-                                  />
-                                  <ChevronDown className="h-3.5 w-3.5 opacity-60" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end" className="w-56">
-                                <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-                                  {currentKernel.displayName ||
-                                    currentKernel.name}
-                                </DropdownMenuLabel>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  onClick={() => handleKernelSelect("change")}
-                                >
-                                  <span>Change Jupyter Server</span>
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={handleDisconnect}
-                                  className="text-destructive focus:text-destructive"
-                                >
-                                  <span>Disconnect</span>
-                                </DropdownMenuItem>
-                              </DropdownMenuContent>
-                            </DropdownMenu>
-                          ) : (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-8 gap-1.5 px-2.5 text-sm font-normal"
-                              onClick={openConnectionDialog}
-                            >
-                              {getStatusIcon()}
-                              <span className="max-w-[120px] truncate">
-                                {getKernelDisplayName()}
-                              </span>
-                            </Button>
-                          )}
-                          <Separator
-                            orientation="vertical"
-                            className="h-6 bg-toolbar-separator-foreground"
-                          />
-                          <ToolbarButton
-                            onClick={toggleFocusMode}
-                            aria-pressed={isFocusMode}
-                            className={cn(
-                              isFocusMode &&
-                              "bg-accent text-foreground hover:bg-accent",
-                            )}
-                            toolTipLabel={
-                              isFocusMode ? "Exit Focus Mode" : "Enter Focus Mode"
-                            }
-                            toolTipShortcut={[[AltOrOption, "Z"]]}
-                          >
-                            <Scan className="h-4 w-4" />
-                          </ToolbarButton>
-                          <ToolbarButton
-                            onClick={toggleRightSidebar}
-                            toolTipLabel={
-                              rightSidebarCollapsed ? "Show Chat" : "Hide Chat"
-                            }
-                            toolTipShortcut={[[AltOrOption, "2"]]}
-                          >
-                            <MessagesSquare className="h-4 w-4" />
-                          </ToolbarButton>
-                          <SettingsMenu />
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex flex-1 flex-col min-h-0 overflow-hidden no-overscroll-x no-overscroll-y">
-                      <Editor
-                        filepath={currentFile.path}
-                        openNotebookAsText={currentFile.openAsText === true}
-                        hasWorkspace={hasWorkspaceOpen}
-                        hasServerConnection={hasServerConnection}
-                        onConnectServer={openConnectionDialog}
-                        // Pass kernel related props
+                      <LeftSidebar
+                        currentFile={currentFile}
+                        onFileSelect={handleFileSelect}
+                        onNavigateToLine={handleNavigateToLine}
+                        notebookMinimap={notebookMinimap}
+                        onMinimapNavigate={handleMinimapNavigate}
+                        kernelSessions={runningKernels}
+                        onSessionSelect={handleSessionSelect}
+                        onSessionShutdown={handleSessionShutdown}
+                        onShutdownAllKernels={handleShutdownAllKernels}
+                        onRefreshKernels={handleRefreshKernels}
                         kernelService={kernelService}
-                        currentKernel={currentKernel}
-                        kernelStatus={kernelStatus}
-                        isRunning={isRunning}
-                        executionCountRef={executionCountRef}
-                        onKernelStatusChange={setKernelStatus}
-                        onCurrentKernelChange={setCurrentKernel}
-                        onIsRunningChange={setIsRunning}
-                        onNotebookChange={setNotebook}
-                        onUnsavedChangesChange={setHasUnsavedChanges}
-                        presentationHideAllCellInputs={
-                          effectiveSettings.notebook.presentationHideAllCellInputs
+                        workspaceDirectory={workspaceDirectory}
+                        onWorkspaceChange={setWorkspaceDirectory}
+                        onWorkspacePathRenamed={handleWorkspacePathRenamed}
+                        onWorkspacePathDeleted={handleWorkspacePathDeleted}
+                        onOpenKernelDropdown={
+                          !currentKernel
+                            ? openConnectionDialog
+                            : () => setIsKernelDropdownOpen(true)
                         }
-                        onFileLoadError={handleEditorFileLoadError}
+                        onToggleTerminalPanel={toggleBottomSidebar}
+                        isTerminalPanelOpen={!bottomSidebarCollapsed}
                       />
                     </div>
                   </div>
                 </ResizablePanel>
 
-                <ResizableHandle className="bg-transparent border-none h-0 transition-all data-[panel-group-direction=vertical]:h-0" />
+                <ResizableHandle variant="sidebar" />
 
-                {/* Bottom Panel - Terminal */}
+                {/* Main Content Panel */}
+                <ResizablePanel defaultSize={horizontalPanelSizes[1]} minSize={30}>
+                  <ResizablePanelGroup
+                    direction="vertical"
+                    onLayout={handleVerticalLayout}
+                  >
+                    {/* Top Panel - Toolbar and Editor */}
+                    <ResizablePanel defaultSize={verticalPanelSizes[0]} minSize={30}>
+                      <div className="flex flex-col h-full">
+                        {/* Unified Toolbar */}
+                        <div
+                          className={`bg-sidebar ${leftSidebarCollapsed && rightSidebarCollapsed
+                            ? "pt-0"
+                            : "pt-2"
+                            }`}
+                        >
+                          <div
+                            className="corner-squircle sticky top-0 z-10 mx-1 flex h-11 min-w-0 shrink-0 items-center gap-1.5 rounded-md border bg-background px-2 shadow-md"
+                          >
+                            <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                              <ToolbarButton
+                                onClick={toggleLeftSidebar}
+                                toolTipLabel={
+                                  leftSidebarCollapsed
+                                    ? "Show Sidebar"
+                                    : "Hide Sidebar"
+                                }
+                                toolTipShortcut={[[AltOrOption, "1"]]}
+                              >
+                                <PanelLeft className="h-4 w-4" />
+                              </ToolbarButton>
+                              <Separator
+                                orientation="vertical"
+                                className="bg-toolbar-separator-foreground h-6"
+                              />
+                              {/* Recent Files Combobox — shown when a file is open or when there are recents (empty editor) */}
+                              {(currentFile.name || recentFiles.length > 0) && (
+                                <Popover
+                                  open={open}
+                                  onOpenChange={(next) => {
+                                    setOpen(next);
+                                    if (next) {
+                                      setRecentFilesTooltipOpen(false);
+                                      if (
+                                        recentFiles.length > 0 &&
+                                        !recentFilesSelectionPathRef.current
+                                      ) {
+                                        updateRecentFilesSelection(
+                                          recentFiles[0].path,
+                                        );
+                                      }
+                                    } else {
+                                      recentFilesShortcutActiveRef.current = false;
+                                      recentFilesShortcutPressCountRef.current = 0;
+                                      updateRecentFilesSelection("");
+                                      setIsFileIconHovered(false);
+                                    }
+                                  }}
+                                >
+                                  <TooltipProvider delayDuration={300}>
+                                    <Tooltip
+                                      open={recentFilesTooltipOpen}
+                                      onOpenChange={(nextOpen) => {
+                                        if (
+                                          nextOpen &&
+                                          isTooltipReopenFromOverlaySuppressed()
+                                        ) {
+                                          return;
+                                        }
+                                        setRecentFilesTooltipOpen(nextOpen);
+                                      }}
+                                    >
+                                      <TooltipTrigger asChild>
+                                        <PopoverTrigger asChild>
+                                          <Button
+                                            variant="ghost"
+                                            role="combobox"
+                                            aria-expanded={open}
+                                            aria-label={
+                                              currentFile.name
+                                                ? `Current file: ${currentFile.name}. Open recent files`
+                                                : "Open recent files"
+                                            }
+                                            className={cn(
+                                              "h-8 max-w-[min(100%,15rem)] min-w-0 shrink px-2 justify-between font-normal",
+                                              currentFileOutsideWorkspace &&
+                                              "border bg-amber-50 dark:bg-amber-950/35 border-amber-200/90 dark:border-amber-800/80 hover:bg-amber-100/90 dark:hover:bg-amber-900/45",
+                                            )}
+                                            disabled={
+                                              !currentFile.name &&
+                                              recentFiles.length === 0
+                                            }
+                                            onMouseEnter={() =>
+                                              setIsFileIconHovered(true)
+                                            }
+                                            onMouseLeave={() =>
+                                              setIsFileIconHovered(false)
+                                            }
+                                          >
+                                            <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
+                                              {currentFile.name ? (
+                                                <>
+                                                  <TooltipProvider delayDuration={300}>
+                                                    <Tooltip>
+                                                      <TooltipTrigger asChild>
+                                                        <button
+                                                          type="button"
+                                                          className="corner-squircle flex items-center justify-center w-5 h-5 shrink-0 rounded cursor-pointer hover:bg-muted transition-colors text-red-500/50 hover:text-red-500"
+                                                          onClick={handleCloseFile}
+                                                          aria-label="Close file"
+                                                        >
+                                                          {open || isFileIconHovered ? (
+                                                            <X className="h-4 w-4" />
+                                                          ) : (
+                                                            <FileIcon
+                                                              filename={
+                                                                currentFile.name || ""
+                                                              }
+                                                            />
+                                                          )}
+                                                        </button>
+                                                      </TooltipTrigger>
+                                                      <TooltipContent>
+                                                        <p>Close file</p>
+                                                      </TooltipContent>
+                                                    </Tooltip>
+                                                  </TooltipProvider>
+                                                  <span
+                                                    className="min-w-0 flex-1 truncate text-left"
+                                                    title={currentFile.name}
+                                                  >
+                                                    {currentFile.name}
+                                                  </span>
+                                                </>
+                                              ) : (
+                                                <>
+                                                  <History className="h-4 w-4 shrink-0 text-muted-foreground" />
+                                                  <span className="min-w-0 flex-1 truncate text-left text-muted-foreground">
+                                                    Recent files
+                                                  </span>
+                                                </>
+                                              )}
+                                            </div>
+                                            <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
+                                          </Button>
+                                        </PopoverTrigger>
+                                      </TooltipTrigger>
+                                      <TooltipPortal>
+                                        <TooltipContent className="z-[100]">
+                                          <div className="flex items-center">
+                                            <p>
+                                              {currentFile.name
+                                                ? "Open recent files"
+                                                : "Recent files"}
+                                            </p>
+                                            <kbd className="pointer-events-none ml-2 inline-flex shrink-0 flex-nowrap h-5 min-h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[12px] font-medium text-muted-foreground opacity-100">
+                                              <CmdOrCtrl className="h-3 w-3" />
+                                              D
+                                            </kbd>
+                                          </div>
+                                        </TooltipContent>
+                                      </TooltipPortal>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                  <PopoverContent className="w-80 p-1">
+                                    <Command
+                                      value={recentFilesSelectionPath}
+                                      onValueChange={updateRecentFilesSelection}
+                                    >
+                                      {currentFileOutsideWorkspace && (
+                                        <div
+                                          className="corner-squircle mx-1 mb-1 flex gap-2 rounded-md border border-amber-300/90 bg-amber-100/90 px-2 py-2 text-xs text-amber-950 dark:border-amber-700 dark:bg-amber-900/45 dark:text-amber-50"
+                                          role="status"
+                                        >
+                                          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-400" />
+                                          <p className="leading-snug">
+                                            This file is not inside the workspace
+                                            folder open in the Files sidebar.
+                                          </p>
+                                        </div>
+                                      )}
+                                      <CommandInput
+                                        ref={recentFilesCommandInputRef}
+                                        placeholder="Search recent files..."
+                                      />
+                                      <CommandEmpty>
+                                        No recent files found.
+                                      </CommandEmpty>
+                                      <CommandList>
+                                        <CommandGroup heading="Recent Files">
+                                          {recentFiles.map((file, index) => (
+                                            <CommandItem
+                                              key={`${file.path}-${index}`}
+                                              value={file.path}
+                                              onSelect={() => {
+                                                recentFilesShortcutActiveRef.current =
+                                                  false;
+                                                setRecentFilesTooltipOpen(false);
+                                                handleFileSelect(file);
+                                                setOpen(false);
+                                                if (
+                                                  shouldFocusEditorAfterRecentFileSelect(
+                                                    file,
+                                                  )
+                                                ) {
+                                                  requestEditorFocus();
+                                                }
+                                              }}
+                                              className="flex items-center gap-2"
+                                            >
+                                              <FileIcon filename={file.name} />
+                                              <div className="flex flex-col min-w-0 flex-1">
+                                                <span className="truncate font-medium">
+                                                  {file.name}
+                                                </span>
+                                                <span className="text-xs text-muted-foreground truncate">
+                                                  {file.path}
+                                                </span>
+                                              </div>
+                                              {currentFile.path === file.path && (
+                                                <Check className="h-4 w-4 text-green-500" />
+                                              )}
+                                            </CommandItem>
+                                          ))}
+                                        </CommandGroup>
+                                      </CommandList>
+                                    </Command>
+                                  </PopoverContent>
+                                </Popover>
+                              )}
+                              {/* Save File Button */}
+                              {currentFile.path && kernelService && (
+                                <>
+                                  <ToolbarButton
+                                    onClick={handleSave}
+                                    toolTipLabel="Save File"
+                                    toolTipShortcut={[[CmdOrCtrl, "S"]]}
+                                  >
+                                    <div className="relative w-4 h-4">
+                                      <Save
+                                        className={cn(
+                                          "h-4 w-4 absolute transition-all duration-300",
+                                          isSaved
+                                            ? "opacity-0 scale-0 rotate-45"
+                                            : "opacity-100 scale-100 rotate-0",
+                                        )}
+                                      />
+                                      <Check
+                                        className={cn(
+                                          "h-4 w-4 absolute text-green-500 transition-all duration-300",
+                                          isSaved
+                                            ? "opacity-100 scale-100 rotate-0"
+                                            : "opacity-0 scale-0 rotate-45",
+                                        )}
+                                      />
+                                    </div>
+                                  </ToolbarButton>
+                                </>
+                              )}
+                              {currentFile.path && ActiveEditorToolbar ? (
+                                <ActiveEditorToolbar
+                                  currentKernel={currentKernel}
+                                  kernelStatus={kernelStatus}
+                                  isRunning={isRunning}
+                                  presentationHideAllCellInputs={
+                                    effectiveSettings.notebook
+                                      .presentationHideAllCellInputs
+                                  }
+                                  onRunAll={handleRunAll}
+                                  onStopKernel={handleStopKernel}
+                                  onRestartKernel={handleRestartKernel}
+                                  onRestartAndRunAll={handleRestartAndRunAll}
+                                  onTogglePresentationHideAllCellInputs={
+                                    handleTogglePresentationHideAllCellInputs
+                                  }
+                                />
+                              ) : null}
+                            </div>
+                            <div className="flex shrink-0 items-center gap-2">
+                              {/* Jupyter Server Connection */}
+                              {currentKernel ? (
+                                <DropdownMenu
+                                  open={isKernelDropdownOpen}
+                                  modal={false}
+                                  onOpenChange={setIsKernelDropdownOpen}
+                                >
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-8 gap-1.5 px-2 text-sm font-normal"
+                                      title={
+                                        currentKernel.displayName ||
+                                        currentKernel.name
+                                      }
+                                    >
+                                      {getStatusIcon()}
+                                      <KernelIcon
+                                        language={currentKernel.language}
+                                        name={currentKernel.name}
+                                        size={16}
+                                      />
+                                      <ChevronDown className="h-3.5 w-3.5 opacity-60" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end" className="w-56">
+                                    <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                                      {currentKernel.displayName ||
+                                        currentKernel.name}
+                                    </DropdownMenuLabel>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                      onClick={() => handleKernelSelect("change")}
+                                    >
+                                      <span>Change Jupyter Server</span>
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      onClick={handleDisconnect}
+                                      className="text-destructive focus:text-destructive"
+                                    >
+                                      <span>Disconnect</span>
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              ) : (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-8 gap-1.5 px-2.5 text-sm font-normal"
+                                  onClick={openConnectionDialog}
+                                >
+                                  {getStatusIcon()}
+                                  <span className="max-w-[120px] truncate">
+                                    {getKernelDisplayName()}
+                                  </span>
+                                </Button>
+                              )}
+                              <Separator
+                                orientation="vertical"
+                                className="h-6 bg-toolbar-separator-foreground"
+                              />
+                              <ToolbarButton
+                                onClick={toggleFocusMode}
+                                aria-pressed={isFocusMode}
+                                className={cn(
+                                  isFocusMode &&
+                                  "bg-accent text-foreground hover:bg-accent",
+                                )}
+                                toolTipLabel={
+                                  isFocusMode ? "Exit Focus Mode" : "Enter Focus Mode"
+                                }
+                                toolTipShortcut={[[AltOrOption, "Z"]]}
+                              >
+                                <Scan className="h-4 w-4" />
+                              </ToolbarButton>
+                              <ToolbarButton
+                                onClick={toggleRightSidebar}
+                                toolTipLabel={
+                                  rightSidebarCollapsed ? "Show Chat" : "Hide Chat"
+                                }
+                                toolTipShortcut={[[AltOrOption, "2"]]}
+                              >
+                                <MessagesSquare className="h-4 w-4" />
+                              </ToolbarButton>
+                              <SettingsMenu />
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex flex-1 flex-col min-h-0 overflow-hidden no-overscroll-x no-overscroll-y">
+                          <Editor
+                            filepath={currentFile.path}
+                            openNotebookAsText={currentFile.openAsText === true}
+                            hasWorkspace={hasWorkspaceOpen}
+                            hasServerConnection={hasServerConnection}
+                            onConnectServer={openConnectionDialog}
+                            workspaceDirectory={workspaceDirectory}
+                            recentFiles={recentFiles}
+                            onOpenFile={handleFileSelect}
+                            onWorkspaceChange={setWorkspaceDirectory}
+                            // Pass kernel related props
+                            kernelService={kernelService}
+                            currentKernel={currentKernel}
+                            kernelStatus={kernelStatus}
+                            isRunning={isRunning}
+                            executionCountRef={executionCountRef}
+                            onKernelStatusChange={setKernelStatus}
+                            onCurrentKernelChange={setCurrentKernel}
+                            onIsRunningChange={setIsRunning}
+                            onNotebookChange={setNotebook}
+                            onUnsavedChangesChange={setHasUnsavedChanges}
+                            presentationHideAllCellInputs={
+                              effectiveSettings.notebook.presentationHideAllCellInputs
+                            }
+                            onFileLoadError={handleEditorFileLoadError}
+                          />
+                        </div>
+                      </div>
+                    </ResizablePanel>
+
+                    <ResizableHandle className="bg-transparent border-none h-0 transition-all data-[panel-group-direction=vertical]:h-0" />
+
+                    {/* Bottom Panel - Terminal */}
+                    <ResizablePanel
+                      ref={bottomPanelRef}
+                      defaultSize={verticalPanelSizes[1]}
+                      minSize={20}
+                      collapsible={true}
+                      onCollapse={handleBottomCollapse}
+                      onExpand={handleBottomExpand}
+                    >
+                      <TerminalPanel
+                        kernelService={kernelService}
+                        onOpenKernelDropdown={
+                          !currentKernel
+                            ? openConnectionDialog
+                            : () => setIsKernelDropdownOpen(true)
+                        }
+                      />
+                    </ResizablePanel>
+                  </ResizablePanelGroup>
+                </ResizablePanel>
+
+                <ResizableHandle variant="sidebar" />
+
+                {/* Right Sidebar Panel */}
                 <ResizablePanel
-                  ref={bottomPanelRef}
-                  defaultSize={verticalPanelSizes[1]}
-                  minSize={20}
+                  ref={rightPanelRef}
+                  className="min-w-0 overflow-hidden"
+                  defaultSize={horizontalPanelSizes[2]}
+                  minSize={10}
+                  maxSize={40}
                   collapsible={true}
-                  onCollapse={handleBottomCollapse}
-                  onExpand={handleBottomExpand}
+                  onCollapse={handleRightCollapse}
+                  onExpand={handleRightExpand}
                 >
-                  <TerminalPanel
+                  <AssistantProvider
                     kernelService={kernelService}
-                    onOpenKernelDropdown={
-                      !currentKernel
-                        ? openConnectionDialog
-                        : () => setIsKernelDropdownOpen(true)
-                    }
-                  />
+                    notebook={notebook}
+                    workspaceDirectory={workspaceDirectory ?? undefined}
+                    onAgentNotebookChange={() => {
+                      window.dispatchEvent(new CustomEvent("agentNotebookModified"));
+                    }}
+                  >
+                    <div
+                      ref={rightSidebarRevealRef}
+                      className="relative h-full overflow-hidden bg-sidebar"
+                      onPointerEnter={() => setFocusRightHovered(true)}
+                      onPointerLeave={() => setFocusRightHovered(false)}
+                      onFocus={() => setFocusRightFocused(true)}
+                      onBlur={handleSidebarRevealBlur(setFocusRightFocused)}
+                    >
+                      <div
+                        className={cn(
+                          "relative h-full transition-opacity duration-300",
+                          isRightSidebarContentHidden &&
+                          "pointer-events-none opacity-0",
+                        )}
+                        aria-hidden={isRightSidebarContentHidden}
+                      >
+                        <RightSidebar
+                          activeNotebookPath={currentFile.path}
+                          activeNotebook={notebook}
+                          kernelService={kernelService}
+                          kernelStatus={kernelStatus}
+                          onOpenKernelDropdown={
+                            !currentKernel
+                              ? openConnectionDialog
+                              : () => setIsKernelDropdownOpen(true)
+                          }
+                          workspaceDirectory={workspaceDirectory ?? undefined}
+                          recentFiles={recentFiles}
+                          onOpenFile={handleFileSelect}
+                        />
+                      </div>
+                    </div>
+                  </AssistantProvider>
                 </ResizablePanel>
               </ResizablePanelGroup>
-            </ResizablePanel>
+            ) : null}
 
-            <ResizableHandle variant="sidebar" />
+            <KernelConnectionDialog
+              open={showConnectionDialog}
+              onOpenChange={setShowConnectionDialog}
+              onConnect={handleConnectToKernelUrlDialog}
+              error={connectionError}
+            />
 
-            {/* Right Sidebar Panel */}
-            <ResizablePanel
-              ref={rightPanelRef}
-              className="min-w-0 overflow-hidden"
-              defaultSize={horizontalPanelSizes[2]}
-              minSize={10}
-              maxSize={40}
-              collapsible={true}
-              onCollapse={handleRightCollapse}
-              onExpand={handleRightExpand}
-            >
-              <AssistantProvider
-                kernelService={kernelService}
-                notebook={notebook}
-                workspaceDirectory={workspaceDirectory ?? undefined}
-                onAgentNotebookChange={() => {
-                  window.dispatchEvent(new CustomEvent("agentNotebookModified"));
-                }}
-              >
-                <div
-                  ref={rightSidebarRevealRef}
-                  className="relative h-full overflow-hidden bg-sidebar"
-                  onPointerEnter={() => setFocusRightHovered(true)}
-                  onPointerLeave={() => setFocusRightHovered(false)}
-                  onFocus={() => setFocusRightFocused(true)}
-                  onBlur={handleSidebarRevealBlur(setFocusRightFocused)}
-                >
-                  <div
-                    className={cn(
-                      "relative h-full transition-opacity duration-300",
-                      isRightSidebarContentHidden &&
-                      "pointer-events-none opacity-0",
-                    )}
-                    aria-hidden={isRightSidebarContentHidden}
-                  >
-                    <RightSidebar
-                      activeNotebookPath={currentFile.path}
-                      activeNotebook={notebook}
-                      kernelService={kernelService}
-                      kernelStatus={kernelStatus}
-                      onOpenKernelDropdown={
-                        !currentKernel
-                          ? openConnectionDialog
-                          : () => setIsKernelDropdownOpen(true)
-                      }
-                      workspaceDirectory={workspaceDirectory ?? undefined}
-                      recentFiles={recentFiles}
-                      onOpenFile={handleFileSelect}
-                    />
-                  </div>
-                </div>
-              </AssistantProvider>
-            </ResizablePanel>
-          </ResizablePanelGroup>
-          ) : null}
-
-          <KernelConnectionDialog
-            open={showConnectionDialog}
-            onOpenChange={setShowConnectionDialog}
-            onConnect={handleConnectToKernelUrlDialog}
-            error={connectionError}
-          />
-
-          {/* Unsaved changes (reload, switch file, close) */}
-          <EditorReloadDialog
-            open={unsavedDialogIntent !== null}
-            filename={currentFile.name || undefined}
-            onSave={handleUnsavedDialogSave}
-            onDiscard={handleUnsavedDialogDiscard}
-            onCancel={() => setUnsavedDialogIntent(null)}
-          />
-        </div>
+            {/* Unsaved changes (reload, switch file, close) */}
+            <EditorReloadDialog
+              open={unsavedDialogIntent !== null}
+              filename={currentFile.name || undefined}
+              onSave={handleUnsavedDialogSave}
+              onDiscard={handleUnsavedDialogDiscard}
+              onCancel={() => setUnsavedDialogIntent(null)}
+            />
+          </div>
+        </MarkdownEditorViewModeProvider>
       </NotebookViewModeProvider>
     </OpenSettingsProvider>
   );

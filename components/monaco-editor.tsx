@@ -376,6 +376,15 @@ export function MonacoEditor({
     return () => window.removeEventListener("orion:navigateToLine", handler);
   }, []);
 
+  // Focus the editor when the recent-files combobox commits a selection
+  useEffect(() => {
+    const handler = () => {
+      editorInstanceRef.current?.focus();
+    };
+    window.addEventListener("orion:focusEditor", handler);
+    return () => window.removeEventListener("orion:focusEditor", handler);
+  }, []);
+
   // Update theme when app theme changes
   useEffect(() => {
     if (isEditorReady && editorInstanceRef.current) {

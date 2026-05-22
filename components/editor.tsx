@@ -1,32 +1,29 @@
 "use client";
 
-import {
-  useState,
-  useEffect,
-  useCallback,
-  useRef,
-  type ReactNode,
-} from "react";
-import { NotebookEditor } from "@/components/notebook/notebook-editor";
-import { MonacoEditor } from "@/components/monaco-editor";
+import { useEffect } from "react";
+
+import { EmptyEditorCard } from "@/components/empty-editor-card";
 import { WelcomeInstructionsCard } from "@/components/welcome-instructions-card";
-import type { Monaco } from "@monaco-editor/react";
-import { extname } from "path";
 import {
   Dialog,
   DialogContent,
-  DialogHeader,
-  DialogTitle,
   DialogDescription,
   DialogFooter,
+  DialogHeader,
+  DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { resolveOrionEditorDefinition } from "@/components/editors/editor-definitions";
+import { useTextFileModel } from "@/components/editors/use-text-file-model";
 import type { KernelStatus, KernelInfo, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { Dispatch, SetStateAction, MutableRefObject } from "react";
-import { isSkillDefinitionPath } from "@/lib/skills/paths";
-import { getMonacoLanguageForFilepath } from "@/lib/editor/monaco-language";
-import { useNotebookViewMode } from "@/contexts/notebook-view-mode-context";
+
+interface EditorFileReference {
+  name: string;
+  path: string;
+  openAsText?: boolean;
+}
 
 interface EditorProps {
   /**
@@ -54,6 +51,14 @@ interface EditorProps {
   hasWorkspace?: boolean;
   hasServerConnection?: boolean;
   onConnectServer?: () => void;
+  /** Currently selected workspace folder path, or null when no workspace is open. */
+  workspaceDirectory?: string | null;
+  /** Files to show in the connected empty-editor state. */
+  recentFiles?: EditorFileReference[];
+  /** Opens a file from the connected empty-editor state. */
+  onOpenFile?: (file: EditorFileReference) => void;
+  /** Changes the selected workspace from the connected empty-editor state. */
+  onWorkspaceChange?: (path: string) => void;
   /**
    * Notebook only: hide all code cell inputs in the UI without persisting to metadata.
    */
@@ -61,10 +66,9 @@ interface EditorProps {
 }
 
 /**
- * Component that handles rendering different types of files based on their extension
- * Currently supports .ipynb files and other text files via Monaco Editor.
- * Language for text files is inferred using Monaco's language services.
- * A dialog is shown if there's an error reading the file.
+ * Resolves and renders the active Orion editor for the selected file.
+ * Notebooks use the notebook editor; Markdown and text files share Monaco-backed
+ * text state for loading, saving, and dirty tracking.
  */
 export function Editor({
   filepath,
@@ -83,157 +87,31 @@ export function Editor({
   hasWorkspace = false,
   hasServerConnection = false,
   onConnectServer,
+  workspaceDirectory,
+  recentFiles,
+  onOpenFile,
+  onWorkspaceChange,
   presentationHideAllCellInputs,
 }: EditorProps) {
-  const { notebookViewMode, setNotebookViewMode } = useNotebookViewMode();
-  const [fileContent, setFileContent] = useState<string>("");
-  const [fileLanguage, setFileLanguage] = useState<string>("plaintext");
-  const [showErrorDialog, setShowErrorDialog] = useState<boolean>(false);
-  const [errorDialogMessage, setErrorDialogMessage] = useState<string>("");
+  const activeEditor = resolveOrionEditorDefinition({
+    path: filepath ?? undefined,
+    openAsText: openNotebookAsText,
+  });
+  const isTextBackedEditor =
+    activeEditor?.id === "text" || activeEditor?.id === "markdown";
 
-  // Tracks whether the Monaco-based file has unsaved changes (not used for notebooks)
-  const isMonacoDirtyRef = useRef(false);
-
-  /** Marks the Monaco file as dirty and notifies parent (once per transition). */
-  const markMonacoDirty = useCallback(() => {
-    if (!isMonacoDirtyRef.current) {
-      isMonacoDirtyRef.current = true;
-      onUnsavedChangesChange?.(true);
-    }
-  }, [onUnsavedChangesChange]);
-
-  /** Marks the Monaco file as clean and notifies parent (once per transition). */
-  const markMonacoClean = useCallback(() => {
-    if (isMonacoDirtyRef.current) {
-      isMonacoDirtyRef.current = false;
-      onUnsavedChangesChange?.(false);
-    }
-  }, [onUnsavedChangesChange]);
-
-  /** Extension from path (synchronous). Must match render branch; do not rely on effect-updated state. */
-  const pathExtension = filepath
-    ? extname(filepath).slice(1).toLowerCase()
-    : "";
-
-  useEffect(() => {
-    const loadFile = async () => {
-      if (filepath && kernelService) {
-        const currentExt = pathExtension;
-        if (currentExt === "ipynb" && !openNotebookAsText) {
-          return; // Notebook files are handled by the NotebookEditor component
-        }
-
-        try {
-          setFileLanguage(
-            currentExt === "ipynb" && openNotebookAsText
-              ? "json"
-              : getMonacoLanguageForFilepath(filepath),
-          );
-
-          // Read file content via Jupyter's ContentsManager
-          const contentsManager = kernelService.getContentsManager();
-          const model = await contentsManager.get(
-            filepath,
-            currentExt === "ipynb" && openNotebookAsText
-              ? { content: true }
-              : { content: true, format: "text" },
-          );
-          const content =
-            typeof model.content === "string"
-              ? model.content
-              : JSON.stringify(model.content, null, 2);
-          setFileContent(content);
-          // File just loaded — no unsaved changes
-          isMonacoDirtyRef.current = false;
-          onUnsavedChangesChange?.(false);
-        } catch (error) {
-          console.error("Error loading or processing file:", error);
-          const handledExternally = onFileLoadError?.(filepath) === true;
-          if (handledExternally) {
-            return;
-          }
-          const message =
-            error instanceof Error
-              ? error.message
-              : "An unknown error occurred.";
-          setErrorDialogMessage(
-            `Failed to load file '${filepath}'. Reason: ${message}`,
-          );
-          setShowErrorDialog(true); // Show dialog for file read error
-        }
-      } else {
-        // Clear content if no filepath or kernelService
-        setFileContent("");
-        setFileLanguage("plaintext");
-        isMonacoDirtyRef.current = false;
-        onUnsavedChangesChange?.(false);
-      }
-    };
-
-    loadFile();
-  }, [
-    filepath,
-    pathExtension,
+  const textFileModel = useTextFileModel({
+    filepath: isTextBackedEditor ? filepath : null,
+    openNotebookAsText,
     kernelService,
-    onFileLoadError,
     onUnsavedChangesChange,
-    openNotebookAsText,
-  ]);
+    onFileLoadError,
+  });
+  const saveTextFile = textFileModel.saveFile;
 
-  /**
-   * Saves the current file content via Jupyter's ContentsManager
-   */
-  const saveFile = useCallback(async () => {
-    // Notebooks saving is handled by the NotebookEditor unless opened as text.
-    if (
-      kernelService &&
-      filepath &&
-      (pathExtension !== "ipynb" || openNotebookAsText)
-    ) {
-      if (!isMonacoDirtyRef.current) {
-        return;
-      }
-      try {
-        const contentsManager = kernelService.getContentsManager();
-        if (pathExtension === "ipynb" && openNotebookAsText) {
-          await contentsManager.save(filepath, {
-            type: "notebook",
-            format: "json",
-            content: JSON.parse(fileContent) as unknown,
-          });
-        } else {
-          await contentsManager.save(filepath, {
-            type: "file",
-            format: "text",
-            content: fileContent,
-          });
-        }
-        markMonacoClean();
-        if (isSkillDefinitionPath(filepath)) {
-          window.dispatchEvent(
-            new CustomEvent("orion:skills-changed", {
-              detail: { path: filepath },
-            }),
-          );
-        }
-        console.log("File saved successfully");
-      } catch (error) {
-        console.error("Error saving file:", error);
-      }
-    }
-  }, [
-    kernelService,
-    filepath,
-    pathExtension,
-    openNotebookAsText,
-    fileContent,
-    markMonacoClean,
-  ]);
-
-  // Listen for save file events
   useEffect(() => {
     const handleSaveFile = () => {
-      saveFile();
+      void saveTextFile();
     };
 
     window.addEventListener("saveFile", handleSaveFile as EventListener);
@@ -241,123 +119,66 @@ export function Editor({
     return () => {
       window.removeEventListener("saveFile", handleSaveFile as EventListener);
     };
-  }, [saveFile]);
+  }, [saveTextFile]);
 
-  /**
-   * Dispatches a custom event to the TerminalPanel requesting code execution.
-   * For .R and .py files, includes a preLaunch command so a new terminal
-   * automatically starts the appropriate REPL before pasting the code.
-   */
-  const handleRunInTerminal = useCallback(
-    (code: string) => {
-      const preLaunch =
-        pathExtension === "r"
-          ? "R"
-          : pathExtension === "py"
-            ? "python"
-            : undefined;
-      window.dispatchEvent(
-        new CustomEvent("orion:run-in-terminal", {
-          detail: { code, preLaunch },
-        }),
-      );
-    },
-    [pathExtension],
-  );
-
-  /** Re-resolve language once Monaco is mounted (extension lookup needs its registry). */
-  const handleMonacoMount = useCallback(
-    (_editor: unknown, monaco: Monaco) => {
-      if (filepath) {
-        setFileLanguage(getMonacoLanguageForFilepath(filepath, monaco));
-      }
-    },
-    [filepath],
-  );
-
-  const FileOperationErrorDialog = () => {
-    return (
-      <Dialog open={showErrorDialog} onOpenChange={setShowErrorDialog}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>File Operation Error</DialogTitle>
-            <DialogDescription>{errorDialogMessage}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button onClick={() => setShowErrorDialog(false)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    );
-  };
-
-  let editorContent: ReactNode = null;
-
-  if (filepath) {
-    if (pathExtension === "ipynb" && !openNotebookAsText) {
-      editorContent = (
-        <NotebookEditor
-          filepath={filepath}
-          // Pass through kernel props
-          kernelService={kernelService}
-          currentKernel={currentKernel}
-          kernelStatus={kernelStatus}
-          isRunning={isRunning}
-          executionCountRef={executionCountRef}
-          onKernelStatusChange={onKernelStatusChange}
-          onCurrentKernelChange={onCurrentKernelChange}
-          onIsRunningChange={onIsRunningChange}
-          onNotebookChange={onNotebookChange}
-          onUnsavedChangesChange={onUnsavedChangesChange}
-          presentationHideAllCellInputs={presentationHideAllCellInputs}
-          activeNotebookView={notebookViewMode}
-          onActiveNotebookViewChange={setNotebookViewMode}
-        />
-      );
-    } else {
-      editorContent = (
-        <MonacoEditor
-          value={fileContent}
-          onChange={(value) => {
-            setFileContent(value);
-            markMonacoDirty();
-          }}
-          language={fileLanguage}
-          lightThemeOverride={{
-            colors: {
-              "editor.background": "#F5F5F5",
-            },
-          }}
-          darkThemeOverride={{
-            colors: {
-              "editor.background": "#131316",
-            },
-          }}
-          height="100%"
-          className="w-full h-full"
-          isNotebook={false}
-          onRunInTerminal={handleRunInTerminal}
-          onMount={handleMonacoMount}
-          referencePath={filepath}
-        />
-      );
-    }
-  } else if (!hasServerConnection || !hasWorkspace) {
-    editorContent = (
+  const ActiveEditor = activeEditor?.Editor;
+  const editorContent =
+    filepath && ActiveEditor ? (
+      <ActiveEditor
+        filepath={filepath}
+        openNotebookAsText={openNotebookAsText}
+        kernelService={kernelService}
+        currentKernel={currentKernel}
+        kernelStatus={kernelStatus}
+        isRunning={isRunning}
+        executionCountRef={executionCountRef}
+        onKernelStatusChange={onKernelStatusChange}
+        onCurrentKernelChange={onCurrentKernelChange}
+        onIsRunningChange={onIsRunningChange}
+        onNotebookChange={onNotebookChange}
+        onUnsavedChangesChange={onUnsavedChangesChange}
+        presentationHideAllCellInputs={presentationHideAllCellInputs}
+        textFileModel={textFileModel}
+      />
+    ) : !hasServerConnection || !hasWorkspace ? (
       <WelcomeInstructionsCard
         jupyterConnected={hasServerConnection}
         workspaceOpen={hasWorkspace}
         onConnectServer={onConnectServer}
       />
+    ) : (
+      <EmptyEditorCard
+        kernelService={kernelService}
+        recentFiles={recentFiles}
+        workspaceDirectory={workspaceDirectory}
+        onOpenFile={onOpenFile}
+        onWorkspaceChange={onWorkspaceChange}
+      />
     );
-  }
 
   return (
     <>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-sidebar">
         {editorContent}
       </div>
-      <FileOperationErrorDialog />
+      <Dialog
+        open={textFileModel.showErrorDialog}
+        onOpenChange={textFileModel.setShowErrorDialog}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>File Operation Error</DialogTitle>
+            <DialogDescription>
+              {textFileModel.errorDialogMessage}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => textFileModel.setShowErrorDialog(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

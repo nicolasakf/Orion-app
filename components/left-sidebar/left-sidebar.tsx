@@ -72,6 +72,10 @@ import {
   MIN_REFRESH_SPIN_MS,
 } from "@/lib/utils";
 import { openFile } from "@/lib/shell/system-commands/open-file";
+import {
+  getWorkspaceFilesChangedDetail,
+  WORKSPACE_FILES_CHANGED_EVENT,
+} from "@/lib/workspace/workspace-events";
 
 /**
  * Accordion header actions: do not pass `size="sm"` on ToolbarButton — it
@@ -665,6 +669,26 @@ export function LeftSidebar({
     window.addEventListener("agentNotebookCreated", handleAgentCreated);
     return () => window.removeEventListener("agentNotebookCreated", handleAgentCreated);
   }, [refreshFileTree, refreshFolder, workspaceDirectory]);
+
+  // Refresh the visible tree after non-sidebar create actions change a folder.
+  useEffect(() => {
+    const handleWorkspaceFilesChanged = (event: Event) => {
+      const detail = getWorkspaceFilesChangedDetail(event);
+      if (!detail) return;
+      void refreshFolder(detail.folderPath);
+    };
+
+    window.addEventListener(
+      WORKSPACE_FILES_CHANGED_EVENT,
+      handleWorkspaceFilesChanged
+    );
+    return () => {
+      window.removeEventListener(
+        WORKSPACE_FILES_CHANGED_EVENT,
+        handleWorkspaceFilesChanged
+      );
+    };
+  }, [refreshFolder]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

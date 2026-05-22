@@ -487,6 +487,14 @@ export function NotebookEditor({
     [applySelectionState, cellCursorId, selectedCellIds],
   );
 
+  useEffect(() => {
+    const handler = () => {
+      focusNotebookCommandTarget(cellCursorId);
+    };
+    window.addEventListener("orion:focusEditor", handler);
+    return () => window.removeEventListener("orion:focusEditor", handler);
+  }, [cellCursorId, focusNotebookCommandTarget]);
+
   /** Selects multiple current notebook cells by array index. */
   const selectCellsByIndices = useCallback(
     (cellIndices: Iterable<number>) => {
