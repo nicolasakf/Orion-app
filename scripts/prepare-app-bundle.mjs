@@ -34,6 +34,7 @@ async function main() {
   await copyRequiredDirectory(standaloneDir, bundleDir, "Standalone build");
   await copyRequiredDirectory(staticDir, join(bundleDir, ".next", "static"), "Static assets");
   await copyRequiredDirectory(publicDir, join(bundleDir, "public"), "Public assets");
+  await rm(join(bundleDir, "logs"), { recursive: true, force: true });
 
   console.log(`Orion app bundle prepared at ${bundleDir}`);
 }
