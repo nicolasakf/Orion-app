@@ -9,7 +9,6 @@ import {
   Orbit,
   Plus,
   FilePlusCorner,
-  FolderPlus,
   Trash2,
   Pencil,
   FolderSearch,
@@ -19,6 +18,7 @@ import {
 import { toast } from "sonner";
 import { DEFAULT_SETTINGS } from "@/lib/settings/defaults";
 import { cn } from "@/lib/utils";
+import { CustomIcon } from "@/components/common/custom-icon";
 import { FileIcon } from "@/components/common/file-icon";
 import {
   DropdownMenu,
@@ -600,7 +600,7 @@ function FileTreeNode({
                       setShowFolderDialog(true);
                     }}
                   >
-                    <FolderPlus className="mr-2 h-4 w-4" />
+                    <CustomIcon filename="folder-plus-corner" className="mr-2 h-4 w-4" />
                     New folder
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -631,7 +631,7 @@ function FileTreeNode({
                   setShowFolderDialog(true);
                 }}
               >
-                <FolderPlus className="mr-2 h-4 w-4" />
+                <CustomIcon filename="folder-plus-corner" className="mr-2 h-4 w-4" />
                 New folder
               </ContextMenuItem>
             </>
