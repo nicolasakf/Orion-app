@@ -32,6 +32,8 @@ next-env.d.ts
 # python
 __pycache__/
 *.pyc
+python/dist/
+*.egg-info/
 
 # mac
 .DS_Store
