@@ -25,6 +25,12 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { XTermTerminal } from "./xterm-terminal";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { useJupyterShellReady } from "@/hooks/use-jupyter-shell-ready";
@@ -355,6 +361,45 @@ export function TerminalPanel({
     [kernelService, pool]
   );
 
+  /** Close every agent terminal shown in the agent tabs dropdown. */
+  const handleCloseAllAgentTerminals = useCallback(async () => {
+    if (!kernelService) return;
+
+    const agentNames = terminals
+      .filter((terminal) => terminal.createdBy === "agent")
+      .map((terminal) => terminal.name);
+    if (agentNames.length === 0) return;
+
+    await Promise.allSettled(
+      agentNames.map(async (name) => {
+        try {
+          if (pool) {
+            await pool.closeTerminal(name);
+          } else {
+            await kernelService.closeTerminal(name);
+          }
+        } catch {
+          // Terminal may already be gone
+        }
+      })
+    );
+
+    if (!pool) {
+      setTerminals((prev) => {
+        const updated = prev.filter((terminal) => terminal.createdBy !== "agent");
+        setActiveTerminalName((current) => {
+          if (current && updated.some((terminal) => terminal.name === current)) {
+            return current;
+          }
+          return updated.length > 0 ? updated[0].name : null;
+        });
+        return updated;
+      });
+    }
+
+    setIsAgentDropdownOpen(false);
+  }, [kernelService, pool, terminals]);
+
   const userTerminals = terminals.filter((terminal) => terminal.createdBy === "user");
   const agentTerminals = terminals.filter((terminal) => terminal.createdBy === "agent");
   const activeUserTerminalName = userTerminals.some(
@@ -521,13 +566,35 @@ export function TerminalPanel({
                     <ChevronDown className="h-3 w-3" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-48 p-0" align="start">
+                <PopoverContent className="w-52 p-0" align="start">
                   <Command>
-                    <CommandInput
-                      placeholder="Search agent terminals..."
-                      className="h-8 rounded-none text-xs"
-
-                    />
+                    <div className="flex items-center border-b [&_[cmdk-input-wrapper]]:border-0">
+                      <CommandInput
+                        placeholder="Search agent terminals..."
+                        className="h-8 flex-1 rounded-none text-xs"
+                      />
+                      <TooltipProvider delayDuration={250}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button
+                              variant="destructive"
+                              size="icon"
+                              className="mr-1 h-7 w-7 shrink-0 bg-transparent text-muted-foreground hover:bg-transparent hover:text-destructive"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                void handleCloseAllAgentTerminals();
+                              }}
+                              aria-label="Close all agent terminals"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">
+                            <p>Close all agent terminals</p>
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    </div>
                     <CommandEmpty>No agent terminals found.</CommandEmpty>
                     <CommandList className="max-h-[220px] overflow-y-auto">
                       <CommandGroup>
