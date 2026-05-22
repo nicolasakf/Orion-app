@@ -1,0 +1,72 @@
+// @vitest-environment node
+
+import { describe, expect, it } from "vitest";
+
+import {
+  buildCreateVenvCommand,
+  buildInstallPackagesCommand,
+  discoverPythonRuntime,
+  getManagedPackageSet,
+  getPythonDiscoveryCandidates,
+  getPythonSupport,
+  parsePythonVersion,
+  type PythonCandidate,
+} from "@/lib/cli/python";
+
+describe("CLI Python runtime", () => {
+  it("classifies Python versions for Orion support", () => {
+    expect(parsePythonVersion("Python 3.11.8")).toEqual([3, 11, 8]);
+    expect(getPythonSupport([3, 9, 0])).toBe("preferred");
+    expect(getPythonSupport([3, 8, 18])).toBe("legacy");
+    expect(getPythonSupport([3, 7, 17])).toBe("unsupported");
+  });
+
+  it("prefers Python 3.9+ over Python 3.8", async () => {
+    const candidates: PythonCandidate[] = [
+      { label: "legacy", command: "python3.8", argsPrefix: [] },
+      { label: "preferred", command: "python3.11", argsPrefix: [] },
+    ];
+
+    const runtime = await discoverPythonRuntime(candidates, async (command) => {
+      const version = command === "python3.8" ? [3, 8, 18] : [3, 11, 8];
+      return {
+        stdout: JSON.stringify({ executable: `/bin/${command}`, version }),
+        stderr: "",
+      };
+    });
+
+    expect(runtime?.candidate.label).toBe("preferred");
+  });
+
+  it("uses stdlib venv and pip commands, not uv", () => {
+    const runtime = {
+      candidate: { label: "python3", command: "python3", argsPrefix: [] },
+      executable: "/usr/bin/python3",
+      version: [3, 11, 8] as [number, number, number],
+      support: "preferred" as const,
+    };
+    const packageSet = getManagedPackageSet(runtime.support);
+
+    expect(buildCreateVenvCommand(runtime, "/tmp/orion/venv")).toEqual({
+      command: "python3",
+      args: ["-m", "venv", "/tmp/orion/venv"],
+    });
+    expect(buildInstallPackagesCommand("/tmp/orion/venv/bin/python", packageSet)).toEqual({
+      command: "/tmp/orion/venv/bin/python",
+      args: ["-m", "pip", "install", "--upgrade", "pip", ...packageSet.packages],
+    });
+    expect(packageSet.packages.join(" ")).not.toContain("uv");
+  });
+
+  it("uses legacy Jupyter pins for Python 3.8", () => {
+    expect(getManagedPackageSet("legacy").packages).toContain(
+      "jupyter_server>=1.24,<2"
+    );
+  });
+
+  it("uses Windows Python launcher candidates on Windows", () => {
+    expect(getPythonDiscoveryCandidates("win32").map((candidate) => candidate.command)).toEqual(
+      ["py", "python", "python3"]
+    );
+  });
+});

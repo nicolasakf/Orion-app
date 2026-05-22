@@ -1,7 +1,25 @@
 {
-  "name": "Orion",
+  "name": "@nicolasakf/orion-agent",
   "version": "0.4.0",
-  "private": true,
+  "description": "Local Orion CLI launcher for notebooks and Jupyter",
+  "license": "Apache-2.0",
+  "private": false,
+  "bin": {
+    "orion": "dist/cli/cli/orion.js"
+  },
+  "files": [
+    "dist/cli",
+    "dist/orion-app",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "next dev -p 3001 --turbopack",
     "build": "next build",
@@ -9,7 +27,12 @@
     "lint": "next lint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "build:cli": "tsc -p tsconfig.cli.json",
+    "prepare:app-bundle": "node scripts/prepare-app-bundle.mjs",
+    "archive:app-bundle": "node scripts/archive-app-bundle.mjs",
+    "prepack": "npm run build && npm run build:cli && npm run prepare:app-bundle && npm run archive:app-bundle",
+    "package:npm": "npm pack --dry-run"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.0",

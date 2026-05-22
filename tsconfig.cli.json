@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "outDir": "dist/cli",
+    "rootDir": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["cli/**/*.ts", "lib/cli/**/*.ts", "lib/kernel/launcher-connection.ts"],
+  "exclude": ["**/*.vitest.test.ts", "**/*.vitest.test.tsx"]
+}
