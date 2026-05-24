@@ -36,7 +36,7 @@ Legacy note:
 
 ### `appView` (object)
 
-Controls notebook app-view grid layout.
+Controls notebook App View layout. Orion supports a legacy grid/canvas layout and a declarative schema layout. When a valid `appView.schema` is present, the declarative renderer takes precedence.
 
 - `appView.grid.cols`: positive integer (`> 0`)
 - `appView.grid.rowHeight`: positive integer (`> 0`)
@@ -51,10 +51,32 @@ Controls notebook app-view grid layout.
     - `w`: positive integer (clamped to `grid.cols`)
     - `h`: positive integer
 
+Declarative schema:
+
+- `appView.schema.version`: literal `1`
+- `appView.schema.primitiveRegistry.source`: literal `"builtin"` only
+- `appView.schema.root`: recursive node object
+  - `type`: one of `Page`, `Stack`, `Grid`, `Section`, `Card`, `Tabs`, `MarkdownCell`, `Output`, `Button`, `Input`, `Textarea`, `Select`, `Slider`, `Checkbox`, `Switch`, `Label`, `Badge`, `Separator`
+  - `props`: optional object; must not contain `className` or `style`
+  - `children`: optional array of child nodes
+
+Common declarative props:
+
+- Layout props: `gap`, `padding`, `columns`, `align`, `title`, `description`, `label`, `value`
+- Notebook references: `cellId`, `outputIndex`
+- Local controls: `stateKey`, `defaultValue`, `placeholder`, `options`, `min`, `max`, `step`, `variant`, `size`
+
+Declarative schema v1 limitations:
+
+- Only built-in primitives are supported.
+- No custom primitive paths, arbitrary React, arbitrary CSS, `className`, or `style`.
+- Local controls do not execute notebook cells or persist state.
+
 Normalization behavior:
 
 - Invalid grid/layout values are normalized or ignored by app-view readers.
 - Runtime currently emits `appView.version = 1`.
+- Invalid declarative schema values render a non-crashing App View error panel.
 
 ## Cell-level fields (`cells[i].metadata.orion`)
 

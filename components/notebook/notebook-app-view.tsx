@@ -5,8 +5,9 @@ import ReactGridLayout, {
   useContainerWidth,
   type Layout,
 } from "react-grid-layout";
-import { GripVertical, LayoutTemplate, X } from "lucide-react";
+import { AlertTriangle, GripVertical, LayoutTemplate, X } from "lucide-react";
 
+import { NotebookAppSchemaView } from "@/components/notebook/notebook-app-schema-view";
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import { OutputRenderer } from "@/components/notebook/output-renderer";
 import { Button } from "@/components/ui/button";
@@ -22,6 +23,7 @@ import {
   getAppViewCells,
   getNotebookAppViewMetadata,
   mergeReactGridLayout,
+  parseNotebookAppViewSchema,
   toReactGridLayout,
   type NotebookAppCell,
   type NotebookAppViewMetadata,
@@ -60,6 +62,46 @@ function layoutItemsEqual(
   });
 }
 
+function AppViewSchemaError({
+  errors,
+  onNotebookViewRequest,
+}: {
+  errors: string[];
+  onNotebookViewRequest?: () => void;
+}): React.JSX.Element {
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center p-6">
+      <Card className="max-w-xl p-5">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-destructive/10 text-destructive">
+            <AlertTriangle className="h-4 w-4" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="text-sm font-medium text-foreground">
+              App View schema could not be rendered
+            </h3>
+            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+              {errors.map((error, index) => (
+                <li key={`${error}-${index}`}>{error}</li>
+              ))}
+            </ul>
+            {onNotebookViewRequest ? (
+              <Button
+                type="button"
+                variant="link"
+                className="mt-4 h-auto p-0 text-sm"
+                onClick={onNotebookViewRequest}
+              >
+                Back to Notebook View
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 /**
  * Renders notebook cells marked for App View as a manually editable dashboard grid.
  */
@@ -70,6 +112,10 @@ export function NotebookAppView({
   onNotebookViewRequest,
 }: NotebookAppViewProps): React.JSX.Element {
   const { width, containerRef, mounted } = useContainerWidth();
+  const schemaResult = useMemo(
+    () => parseNotebookAppViewSchema(notebook.metadata),
+    [notebook.metadata],
+  );
   const appCells = useMemo(
     () => getAppViewCells(notebook.cells),
     [notebook.cells],
@@ -105,6 +151,19 @@ export function NotebookAppView({
     },
     [appView, onAppViewChange],
   );
+
+  if (schemaResult.status === "valid") {
+    return <NotebookAppSchemaView notebook={notebook} schema={schemaResult.schema} />;
+  }
+
+  if (schemaResult.status === "invalid") {
+    return (
+      <AppViewSchemaError
+        errors={schemaResult.errors}
+        onNotebookViewRequest={onNotebookViewRequest}
+      />
+    );
+  }
 
   if (appCells.length === 0) {
     return (

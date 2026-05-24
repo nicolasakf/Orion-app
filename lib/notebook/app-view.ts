@@ -7,8 +7,31 @@ import {
 export const NOTEBOOK_APP_VIEW_VERSION = 1;
 export const NOTEBOOK_APP_GRID_COLUMNS = 24;
 export const NOTEBOOK_APP_GRID_ROW_HEIGHT = 44;
+export const NOTEBOOK_APP_VIEW_SCHEMA_VERSION = 1;
+
+export const BUILTIN_APP_VIEW_PRIMITIVES = [
+  "Page",
+  "Stack",
+  "Grid",
+  "Section",
+  "Card",
+  "Tabs",
+  "MarkdownCell",
+  "Output",
+  "Button",
+  "Input",
+  "Textarea",
+  "Select",
+  "Slider",
+  "Checkbox",
+  "Switch",
+  "Label",
+  "Badge",
+  "Separator",
+] as const;
 
 export type NotebookAppGridTuple = [number, number];
+export type BuiltinAppViewPrimitive = (typeof BUILTIN_APP_VIEW_PRIMITIVES)[number];
 
 export interface NotebookAppGridConfig {
   cols: number;
@@ -50,8 +73,205 @@ export interface ReactGridLayoutItem extends NotebookAppLayoutItem {
   i: string;
 }
 
+export interface NotebookAppViewSchemaPrimitiveRegistry {
+  source: "builtin";
+}
+
+export interface NotebookAppViewSchemaNode {
+  type: BuiltinAppViewPrimitive;
+  props: Record<string, unknown>;
+  children: NotebookAppViewSchemaNode[];
+}
+
+export interface NotebookAppViewSchema {
+  version: typeof NOTEBOOK_APP_VIEW_SCHEMA_VERSION;
+  primitiveRegistry: NotebookAppViewSchemaPrimitiveRegistry;
+  root: NotebookAppViewSchemaNode;
+}
+
+export type NotebookAppViewSchemaParseResult =
+  | { status: "missing" }
+  | { status: "valid"; schema: NotebookAppViewSchema }
+  | { status: "invalid"; errors: string[] };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Checks whether a schema node type is available in the built-in registry. */
+function isBuiltinAppViewPrimitive(
+  value: unknown,
+): value is BuiltinAppViewPrimitive {
+  return (
+    typeof value === "string" &&
+    (BUILTIN_APP_VIEW_PRIMITIVES as readonly string[]).includes(value)
+  );
+}
+
+/** Adds a path-qualified schema validation message. */
+function appendSchemaError(
+  errors: string[],
+  path: string,
+  message: string,
+): void {
+  errors.push(`${path}: ${message}`);
+}
+
+/** Normalizes schema props and rejects unsupported styling escape hatches. */
+function normalizeSchemaProps(
+  value: unknown,
+  path: string,
+  errors: string[],
+): Record<string, unknown> {
+  if (value === undefined) {
+    return {};
+  }
+
+  if (!isRecord(value)) {
+    appendSchemaError(errors, path, "props must be an object when present");
+    return {};
+  }
+
+  if ("className" in value) {
+    appendSchemaError(
+      errors,
+      `${path}.className`,
+      "className is not supported in app-view schema v1",
+    );
+  }
+
+  if ("style" in value) {
+    appendSchemaError(
+      errors,
+      `${path}.style`,
+      "style is not supported in app-view schema v1",
+    );
+  }
+
+  return value;
+}
+
+/** Normalizes a recursive schema node into the renderer's internal shape. */
+function normalizeSchemaNode(
+  value: unknown,
+  path: string,
+  errors: string[],
+): NotebookAppViewSchemaNode | null {
+  if (!isRecord(value)) {
+    appendSchemaError(errors, path, "node must be an object");
+    return null;
+  }
+
+  if (!isBuiltinAppViewPrimitive(value.type)) {
+    appendSchemaError(
+      errors,
+      `${path}.type`,
+      `unknown primitive '${String(value.type)}'`,
+    );
+    return null;
+  }
+
+  const children: NotebookAppViewSchemaNode[] = [];
+  if (value.children !== undefined) {
+    if (!Array.isArray(value.children)) {
+      appendSchemaError(errors, `${path}.children`, "children must be an array");
+    } else {
+      value.children.forEach((child, index) => {
+        const normalized = normalizeSchemaNode(
+          child,
+          `${path}.children[${index}]`,
+          errors,
+        );
+        if (normalized) {
+          children.push(normalized);
+        }
+      });
+    }
+  }
+
+  return {
+    type: value.type,
+    props: normalizeSchemaProps(value.props, `${path}.props`, errors),
+    children,
+  };
+}
+
+/** Reads the raw declarative schema object from notebook metadata. */
+function getRawAppViewSchema(
+  metadata: NotebookType["metadata"] | undefined,
+): unknown {
+  const orion = isRecord(metadata?.orion) ? metadata.orion : {};
+  const appView = isRecord(orion.appView) ? orion.appView : {};
+  return appView.schema;
+}
+
+/**
+ * Parses notebook-level declarative App View schema metadata.
+ */
+export function parseNotebookAppViewSchema(
+  metadata: NotebookType["metadata"] | undefined,
+): NotebookAppViewSchemaParseResult {
+  const rawSchema = getRawAppViewSchema(metadata);
+  if (rawSchema === undefined) {
+    return { status: "missing" };
+  }
+
+  const errors: string[] = [];
+  if (!isRecord(rawSchema)) {
+    return {
+      status: "invalid",
+      errors: ["metadata.orion.appView.schema: schema must be an object"],
+    };
+  }
+
+  if (rawSchema.version !== NOTEBOOK_APP_VIEW_SCHEMA_VERSION) {
+    appendSchemaError(
+      errors,
+      "metadata.orion.appView.schema.version",
+      `version must be ${NOTEBOOK_APP_VIEW_SCHEMA_VERSION}`,
+    );
+  }
+
+  const primitiveRegistry = isRecord(rawSchema.primitiveRegistry)
+    ? rawSchema.primitiveRegistry
+    : {};
+  if (primitiveRegistry.source !== "builtin") {
+    appendSchemaError(
+      errors,
+      "metadata.orion.appView.schema.primitiveRegistry.source",
+      "only 'builtin' is supported",
+    );
+  }
+
+  if (rawSchema.root === undefined) {
+    appendSchemaError(
+      errors,
+      "metadata.orion.appView.schema.root",
+      "root is required",
+    );
+  }
+
+  const root =
+    rawSchema.root === undefined
+      ? null
+      : normalizeSchemaNode(
+          rawSchema.root,
+          "metadata.orion.appView.schema.root",
+          errors,
+        );
+
+  if (errors.length > 0 || !root) {
+    return { status: "invalid", errors };
+  }
+
+  return {
+    status: "valid",
+    schema: {
+      version: NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
+      primitiveRegistry: { source: "builtin" },
+      root,
+    },
+  };
 }
 
 function finiteNumber(value: unknown): number | null {

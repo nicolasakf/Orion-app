@@ -20,9 +20,9 @@ function readBuiltinSkills() {
 }
 
 describe("built-in skills", () => {
-  it("includes Orion settings and chat history skills", () => {
+  it("includes core Orion built-in skills", () => {
     expect(readBuiltinSkills().map((skill) => skill.name)).toEqual(
-      expect.arrayContaining(["orion-settings", "chat-history"])
+      expect.arrayContaining(["create-app", "orion-settings", "chat-history"])
     );
   });
 
