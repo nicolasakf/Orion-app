@@ -41,6 +41,7 @@ interface CliOptions {
   yes: boolean;
   noBrowser: boolean;
   here: boolean;
+  appOnly: boolean;
 }
 
 /** Parses the small option set supported by the Orion CLI. */
@@ -49,6 +50,7 @@ function parseOptions(argv: string[]): CliOptions {
     yes: argv.includes("--yes") || argv.includes("-y"),
     noBrowser: argv.includes("--no-browser"),
     here: argv.includes("--here"),
+    appOnly: argv.includes("--app-only"),
   };
 }
 
@@ -73,7 +75,7 @@ Options:
 
 /** Prints a compact usage message for CLI users. */
 function printUsage(): void {
-  console.log(`Usage: orion [--yes] [--no-browser] [--here]
+  console.log(`Usage: orion [--yes] [--no-browser] [--here] [--app-only]
        orion uninstall [--yes] [--all]
 
 Starts a local Orion app, starts Jupyter Server, and opens Orion already connected.
@@ -82,6 +84,8 @@ Options:
   -y, --yes       Approve Orion-managed setup prompts.
   --no-browser   Start services without opening a browser.
   --here         Start Jupyter from the current directory instead of ~.
+  --app-only     Start only the Orion app (skip Jupyter). Connect to an existing
+                 Jupyter server from the UI, or use a prior handoff file.
 
 Commands:
   uninstall      Remove cached Orion data under ~/.orion before package uninstall.`);
@@ -210,26 +214,34 @@ async function runUninstallCommand(argv: string[]): Promise<void> {
   console.log("  pip uninstall orion-notebook");
 }
 
-/** Boots the local Orion app and Jupyter services. */
+/** Boots the local Orion app and optionally Jupyter services. */
 async function runStartCommand(argv: string[]): Promise<void> {
   const options = parseOptions(argv);
   if (options.noBrowser) {
     process.env.ORION_NO_BROWSER = "1";
   }
 
-  const jupyterRoot = resolveJupyterRootDirectory(options);
-
   console.log("Starting Orion...");
-  console.log("Checking Python and Jupyter...");
-  const jupyter = await bootstrapJupyter(options, jupyterRoot);
-  console.log("Starting Orion app server...");
+  let jupyter: StartedJupyterServer | null = null;
+  let jupyterRoot: string | null = null;
+  if (options.appOnly) {
+    console.log("Starting Orion app server only (--app-only)...");
+  } else {
+    jupyterRoot = resolveJupyterRootDirectory(options);
+    console.log("Checking Python and Jupyter...");
+    jupyter = await bootstrapJupyter(options, jupyterRoot);
+    console.log("Starting Orion app server...");
+  }
+
   const app = await startOrionAppServer();
 
   console.log(`Orion is running at ${app.url}`);
-  console.log(`Jupyter is running at ${jupyter.baseUrl} (root: ${jupyterRoot})`);
+  if (jupyter && jupyterRoot) {
+    console.log(`Jupyter is running at ${jupyter.baseUrl} (root: ${jupyterRoot})`);
+  }
   console.log(`Opening ${app.url} in your browser...`);
   openBrowser(app.url);
-  keepAliveUntilExit([jupyter.process, app.process]);
+  keepAliveUntilExit(jupyter ? [jupyter.process, app.process] : [app.process]);
 }
 
 /** Runs the Orion CLI entrypoint. */

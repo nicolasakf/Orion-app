@@ -437,42 +437,64 @@ def start_main(argv: list[str]) -> None:
         action="store_true",
         help="Start Jupyter from the current directory instead of ~.",
     )
+    parser.add_argument(
+        "--app-only",
+        action="store_true",
+        help=(
+            "Start only the Orion app (skip Jupyter). Connect to an existing "
+            "Jupyter server from the UI, or use a prior handoff file."
+        ),
+    )
     args = parser.parse_args(argv)
-
-    jupyter_root = Path.cwd() if args.here else Path.home()
 
     app = ensure_app_bundle(args.yes)
     node = ensure_node(args.yes)
-    uses_existing_jupyter = has_jupyter(sys.executable)
-    python = sys.executable if uses_existing_jupyter else install_managed_jupyter(args.yes)
-    try:
-        jupyter_proc, base_url, token, capabilities, version = start_jupyter(python, jupyter_root)
-    except SystemExit:
-        if not uses_existing_jupyter:
-            raise
-        print("Existing Jupyter is not compatible with Orion. Falling back to an Orion-managed runtime.")
-        python = install_managed_jupyter(args.yes)
-        uses_existing_jupyter = False
-        jupyter_proc, base_url, token, capabilities, version = start_jupyter(python, jupyter_root)
-    write_handoff(
-        base_url,
-        token,
-        python,
-        capabilities,
-        version,
-        "existing" if uses_existing_jupyter else "managed",
-    )
+    jupyter_proc: subprocess.Popen[bytes] | None = None
+
+    if args.app_only:
+        print("Starting Orion app server only (--app-only)...")
+    else:
+        jupyter_root = Path.cwd() if args.here else Path.home()
+        uses_existing_jupyter = has_jupyter(sys.executable)
+        python = sys.executable if uses_existing_jupyter else install_managed_jupyter(args.yes)
+        try:
+            jupyter_proc, base_url, token, capabilities, version = start_jupyter(
+                python, jupyter_root
+            )
+        except SystemExit:
+            if not uses_existing_jupyter:
+                raise
+            print(
+                "Existing Jupyter is not compatible with Orion. "
+                "Falling back to an Orion-managed runtime."
+            )
+            python = install_managed_jupyter(args.yes)
+            uses_existing_jupyter = False
+            jupyter_proc, base_url, token, capabilities, version = start_jupyter(
+                python, jupyter_root
+            )
+        write_handoff(
+            base_url,
+            token,
+            python,
+            capabilities,
+            version,
+            "existing" if uses_existing_jupyter else "managed",
+        )
+
     app_proc, url = start_orion_app(node, app)
 
     print(f"Orion is running at {url}")
-    print(f"Jupyter is running at {base_url} (root: {jupyter_root})")
+    if not args.app_only:
+        print(f"Jupyter is running at {base_url} (root: {jupyter_root})")
     if not args.no_browser:
         webbrowser.open(url)
 
     try:
         app_proc.wait()
     finally:
-        jupyter_proc.terminate()
+        if jupyter_proc is not None:
+            jupyter_proc.terminate()
 
 
 def main() -> None:
