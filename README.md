@@ -137,9 +137,11 @@ See [Contributing](./CONTRIBUTING.md#cli-development) for CLI flags, publishing,
 | --- | --- |
 | Website | [orion-agent.ai](https://www.orion-agent.ai) |
 | Hosted app | [app.orion-agent.ai](https://app.orion-agent.ai) |
+| User docs | [docs.orion-agent.ai](https://docs.orion-agent.ai) |
 
 ## Documentation
 
+- [User help](https://docs.orion-agent.ai) — install guides and troubleshooting (Orion-docs)
 - [Contributing](./CONTRIBUTING.md) — setup, CLI development, publishing, pull requests
 - [PyPI package](./python/README.md) — pip install details and first-run behavior
 - [Architecture](./docs/architecture.md) — how the app fits together

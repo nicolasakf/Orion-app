@@ -1,18 +1,21 @@
 ---
 name: create-user-facing-docs
-description: Writes or updates end-user help in public/docs with clear fix-first steps, plain language, and issue links when relevant; includes POSIX and Windows (NT) paths or commands when both apply. Use when the user asks for user-facing documentation, public help pages, troubleshooting guides for Orion users, or markdown under public/docs.
+description: Writes or updates end-user help in Orion-docs with clear fix-first steps, plain language, and issue links when relevant; includes POSIX and Windows (NT) paths or commands when both apply. Use when the user asks for user-facing documentation, public help pages, troubleshooting guides for Orion users, or markdown under Orion-docs.
 ---
 
-# User-facing documentation (public/docs)
+# User-facing documentation (Orion-docs)
 
 ## Scope and location
 
-- **Default path**: `public/docs/` at the repo root. These files are served as public help content; write for **end users**, not engineers maintaining the repo.
-- **Do not** put user-facing articles in `docs/` unless the user explicitly asks—`docs/` is typically internal or developer-oriented.
+- **Default path**: `Orion-docs/docs/` in the monorepo (published at [docs.orion-agent.ai](https://docs.orion-agent.ai)). Write for **end users**, not engineers maintaining the repo.
+- **Getting started** articles: `Orion-docs/docs/getting-started/`
+- **Troubleshooting / how-tos**: `Orion-docs/docs/troubleshooting/`
+- **Do not** put user-facing articles in `Orion-app/docs/` unless the user explicitly asks—that folder is internal/developer-oriented.
+- After adding or renaming a page, register it in `Orion-docs/docs/.vitepress/config.ts` sidebar.
 
 ## Before writing
 
-1. **Read one existing file** in `public/docs/` (for example `chatgpt-codex-device-authorization.md`) and **match** heading style, tone, and density.
+1. **Read one existing file** in `Orion-docs/docs/troubleshooting/` (for example `chatgpt-codex-device-authorization.md`) and **match** heading style, tone, and density.
 2. **Clarify the outcome**: What should the user be able to do after reading? Prefer **numbered steps** for procedures (especially fixes).
 3. If the doc addresses a **GitHub issue**, fetch or confirm title/body with `gh issue view <n>` and link the issue at the end; keep the article useful even if someone lands without issue context.
 
@@ -58,7 +61,7 @@ Use this shape unless the topic clearly needs something else:
 
 ## Checklist before finishing
 
-- [ ] Lives under `public/docs/` unless specified otherwise.
+- [ ] Lives under `Orion-docs/docs/` and is listed in `.vitepress/config.ts` unless specified otherwise.
 - [ ] User can follow steps without reading the issue or source code.
 - [ ] Commands and config snippets are copy-paste complete.
 - [ ] Where paths or shell commands differ by OS: **POSIX and Windows (NT)** instructions are both present, or the doc states a single-OS scope.
