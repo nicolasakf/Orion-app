@@ -48,9 +48,9 @@ export function openBrowser(url: string): void {
 }
 
 /** Returns whether a local HTTP server is accepting connections. */
-async function isServerReady(url: string): Promise<boolean> {
+async function isServerReady(url: string, timeoutMs = 3_000): Promise<boolean> {
   try {
-    await fetch(url);
+    await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
     // Any HTTP response (including 500) means the server is up and listening.
     return true;
   } catch {
