@@ -899,6 +899,8 @@ function NotebookCellComponent({
   const [isMetadataEditingMode, setIsMetadataEditingMode] = useState(false);
   const [localMetadata, setLocalMetadata] = useState("");
   const [metadataError, setMetadataError] = useState<string | null>(null);
+  const [hasMentionableEditorSelection, setHasMentionableEditorSelection] =
+    useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [contentScrollHeight, setContentScrollHeight] = useState(0);
   const outputContentRef = useRef<HTMLDivElement>(null);
@@ -950,6 +952,7 @@ function NotebookCellComponent({
       setIsMuted(orionMeta?.cellState?.isMuted ?? orionMeta?.isMuted ?? false);
       setIsInputCollapsed(orionMeta?.isInputCollapsed ?? false);
       setIsOutputCollapsed(orionMeta?.isOutputCollapsed ?? false);
+      setHasMentionableEditorSelection(false);
     }
   }, [cellId, cell.source, cell.metadata]);
 
@@ -992,6 +995,48 @@ function NotebookCellComponent({
       setIsEditingMode(true);
     },
     [],
+  );
+
+  /** Tracks whether the active source editor has a non-empty selection to mention. */
+  const registerMentionSelectionTracker = useCallback(
+    (editor: MonacoEditorApi.IStandaloneCodeEditor) => {
+      const setSelectionVisible = (visible: boolean) => {
+        setHasMentionableEditorSelection((current) =>
+          current === visible ? current : visible,
+        );
+      };
+
+      const updateSelectionVisible = () => {
+        const model = editor.getModel();
+        const selection = editor.getSelection();
+        const hasSelection = Boolean(
+          notebookPath &&
+            model &&
+            selection &&
+            !selection.isEmpty() &&
+            model.getValueInRange(selection).trim(),
+        );
+        setSelectionVisible(hasSelection);
+      };
+
+      const selectionDisposable =
+        editor.onDidChangeCursorSelection(updateSelectionVisible);
+      const focusDisposable =
+        editor.onDidFocusEditorWidget(updateSelectionVisible);
+      const blurDisposable = editor.onDidBlurEditorWidget(() => {
+        setSelectionVisible(false);
+      });
+      const disposeDisposable = editor.onDidDispose(() => {
+        selectionDisposable.dispose();
+        focusDisposable.dispose();
+        blurDisposable.dispose();
+        disposeDisposable.dispose();
+        setSelectionVisible(false);
+      });
+
+      updateSelectionVisible();
+    },
+    [notebookPath],
   );
 
   useEffect(() => {
@@ -1971,7 +2016,10 @@ function NotebookCellComponent({
           )}
           onClick={(e) => onCellSelect?.(cellIndex, e)}
         >
-          <div className="flex items-center gap-2 p-2 bg-red-50 dark:bg-red-950 border-b border-red-200 dark:border-red-800 h-9">
+          <div
+            className="flex items-center gap-2 p-2 bg-red-50 dark:bg-red-950 border-b border-red-200 dark:border-red-800 h-9"
+            data-notebook-export-remove
+          >
             <XCircle className="h-4 w-4 text-red-500" />
             <span className="text-xs font-medium text-red-700 dark:text-red-400">
               Corrupted Cell #{cellIndex}
@@ -2071,7 +2119,10 @@ function NotebookCellComponent({
             onToggleAppView={handleToggleAppView}
             onMarkdownAction={handleMarkdownContextMenuAction}
           >
-            <div className="flex items-center px-1.5 py-0.5 bg-muted min-h-7 h-7">
+            <div
+              className="flex items-center px-1.5 py-0.5 bg-muted min-h-7 h-7"
+              data-notebook-export-remove
+            >
               <div className="flex items-center flex-1 justify-between min-h-0">
                 <div className="flex items-center min-w-0">
                   <span className="text-muted-foreground text-[11px] tabular-nums mx-1 shrink-0">
@@ -2122,6 +2173,15 @@ function NotebookCellComponent({
                 </div>
 
                 <div className="flex items-center gap-1 shrink-0">
+                  {!isMetadataEditingMode && hasMentionableEditorSelection && (
+                    <div className="mr-1 flex items-center gap-1.5 whitespace-nowrap text-[11px] leading-none text-muted-foreground">
+                      <span>Mention selection</span>
+                      <kbd className="inline-flex h-4 min-h-4 items-center gap-0.5 rounded border border-border bg-background px-1 font-mono text-[10px] font-medium">
+                        <CmdOrCtrl className="h-2.5 w-2.5" />
+                        <span>I</span>
+                      </kbd>
+                    </div>
+                  )}
                   {!isMetadataEditingMode && (
                     <TooltipProvider delayDuration={300}>
                       <CellHeaderActionButtons
@@ -2170,7 +2230,10 @@ function NotebookCellComponent({
           {isMetadataEditingMode ? (
             <div className="border-t border-muted">
               {effectiveVariant !== "default" ? (
-                <div className="flex h-7 min-h-7 items-center justify-end bg-muted px-1.5 py-0.5">
+                <div
+                  className="flex h-7 min-h-7 items-center justify-end bg-muted px-1.5 py-0.5"
+                  data-notebook-export-remove
+                >
                   <TooltipProvider delayDuration={300}>
                     <CellHeaderActionButtons
                       actionButtons={metadataEditRightActionButtons}
@@ -2267,6 +2330,7 @@ function NotebookCellComponent({
                             onEditorFocus={() => setIsEditingMode(true)}
                             onMount={(editor) => {
                               markdownEditorInstanceRef.current = editor;
+                              registerMentionSelectionTracker(editor);
                               editor.updateOptions({
                                 colorDecorators: true,
                                 colorDecoratorsActivatedOn: "clickAndHover",
@@ -2340,6 +2404,7 @@ function NotebookCellComponent({
                         onEditorBlur={() => setIsEditingMode(false)}
                         onMount={(editor) => {
                           monacoEditorInstanceRef.current = editor;
+                          registerMentionSelectionTracker(editor);
                         }}
                       />
                       <CellOutputToolbar

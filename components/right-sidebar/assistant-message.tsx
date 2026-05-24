@@ -10,6 +10,12 @@ interface AssistantMessageProps {
   content: string;
   /** True while this is the active assistant response receiving streamed tokens. */
   isStreaming?: boolean;
+  /** Optional metadata used when highlighted assistant text is mentioned in chat. */
+  conversationReference?: {
+    messageId: string;
+    messageIndex: number;
+    partIndex: number;
+  };
 }
 
 /** Render the one active streaming Markdown block without rich parsing. */
@@ -33,7 +39,11 @@ function PlainStreamingText({
   );
 }
 
-export function AssistantMessage({ content, isStreaming = false }: AssistantMessageProps) {
+export function AssistantMessage({
+  content,
+  isStreaming = false,
+  conversationReference,
+}: AssistantMessageProps) {
   const { effectiveSettings } = useOrionSettings();
   const chatFontSize = effectiveSettings.chat.fontSize;
   const streamingContent = React.useMemo(
@@ -43,7 +53,14 @@ export function AssistantMessage({ content, isStreaming = false }: AssistantMess
   const markdownSource = streamingContent ? streamingContent.stable : content;
 
   return (
-    <div className="bg-transparent px-1 py-1">
+    <div
+      className="bg-transparent px-1 py-1"
+      data-orion-conversation-reference={conversationReference ? "true" : undefined}
+      data-orion-conversation-source={conversationReference ? "assistant" : undefined}
+      data-orion-message-id={conversationReference?.messageId}
+      data-orion-message-index={conversationReference?.messageIndex}
+      data-orion-part-index={conversationReference?.partIndex}
+    >
       <ChatMarkdownRenderer source={markdownSource} fontSize={chatFontSize} />
       {streamingContent && (
         <PlainStreamingText

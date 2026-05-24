@@ -48,6 +48,13 @@ interface DelegateInvocationCardProps {
   reportPath?: string;
   onShowReport?: (path: string) => void;
   className?: string;
+  /** Optional metadata used when highlighted sub-agent card text is mentioned in chat. */
+  conversationReference?: {
+    messageId: string;
+    messageIndex: number;
+    partIndex: number;
+    toolCallId: string;
+  };
 }
 
 // ============================================================================
@@ -143,6 +150,7 @@ export function DelegateInvocationCard({
   reportPath,
   onShowReport,
   className,
+  conversationReference,
 }: DelegateInvocationCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -208,6 +216,13 @@ export function DelegateInvocationCard({
           "cursor-pointer transition-colors hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
         className
       )}
+      data-orion-conversation-reference={conversationReference ? "true" : undefined}
+      data-orion-conversation-source={conversationReference ? "tool" : undefined}
+      data-orion-message-id={conversationReference?.messageId}
+      data-orion-message-index={conversationReference?.messageIndex}
+      data-orion-part-index={conversationReference?.partIndex}
+      data-orion-tool-name={conversationReference ? "delegate" : undefined}
+      data-orion-tool-call-id={conversationReference?.toolCallId}
     >
       <div className="flex items-center gap-2 px-3 py-2">
           <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />

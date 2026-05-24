@@ -3,7 +3,7 @@
 import * as React from "react";
 import { type UIMessage, isToolUIPart } from "ai";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, AtSign } from "lucide-react";
 import { ToolInvocationCard } from "./tool-invocation-card";
 import { DelegateInvocationCard } from "./delegate-invocation-card";
 import { UserMessage } from "./user-message";
@@ -63,6 +63,181 @@ type ChatRenderItem =
   | { type: "kernelPrompt" }
   | { type: "loading" }
   | { type: "error"; message: string | undefined };
+
+type ConversationSelectionSource = "assistant" | "tool";
+
+type ConversationSelectionPopoverState = {
+  selectedText: string;
+  rect: DOMRect;
+  source: ConversationSelectionSource;
+  messageId: string;
+  messageIndex: number;
+  partIndex: number;
+  toolName?: string;
+  toolCallId?: string;
+};
+
+/** Finds the element carrying conversation-reference metadata for a text node. */
+function closestConversationReferenceElement(node: Node | null): HTMLElement | null {
+  const element =
+    node instanceof HTMLElement
+      ? node
+      : node?.parentElement instanceof HTMLElement
+        ? node.parentElement
+        : null;
+  return element?.closest<HTMLElement>("[data-orion-conversation-reference='true']") ?? null;
+}
+
+/** Finds the floating mention action, which lives outside the chat scroll root. */
+function closestConversationMentionPopoverElement(node: Node | null): HTMLElement | null {
+  const element =
+    node instanceof HTMLElement
+      ? node
+      : node?.parentElement instanceof HTMLElement
+        ? node.parentElement
+        : null;
+  return (
+    element?.closest<HTMLElement>("[data-orion-conversation-mention-popover='true']") ?? null
+  );
+}
+
+/** Reads a non-negative integer from a data attribute. */
+function readDatasetIndex(value: string | undefined): number | null {
+  if (value === undefined || value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/** Builds a popover payload for a selection inside assistant or tool chat content. */
+function getConversationSelectionState(
+  root: HTMLElement,
+  selection: Selection | null
+): ConversationSelectionPopoverState | null {
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+
+  const selectedText = selection.toString().trim();
+  if (!selectedText) return null;
+
+  const range = selection.getRangeAt(0);
+  const referenceElement = closestConversationReferenceElement(range.commonAncestorContainer);
+  if (!referenceElement || !root.contains(referenceElement)) return null;
+  if (
+    !referenceElement.contains(range.startContainer) ||
+    !referenceElement.contains(range.endContainer)
+  ) {
+    return null;
+  }
+
+  const source = referenceElement.dataset.orionConversationSource;
+  if (source !== "assistant" && source !== "tool") return null;
+
+  const messageId = referenceElement.dataset.orionMessageId;
+  const messageIndex = readDatasetIndex(referenceElement.dataset.orionMessageIndex);
+  const partIndex = readDatasetIndex(referenceElement.dataset.orionPartIndex);
+  if (!messageId || messageIndex === null || partIndex === null) return null;
+
+  const rect = range.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return null;
+
+  return {
+    selectedText,
+    rect,
+    source,
+    messageId,
+    messageIndex,
+    partIndex,
+    toolName: referenceElement.dataset.orionToolName,
+    toolCallId: referenceElement.dataset.orionToolCallId,
+  };
+}
+
+/** Floating action that turns highlighted assistant/tool text into a draft chat mention. */
+function ConversationSelectionMentionPopover({
+  rootRef,
+}: {
+  rootRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const [state, setState] = React.useState<ConversationSelectionPopoverState | null>(null);
+
+  const updateFromSelection = React.useCallback(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    setState(getConversationSelectionState(root, window.getSelection()));
+  }, [rootRef]);
+
+  React.useEffect(() => {
+    const handleSelectionChange = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed) setState(null);
+    };
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => document.removeEventListener("selectionchange", handleSelectionChange);
+  }, []);
+
+  const mentionSelection = React.useCallback(() => {
+    if (!state) return;
+    window.dispatchEvent(
+      new CustomEvent("orion:mention-conversation-selection", {
+        detail: {
+          selectedText: state.selectedText,
+          source: state.source,
+          messageId: state.messageId,
+          messageIndex: state.messageIndex,
+          partIndex: state.partIndex,
+          toolName: state.toolName,
+          toolCallId: state.toolCallId,
+        },
+      })
+    );
+    window.getSelection()?.removeAllRanges();
+    setState(null);
+  }, [state]);
+
+  React.useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const hidePopover = () => setState(null);
+    const hideWhenClickingAway = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (root.contains(target)) return;
+      if (closestConversationMentionPopoverElement(target)) return;
+      setState(null);
+    };
+    root.addEventListener("mouseup", updateFromSelection);
+    root.addEventListener("keyup", updateFromSelection);
+    root.addEventListener("scroll", hidePopover, true);
+    document.addEventListener("mousedown", hideWhenClickingAway);
+    return () => {
+      root.removeEventListener("mouseup", updateFromSelection);
+      root.removeEventListener("keyup", updateFromSelection);
+      root.removeEventListener("scroll", hidePopover, true);
+      document.removeEventListener("mousedown", hideWhenClickingAway);
+    };
+  }, [rootRef, updateFromSelection]);
+
+  if (!state) return null;
+
+  const left = Math.min(
+    Math.max(state.rect.left + state.rect.width / 2, 48),
+    window.innerWidth - 48
+  );
+  const top = Math.max(state.rect.top - 38, 8);
+
+  return (
+    <button
+      type="button"
+      className="corner-squircle fixed z-50 inline-flex -translate-x-1/2 items-center gap-1 rounded-md border border-border bg-popover px-2 py-1 text-xs font-medium text-popover-foreground shadow-md"
+      data-orion-conversation-mention-popover="true"
+      style={{ left, top }}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={mentionSelection}
+    >
+      <AtSign className="h-3 w-3" />
+      Mention in chat
+    </button>
+  );
+}
 
 /** Compare UI message parts by the fields that affect rendered chat rows. */
 function areRenderedPartsEqual(prev: UIMessage["parts"], next: UIMessage["parts"]): boolean {
@@ -204,6 +379,12 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
                         ? () => onOpenSubagentChat(inv.toolCallId)
                         : undefined
                     }
+                    conversationReference={{
+                      messageId: message.id,
+                      messageIndex: index,
+                      partIndex,
+                      toolCallId: inv.toolCallId,
+                    }}
                   />
                 );
               }
@@ -220,6 +401,12 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
                   onReject={onReject ? () => onReject(inv.toolCallId) : undefined}
                   toolApprovalMode={toolApprovalMode}
                   onToolApprovalModeChange={onToolApprovalModeChange}
+                  conversationReference={{
+                    messageId: message.id,
+                    messageIndex: index,
+                    partIndex,
+                    toolCallId: inv.toolCallId,
+                  }}
                 />
               );
             }
@@ -229,6 +416,11 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
                   key={`${message.id}-text-${partIndex}`}
                   content={part.text}
                   isStreaming={isLoading && isLastMessage}
+                  conversationReference={{
+                    messageId: message.id,
+                    messageIndex: index,
+                    partIndex,
+                  }}
                 />
               );
             }
@@ -425,6 +617,7 @@ export function ChatBody({
 
   return (
     <div className="relative min-h-0 min-w-0 flex-1">
+      <ConversationSelectionMentionPopover rootRef={scrollParentRef} />
       <div
         ref={scrollParentRef}
         className="h-full min-w-0 overflow-x-hidden overflow-y-auto px-4"

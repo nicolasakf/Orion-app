@@ -205,6 +205,13 @@ interface ToolInvocationCardProps {
   onReject?: () => void;
   toolApprovalMode?: ToolApprovalMode;
   onToolApprovalModeChange?: (mode: ToolApprovalMode) => void;
+  /** Optional metadata used when highlighted tool-card text is mentioned in chat. */
+  conversationReference?: {
+    messageId: string;
+    messageIndex: number;
+    partIndex: number;
+    toolCallId: string;
+  };
 }
 
 export function ToolInvocationCard({
@@ -218,6 +225,7 @@ export function ToolInvocationCard({
   onReject,
   toolApprovalMode,
   onToolApprovalModeChange,
+  conversationReference,
 }: ToolInvocationCardProps) {
   const args = safeArgs(rawArgs);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -266,6 +274,13 @@ export function ToolInvocationCard({
       className={cn("my-0.5 w-full min-w-0 max-w-full text-[10px] font-mono", className)}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      data-orion-conversation-reference={conversationReference ? "true" : undefined}
+      data-orion-conversation-source={conversationReference ? "tool" : undefined}
+      data-orion-message-id={conversationReference?.messageId}
+      data-orion-message-index={conversationReference?.messageIndex}
+      data-orion-part-index={conversationReference?.partIndex}
+      data-orion-tool-name={conversationReference ? toolName : undefined}
+      data-orion-tool-call-id={conversationReference?.toolCallId}
     >
       {/* Inline text row */}
       <div className="flex min-w-0 items-center gap-1.5">

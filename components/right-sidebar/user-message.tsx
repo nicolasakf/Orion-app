@@ -2,7 +2,17 @@
 
 import { type UIMessage } from "ai";
 import { useState, useRef, useEffect } from "react";
-import { Copy, Undo2, Check, FileText, Folder, Hash, Braces, Terminal } from "lucide-react";
+import {
+  Copy,
+  Undo2,
+  Check,
+  FileText,
+  Folder,
+  Hash,
+  Braces,
+  Terminal,
+  MessagesSquare,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -24,6 +34,7 @@ const REFERENCE_TYPE_ICONS: Record<ChatReferenceType, React.ComponentType<{ clas
   cell: Hash,
   variable: Braces,
   terminal: Terminal,
+  conversation: MessagesSquare,
 };
 
 interface UserMessageProps {

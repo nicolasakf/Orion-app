@@ -15,6 +15,7 @@ import {
   GripVertical,
   Bot,
   MessageCircle,
+  MessagesSquare,
   PenLine,
   Pencil,
   Boxes,
@@ -170,6 +171,7 @@ const REFERENCE_TYPE_ICONS: Record<ChatReferenceType, React.ComponentType<{ clas
   cell: StretchHorizontal,
   variable: Boxes,
   terminal: Terminal,
+  conversation: MessagesSquare,
 };
 
 /** Normalizes mention search text so `@cell#3` can match the `Cell #3` option label. */

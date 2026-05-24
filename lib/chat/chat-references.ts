@@ -6,6 +6,7 @@ export const CHAT_REFERENCE_TYPES = [
   "cell",
   "variable",
   "terminal",
+  "conversation",
 ] as const;
 
 export type ChatReferenceType = (typeof CHAT_REFERENCE_TYPES)[number];
@@ -26,7 +27,17 @@ export type ChatReferenceLocator =
       lineEnd?: number;
     }
   | { type: "variable"; name: string; notebookPath?: string }
-  | { type: "terminal"; terminalName: string; chatId?: string };
+  | { type: "terminal"; terminalName: string; chatId?: string }
+  | {
+      type: "conversation";
+      messageId: string;
+      messageIndex: number;
+      partIndex: number;
+      source: "assistant" | "tool";
+      toolName?: string;
+      toolCallId?: string;
+      selectionHash?: string;
+    };
 
 export interface ChatReference {
   id: string;
@@ -79,6 +90,16 @@ const ChatReferenceLocatorSchema = z.discriminatedUnion("type", [
     terminalName: z.string().min(1),
     chatId: z.string().optional(),
   }),
+  z.object({
+    type: z.literal("conversation"),
+    messageId: z.string().min(1),
+    messageIndex: z.number().int().min(0),
+    partIndex: z.number().int().min(0),
+    source: z.enum(["assistant", "tool"]),
+    toolName: z.string().min(1).optional(),
+    toolCallId: z.string().min(1).optional(),
+    selectionHash: z.string().min(1).optional(),
+  }),
 ]);
 
 export const ResolvedChatReferenceSchema = z.object({
@@ -115,6 +136,8 @@ export function getReferenceTypeLabel(type: ChatReferenceType): string {
       return "Variable";
     case "terminal":
       return "Terminal";
+    case "conversation":
+      return "Conversation";
   }
 }
 
@@ -155,6 +178,13 @@ function formatLocator(reference: ResolvedChatReference): string {
       return locator.notebookPath ? `${locator.name} in ${locator.notebookPath}` : locator.name;
     case "terminal":
       return locator.terminalName;
+    case "conversation":
+      if (locator.source === "tool") {
+        return locator.toolName
+          ? `Message ${locator.messageIndex + 1}, ${locator.toolName} tool`
+          : `Message ${locator.messageIndex + 1}, tool call`;
+      }
+      return `Message ${locator.messageIndex + 1}, assistant response`;
   }
 }
 
@@ -164,7 +194,7 @@ function hasSelectedTextPayload(reference: ResolvedChatReference): boolean {
     (locator.type === "file" || locator.type === "cell") &&
     !!locator.lineStart &&
     !!locator.lineEnd
-  );
+  ) || locator.type === "conversation";
 }
 
 /** Builds compact context for a single user message's attached references. */
@@ -192,7 +222,7 @@ export function formatReferencesForMessage(references: ResolvedChatReference[]):
 
   return `## Referenced Context For This Message
 
-The user attached these references specifically to this message. Treat regular mentions as pointers, and use tools when exact content is needed. Highlighted editor selections include their selected text inline.
+The user attached these references specifically to this message. Treat regular mentions as pointers, and use tools when exact content is needed. Highlighted editor and conversation selections include their selected text inline.
 
 ${blocks.join("\n\n")}`;
 }

@@ -218,6 +218,29 @@ function formatCellSelectionReferenceLabel(
   return `${formatCellReferenceLabel([cellIndex])}:${formatLineRange(lineStart, lineEnd)}`;
 }
 
+/** Creates a short stable suffix so separate conversation snippets remain distinct chips. */
+function hashConversationSelection(value: string): string {
+  let hash = 0;
+  for (let index = 0; index < value.length; index++) {
+    hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+/** Formats the chip label for a selected assistant or tool-card snippet. */
+function formatConversationSelectionReferenceLabel(
+  source: "assistant" | "tool",
+  messageIndex: number,
+  toolName?: string
+): string {
+  if (source === "tool") {
+    return toolName
+      ? `${toolName} output #${messageIndex + 1}`
+      : `Tool output #${messageIndex + 1}`;
+  }
+  return `Assistant #${messageIndex + 1}`;
+}
+
 function makeReference(
   type: ChatReferenceType,
   label: string,
@@ -375,6 +398,16 @@ type EditorSelectionAttachEventDetail = {
   lineEnd?: unknown;
   selectedText?: unknown;
   notebookCellIndex?: unknown;
+};
+
+type ConversationSelectionMentionEventDetail = {
+  selectedText?: unknown;
+  source?: unknown;
+  messageId?: unknown;
+  messageIndex?: unknown;
+  partIndex?: unknown;
+  toolName?: unknown;
+  toolCallId?: unknown;
 };
 
 /** Preserve skill invocation metadata in the request body while omitting client-only fields. */
@@ -1445,6 +1478,63 @@ export function RightSidebar({
     window.addEventListener("orion:attach-editor-selection", handleAttachEditorSelection);
     return () => {
       window.removeEventListener("orion:attach-editor-selection", handleAttachEditorSelection);
+    };
+  }, [addDraftReference]);
+
+  useEffect(() => {
+    const handleMentionConversationSelection = (event: Event) => {
+      const detail = (event as CustomEvent<ConversationSelectionMentionEventDetail>).detail;
+      if (
+        typeof detail?.selectedText !== "string" ||
+        typeof detail.messageId !== "string" ||
+        typeof detail.messageIndex !== "number" ||
+        typeof detail.partIndex !== "number" ||
+        !Number.isInteger(detail.messageIndex) ||
+        !Number.isInteger(detail.partIndex) ||
+        detail.messageIndex < 0 ||
+        detail.partIndex < 0 ||
+        (detail.source !== "assistant" && detail.source !== "tool")
+      ) {
+        return;
+      }
+
+      const toolName = typeof detail.toolName === "string" ? detail.toolName : undefined;
+      const toolCallId = typeof detail.toolCallId === "string" ? detail.toolCallId : undefined;
+      const label = formatConversationSelectionReferenceLabel(
+        detail.source,
+        detail.messageIndex,
+        toolName
+      );
+
+      addDraftReference(
+        makeReference(
+          "conversation",
+          label,
+          {
+            type: "conversation",
+            messageId: detail.messageId,
+            messageIndex: detail.messageIndex,
+            partIndex: detail.partIndex,
+            source: detail.source,
+            toolName,
+            toolCallId,
+            selectionHash: hashConversationSelection(detail.selectedText),
+          },
+          detail.selectedText,
+          "Use the selected conversation text included inline as context from this chat."
+        )
+      );
+    };
+
+    window.addEventListener(
+      "orion:mention-conversation-selection",
+      handleMentionConversationSelection
+    );
+    return () => {
+      window.removeEventListener(
+        "orion:mention-conversation-selection",
+        handleMentionConversationSelection
+      );
     };
   }, [addDraftReference]);
 
