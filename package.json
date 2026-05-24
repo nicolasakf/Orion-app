@@ -1,5 +1,5 @@
 {
-  "name": "@nicolasakf/orion-agent",
+  "name": "orion-notebook",
   "version": "0.5.1",
   "description": "Local Orion CLI launcher for notebooks and Jupyter",
   "license": "Apache-2.0",
@@ -16,9 +16,6 @@
   ],
   "engines": {
     "node": ">=20"
-  },
-  "publishConfig": {
-    "access": "public"
   },
   "scripts": {
     "dev": "next dev -p 3001 --turbopack",
