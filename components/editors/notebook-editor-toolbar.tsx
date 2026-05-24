@@ -2,8 +2,11 @@
 
 import {
   ChevronDown,
+  Download,
   Eye,
   EyeOff,
+  FileCode,
+  FileText,
   Play,
   RefreshCw,
   RotateCcw,
@@ -21,12 +24,27 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  NOTEBOOK_EXPORT_EVENT_NAME,
+  NOTEBOOK_EXPORT_OPTIONS,
+  type NotebookExportEventDetail,
+  type NotebookExportFormat,
+} from "@/lib/notebook/notebook-export";
+import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import type { KernelInfo, KernelStatus } from "@/lib/types";
+
+/** Dispatches a notebook export request to the mounted notebook editor. */
+function dispatchNotebookExport(format: NotebookExportFormat): void {
+  window.dispatchEvent(
+    new CustomEvent<NotebookExportEventDetail>(NOTEBOOK_EXPORT_EVENT_NAME, {
+      detail: { format },
+    }),
+  );
+}
 
 export interface NotebookEditorToolbarProps {
   currentKernel: KernelInfo | null;
@@ -152,6 +170,28 @@ export function NotebookEditorToolbar({
           <Eye className="h-4 w-4" />
         )}
       </ToolbarButton>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <ToolbarButton toolTipLabel="Export Notebook">
+            <Download className="h-4 w-4" />
+          </ToolbarButton>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" className="w-44">
+          {NOTEBOOK_EXPORT_OPTIONS.map((option) => (
+            <DropdownMenuItem
+              key={option.format}
+              onClick={() => dispatchNotebookExport(option.format)}
+            >
+              {option.format === "pdf" || option.format === "latex" ? (
+                <FileCode className="h-4 w-4" />
+              ) : (
+                <FileText className="h-4 w-4" />
+              )}
+              {option.label}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
       <NotebookViewToggle />
     </>
   );

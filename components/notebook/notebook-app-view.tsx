@@ -152,7 +152,7 @@ export function NotebookAppView({
   }
 
   return (
-    <div className="min-h-0 flex-1 p-3">
+    <div className="min-h-0 flex-1 p-3" data-notebook-export-root="app">
       <div
         ref={containerRef}
         className="notebook-app-grid min-h-full"

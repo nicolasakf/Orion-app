@@ -67,6 +67,21 @@ import type { KernelService } from "@/lib/kernel/kernel-service";
 import { runCells as runCellsBatch } from "@/lib/notebook/cell-executor";
 import type { CellExecutionResult } from "@/lib/notebook/cell-executor";
 import {
+  buildScreenNotebookExportHtml,
+  downloadNotebookExport,
+  downloadScreenNotebookHtml,
+  getNotebookExportFilename,
+  getNotebookExportLabel,
+  getNotebookExportUrl,
+  isNotebookExportFormat,
+  isScreenRenderedNotebookExport,
+  NOTEBOOK_EXPORT_EVENT_NAME,
+  openScreenNotebookPrintWindow,
+  printScreenNotebookHtml,
+  type NotebookExportEventDetail,
+  type NotebookExportFormat,
+} from "@/lib/notebook/notebook-export";
+import {
   ensureAppViewLayout,
   getNotebookAppViewMetadata,
   isCellInAppView,
@@ -105,6 +120,7 @@ import {
   type DeletedCellSnapshot,
   type CellSelectionState,
 } from "./notebook-commands";
+import { toast } from "@/hooks/use-toast";
 import {
   getSubagentDisableModelInvocation,
   getSubagentMetadata,
@@ -1064,6 +1080,159 @@ export function NotebookEditor({
       );
     };
   }, [parentKernelService, filepath, notebook, applyPendingChanges, markClean]);
+
+  /** Finds the currently visible notebook surface used for screen-rendered exports. */
+  const getScreenExportElement = useCallback((): HTMLElement | null => {
+    const selector =
+      activeNotebookView === "app"
+        ? '[data-notebook-export-root="app"]'
+        : '[data-notebook-export-root="notebook"]';
+
+    return notebookRootRef.current?.querySelector<HTMLElement>(selector) ?? null;
+  }, [activeNotebookView]);
+
+  /** Saves the current editor state and exports the notebook in the requested format. */
+  const handleExportNotebook = useCallback(
+    async (format: NotebookExportFormat) => {
+      if (!parentKernelService || !notebook) {
+        toast({
+          title: "Notebook export unavailable",
+          description:
+            "Wait for the notebook to finish loading and confirm Jupyter is connected.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const label = getNotebookExportLabel(format);
+      const filename = getNotebookExportFilename(filepath, format);
+      const shouldUseScreenExport = isScreenRenderedNotebookExport(format);
+      const printWindow =
+        format === "pdf" ? openScreenNotebookPrintWindow(filename) : null;
+
+      if (format === "pdf" && !printWindow) {
+        toast({
+          title: "PDF export blocked",
+          description:
+            "Allow pop-ups for Orion, then try exporting the notebook again.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      try {
+        const screenExportHtml = shouldUseScreenExport
+          ? (() => {
+              const sourceElement = getScreenExportElement();
+              if (!sourceElement) {
+                throw new Error("No rendered notebook surface is available.");
+              }
+
+              return buildScreenNotebookExportHtml({
+                sourceElement,
+                title: filename,
+                autoPrint: format === "pdf",
+              });
+            })()
+          : null;
+
+        // Capture mounted editor text so the export includes unsaved cell edits.
+        modifiedCellsRef.current.forEach((cellId) => {
+          const cellRef = cellComponentRefs.current.get(cellId);
+          if (cellRef) {
+            pendingCellChangesRef.current.set(cellId, cellRef.getSource());
+          }
+        });
+
+        const notebookToExport = applyPendingChanges(notebook);
+        const contentsManager = parentKernelService.getContentsManager();
+        await contentsManager.save(filepath, {
+          type: "notebook",
+          format: "json",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          content: notebookToExport as any,
+        });
+
+        if (getSubagentMetadata(notebookToExport.metadata)) {
+          window.dispatchEvent(
+            new CustomEvent("orion:subagents-changed", {
+              detail: { path: filepath },
+            }),
+          );
+        }
+
+        setNotebook(notebookToExport);
+        pendingCellChangesRef.current.clear();
+        modifiedCellsRef.current.clear();
+        markClean();
+
+        if (screenExportHtml) {
+          if (format === "html") {
+            downloadScreenNotebookHtml(screenExportHtml, filename);
+          } else if (printWindow) {
+            printScreenNotebookHtml(printWindow, screenExportHtml);
+          }
+        } else {
+          const exportUrl = getNotebookExportUrl(
+            parentKernelService.getServerSettings(),
+            filepath,
+            format,
+          );
+          downloadNotebookExport(exportUrl, filename);
+        }
+
+        toast({
+          title: format === "pdf" ? "PDF export opened" : "Notebook exported",
+          description:
+            format === "pdf"
+              ? "Use the print dialog to save the Orion-rendered notebook as PDF."
+              : `${label} export downloaded as ${filename}.`,
+        });
+      } catch (error) {
+        printWindow?.close();
+        console.error("Error exporting notebook:", error);
+        toast({
+          title: "Notebook export failed",
+          description:
+            error instanceof Error
+              ? error.message
+              : "Jupyter could not export this notebook.",
+          variant: "destructive",
+        });
+      }
+    },
+    [
+      applyPendingChanges,
+      filepath,
+      getScreenExportElement,
+      markClean,
+      notebook,
+      parentKernelService,
+    ],
+  );
+
+  useEffect(() => {
+    /** Handles export requests dispatched by the notebook toolbar. */
+    const handleNotebookExportEvent = (event: Event) => {
+      const detail = (event as CustomEvent<NotebookExportEventDetail>).detail;
+      if (!isNotebookExportFormat(detail?.format)) {
+        return;
+      }
+
+      void handleExportNotebook(detail.format);
+    };
+
+    window.addEventListener(
+      NOTEBOOK_EXPORT_EVENT_NAME,
+      handleNotebookExportEvent,
+    );
+    return () => {
+      window.removeEventListener(
+        NOTEBOOK_EXPORT_EVENT_NAME,
+        handleNotebookExportEvent,
+      );
+    };
+  }, [handleExportNotebook]);
 
   /**
    * Listen for agentNotebookModified events dispatched when the Orion agent
@@ -3047,6 +3216,7 @@ export function NotebookEditor({
                   ) : (
                     <div
                       className="space-y-3 p-3 notebook-editor-content-area"
+                      data-notebook-export-root="notebook"
                       tabIndex={-1}
                     >
                       {showSubagentOptions ? (
