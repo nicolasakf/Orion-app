@@ -37,6 +37,23 @@ After the first successful setup, later runs start Jupyter, launch Orion, and op
 ```bash
 orion --yes          # auto-approve setup prompts
 orion --no-browser   # start services without opening a browser
+orion uninstall      # remove cached app bundle for this version (~/.orion/app/<version>)
+orion uninstall --all --yes  # remove entire ~/.orion directory
+```
+
+## Uninstall
+
+`pip uninstall orion-notebook` removes the Python launcher only. It does **not** delete the app bundle downloaded into `~/.orion/app/<version>/`. Run this first:
+
+```bash
+orion uninstall --yes
+pip uninstall orion-notebook
+```
+
+To remove all Orion-managed data (Jupyter venv, portable Node, every cached app version):
+
+```bash
+orion uninstall --all --yes
 ```
 
 ## Environment variables
@@ -53,12 +70,12 @@ Default app bundle URL:
 https://github.com/nicolasakf/Orion-app/releases/download/v<version>/orion-app-<version>.tar.gz
 ```
 
-## npm alternative
+## npm install (recommended)
 
-If you already have Node.js 20+, the npm package is simpler because it ships the app bundle directly:
+Both npm and PyPI publish under the name `orion-notebook`. If you already have Node.js 20+, npm is simpler because it ships the app bundle directly:
 
 ```bash
-npm install -g @nicolasakf/orion-agent
+npm install -g orion-notebook
 orion
 ```
 

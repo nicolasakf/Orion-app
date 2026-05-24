@@ -4,6 +4,13 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+
+- npm package renamed from `@nicolasakf/orion-agent` to `orion-notebook` (same name as PyPI)
+- `orion uninstall` removes pip-downloaded app cache under `~/.orion/app/<version>/` before package uninstall
+
 ## [0.5.1] - 2026-05-22
 
 ### Fixed

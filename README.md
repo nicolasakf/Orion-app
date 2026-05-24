@@ -38,15 +38,17 @@ Running `orion` starts Jupyter, launches Orion locally, opens your browser, and 
 
 ### Install via npm (recommended)
 
+Both npm and PyPI use the package name **`orion-notebook`**:
+
 ```bash
-npm install -g @nicolasakf/orion-agent
+npm install -g orion-notebook
 orion
 ```
 
 Or run once without installing globally:
 
 ```bash
-npx @nicolasakf/orion-agent
+npx orion-notebook
 ```
 
 The npm package ships the full Orion app bundle, so no separate app download is needed. You only need Node.js 20+ installed; Python 3.8+ is required for notebook execution.
@@ -77,6 +79,28 @@ orion --yes
 ```
 
 After the first successful setup, later runs are much faster.
+
+### Uninstall
+
+`pip uninstall` and `npm uninstall` remove the launcher only. To also remove cached Orion data (especially the pip-downloaded app bundle under `~/.orion/app/<version>/`), run:
+
+```bash
+orion uninstall --yes
+```
+
+Remove everything under `~/.orion` (Jupyter venv, portable Node, all cached app versions):
+
+```bash
+orion uninstall --all --yes
+```
+
+Then remove the package:
+
+```bash
+pip uninstall orion-notebook
+# or
+npm uninstall -g orion-notebook
+```
 
 ### Adding yourAPI Keys
 

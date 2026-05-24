@@ -24,7 +24,7 @@ Configure model credentials inside the app under **Settings → Providers**.
 
 ## CLI Development
 
-To test the `orion` CLI locally (the same command published as `@nicolasakf/orion-agent` on npm):
+To test the `orion` CLI locally (the same command published as `orion-notebook` on npm):
 
 ```bash
 npm run build          # production Next build (required once, or after app changes)
@@ -38,6 +38,7 @@ Useful flags:
 ```bash
 node dist/cli/cli/orion.js --yes          # auto-approve managed Python/Jupyter setup
 node dist/cli/cli/orion.js --no-browser   # start services without opening a browser
+node dist/cli/cli/orion.js uninstall --yes  # remove cached ~/.orion/app/<version> data
 ORION_PORT=3002 node dist/cli/cli/orion.js  # use a different app port
 ```
 
@@ -78,7 +79,7 @@ Orion ships two packages that both install the `orion` command:
 
 | Channel | Package name | What ships in the package |
 | --- | --- | --- |
-| npm | `@nicolasakf/orion-agent` | CLI + full app bundle (`dist/orion-app`) |
+| npm | `orion-notebook` | CLI + full app bundle (`dist/orion-app`) |
 | PyPI | `orion-notebook` | Python launcher only; app bundle downloaded on first run |
 
 Keep version numbers in sync across `package.json`, `python/pyproject.toml`, and `python/orion_agent/cli.py` (`VERSION`).
@@ -101,14 +102,20 @@ Test a real install from the generated tarball before publishing:
 
 ```bash
 npm pack
-npm install -g ./nicolasakf-orion-agent-<version>.tgz
+npm install -g ./orion-notebook-<version>.tgz
 orion --yes
 ```
 
 Publish when ready:
 
 ```bash
-npm publish --access public
+npm publish
+```
+
+After the first `orion-notebook` publish, deprecate the legacy npm package:
+
+```bash
+npm deprecate @nicolasakf/orion-agent "Renamed to orion-notebook. Install with: npm install -g orion-notebook"
 ```
 
 ### Publish to PyPI
