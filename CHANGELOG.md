@@ -4,13 +4,25 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.5.2] - 2026-05-24
+
+### Added
+
+- `orion uninstall` subcommand to remove Orion and cached app bundles
+- `--app-only` CLI flag to start the app without launching Jupyter
+- macOS/Linux install script: `curl -fsSL https://www.orion-agent.ai/install.sh | bash`
 
 ### Changed
 
 - npm package renamed from `@nicolasakf/orion-agent` to `orion-notebook` (same name as PyPI)
 - `orion uninstall` removes pip-downloaded app cache under `~/.orion/app/<version>/` before package uninstall
-- macOS/Linux install script: `curl -fsSL https://www.orion-agent.ai/install.sh | bash` (hosted on [orion-agent.ai](https://www.orion-agent.ai))
+- UI: default font switched to Saira
+
+### Fixed
+
+- CLI: add timeout to server readiness check
+
+[0.5.2]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.5.2
 
 ## [0.5.1] - 2026-05-22
 
