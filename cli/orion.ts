@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
 
 import { startOrionAppServer, keepAliveUntilExit, openBrowser } from "../lib/cli/app-server";
 import {
@@ -22,6 +23,19 @@ import {
   resolveManagedVenvDirectory,
   resolveManagedVenvPythonPath,
 } from "../lib/cli/paths";
+import { runUninstall } from "../lib/cli/uninstall";
+
+/** Reads the published package version from package.json. */
+function readPackageVersion(): string {
+  const packageJsonPath = join(__dirname, "..", "..", "..", "package.json");
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
+    version?: string;
+  };
+  if (!packageJson.version) {
+    throw new Error(`Missing version in ${packageJsonPath}.`);
+  }
+  return packageJson.version;
+}
 
 interface CliOptions {
   yes: boolean;
@@ -43,16 +57,34 @@ function resolveJupyterRootDirectory(options: CliOptions): string {
   return options.here ? process.cwd() : resolveDefaultJupyterRootDirectory();
 }
 
+/** Prints uninstall usage for CLI users. */
+function printUninstallUsage(): void {
+  console.log(`Usage: orion uninstall [--yes] [--all]
+
+Removes Orion-managed data under ~/.orion.
+
+By default, removes the pip-downloaded app bundle and cached GitHub archive
+for this package version. Does not remove the npm/pip package itself.
+
+Options:
+  -y, --yes   Approve removal prompts.
+  --all       Remove the entire ~/.orion directory (app cache, Jupyter venv, portable Node).`);
+}
+
 /** Prints a compact usage message for CLI users. */
 function printUsage(): void {
   console.log(`Usage: orion [--yes] [--no-browser] [--here]
+       orion uninstall [--yes] [--all]
 
 Starts a local Orion app, starts Jupyter Server, and opens Orion already connected.
 
 Options:
   -y, --yes       Approve Orion-managed setup prompts.
   --no-browser   Start services without opening a browser.
-  --here         Start Jupyter from the current directory instead of ~.`);
+  --here         Start Jupyter from the current directory instead of ~.
+
+Commands:
+  uninstall      Remove cached Orion data under ~/.orion before package uninstall.`);
 }
 
 /** Attempts to start Jupyter from an already-compatible existing Python runtime. */
@@ -147,14 +179,40 @@ async function bootstrapJupyter(
   return server;
 }
 
-/** Runs the Orion CLI entrypoint. */
-async function main(): Promise<void> {
-  if (process.argv.includes("--help") || process.argv.includes("-h")) {
-    printUsage();
+/** Removes Orion-managed cache data under ~/.orion. */
+async function runUninstallCommand(argv: string[]): Promise<void> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    printUninstallUsage();
     return;
   }
 
-  const options = parseOptions(process.argv.slice(2));
+  const result = await runUninstall({
+    version: readPackageVersion(),
+    yes: argv.includes("--yes") || argv.includes("-y"),
+    all: argv.includes("--all"),
+  });
+
+  if (result.removed.length === 0) {
+    console.log("Nothing to remove.");
+    if (result.skipped.length > 0) {
+      console.log("Expected locations were already absent.");
+    }
+  } else {
+    console.log("Removed:");
+    for (const path of result.removed) {
+      console.log(`  - ${path}`);
+    }
+  }
+
+  console.log("");
+  console.log("To remove the installed package, run:");
+  console.log("  npm uninstall -g orion-notebook");
+  console.log("  pip uninstall orion-notebook");
+}
+
+/** Boots the local Orion app and Jupyter services. */
+async function runStartCommand(argv: string[]): Promise<void> {
+  const options = parseOptions(argv);
   if (options.noBrowser) {
     process.env.ORION_NO_BROWSER = "1";
   }
@@ -172,6 +230,24 @@ async function main(): Promise<void> {
   console.log(`Opening ${app.url} in your browser...`);
   openBrowser(app.url);
   keepAliveUntilExit([jupyter.process, app.process]);
+}
+
+/** Runs the Orion CLI entrypoint. */
+async function main(): Promise<void> {
+  const argv = process.argv.slice(2);
+  const command = argv[0];
+
+  if (command === "uninstall") {
+    await runUninstallCommand(argv.slice(1));
+    return;
+  }
+
+  if (argv.includes("--help") || argv.includes("-h")) {
+    printUsage();
+    return;
+  }
+
+  await runStartCommand(argv);
 }
 
 main().catch((error: unknown) => {

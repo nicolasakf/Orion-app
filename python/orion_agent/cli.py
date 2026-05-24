@@ -342,8 +342,93 @@ def start_orion_app(node: str, app: Path) -> tuple[subprocess.Popen[bytes], str]
     return proc, f"http://127.0.0.1:{port}"
 
 
-def main() -> None:
-    """Run the PyPI Orion CLI entrypoint."""
+def app_bundle_archive() -> Path:
+    """Return the cached GitHub app bundle archive for this version."""
+    return runtime_dir() / "downloads" / f"orion-app-{VERSION}.tar.gz"
+
+
+def remove_path(path: Path) -> bool:
+    """Remove a file or directory when it exists."""
+    if not path.exists():
+        return False
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+    return True
+
+
+def run_uninstall(assume_yes: bool, remove_all: bool) -> None:
+    """Remove Orion-managed cache data under ~/.orion."""
+    if remove_all:
+        home = orion_home()
+        if not home.exists():
+            print("Nothing to remove.")
+            return
+        if not confirm(
+            f"Remove all Orion data under {home}? "
+            "This deletes cached app bundles, Jupyter venv, and portable Node.",
+            assume_yes,
+        ):
+            raise SystemExit("Uninstall declined.")
+        shutil.rmtree(home)
+        print(f"Removed:\n  - {home}")
+        print_package_uninstall_hint()
+        return
+
+    targets = [app_dir(), app_bundle_archive()]
+    existing = [path for path in targets if path.exists()]
+    if not existing:
+        print("Nothing to remove.")
+        print("Expected locations were already absent.")
+        print_package_uninstall_hint()
+        return
+
+    if not confirm(
+        "Remove Orion cached data for "
+        f"v{VERSION}?\n" + "\n".join(f"  - {path}" for path in existing),
+        assume_yes,
+    ):
+        raise SystemExit("Uninstall declined.")
+
+    removed: list[Path] = []
+    for path in targets:
+        if remove_path(path):
+            removed.append(path)
+
+    if removed:
+        print("Removed:")
+        for path in removed:
+            print(f"  - {path}")
+    else:
+        print("Nothing to remove.")
+
+    print_package_uninstall_hint()
+
+
+def print_package_uninstall_hint() -> None:
+    """Print how to remove the installed npm or pip package."""
+    print("")
+    print("To remove the installed package, run:")
+    print("  npm uninstall -g orion-notebook")
+    print("  pip uninstall orion-notebook")
+
+
+def uninstall_main(argv: list[str]) -> None:
+    """Run the Orion uninstall subcommand."""
+    parser = argparse.ArgumentParser(description="Remove Orion-managed cache data.")
+    parser.add_argument("-y", "--yes", action="store_true", help="Approve removal prompts.")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Remove the entire ~/.orion directory.",
+    )
+    args = parser.parse_args(argv)
+    run_uninstall(args.yes, args.all)
+
+
+def start_main(argv: list[str]) -> None:
+    """Run the default Orion start command."""
     parser = argparse.ArgumentParser(description="Start Orion locally.")
     parser.add_argument("-y", "--yes", action="store_true", help="Approve setup prompts.")
     parser.add_argument("--no-browser", action="store_true", help="Do not open a browser.")
@@ -352,7 +437,7 @@ def main() -> None:
         action="store_true",
         help="Start Jupyter from the current directory instead of ~.",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     jupyter_root = Path.cwd() if args.here else Path.home()
 
@@ -388,6 +473,15 @@ def main() -> None:
         app_proc.wait()
     finally:
         jupyter_proc.terminate()
+
+
+def main() -> None:
+    """Run the PyPI Orion CLI entrypoint."""
+    argv = sys.argv[1:]
+    if argv and argv[0] == "uninstall":
+        uninstall_main(argv[1:])
+        return
+    start_main(argv)
 
 
 if __name__ == "__main__":
