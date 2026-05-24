@@ -1,5 +1,6 @@
 import { execFile as execFileCallback } from "child_process";
 import { mkdir } from "fs/promises";
+import path from "path";
 import { promisify } from "util";
 
 import {
@@ -33,6 +34,27 @@ export interface CommandSpec {
 export interface ManagedPackageSet {
   support: PythonRuntime["support"];
   packages: string[];
+}
+
+export type PythonInstallStatus = "ready" | "no-jupyter" | "unsupported" | "probe-failed";
+
+export interface PythonInstallation {
+  status: PythonInstallStatus;
+  label: string;
+  candidate?: PythonCandidate;
+  runtime?: PythonRuntime;
+  executable?: string;
+  version?: [number, number, number];
+  reason?: string;
+  managed?: boolean;
+}
+
+export interface PythonInstallationReport {
+  ready: PythonInstallation[];
+  noJupyter: PythonInstallation[];
+  unsupported: PythonInstallation[];
+  probeFailed: PythonInstallation[];
+  venvCreationRuntime: PythonRuntime | null;
 }
 
 type ExecFileLike = (
@@ -94,6 +116,19 @@ export function getPythonDiscoveryCandidates(
     candidates.unshift({ label: "PYTHON", command: env.PYTHON, argsPrefix: [] });
   }
 
+  if (env.CONDA_PREFIX) {
+    const condaPython =
+      platform === "win32"
+        ? path.join(env.CONDA_PREFIX, "python.exe")
+        : path.join(env.CONDA_PREFIX, "bin", "python");
+    const insertAt = env.PYTHON ? 1 : 0;
+    candidates.splice(insertAt, 0, {
+      label: "Conda",
+      command: condaPython,
+      argsPrefix: [],
+    });
+  }
+
   return candidates;
 }
 
@@ -138,18 +173,212 @@ export async function inspectPythonCandidate(
   }
 }
 
+/** Formats a Python version tuple for CLI output. */
+export function formatPythonVersion(version: [number, number, number]): string {
+  return version.join(".");
+}
+
+/** Probes one Python candidate and classifies the result for CLI reporting. */
+export async function probePythonCandidate(
+  candidate: PythonCandidate,
+  execFileImpl: ExecFileLike = execFile,
+  hasJupyter: (
+    command: string,
+    argsPrefix?: string[]
+  ) => Promise<boolean> = async () => false
+): Promise<PythonInstallation> {
+  try {
+    const { stdout } = await execFileImpl(candidate.command, [
+      ...candidate.argsPrefix,
+      "-c",
+      INSPECT_SCRIPT,
+    ]);
+    const data = JSON.parse(stdout) as {
+      executable?: unknown;
+      version?: unknown;
+    };
+
+    if (
+      typeof data.executable !== "string" ||
+      !Array.isArray(data.version) ||
+      data.version.length < 3
+    ) {
+      return {
+        status: "probe-failed",
+        label: candidate.label,
+        reason: "Could not inspect Python executable",
+      };
+    }
+
+    const version = data.version.slice(0, 3) as [number, number, number];
+    const support = getPythonSupport(version);
+    if (support === "unsupported") {
+      return {
+        status: "unsupported",
+        label: candidate.label,
+        candidate,
+        executable: data.executable,
+        version,
+        reason: "Python 3.8+ required",
+      };
+    }
+
+    const runtime: PythonRuntime = {
+      candidate,
+      executable: data.executable,
+      version,
+      support,
+    };
+    const jupyterReady = await hasJupyter(candidate.command, candidate.argsPrefix);
+    if (jupyterReady) {
+      return {
+        status: "ready",
+        label: candidate.label,
+        candidate,
+        runtime,
+        executable: data.executable,
+        version,
+      };
+    }
+
+    return {
+      status: "no-jupyter",
+      label: candidate.label,
+      candidate,
+      runtime,
+      executable: data.executable,
+      version,
+      reason: "jupyter_server not installed",
+    };
+  } catch {
+    return {
+      status: "probe-failed",
+      label: candidate.label,
+      candidate,
+      reason: "Command failed or Python is not installed",
+    };
+  }
+}
+
+/** Probes managed, candidate, and saved Python installations for CLI selection. */
+export async function probePythonInstallations(
+  options: {
+    candidates?: PythonCandidate[];
+    execFileImpl?: ExecFileLike;
+    hasJupyter?: (command: string, argsPrefix?: string[]) => Promise<boolean>;
+    managedPythonPath?: string;
+  } = {}
+): Promise<PythonInstallationReport> {
+  const candidates = options.candidates ?? getPythonDiscoveryCandidates();
+  const execFileImpl = options.execFileImpl ?? execFile;
+  const hasJupyter =
+    options.hasJupyter ??
+    (async () => {
+      return false;
+    });
+
+  const ready: PythonInstallation[] = [];
+  const noJupyter: PythonInstallation[] = [];
+  const unsupported: PythonInstallation[] = [];
+  const probeFailed: PythonInstallation[] = [];
+  const seenExecutables = new Set<string>();
+  const seenProbeCommands = new Set<string>();
+
+  for (const candidate of candidates) {
+    const probeCommand = [candidate.command, ...candidate.argsPrefix].join(" ");
+    if (seenProbeCommands.has(probeCommand)) {
+      continue;
+    }
+    seenProbeCommands.add(probeCommand);
+
+    const installation = await probePythonCandidate(candidate, execFileImpl, hasJupyter);
+    if (
+      installation.executable &&
+      (installation.status === "ready" ||
+        installation.status === "no-jupyter" ||
+        installation.status === "unsupported")
+    ) {
+      if (seenExecutables.has(installation.executable)) {
+        continue;
+      }
+      seenExecutables.add(installation.executable);
+    }
+
+    switch (installation.status) {
+      case "ready":
+        ready.push(installation);
+        break;
+      case "no-jupyter":
+        noJupyter.push(installation);
+        break;
+      case "unsupported":
+        unsupported.push(installation);
+        break;
+      case "probe-failed":
+        probeFailed.push(installation);
+        break;
+    }
+  }
+
+  if (options.managedPythonPath) {
+    const managedCandidate: PythonCandidate = {
+      label: "Orion managed",
+      command: options.managedPythonPath,
+      argsPrefix: [],
+    };
+    if (!seenExecutables.has(options.managedPythonPath)) {
+      const managedInstallation = await probePythonCandidate(
+        managedCandidate,
+        execFileImpl,
+        hasJupyter
+      );
+      if (managedInstallation.status === "ready" && managedInstallation.runtime) {
+        ready.push({
+          ...managedInstallation,
+          label: "Orion managed",
+          managed: true,
+        });
+        seenExecutables.add(options.managedPythonPath);
+      }
+    }
+  }
+
+  const venvCreationRuntime = await discoverPythonRuntime(candidates, execFileImpl);
+
+  return {
+    ready,
+    noJupyter,
+    unsupported,
+    probeFailed,
+    venvCreationRuntime,
+  };
+}
+
+/** Discovers all supported Python runtimes, deduplicated by executable path. */
+export async function discoverAllPythonRuntimes(
+  candidates = getPythonDiscoveryCandidates(),
+  execFileImpl: ExecFileLike = execFile
+): Promise<PythonRuntime[]> {
+  const runtimes: PythonRuntime[] = [];
+  const seenExecutables = new Set<string>();
+
+  for (const candidate of candidates) {
+    const runtime = await inspectPythonCandidate(candidate, execFileImpl);
+    if (runtime && !seenExecutables.has(runtime.executable)) {
+      seenExecutables.add(runtime.executable);
+      runtimes.push(runtime);
+    }
+  }
+
+  return runtimes;
+}
+
 /** Discovers the best supported Python runtime, preferring Python 3.9+. */
 export async function discoverPythonRuntime(
   candidates = getPythonDiscoveryCandidates(),
   execFileImpl: ExecFileLike = execFile
 ): Promise<PythonRuntime | null> {
-  const runtimes: PythonRuntime[] = [];
-  for (const candidate of candidates) {
-    const runtime = await inspectPythonCandidate(candidate, execFileImpl);
-    if (runtime) {
-      runtimes.push(runtime);
-    }
-  }
+  const runtimes = await discoverAllPythonRuntimes(candidates, execFileImpl);
 
   return (
     runtimes.find((runtime) => runtime.support === "preferred") ??

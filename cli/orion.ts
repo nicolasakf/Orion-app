@@ -6,7 +6,6 @@ import { startOrionAppServer, keepAliveUntilExit, openBrowser } from "../lib/cli
 import {
   checkJupyterCapabilities,
   ensureRuntimeDirectory,
-  hasJupyterServer,
   hasJupyterServerCommand,
   resolveDefaultJupyterRootDirectory,
   saveJupyterConnectionHandoff,
@@ -15,15 +14,21 @@ import {
 } from "../lib/cli/jupyter";
 import { confirmSetup } from "../lib/cli/prompt";
 import {
-  discoverPythonRuntime,
+  buildPythonInstallationReport,
+  resolvePythonChoice,
+  savePythonPreference,
+  type PythonSelectionChoice,
+} from "../lib/cli/python-selection";
+import {
   ensureManagedPythonEnvironment,
+  type PythonInstallationReport,
   type PythonRuntime,
 } from "../lib/cli/python";
 import {
   resolveManagedVenvDirectory,
   resolveManagedVenvPythonPath,
 } from "../lib/cli/paths";
-import { runUninstall } from "../lib/cli/uninstall";
+import { runConfigCommand } from "../lib/cli/config";
 
 /** Reads the published package version from package.json. */
 function readPackageVersion(): string {
@@ -37,11 +42,14 @@ function readPackageVersion(): string {
   return packageJson.version;
 }
 
+import { runUninstall } from "../lib/cli/uninstall";
+
 interface CliOptions {
   yes: boolean;
   noBrowser: boolean;
   here: boolean;
   appOnly: boolean;
+  pickPython: boolean;
 }
 
 /** Parses the small option set supported by the Orion CLI. */
@@ -51,6 +59,7 @@ function parseOptions(argv: string[]): CliOptions {
     noBrowser: argv.includes("--no-browser"),
     here: argv.includes("--here"),
     appOnly: argv.includes("--app-only"),
+    pickPython: argv.includes("--pick-python"),
   };
 }
 
@@ -75,7 +84,8 @@ Options:
 
 /** Prints a compact usage message for CLI users. */
 function printUsage(): void {
-  console.log(`Usage: orion [--yes] [--no-browser] [--here] [--app-only]
+  console.log(`Usage: orion [--yes] [--no-browser] [--here] [--app-only] [--pick-python]
+       orion config [show|python ...]
        orion uninstall [--yes] [--all]
 
 Starts a local Orion app, starts Jupyter Server, and opens Orion already connected.
@@ -86,20 +96,20 @@ Options:
   --here         Start Jupyter from the current directory instead of ~.
   --app-only     Start only the Orion app (skip Jupyter). Connect to an existing
                  Jupyter server from the UI, or use a prior handoff file.
+  --pick-python  Ignore the saved Python preference and show the selection menu.
 
 Commands:
+  config         Show or change Orion CLI settings under ~/.orion/runtime.
   uninstall      Remove cached Orion data under ~/.orion before package uninstall.`);
 }
 
-/** Attempts to start Jupyter from an already-compatible existing Python runtime. */
-async function tryExistingJupyter(
+/** Starts Jupyter from a user-selected existing Python runtime. */
+async function startExistingJupyter(
   runtime: PythonRuntime,
-  jupyterRoot: string
-): Promise<StartedJupyterServer | null> {
-  if (!(await hasJupyterServer(runtime))) {
-    return null;
-  }
-
+  options: CliOptions,
+  jupyterRoot: string,
+  report: PythonInstallationReport
+): Promise<StartedJupyterServer> {
   const server = await startJupyterServer(
     runtime.candidate.command,
     runtime.candidate.argsPrefix,
@@ -108,7 +118,20 @@ async function tryExistingJupyter(
   const capabilities = await checkJupyterCapabilities(server.baseUrl, server.token);
   if (!capabilities.ok) {
     server.dispose();
-    return null;
+    if (!report.venvCreationRuntime) {
+      throw new Error(
+        `The selected Python is missing required Jupyter APIs (${capabilities.missing.join(", ")}).`
+      );
+    }
+
+    const accepted = await confirmSetup(
+      `The selected Python is missing required Jupyter APIs (${capabilities.missing.join(", ")}). Create or update an Orion-managed runtime instead?`,
+      { assumeYes: options.yes }
+    );
+    if (!accepted) {
+      throw new Error("Setup declined. Orion cannot continue without a compatible Jupyter runtime.");
+    }
+    return startManagedJupyter(report.venvCreationRuntime, options, jupyterRoot, true);
   }
 
   return server;
@@ -118,18 +141,21 @@ async function tryExistingJupyter(
 async function startManagedJupyter(
   runtime: PythonRuntime,
   options: CliOptions,
-  jupyterRoot: string
+  jupyterRoot: string,
+  setupApproved = false
 ): Promise<StartedJupyterServer> {
   const venvPython = resolveManagedVenvPythonPath(resolveManagedVenvDirectory());
   if (!existsSync(venvPython) || !(await hasJupyterServerCommand(venvPython))) {
-    const accepted = await confirmSetup(
-      "Orion needs a local Jupyter runtime. Create it under ~/.orion/runtime?",
-      { assumeYes: options.yes }
-    );
-    if (!accepted) {
-      throw new Error(
-        "Setup declined. Install Jupyter yourself or rerun `orion --yes` to create an Orion-managed runtime."
+    if (!setupApproved) {
+      const accepted = await confirmSetup(
+        "Orion needs a local Jupyter runtime. Create it under ~/.orion/runtime?",
+        { assumeYes: options.yes }
       );
+      if (!accepted) {
+        throw new Error(
+          "Setup declined. Install Jupyter yourself or rerun `orion --yes` to create an Orion-managed runtime."
+        );
+      }
     }
     await ensureManagedPythonEnvironment(runtime);
   }
@@ -146,9 +172,34 @@ async function startManagedJupyter(
       throw new Error("Setup declined. Orion cannot continue without a compatible Jupyter runtime.");
     }
     await ensureManagedPythonEnvironment(runtime);
-    return startManagedJupyter(runtime, { ...options, yes: true }, jupyterRoot);
+    return startManagedJupyter(runtime, { ...options, yes: true }, jupyterRoot, true);
   }
   return server;
+}
+
+/** Starts Jupyter for the resolved Python choice. */
+async function startJupyterForChoice(
+  choice: PythonSelectionChoice,
+  options: CliOptions,
+  jupyterRoot: string,
+  report: PythonInstallationReport
+): Promise<StartedJupyterServer> {
+  if (choice.kind === "managed") {
+    return startManagedJupyter(choice.runtime, options, jupyterRoot, true);
+  }
+
+  if (choice.installation?.managed) {
+    const venvPython = resolveManagedVenvPythonPath(resolveManagedVenvDirectory());
+    const server = await startJupyterServer(venvPython, [], jupyterRoot);
+    const capabilities = await checkJupyterCapabilities(server.baseUrl, server.token);
+    if (!capabilities.ok) {
+      server.dispose();
+      return startManagedJupyter(choice.runtime, options, jupyterRoot, true);
+    }
+    return server;
+  }
+
+  return startExistingJupyter(choice.runtime, options, jupyterRoot, report);
 }
 
 /** Bootstraps Jupyter and writes the Orion app handoff file. */
@@ -157,24 +208,18 @@ async function bootstrapJupyter(
   jupyterRoot: string
 ): Promise<StartedJupyterServer> {
   await ensureRuntimeDirectory();
-  const runtime = await discoverPythonRuntime();
-  if (!runtime) {
-    await confirmSetup(
-      "Orion needs Python 3.8+ to run notebooks. Managed Python download is not bundled yet; show setup instructions?",
-      { assumeYes: options.yes }
-    );
-    throw new Error(
-      "No supported Python runtime found. Install Python 3.8+ from python.org, Homebrew, Conda, or the Windows Python Launcher, then rerun `orion`."
-    );
-  }
-
-  const existingServer = await tryExistingJupyter(runtime, jupyterRoot);
-  const server = existingServer ?? (await startManagedJupyter(runtime, options, jupyterRoot));
+  const report = await buildPythonInstallationReport();
+  const choice = await resolvePythonChoice(report, {
+    assumeYes: options.yes,
+    forcePrompt: options.pickPython,
+  });
+  const server = await startJupyterForChoice(choice, options, jupyterRoot, report);
   const capabilities = await checkJupyterCapabilities(server.baseUrl, server.token);
+  await savePythonPreference(choice);
   await saveJupyterConnectionHandoff({
     baseUrl: server.baseUrl,
     token: server.token,
-    source: existingServer ? "existing" : "managed",
+    source: choice.kind === "managed" || choice.installation?.managed ? "managed" : "existing",
     pythonPath: server.pythonPath,
     jupyterVersion: capabilities.jupyterVersion,
     capabilities: capabilities.capabilities,
@@ -233,7 +278,13 @@ async function runStartCommand(argv: string[]): Promise<void> {
     console.log("Starting Orion app server...");
   }
 
-  const app = await startOrionAppServer();
+  let app: Awaited<ReturnType<typeof startOrionAppServer>>;
+  try {
+    app = await startOrionAppServer();
+  } catch (error) {
+    jupyter?.dispose();
+    throw error;
+  }
 
   console.log(`Orion is running at ${app.url}`);
   if (jupyter && jupyterRoot) {
@@ -251,6 +302,13 @@ async function main(): Promise<void> {
 
   if (command === "uninstall") {
     await runUninstallCommand(argv.slice(1));
+    return;
+  }
+
+  if (command === "config") {
+    await runConfigCommand(argv.slice(1), {
+      yes: argv.includes("--yes") || argv.includes("-y"),
+    });
     return;
   }
 

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCreateVenvCommand,
   buildInstallPackagesCommand,
+  discoverAllPythonRuntimes,
   discoverPythonRuntime,
   getManagedPackageSet,
   getPythonDiscoveryCandidates,
@@ -65,8 +66,40 @@ describe("CLI Python runtime", () => {
   });
 
   it("uses Windows Python launcher candidates on Windows", () => {
-    expect(getPythonDiscoveryCandidates("win32").map((candidate) => candidate.command)).toEqual(
-      ["py", "python", "python3"]
-    );
+    expect(
+      getPythonDiscoveryCandidates("win32", {}).map((candidate) => candidate.command)
+    ).toEqual(["py", "python", "python3"]);
+  });
+
+  it("includes the active Conda interpreter when CONDA_PREFIX is set", () => {
+    expect(
+      getPythonDiscoveryCandidates("darwin", {
+        CONDA_PREFIX: "/opt/anaconda3",
+      }).map((candidate) => candidate.command)
+    ).toEqual([
+      "/opt/anaconda3/bin/python",
+      "python3",
+      "python",
+      "/opt/homebrew/bin/python3",
+      "/usr/local/bin/python3",
+    ]);
+  });
+
+  it("deduplicates runtimes that resolve to the same executable", async () => {
+    const candidates: PythonCandidate[] = [
+      { label: "python3", command: "python3", argsPrefix: [] },
+      { label: "python", command: "python", argsPrefix: [] },
+    ];
+
+    const runtimes = await discoverAllPythonRuntimes(candidates, async () => ({
+      stdout: JSON.stringify({
+        executable: "/opt/anaconda3/bin/python",
+        version: [3, 13, 5],
+      }),
+      stderr: "",
+    }));
+
+    expect(runtimes).toHaveLength(1);
+    expect(runtimes[0]?.executable).toBe("/opt/anaconda3/bin/python");
   });
 });

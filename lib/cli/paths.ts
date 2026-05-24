@@ -67,6 +67,17 @@ export function resolveJupyterConnectionFilePath(
   );
 }
 
+/** Resolves the saved Python preference file for the Orion CLI. */
+export function resolvePythonPreferenceFilePath(
+  options: RuntimePathOptions = {}
+): string {
+  const platform = options.platform ?? process.platform;
+  return getPathModule(platform).join(
+    resolveOrionRuntimeDirectory(options),
+    "python-preference.json"
+  );
+}
+
 /** Resolves Orion's managed Python virtual environment directory. */
 export function resolveManagedVenvDirectory(
   options: RuntimePathOptions = {}

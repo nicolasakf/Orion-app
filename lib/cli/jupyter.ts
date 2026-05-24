@@ -206,7 +206,7 @@ export async function startJupyterServer(
 
   const proc = spawn(pythonCommand, args, {
     cwd,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: "ignore",
     env: process.env,
   });
 
