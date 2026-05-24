@@ -63,7 +63,7 @@ Phase 1 — Agent
 - [ ] 7. Tag and push
 - [ ] 8. GitHub release + app bundle asset
 - [ ] 9. Build PyPI artifacts (twine check only)
-- [ ] 10. Print manual publish instructions → STOP
+- [ ] 10. Clean up temp release files (e.g. `CHANGELOG-excerpt.md`, `npm pack` `.tgz`); print manual publish instructions → STOP
 
 Phase 2 — User (manual)
 - [ ] 11. npm publish
@@ -190,6 +190,8 @@ gh release create v<version> \
 ```
 
 Write `CHANGELOG-excerpt.md` locally from the new `CHANGELOG.md` section (do not commit it). Use `--notes "..."` for a one-liner instead if preferred.
+
+After the release is created, delete `CHANGELOG-excerpt.md` and any other scratch files from the release (e.g. `orion-notebook-*.tgz` from `npm pack`). Do not leave them untracked in the repo.
 
 To replace a bad asset after rebuilding: `gh release upload v<version> dist/orion-app-<version>.tar.gz --clobber`
 
