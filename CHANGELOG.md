@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 - npm package renamed from `@nicolasakf/orion-agent` to `orion-notebook` (same name as PyPI)
 - `orion uninstall` removes pip-downloaded app cache under `~/.orion/app/<version>/` before package uninstall
+- macOS/Linux install script: `curl -fsSL https://www.orion-agent.ai/install.sh | bash` (hosted on [orion-agent.ai](https://www.orion-agent.ai))
 
 ## [0.5.1] - 2026-05-22
 

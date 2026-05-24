@@ -36,6 +36,14 @@ Orion closes that gap. Built around a modern notebook IDE, it feeds the right co
 
 Running `orion` starts Jupyter, launches Orion locally, opens your browser, and auto-connects to the Jupyter server. All managed files live under `~/.orion` (Windows: `%USERPROFILE%\.orion`).
 
+### Install script (macOS / Linux)
+
+```bash
+curl -fsSL https://www.orion-agent.ai/install.sh | bash
+```
+
+The script installs `orion-notebook` via npm when Node.js 20+ is available, otherwise via pip. Pin a version with `ORION_VERSION=0.5.1` or force a method with `ORION_INSTALL_METHOD=npm|pip`.
+
 ### Install via npm (recommended)
 
 Both npm and PyPI use the package name **`orion-notebook`**:
