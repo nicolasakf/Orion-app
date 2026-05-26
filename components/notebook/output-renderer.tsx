@@ -16,6 +16,7 @@ import {
   getOutputPresentationMimes,
   resolveOutputForPresentation,
 } from "@/components/notebook/output-presentation";
+import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
 
 const COLLAPSED_HEIGHT_DEFAULT = 192; // px — matches Tailwind h-48
 const COLLAPSED_HEIGHT_MIN = 64; // px
@@ -259,6 +260,12 @@ interface OutputRendererProps {
   onCopyOutput?: (cellIndex: number, outputIndex: number) => void;
   onHideOutput?: (cellIndex: number, outputIndex: number) => void;
   onToggleOutputAppView?: (cellIndex: number, outputIndex: number) => void;
+  onOrionUiStateChange?: (
+    key: string,
+    value: OrionUiLocalValue,
+    outputId?: string,
+  ) => void;
+  onOrionUiAction?: (action: unknown) => void;
   isInAppView?: boolean;
   /** Whether this output is collapsed (for text-based outputs) */
   isCollapsed?: boolean;
@@ -280,6 +287,8 @@ export function OutputRenderer({
   onCopyOutput,
   onHideOutput,
   onToggleOutputAppView,
+  onOrionUiStateChange,
+  onOrionUiAction,
   isInAppView,
   isCollapsed,
   onToggleCollapse,
@@ -417,6 +426,8 @@ export function OutputRenderer({
       onCopyOutput,
       onHideOutput,
       onToggleOutputAppView,
+      onOrionUiStateChange,
+      onOrionUiAction,
       isInAppView,
       cellIndex,
       outputIndex,
@@ -506,6 +517,8 @@ export function OutputRenderer({
         onCopyOutput,
         onHideOutput,
         onToggleOutputAppView,
+        onOrionUiStateChange,
+        onOrionUiAction,
         isInAppView: !!isInAppView,
         presentationMenu: sharedPresentationMenu,
       }}

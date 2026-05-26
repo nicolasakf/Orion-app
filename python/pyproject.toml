@@ -21,4 +21,4 @@ classifiers = [
 orion = "orion_agent.cli:main"
 
 [tool.setuptools]
-packages = ["orion_agent"]
+packages = ["orion_agent", "orion_ui"]

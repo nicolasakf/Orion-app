@@ -1,4 +1,5 @@
 import { OutputType } from "@/lib/types";
+import { ORION_UI_MIME_TYPE, parseOrionUiMimePayload } from "@/lib/notebook/app-view";
 import { extractTableFromHTML, isEmptyDataframeHtmlTable } from "@/lib/notebook/table-extractor";
 import { NotebookMimeRegistry } from "./registry";
 import { ERROR_MIME, STREAM_MIME } from "./synthetic-mimes";
@@ -296,6 +297,32 @@ function buildDefaultFactories(): MimeRendererFactory[] {
           text: `${payload.ename ?? ""}: ${payload.evalue ?? ""}${traceback ? `\n${traceback}` : ""}`,
         };
       },
+    },
+    {
+      id: "orion-ui",
+      mimeTypes: [ORION_UI_MIME_TYPE],
+      rank: 4,
+      safe: true,
+      kind: "html",
+      outputTypes: [OutputType.EXECUTE_RESULT, OutputType.DISPLAY_DATA],
+      summarize: (model) => {
+        const parsed = parseOrionUiMimePayload(model.value);
+        if (parsed.status === "invalid") {
+          return `[Orion UI]\nInvalid payload: ${parsed.errors.join("; ")}`;
+        }
+        return `[Orion UI]\nRoot: ${parsed.payload.root.type}\nState keys: ${Object.keys(parsed.payload.state).join(", ") || "(none)"}`;
+      },
+      toAgentResult: (model) => {
+        const parsed = parseOrionUiMimePayload(model.value);
+        if (parsed.status === "invalid") {
+          return { text: `[Orion UI]\nInvalid payload: ${parsed.errors.join("; ")}` };
+        }
+        return {
+          text: `[Orion UI]\nRoot: ${parsed.payload.root.type}\n${stringifyJsonValue(model.value)}`,
+        };
+      },
+      textLength: () => 0,
+      toClipboard: (model) => ({ kind: "text", text: stringifyJsonValue(model.value) }),
     },
     {
       id: "orion-plotly-json",

@@ -8,6 +8,7 @@ import ReactGridLayout, {
 import { AlertTriangle, GripVertical, LayoutTemplate, X } from "lucide-react";
 
 import { NotebookAppSchemaView } from "@/components/notebook/notebook-app-schema-view";
+import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import { OutputRenderer } from "@/components/notebook/output-renderer";
 import { Button } from "@/components/ui/button";
@@ -36,6 +37,12 @@ interface NotebookAppViewProps {
   onAppViewChange: (appView: NotebookAppViewMetadata) => void;
   onRemoveAppItem: (appCell: NotebookAppCell) => void;
   onNotebookViewRequest?: () => void;
+  onOrionUiStateChange?: (
+    key: string,
+    value: OrionUiLocalValue,
+    outputId?: string,
+  ) => void;
+  onOrionUiAction?: (action: unknown) => void;
 }
 
 function sourceToString(source: string[] | undefined): string {
@@ -110,6 +117,8 @@ export function NotebookAppView({
   onAppViewChange,
   onRemoveAppItem,
   onNotebookViewRequest,
+  onOrionUiStateChange,
+  onOrionUiAction,
 }: NotebookAppViewProps): React.JSX.Element {
   const { width, containerRef, mounted } = useContainerWidth();
   const schemaResult = useMemo(
@@ -153,7 +162,14 @@ export function NotebookAppView({
   );
 
   if (schemaResult.status === "valid") {
-    return <NotebookAppSchemaView notebook={notebook} schema={schemaResult.schema} />;
+    return (
+      <NotebookAppSchemaView
+        notebook={notebook}
+        schema={schemaResult.schema}
+        onOrionUiStateChange={onOrionUiStateChange}
+        onOrionUiAction={onOrionUiAction}
+      />
+    );
   }
 
   if (schemaResult.status === "invalid") {
@@ -311,6 +327,8 @@ export function NotebookAppView({
                               notebookMetadata={notebook.metadata}
                               cellIndex={appCell.cellIndex}
                               outputIndex={appCell.outputIndex ?? 0}
+                              onOrionUiStateChange={onOrionUiStateChange}
+                              onOrionUiAction={onOrionUiAction}
                             />
                           ) : (
                             <div className="p-3 text-sm text-muted-foreground">

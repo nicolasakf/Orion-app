@@ -26,6 +26,11 @@ const NOTEBOOK_EXPORT_FORMATS = new Set<string>(
   NOTEBOOK_EXPORT_OPTIONS.map((option) => option.format),
 );
 
+/** Standalone exports cannot rely on Next.js @font-face bundles; load Saira from Google Fonts. */
+const EXPORT_SANS_FONT_FAMILY = "'Saira', sans-serif";
+const EXPORT_SAIRA_FONT_STYLESHEET =
+  "https://fonts.googleapis.com/css2?family=Saira:ital,wght@0,100..900;1,100..900&display=swap";
+
 /**
  * Returns true when an arbitrary value is one of Orion's supported notebook
  * export formats.
@@ -130,7 +135,10 @@ function getRootCustomPropertyStyle(): string {
   const computedStyle = window.getComputedStyle(document.documentElement);
 
   return Array.from(computedStyle)
-    .filter((propertyName) => propertyName.startsWith("--"))
+    .filter(
+      (propertyName) =>
+        propertyName.startsWith("--") && propertyName !== "--font-sans",
+    )
     .map((propertyName) => {
       const value = computedStyle.getPropertyValue(propertyName).trim();
       return `${propertyName}: ${value};`;
@@ -311,14 +319,18 @@ export function buildScreenNotebookExportHtml({
     : "light";
 
   return `<!doctype html>
-<html class="${escapeHtml(htmlClassName)}" data-color-mode="${colorMode}" style="${escapeHtml(rootCustomProperties)}">
+<html class="${escapeHtml(htmlClassName)}" data-color-mode="${colorMode}" style="${escapeHtml(rootCustomProperties)} --font-sans: ${EXPORT_SANS_FONT_FAMILY};">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>${escapedTitle}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="${EXPORT_SAIRA_FONT_STYLESHEET}" />
   <style>${styleText}</style>
   <style>
     html {
+      --font-sans: ${EXPORT_SANS_FONT_FAMILY};
       background: ${computedRoot.backgroundColor};
       height: auto !important;
       min-height: 100% !important;
@@ -333,7 +345,7 @@ export function buildScreenNotebookExportHtml({
       overscroll-behavior: auto !important;
       background: ${computedBody.backgroundColor};
       color: ${computedBody.color};
-      font-family: ${computedBody.fontFamily};
+      font-family: ${EXPORT_SANS_FONT_FAMILY};
       -webkit-font-smoothing: antialiased;
       text-rendering: optimizeLegibility;
     }
@@ -395,6 +407,7 @@ export function buildScreenNotebookExportHtml({
     }
     .orion-screen-export-content .wmde-markdown,
     .orion-screen-export-content .wmde-markdown-var {
+      font-family: var(--font-sans), sans-serif !important;
       --color-fg-default: hsl(var(--foreground)) !important;
       --color-fg-muted: hsl(var(--muted-foreground)) !important;
       --color-fg-subtle: hsl(var(--muted-foreground)) !important;

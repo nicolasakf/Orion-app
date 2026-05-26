@@ -22,17 +22,22 @@ interface MarkdownRendererProps {
  * @param source - The markdown string to be rendered
  * @returns A React component that renders the formatted markdown
  */
+const defaultMarkdownStyle: React.CSSProperties = {
+  backgroundColor: "transparent",
+  fontFamily: "var(--font-sans), sans-serif",
+};
+
 export function MarkdownRenderer({
   source,
-  style = { backgroundColor: "transparent" },
+  style,
 }: MarkdownRendererProps) {
   return (
-    <div className="prose prose-sm max-w-none dark:prose-invert">
+    <div className="prose prose-sm max-w-none font-sans dark:prose-invert">
       <MarkdownPreview
         source={normalizeMarkdownMathSource(source)}
         remarkPlugins={[remarkMath, remarkMathJaxDelimiters]}
         rehypePlugins={[rehypeKatex]}
-        style={style}
+        style={{ ...defaultMarkdownStyle, ...style }}
       />
     </div>
   );

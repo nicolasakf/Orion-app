@@ -52,6 +52,13 @@ interface ExecutionFuture {
   done: Promise<void>;
 }
 
+export interface KernelExecuteOptions {
+  /** Do not add the request to kernel history. Useful for UI state sync. */
+  storeHistory?: boolean;
+  /** Execute silently so the kernel does not emit user-visible outputs. */
+  silent?: boolean;
+}
+
 /** Summary of a tracked kernel session, returned by listActiveSessions(). */
 export interface KernelSessionInfo {
   /** Notebook path used as the session key. */
@@ -861,7 +868,8 @@ export class KernelService {
    */
   async execute(
     code: string,
-    onMsg?: (msg: any) => void
+    onMsg?: (msg: any) => void,
+    options: KernelExecuteOptions = {},
   ): Promise<ExecutionFuture> {
     this.assertNotDisposed();
     const entry = this.getActiveEntry();
@@ -878,7 +886,11 @@ export class KernelService {
       );
     }
 
-    const future = kernel.requestExecute({ code });
+    const future = kernel.requestExecute({
+      code,
+      silent: options.silent ?? false,
+      store_history: options.storeHistory ?? true,
+    });
 
     if (onMsg) {
       future.onIOPub = (msg) => {

@@ -1,5 +1,6 @@
 import type ansiToHtml from "ansi-to-html";
 import type { NotebookOutputType } from "@/lib/types";
+import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
 
 /**
  * “Presentation” submenu: switch which MIME in the output bundle is shown
@@ -19,6 +20,12 @@ export interface NotebookOutputActionHandlers {
   onCopyOutput?: (cellIndex: number, outputIndex: number) => void;
   onHideOutput?: (cellIndex: number, outputIndex: number) => void;
   onToggleOutputAppView?: (cellIndex: number, outputIndex: number) => void;
+  onOrionUiStateChange?: (
+    key: string,
+    value: OrionUiLocalValue,
+    outputId?: string,
+  ) => void;
+  onOrionUiAction?: (action: unknown) => void;
   isInAppView?: boolean;
   /** When set, the output context menu includes a Presentation submenu. */
   presentationMenu?: NotebookOutputPresentationMenu | null;

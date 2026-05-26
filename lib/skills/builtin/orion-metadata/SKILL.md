@@ -38,6 +38,8 @@ Legacy note:
 
 Controls notebook App View layout. Orion supports a legacy grid/canvas layout and a declarative schema layout. When a valid `appView.schema` is present, the declarative renderer takes precedence.
 
+App View metadata is a composition layer, not the source of truth for runtime behavior. Prefer `orion_ui` code-cell outputs for sliders, selects, forms, action buttons, and other interactive controls, then reference those outputs from App View.
+
 - `appView.grid.cols`: positive integer (`> 0`)
 - `appView.grid.rowHeight`: positive integer (`> 0`)
 - `appView.grid.margin`: tuple `[x, y]` with non-negative integers
@@ -64,13 +66,13 @@ Common declarative props:
 
 - Layout props: `gap`, `padding`, `columns`, `align`, `title`, `description`, `label`, `value`
 - Notebook references: `cellId`, `outputIndex`
-- Local controls: `stateKey`, `defaultValue`, `placeholder`, `options`, `min`, `max`, `step`, `variant`, `size`
+- Static/local controls: `stateKey`, `defaultValue`, `placeholder`, `options`, `min`, `max`, `step`, `variant`, `size`
 
 Declarative schema v1 limitations:
 
 - Only built-in primitives are supported.
 - No custom primitive paths, arbitrary React, arbitrary CSS, `className`, or `style`.
-- Local controls do not execute notebook cells or persist state.
+- Local controls in metadata do not execute notebook cells, persist Python state, or replace `orion_ui` runtime controls.
 
 Normalization behavior:
 

@@ -44,6 +44,30 @@ function main(): void {
     assert(mime === "application/vnd.plotly.v1+json", `expected plotly mime, got ${mime}`);
   });
 
+  runTest("preferredMimeType picks Orion UI over HTML and plain text", () => {
+    const output: NotebookOutputType = {
+      output_type: OutputType.DISPLAY_DATA,
+      data: {
+        "application/vnd.orion.ui+json": {
+          version: 1,
+          id: "ui-test",
+          root: {
+            type: "Input",
+            props: { stateKey: "region", defaultValue: "west" },
+            children: [],
+          },
+          state: { region: "west" },
+          bindings: { region: { kind: "python_state", valueType: "string" } },
+        },
+        "text/html": ["<div>fallback</div>"],
+        "text/plain": ["plain fallback"],
+      },
+      metadata: {},
+    };
+    const mime = registry.preferredMimeType(output);
+    assert(mime === "application/vnd.orion.ui+json", `expected Orion UI mime, got ${mime}`);
+  });
+
   runTest("untrusted output skips unsafe HTML renderer", () => {
     const output: NotebookOutputType = {
       output_type: OutputType.DISPLAY_DATA,
@@ -128,6 +152,7 @@ function main(): void {
       "application/vdom.v1+json",
       "application/vnd.dataresource+json",
       "application/vnd.jupyter.widget-view+json",
+      "application/vnd.orion.ui+json",
       "application/vnd.plotly.v1+json",
       "application/vnd.vega.v2+json",
       "application/vnd.vega.v3+json",
@@ -179,6 +204,7 @@ function main(): void {
       "application/geo+json": "orion-geojson",
       "application/vdom.v1+json": "orion-vdom",
       "application/vnd.dataresource+json": "orion-dataresource",
+      "application/vnd.orion.ui+json": "orion-ui",
       "application/vnd.vega.v5+json": "orion-vega",
       "application/vnd.vegalite.v5+json": "orion-vegalite",
       "application/vnd.jupyter.widget-view+json": "orion-widget-view",

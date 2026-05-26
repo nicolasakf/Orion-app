@@ -1,11 +1,15 @@
 ---
 name: create-app
-description: Creates or edits Orion notebook App View layouts using notebook metadata. Use when the user asks to make a notebook app, dashboard, report UI, interactive controls, or declarative app view from notebook cells and outputs.
+description: Creates or edits Orion notebook App View layouts using notebook metadata. Use when the user asks to make a notebook app, dashboard, report UI, or declarative app layout from notebook cells and outputs.
 ---
 
 # Creating Orion notebook apps
 
 Use this skill when the deliverable is an Orion App View inside a notebook, not a separate web app.
+
+App View metadata is the layout and composition layer. It should arrange notebook cells and outputs into a polished interface, add headings/sections/tabs/labels, and control high-level presentation. It should not be the source of truth for interactive runtime behavior.
+
+For sliders, selects, forms, action buttons, interactive tables, and other runtime controls, prefer writing a Python code cell with `orion_ui` and then reference that cell output from App View. Load or consult the `orion-ui` skill for those controls.
 
 ## Core workflow
 
@@ -14,7 +18,7 @@ Use this skill when the deliverable is an Orion App View inside a notebook, not 
 3. Decide which notebook content should appear in App View:
    - Markdown cells render through `MarkdownCell`.
    - Code outputs render through `Output` with `cellId` and zero-based `outputIndex`.
-   - UI-only controls use local renderer state via `stateKey`; they do not execute cells yet.
+   - Interactive UI should usually be an `orion_ui` output produced by a code cell, then included with `Output`.
 4. Write notebook-level `metadata.orion.appView.schema` with `edit_orion_metadata`.
 5. Preserve unrelated `metadata.orion` siblings and existing cell metadata.
 6. If editing an existing app, make the smallest schema change that satisfies the request.
@@ -60,10 +64,11 @@ Notebook display:
 - `MarkdownCell`: render markdown from `cellId`, or inline `source`/`text`.
 - `Output`: render a code output with `cellId` and `outputIndex`.
 
-Local UI controls:
+Static/local UI primitives:
 
 - `Input`, `Textarea`, `Select`, `Slider`, `Checkbox`, `Switch`, `Button`, `Label`, `Badge`.
-- Controls may use `stateKey` and `defaultValue`; this state is renderer-local only.
+- Controls in App View metadata are static/local-only compatibility primitives. Do not use them for real notebook behavior.
+- Controls may use `stateKey` and `defaultValue`; this state is renderer-local only and is not Python runtime state.
 - `Select.options` may be strings or `{ "label": "...", "value": "..." }` objects.
 - `Button` is display-only in v1; do not imply it runs notebook code.
 
@@ -81,7 +86,7 @@ Prefer simple, readable trees. A good dashboard starts with:
 - `Page`
 - one or more `Section` blocks
 - `Grid` for comparable cards
-- `Card` around dense outputs or controls
+- `Card` around dense outputs or `orion_ui` control outputs
 - direct `MarkdownCell` for narrative text
 
 Example:
@@ -125,7 +130,8 @@ Example:
 - Keep legacy `appView.grid` and `appView.layout` unless the user asks to remove them; the declarative schema takes precedence when valid.
 - Do not edit `cells[i].metadata.orion.id`.
 - For App View inclusion metadata (`cell.metadata.orion.app`) only use it when maintaining the legacy grid App View. Declarative schema references do not require `app.enabled`.
-- If a requested feature needs cell execution, parameter binding, custom React, arbitrary CSS, or custom primitive imports, explain that v1 App View metadata does not support it yet and offer a static/local-control approximation.
+- If a requested feature needs cell execution, parameter binding, or runtime interactivity, implement it in a Python code cell with `orion_ui` and reference that output from App View.
+- If a requested layout needs custom React, arbitrary CSS, `className`, `style`, or custom primitive imports, explain that v1 App View metadata intentionally does not support those escape hatches yet.
 
 ## Validation checklist
 
@@ -137,3 +143,4 @@ Example:
 - All `cellId` references exist in `cells[i].metadata.orion.id`.
 - Every `Output.outputIndex` exists on the referenced code cell.
 - No node uses `className`, `style`, custom imports, or action/run-cell props.
+- Interactive controls are implemented in `orion_ui` code cells, not authored directly in App View metadata.

@@ -51,6 +51,7 @@ import {
 } from "lucide-react";
 import { parseNotebook } from "@/lib/notebook/notebook-parser";
 import { NotebookCell } from "@/components/notebook/notebook-cell";
+import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
 import { NotebookAppView } from "@/components/notebook/notebook-app-view";
 import type {
   NotebookType,
@@ -1725,6 +1726,66 @@ export function NotebookEditor({
   );
 
   /**
+   * Synchronizes a bound Orion UI control value into the Python runtime without
+   * creating a visible notebook output or adding an execution history entry.
+   */
+  const handleOrionUiStateChange = useCallback(
+    async (
+      key: string,
+      value: OrionUiLocalValue,
+      outputId?: string,
+    ): Promise<void> => {
+      if (!parentKernelService || !parentKernelService.isReady()) {
+        return;
+      }
+
+      const toPythonJsonLoad = (payload: unknown): string =>
+        `_orion_json.loads(${JSON.stringify(JSON.stringify(payload))})`;
+      const outputIdExpression =
+        outputId === undefined ? "None" : toPythonJsonLoad(outputId);
+      const code = [
+        "import json as _orion_json",
+        "import orion_ui as _orion_ui",
+        `_orion_ui._runtime.set_value(${toPythonJsonLoad(key)}, ${toPythonJsonLoad(value)}, output_id=${outputIdExpression})`,
+      ].join("\n");
+
+      try {
+        const future = await parentKernelService.execute(code, undefined, {
+          silent: true,
+          storeHistory: false,
+        });
+        await future.done;
+      } catch (error) {
+        console.warn("Failed to sync Orion UI state", error);
+      }
+    },
+    [parentKernelService],
+  );
+
+  /**
+   * Handles declarative actions emitted by Orion UI buttons.
+   */
+  const handleOrionUiAction = useCallback(
+    (action: unknown): void => {
+      if (!notebook || !isRecord(action)) {
+        return;
+      }
+
+      if (action.type === "execute_cells" && Array.isArray(action.cellIds)) {
+        const indices = action.cellIds
+          .filter((cellId): cellId is string => typeof cellId === "string")
+          .map((cellId) => getCellIndexById(notebook, cellId))
+          .filter((index) => index >= 0);
+
+        if (indices.length > 0) {
+          void handleRunCell(indices, true);
+        }
+      }
+    },
+    [handleRunCell, notebook],
+  );
+
+  /**
    * Runs all code cells in the notebook sequentially.
    *
    * @param stopOnError - If true (default), stops on first cell error
@@ -3152,6 +3213,8 @@ export function NotebookEditor({
                   onNotebookViewRequest={() =>
                     onActiveNotebookViewChange?.("notebook")
                   }
+                  onOrionUiStateChange={handleOrionUiStateChange}
+                  onOrionUiAction={handleOrionUiAction}
                 />
               </div>
               <div
@@ -3386,6 +3449,8 @@ export function NotebookEditor({
                               onRegisterRef={registerCellRef}
                               onContentChange={handleCellContentChange}
                               onMentionCell={handleMentionCell}
+                              onOrionUiStateChange={handleOrionUiStateChange}
+                              onOrionUiAction={handleOrionUiAction}
                               validationIssue={subagentValidation.cellIssues.get(
                                 index,
                               )}

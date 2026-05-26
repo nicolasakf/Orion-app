@@ -12,6 +12,7 @@ import { JsonOutputRenderer } from "./json";
 import { LatexOutputRenderer } from "./latex";
 import { MarkdownOutputRenderer } from "./markdown";
 import { NteractModelDebugOutputRenderer } from "./nteract-model-debug";
+import { OrionUiOutputRenderer } from "./orion-ui";
 import { PdfOutputRenderer } from "./pdf";
 import { PlainTextOutputRenderer } from "./plain";
 import { PlotlyHtmlOutputRenderer } from "./plotly-html";
@@ -22,6 +23,7 @@ import { VDomOutputRenderer } from "./vdom";
 import { VegaOutputRenderer } from "./vega";
 import { WidgetViewOutputRenderer } from "./widget-view";
 import type { NotebookMimeRendererProps } from "./types";
+import { ORION_UI_MIME_TYPE } from "@/lib/notebook/app-view";
 
 export type NotebookMimeRenderer = (props: NotebookMimeRendererProps) => JSX.Element;
 
@@ -29,6 +31,7 @@ export type NotebookMimeRenderer = (props: NotebookMimeRendererProps) => JSX.Ele
 export const MIME_RENDERERS: Record<string, NotebookMimeRenderer> = {
   [STREAM_MIME]: StreamOutputRenderer,
   [ERROR_MIME]: ErrorOutputRenderer,
+  [ORION_UI_MIME_TYPE]: OrionUiOutputRenderer,
   "application/vnd.plotly.v1+json": PlotlyJsonOutputRenderer,
   "text/vnd.plotly.v1+html": PlotlyHtmlOutputRenderer,
   "image/png": ImageOutputRenderer,

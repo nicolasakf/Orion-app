@@ -8,6 +8,7 @@ export const NOTEBOOK_APP_VIEW_VERSION = 1;
 export const NOTEBOOK_APP_GRID_COLUMNS = 24;
 export const NOTEBOOK_APP_GRID_ROW_HEIGHT = 44;
 export const NOTEBOOK_APP_VIEW_SCHEMA_VERSION = 1;
+export const ORION_UI_MIME_TYPE = "application/vnd.orion.ui+json";
 
 export const BUILTIN_APP_VIEW_PRIMITIVES = [
   "Page",
@@ -89,9 +90,23 @@ export interface NotebookAppViewSchema {
   root: NotebookAppViewSchemaNode;
 }
 
+export type OrionUiMimeStateValue = string | number | boolean;
+
+export interface OrionUiMimePayload {
+  version: typeof NOTEBOOK_APP_VIEW_SCHEMA_VERSION;
+  id?: string;
+  root: NotebookAppViewSchemaNode;
+  state: Record<string, OrionUiMimeStateValue>;
+  bindings: Record<string, unknown>;
+}
+
 export type NotebookAppViewSchemaParseResult =
   | { status: "missing" }
   | { status: "valid"; schema: NotebookAppViewSchema }
+  | { status: "invalid"; errors: string[] };
+
+export type OrionUiMimePayloadParseResult =
+  | { status: "valid"; payload: OrionUiMimePayload }
   | { status: "invalid"; errors: string[] };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -270,6 +285,88 @@ export function parseNotebookAppViewSchema(
       version: NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
       primitiveRegistry: { source: "builtin" },
       root,
+    },
+  };
+}
+
+/** Parses an Orion UI MIME payload into the shared primitive tree shape. */
+export function parseOrionUiMimePayload(
+  value: unknown,
+): OrionUiMimePayloadParseResult {
+  const errors: string[] = [];
+  const rawPayload =
+    typeof value === "string"
+      ? (() => {
+          try {
+            return JSON.parse(value) as unknown;
+          } catch {
+            errors.push(`${ORION_UI_MIME_TYPE}: payload string must be valid JSON`);
+            return null;
+          }
+        })()
+      : value;
+
+  if (!isRecord(rawPayload)) {
+    return {
+      status: "invalid",
+      errors:
+        errors.length > 0
+          ? errors
+          : [`${ORION_UI_MIME_TYPE}: payload must be an object`],
+    };
+  }
+
+  if (rawPayload.version !== NOTEBOOK_APP_VIEW_SCHEMA_VERSION) {
+    appendSchemaError(
+      errors,
+      `${ORION_UI_MIME_TYPE}.version`,
+      `version must be ${NOTEBOOK_APP_VIEW_SCHEMA_VERSION}`,
+    );
+  }
+
+  if (rawPayload.id !== undefined && typeof rawPayload.id !== "string") {
+    appendSchemaError(errors, `${ORION_UI_MIME_TYPE}.id`, "id must be a string");
+  }
+
+  if (rawPayload.root === undefined) {
+    appendSchemaError(errors, `${ORION_UI_MIME_TYPE}.root`, "root is required");
+  }
+
+  const root =
+    rawPayload.root === undefined
+      ? null
+      : normalizeSchemaNode(rawPayload.root, `${ORION_UI_MIME_TYPE}.root`, errors);
+
+  const rawState = isRecord(rawPayload.state) ? rawPayload.state : {};
+  const state: Record<string, OrionUiMimeStateValue> = {};
+  for (const [key, entry] of Object.entries(rawState)) {
+    if (
+      typeof entry === "string" ||
+      typeof entry === "number" ||
+      typeof entry === "boolean"
+    ) {
+      state[key] = entry;
+    } else {
+      appendSchemaError(
+        errors,
+        `${ORION_UI_MIME_TYPE}.state.${key}`,
+        "state values must be strings, numbers, or booleans",
+      );
+    }
+  }
+
+  if (errors.length > 0 || !root) {
+    return { status: "invalid", errors };
+  }
+
+  return {
+    status: "valid",
+    payload: {
+      version: NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
+      id: typeof rawPayload.id === "string" ? rawPayload.id : undefined,
+      root,
+      state,
+      bindings: isRecord(rawPayload.bindings) ? rawPayload.bindings : {},
     },
   };
 }

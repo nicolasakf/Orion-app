@@ -399,3 +399,9 @@ html {
     @apply bg-background text-foreground;
   }
 }
+
+/* @uiw/react-markdown-preview ships a system-ui stack on .wmde-markdown */
+.wmde-markdown,
+.wmde-markdown-var {
+  font-family: var(--font-sans), sans-serif !important;
+}

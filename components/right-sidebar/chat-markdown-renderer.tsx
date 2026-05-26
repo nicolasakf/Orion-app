@@ -462,7 +462,7 @@ export function ChatMarkdownRenderer({ source, fontSize }: ChatMarkdownRendererP
     <div
       data-chat-markdown-root=""
       className={cn(
-        "min-w-0 max-w-none break-words text-foreground",
+        "min-w-0 max-w-none break-words font-sans text-foreground",
         "[&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden"
       )}
       style={{ fontSize }}

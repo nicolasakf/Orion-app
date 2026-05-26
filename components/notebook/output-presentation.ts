@@ -20,6 +20,7 @@ const MIME_LABEL_OVERRIDES: Record<string, string> = {
   "application/geo+json": "GeoJSON",
   "application/vdom.v1+json": "VDOM",
   "application/vnd.dataresource+json": "Data Resource",
+  "application/vnd.orion.ui+json": "Orion UI",
   "application/vnd.jupyter.widget-view+json": "Jupyter widget",
   "application/vnd.plotly.v1+json": "Plotly (interactive)",
   "application/vnd.vega.v2+json": "Vega v2",

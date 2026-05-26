@@ -19,6 +19,7 @@ import {
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import { MonacoEditor } from "@/components/monaco-editor";
 import { OutputRenderer } from "@/components/notebook/output-renderer";
+import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
 import {
   ChevronDown,
   ChevronRight,
@@ -133,6 +134,12 @@ interface NotebookCellProps {
   ) => void;
   onContentChange?: (cellIndex: number, source: string) => void;
   onMentionCell?: (cellIndex: number) => void;
+  onOrionUiStateChange?: (
+    key: string,
+    value: OrionUiLocalValue,
+    outputId?: string,
+  ) => void;
+  onOrionUiAction?: (action: unknown) => void;
   variant?: "default" | "ghost";
   validationIssue?: string;
   /**
@@ -866,6 +873,8 @@ function NotebookCellComponent({
   onRegisterRef,
   onContentChange,
   onMentionCell,
+  onOrionUiStateChange,
+  onOrionUiAction,
   variant,
   validationIssue,
   presentationHideAllCellInputs,
@@ -2463,6 +2472,8 @@ function NotebookCellComponent({
                                   onToggleOutputAppView={
                                     handleToggleOutputAppView
                                   }
+                                  onOrionUiStateChange={onOrionUiStateChange}
+                                  onOrionUiAction={onOrionUiAction}
                                   isInAppView={isOutputInAppView(cell, idx)}
                                   isCollapsed={isOutputCollapsedAtIndex(idx)}
                                   onToggleCollapse={() =>
@@ -2515,6 +2526,10 @@ export const NotebookCell = memo(NotebookCellComponent, (prev, next) => {
   const sameVariant = prev.variant === next.variant;
   const sameValidationIssue = prev.validationIssue === next.validationIssue;
   const sameMentionHandler = prev.onMentionCell === next.onMentionCell;
+  const sameOrionUiStateHandler =
+    prev.onOrionUiStateChange === next.onOrionUiStateChange;
+  const sameOrionUiActionHandler =
+    prev.onOrionUiAction === next.onOrionUiAction;
   const samePresentationHide =
     prev.presentationHideAllCellInputs === next.presentationHideAllCellInputs;
   return (
@@ -2526,6 +2541,8 @@ export const NotebookCell = memo(NotebookCellComponent, (prev, next) => {
     sameVariant &&
     sameValidationIssue &&
     sameMentionHandler &&
+    sameOrionUiStateHandler &&
+    sameOrionUiActionHandler &&
     samePresentationHide
   );
 });

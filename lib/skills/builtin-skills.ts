@@ -15,6 +15,7 @@ import createSubagentRaw from "./builtin/create-subagent/SKILL.md";
 import chatHistoryRaw from "./builtin/chat-history/SKILL.md";
 import orionMetadataRaw from "./builtin/orion-metadata/SKILL.md";
 import orionSettingsRaw from "./builtin/orion-settings/SKILL.md";
+import orionUiRaw from "./builtin/orion-ui/SKILL.md";
 
 /** Converts a bundled SKILL.md file into a registry entry. */
 function parseBuiltinSkill(raw: string): SkillInfo {
@@ -38,4 +39,5 @@ export const BUILTIN_SKILLS: SkillInfo[] = [
   parseBuiltinSkill(orionSettingsRaw),
   parseBuiltinSkill(chatHistoryRaw),
   parseBuiltinSkill(orionMetadataRaw),
+  parseBuiltinSkill(orionUiRaw),
 ];
