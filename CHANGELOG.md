@@ -4,6 +4,24 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.0] - 2026-05-26
+
+### Added
+
+- CLI: Python selection menu, `orion config` subcommand, and persisted runtime choice under `~/.orion/runtime`
+- Notebook: HTML, PDF, Markdown, and LaTeX export from the toolbar
+- Notebook: declarative App View schema rendering with built-in primitives
+- Notebook: Orion UI declarative output rendering (`application/vnd.orion.ui+json`) with interactive kernel-backed controls
+- Chat: mention highlighted assistant and tool text in chat via floating @ popover
+- Chat: collapsible rows for grouped assistant tool activity with duration headers
+- Workspace: Orion workspace configuration file
+
+### Changed
+
+- Chat: extracted model selection logic and fixed fallback race conditions when stored model is invalid
+
+[0.6.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.6.0
+
 ## [0.5.2] - 2026-05-24
 
 ### Added

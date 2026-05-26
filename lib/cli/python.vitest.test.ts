@@ -67,13 +67,14 @@ describe("CLI Python runtime", () => {
 
   it("uses Windows Python launcher candidates on Windows", () => {
     expect(
-      getPythonDiscoveryCandidates("win32", {}).map((candidate) => candidate.command)
+      getPythonDiscoveryCandidates("win32", { NODE_ENV: "test" }).map((candidate) => candidate.command)
     ).toEqual(["py", "python", "python3"]);
   });
 
   it("includes the active Conda interpreter when CONDA_PREFIX is set", () => {
     expect(
       getPythonDiscoveryCandidates("darwin", {
+        NODE_ENV: "test",
         CONDA_PREFIX: "/opt/anaconda3",
       }).map((candidate) => candidate.command)
     ).toEqual([

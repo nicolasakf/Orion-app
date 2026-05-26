@@ -71,6 +71,7 @@ describe("CLI Python selection", () => {
 
     expect(
       selectDefaultReadyInstallation(report, {
+        NODE_ENV: "test",
         PYTHON: "/opt/anaconda3/bin/python",
       })?.executable
     ).toBe("/opt/anaconda3/bin/python");
