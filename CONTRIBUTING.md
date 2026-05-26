@@ -66,23 +66,31 @@ orion --yes
 To test the PyPI shim locally:
 
 ```bash
-cd python
-pip install -e .
+cd python/orion-ui && pip install -e .
+cd .. && pip install -e .
 PYTHONPATH=python python -m orion_agent.cli --help
+```
+
+For notebook UI development, `orion-ui` can be installed alone:
+
+```bash
+cd python/orion-ui && pip install -e .
+# or: PYTHONPATH=python/orion-ui python -c "import orion_ui"
 ```
 
 The PyPI path downloads the app bundle on first run, so for day-to-day development prefer the npm/local flow above.
 
 ## Publishing The CLI
 
-Orion ships two packages that both install the `orion` command:
+Orion ships three publishable packages:
 
 | Channel | Package name | What ships in the package |
 | --- | --- | --- |
 | npm | `orion-notebook` | CLI + full app bundle (`dist/orion-app`) |
 | PyPI | `orion-notebook` | Python launcher only; app bundle downloaded on first run |
+| PyPI | `orion-ui` | Notebook UI library (`import orion_ui`) for kernel environments |
 
-Keep version numbers in sync across `package.json`, `python/pyproject.toml`, and `python/orion_agent/cli.py` (`VERSION`).
+Keep version numbers in sync across `package.json`, `python/pyproject.toml`, `python/orion-ui/pyproject.toml`, `python/orion_agent/cli.py` (`VERSION`), and `python/orion-ui/orion_ui/__init__.py` (`__version__`).
 
 ### Publish to npm
 
@@ -120,7 +128,18 @@ npm deprecate @nicolasakf/orion-agent "Renamed to orion-notebook. Install with: 
 
 ### Publish to PyPI
 
-Build and upload the Python shim from `python/`:
+Build and upload both Python packages. Publish **`orion-ui` first** — managed Orion runtimes install it from PyPI on startup.
+
+**`orion-ui`:**
+
+```bash
+cd python/orion-ui
+python -m pip install build twine
+python -m build
+twine upload dist/*
+```
+
+**`orion-notebook`:**
 
 ```bash
 cd python

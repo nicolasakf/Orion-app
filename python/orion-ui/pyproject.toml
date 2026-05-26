@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "orion-notebook"
+name = "orion-ui"
 version = "0.6.1"
-description = "Local Orion CLI launcher for notebooks and Jupyter"
+description = "Python authoring API for Orion-native notebook UI outputs"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }
@@ -17,8 +17,6 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 
-[project.scripts]
-orion = "orion_agent.cli:main"
-
-[tool.setuptools]
-packages = ["orion_agent"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["orion_ui*"]

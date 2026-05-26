@@ -142,9 +142,9 @@ Only use this action when the target cell ids already exist in `cells[i].metadat
 
 ## Install/runtime guidance
 
-In Orion-managed runtimes, `orion_ui` should be available as part of Orion's Python runtime setup.
+In Orion-managed runtimes, `orion_ui` is installed automatically into `~/.orion/runtime/venv` as part of startup (`orion-ui==<Orion version>`).
 
-If a user is using an external Python kernel and `import orion_ui` fails, tell them the kernel needs the Orion UI Python package installed. Prefer a future standalone package name:
+If a user is using an external Python kernel and `import orion_ui` fails, install the package into **that kernel's Python environment**:
 
 ```bash
 python -m pip install orion-ui
@@ -153,8 +153,8 @@ python -m pip install orion-ui
 For local development inside this repo:
 
 ```bash
-cd python
-python -m pip install -e .
+cd python/orion-ui && python -m pip install -e .
+# or: PYTHONPATH=python/orion-ui python -c "import orion_ui"
 ```
 
 ## Validation checklist

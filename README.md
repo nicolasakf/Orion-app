@@ -78,7 +78,7 @@ The PyPI wheel is small by design. On first run it may:
 
 1. download the Orion app bundle into `~/.orion/app/<version>`
 2. download portable Node.js 20+ into `~/.orion/runtime/node` if Node is missing
-3. create an Orion-managed Jupyter venv under `~/.orion/runtime/venv` if needed
+3. create an Orion-managed Jupyter venv under `~/.orion/runtime/venv` if needed (includes `orion-ui` for notebook UI components — no extra install step)
 
 Each step prompts before downloading or installing unless you pass `--yes`:
 

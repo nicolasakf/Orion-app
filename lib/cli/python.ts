@@ -389,25 +389,19 @@ export async function discoverPythonRuntime(
 
 /** Selects package constraints for Orion's managed Jupyter environment. */
 export function getManagedPackageSet(
-  support: PythonRuntime["support"]
+  support: PythonRuntime["support"],
+  orionVersion: string
 ): ManagedPackageSet {
-  if (support === "legacy") {
-    return {
-      support,
-      packages: [
-        "jupyter_server>=1.24,<2",
-        "jupyter_server_terminals>=0.4,<1",
-        "ipykernel>=6,<7",
-      ],
-    };
-  }
+  const jupyterServer =
+    support === "legacy" ? "jupyter_server>=1.24,<2" : "jupyter_server>=2,<3";
 
   return {
     support,
     packages: [
-      "jupyter_server>=2,<3",
+      jupyterServer,
       "jupyter_server_terminals>=0.4,<1",
       "ipykernel>=6,<7",
+      `orion-ui==${orionVersion}`,
     ],
   };
 }
@@ -434,9 +428,25 @@ export function buildInstallPackagesCommand(
   };
 }
 
+/** Installs or upgrades managed runtime packages in an existing venv. */
+export async function syncManagedRuntimePackages(
+  venvPythonPath: string,
+  support: PythonRuntime["support"],
+  orionVersion: string,
+  execFileImpl: ExecFileLike = execFile
+): Promise<void> {
+  const packageSet = getManagedPackageSet(support, orionVersion);
+  console.log(
+    `Syncing Orion-managed runtime packages (${packageSet.packages.join(", ")})...`
+  );
+  const installPackages = buildInstallPackagesCommand(venvPythonPath, packageSet);
+  await execFileImpl(installPackages.command, installPackages.args);
+}
+
 /** Creates or updates Orion's managed venv without touching global Python. */
 export async function ensureManagedPythonEnvironment(
   runtime: PythonRuntime,
+  orionVersion: string,
   execFileImpl: ExecFileLike = execFile
 ): Promise<string> {
   const runtimeDirectory = resolveOrionRuntimeDirectory();
@@ -448,12 +458,8 @@ export async function ensureManagedPythonEnvironment(
   await execFileImpl(createVenv.command, createVenv.args);
 
   const venvPythonPath = resolveManagedVenvPythonPath(venvDirectory);
-  const packageSet = getManagedPackageSet(runtime.support);
-  console.log(
-    `Installing Jupyter packages (${packageSet.packages.join(", ")})... This may take a few minutes.`
-  );
-  const installPackages = buildInstallPackagesCommand(venvPythonPath, packageSet);
-  await execFileImpl(installPackages.command, installPackages.args);
+  console.log("Installing managed runtime packages... This may take a few minutes.");
+  await syncManagedRuntimePackages(venvPythonPath, runtime.support, orionVersion, execFileImpl);
 
   console.log("Orion-managed Python environment is ready.");
   return venvPythonPath;

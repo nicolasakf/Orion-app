@@ -4,6 +4,24 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.1] - 2026-05-26
+
+### Added
+
+- CLI: managed Jupyter runtime auto-syncs `orion-ui` (and other runtime packages) on startup
+- PyPI: `orion-ui` as a standalone package for notebook UI components (`import orion_ui`)
+
+### Changed
+
+- `orion-ui` source moved to `python/orion-ui/`; managed runtimes install it from PyPI instead of bundling it inline
+- Docs: publishing and development instructions updated for the three-package release (`orion-notebook` npm, `orion-notebook` PyPI, `orion-ui` PyPI)
+
+### Fixed
+
+- External and managed kernels no longer fail with `ModuleNotFoundError: orion_ui` after Orion UI output rendering shipped in 0.6.0
+
+[0.6.1]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.6.1
+
 ## [0.6.0] - 2026-05-26
 
 ### Added

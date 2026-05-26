@@ -21,6 +21,7 @@ import {
 } from "../lib/cli/python-selection";
 import {
   ensureManagedPythonEnvironment,
+  syncManagedRuntimePackages,
   type PythonInstallationReport,
   type PythonRuntime,
 } from "../lib/cli/python";
@@ -144,6 +145,7 @@ async function startManagedJupyter(
   jupyterRoot: string,
   setupApproved = false
 ): Promise<StartedJupyterServer> {
+  const orionVersion = readPackageVersion();
   const venvPython = resolveManagedVenvPythonPath(resolveManagedVenvDirectory());
   if (!existsSync(venvPython) || !(await hasJupyterServerCommand(venvPython))) {
     if (!setupApproved) {
@@ -157,7 +159,9 @@ async function startManagedJupyter(
         );
       }
     }
-    await ensureManagedPythonEnvironment(runtime);
+    await ensureManagedPythonEnvironment(runtime, orionVersion);
+  } else {
+    await syncManagedRuntimePackages(venvPython, runtime.support, orionVersion);
   }
 
   const server = await startJupyterServer(venvPython, [], jupyterRoot);
@@ -171,7 +175,7 @@ async function startManagedJupyter(
     if (!accepted) {
       throw new Error("Setup declined. Orion cannot continue without a compatible Jupyter runtime.");
     }
-    await ensureManagedPythonEnvironment(runtime);
+    await ensureManagedPythonEnvironment(runtime, orionVersion);
     return startManagedJupyter(runtime, { ...options, yes: true }, jupyterRoot, true);
   }
   return server;
@@ -190,6 +194,8 @@ async function startJupyterForChoice(
 
   if (choice.installation?.managed) {
     const venvPython = resolveManagedVenvPythonPath(resolveManagedVenvDirectory());
+    const orionVersion = readPackageVersion();
+    await syncManagedRuntimePackages(venvPython, choice.runtime.support, orionVersion);
     const server = await startJupyterServer(venvPython, [], jupyterRoot);
     const capabilities = await checkJupyterCapabilities(server.baseUrl, server.token);
     if (!capabilities.ok) {

@@ -2,6 +2,8 @@
 
 Python launcher for [Orion](https://www.orion-agent.ai). Installs the `orion` command on PyPI.
 
+Orion also publishes **`orion-ui`** on PyPI — the Python library for notebook UI components (`import orion_ui as ui`). You do not install it separately when using Orion's managed Jupyter runtime; Orion syncs `orion-ui==<version>` into `~/.orion/runtime/venv` automatically.
+
 ## Install
 
 ```bash
@@ -15,7 +17,7 @@ The PyPI wheel is intentionally small. When you run `orion` for the first time, 
 
 1. **Download the Orion app bundle** into `~/.orion/app/<version>` from a GitHub release
 2. **Download portable Node.js 20+** into `~/.orion/runtime/node/<version>` if Node is not installed
-3. **Create an Orion-managed Jupyter venv** under `~/.orion/runtime/venv` if no compatible Jupyter is found
+3. **Create an Orion-managed Jupyter venv** under `~/.orion/runtime/venv` if no compatible Jupyter is found (includes Jupyter, ipykernel, and `orion-ui`)
 
 Each step prompts for consent unless you pass `--yes`:
 

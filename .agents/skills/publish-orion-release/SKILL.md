@@ -5,14 +5,15 @@ description: Publishes an Orion CLI release in two phases — the agent prepares
 
 # Publish Orion Release
 
-Orion ships two packages that both install the `orion` command under the same name:
+Orion ships three publishable packages:
 
 | Channel | Package | Ships in package |
 | --- | --- | --- |
 | npm | `orion-notebook` | CLI + app bundle |
 | PyPI | `orion-notebook` | Python launcher only (app bundle downloaded from GitHub release) |
+| PyPI | `orion-ui` | Notebook UI library (`import orion_ui`) for kernel environments |
 
-The Python module directory stays `python/orion_agent/`; only `[project].name` in `python/pyproject.toml` is `orion-notebook`. The legacy npm package `@nicolasakf/orion-agent` should be deprecated after the first `orion-notebook` npm publish (see Phase 2).
+The Python module directory stays `python/orion_agent/`; only `[project].name` in `python/pyproject.toml` is `orion-notebook`. The `orion-ui` package is built from `python/orion-ui/` and ships `python/orion-ui/orion_ui/`. The legacy npm package `@nicolasakf/orion-agent` should be deprecated after the first `orion-notebook` npm publish (see Phase 2).
 
 Detailed reference: [CONTRIBUTING.md — Publishing The CLI](../../../CONTRIBUTING.md#publishing-the-cli)
 
@@ -45,7 +46,9 @@ Bump the **same semver** in all of:
 | `package.json` | `"version"` |
 | `package-lock.json` | top-level `"version"` and `"packages"."".version` |
 | `python/pyproject.toml` | `[project].version` |
+| `python/orion-ui/pyproject.toml` | `[project].version` |
 | `python/orion_agent/__init__.py` | `__version__` |
+| `python/orion-ui/orion_ui/__init__.py` | `__version__` |
 | `python/orion_agent/cli.py` | `VERSION` and `DEFAULT_APP_BUNDLE_URL` path segment |
 
 Prefer `npm version <x.y.z> --no-git-tag-version` for `package.json` + lockfile, then mirror the version in the Python files.
@@ -67,7 +70,7 @@ Phase 1 — Agent
 
 Phase 2 — User (manual)
 - [ ] 11. npm publish
-- [ ] 12. PyPI publish (orion-notebook)
+- [ ] 12. PyPI publish (`orion-ui` first, then `orion-notebook`)
 - [ ] 13. Reply "done"
 
 Phase 3 — Agent (after "done")
@@ -235,10 +238,13 @@ npm publish --access public
 
 Enter your npm one-time password when prompted. `prepack` rebuilds automatically.
 
-**PyPI** (`python/`):
+**PyPI** (publish `orion-ui` **before** `orion-notebook`):
 
 ```bash
-cd /path/to/Orion-app/python
+cd /path/to/Orion-app/python/orion-ui
+twine upload dist/*
+
+cd ..
 twine upload dist/*
 # or: python3 -m twine upload dist/*
 ```
@@ -280,9 +286,21 @@ After the first successful `orion-notebook` npm publish, deprecate the legacy sc
 npm deprecate @nicolasakf/orion-agent "Renamed to orion-notebook. Install with: npm install -g orion-notebook"
 ```
 
-### PyPI publish (`orion-notebook`)
+### PyPI publish (`orion-ui` then `orion-notebook`)
 
-Artifacts should already exist under `python/dist/` from Phase 1. If missing, rebuild:
+Publish **`orion-ui` first**. Managed Orion runtimes install `orion-ui==<version>` from PyPI on startup; uploading `orion-notebook` before `orion-ui` breaks first-run managed venv setup for that version.
+
+**`orion-ui`** artifacts should exist under `python/orion-ui/dist/` from Phase 1. If missing, rebuild:
+
+```bash
+cd python/orion-ui
+rm -rf dist/ build/ *.egg-info/
+python3 -m build
+twine check dist/*
+twine upload dist/*
+```
+
+**`orion-notebook`** artifacts should exist under `python/dist/` from Phase 1. If missing, rebuild:
 
 ```bash
 cd python
@@ -292,7 +310,7 @@ twine check dist/*
 twine upload dist/*
 ```
 
-Publish order: GitHub release asset **must** exist before PyPI upload (Phase 1 step 6 handles this).
+Publish order: GitHub release asset **must** exist before PyPI upload. **`orion-ui` must** be on PyPI before users on the new version sync managed runtimes.
 
 Optional local PyPI smoke test before upload:
 
@@ -328,9 +346,10 @@ Read the target version from `package.json` (or the release tag just cut). Run a
 ```bash
 npm view orion-notebook version
 pip index versions orion-notebook
+pip index versions orion-ui
 ```
 
-Both must match the release version (e.g. `0.5.1`).
+All must match the release version (e.g. `0.5.1`).
 
 ### GitHub release asset
 
@@ -357,6 +376,7 @@ Report results for:
 
 - [ ] `npm view orion-notebook version` matches release
 - [ ] `pip index versions orion-notebook` includes release version
+- [ ] `pip index versions orion-ui` includes release version
 - [ ] GitHub release lists `orion-app-<version>.tar.gz`
 - [ ] GitHub asset URL returns a redirect/200
 - [ ] (optional) `npx orion-notebook@<version> --yes` starts Orion

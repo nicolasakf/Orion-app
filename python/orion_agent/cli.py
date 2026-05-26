@@ -21,7 +21,9 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-VERSION = "0.6.0"
+from .managed_packages import get_python_support, managed_runtime_packages
+
+VERSION = "0.6.1"
 NODE_VERSION = "v22.12.0"
 DEFAULT_APP_BUNDLE_URL = (
     f"https://github.com/nicolasakf/Orion-app/releases/download/"
@@ -201,6 +203,29 @@ def has_jupyter(python: str) -> bool:
         return False
 
 
+def venv_python_support(python: str) -> str:
+    """Return Orion's support tier for a venv Python executable."""
+    result = subprocess.run(
+        [python, "-c", "import sys; print(*sys.version_info[:3])"],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    major, minor, patch = (int(part) for part in result.stdout.strip().split())
+    support = get_python_support((major, minor, patch))
+    if support is None:
+        raise SystemExit("Orion-managed runtime requires Python 3.8+.")
+    return support
+
+
+def sync_managed_runtime_packages(python: str) -> None:
+    """Install or upgrade managed runtime packages in Orion's venv."""
+    support = venv_python_support(python)
+    packages = managed_runtime_packages(VERSION, support)
+    print(f"Syncing Orion-managed runtime packages ({', '.join(packages)})...")
+    run_checked([python, "-m", "pip", "install", "--upgrade", "pip", *packages])
+
+
 def install_managed_jupyter(assume_yes: bool) -> str:
     """Create/update Orion's managed venv and install Jupyter packages there."""
     py = managed_venv_python()
@@ -213,12 +238,7 @@ def install_managed_jupyter(assume_yes: bool) -> str:
         runtime_dir().mkdir(parents=True, exist_ok=True)
         venv.EnvBuilder(with_pip=True).create(runtime_dir() / "venv")
 
-    packages = [
-        "jupyter_server>=1.24,<3",
-        "jupyter_server_terminals>=0.4,<1",
-        "ipykernel>=6,<7",
-    ]
-    run_checked([str(py), "-m", "pip", "install", "--upgrade", "pip", *packages])
+    sync_managed_runtime_packages(str(py))
     return str(py)
 
 
