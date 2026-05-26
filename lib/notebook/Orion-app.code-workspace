@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "../.."
+		},
+		{
+			"path": "../../../Orion-docs"
+		}
+	],
+	"settings": {
+		"postman.settings.dotenv-detection-notification-visibility": false,
+		"task.allowAutomaticTasks": "on"
+	}
+}
