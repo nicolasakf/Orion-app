@@ -77,6 +77,7 @@ import type { ModelCatalogEntry } from "@/lib/agent/model-catalog";
 import { ChatToolbar } from "./chat-toolbar";
 import { ChatBody } from "./chat-body";
 import { ChatTextbox, type ReferenceTab } from "./chat-textbox";
+import type { ToolTiming } from "./assistant-activity-grouping";
 import { useContextEstimate } from "./context-usage-pill";
 import {
   ORION_GITHUB_ISSUES_URL,
@@ -1297,6 +1298,33 @@ export function RightSidebar({
 
   /** Live progress descriptions for running sub-agent tool calls, keyed by toolCallId. */
   const [subagentProgress, setSubagentProgress] = useState<Map<string, string>>(new Map());
+  const [toolTimings, setToolTimings] = useState<Map<string, ToolTiming>>(new Map());
+
+  /** Record the first moment a tool call entered the client execution loop. */
+  const markToolStarted = useCallback((toolCallId: string) => {
+    const startedAt = Date.now();
+    setToolTimings((prev) => {
+      if (prev.get(toolCallId)?.startedAt) return prev;
+      const next = new Map(prev);
+      next.set(toolCallId, { startedAt });
+      return next;
+    });
+  }, []);
+
+  /** Record a terminal tool timestamp without extending completed durations on resubmits. */
+  const markToolEnded = useCallback((toolCallId: string) => {
+    const endedAt = Date.now();
+    setToolTimings((prev) => {
+      const current = prev.get(toolCallId);
+      if (current?.endedAt) return prev;
+      const next = new Map(prev);
+      next.set(toolCallId, {
+        startedAt: current?.startedAt ?? endedAt,
+        endedAt,
+      });
+      return next;
+    });
+  }, []);
 
   /**
    * Per parent-chat + subagent type, how many delegate runs have started (for dev log
@@ -1952,6 +1980,17 @@ export function RightSidebar({
     addToolOutputRef.current = addToolOutput;
   }, [addToolOutput]);
 
+  type ToolOutputPayload = Parameters<typeof addToolOutput>[0];
+
+  /** Submit a tool result to useChat and stamp its terminal time for compact activity rows. */
+  const addTimedToolOutput = useCallback(
+    (payload: ToolOutputPayload) => {
+      markToolEnded(payload.toolCallId);
+      addToolOutputRef.current(payload);
+    },
+    [markToolEnded]
+  );
+
   const enqueueToolExecution = useCallback(
     (toolCallId: string, toolName: OrionToolName, args: Record<string, unknown>) => {
       if (!assistant) return;
@@ -2030,7 +2069,7 @@ export function RightSidebar({
                 status: "error",
                 errorText,
               });
-              addToolOutputRef.current({ state: "output-error", tool: toolName, toolCallId, errorText });
+              addTimedToolOutput({ state: "output-error", tool: toolName, toolCallId, errorText });
             };
 
             if (!subagentDefinition) {
@@ -2094,7 +2133,7 @@ export function RightSidebar({
                 tmpNotebookPath: reconnectTmpNotebookPath,
                 errorText,
               });
-              addToolOutputRef.current({ state: "output-error", tool: toolName, toolCallId, errorText });
+              addTimedToolOutput({ state: "output-error", tool: toolName, toolCallId, errorText });
               return;
             }
 
@@ -2200,7 +2239,7 @@ export function RightSidebar({
               });
 
               if (stopRequestedRef.current) return;
-              addToolOutputRef.current({ tool: toolName, toolCallId, output: delegateOutput });
+              addTimedToolOutput({ tool: toolName, toolCallId, output: delegateOutput });
             } catch (err) {
               clearInterval(stopUnlinkId);
               // Clear live progress on error too
@@ -2224,7 +2263,7 @@ export function RightSidebar({
                 result: isCancelled ? CANCELLED_TOOL_RESULT : { error: errorText },
               });
               if (stopRequestedRef.current) return;
-              addToolOutputRef.current({
+              addTimedToolOutput({
                 state: "output-error",
                 tool: toolName,
                 toolCallId,
@@ -2244,7 +2283,7 @@ export function RightSidebar({
             if (stopRequestedRef.current) {
               return;
             }
-            addToolOutputRef.current({ tool: toolName, toolCallId, output: result });
+            addTimedToolOutput({ tool: toolName, toolCallId, output: result });
           } catch (err) {
             const errorText = err instanceof Error ? err.message : String(err);
             trackedToolCallsRef.current.set(toolCallId, {
@@ -2254,7 +2293,7 @@ export function RightSidebar({
             if (stopRequestedRef.current) {
               return;
             }
-            addToolOutputRef.current({
+            addTimedToolOutput({
               state: "output-error",
               tool: toolName,
               toolCallId,
@@ -2278,6 +2317,7 @@ export function RightSidebar({
       clientPlatformOs,
       modelsWithAccess,
       refreshCredentialForProviderIfNeeded,
+      addTimedToolOutput,
       setChats,
     ]
   );
@@ -2309,7 +2349,7 @@ export function RightSidebar({
             const shouldResubmit =
               !trackedCall.lastResubmittedAt || now - trackedCall.lastResubmittedAt > 300;
             if (shouldResubmit) {
-              addToolOutputRef.current({ tool: toolName, toolCallId: inv.toolCallId, output: trackedCall.result });
+              addTimedToolOutput({ tool: toolName, toolCallId: inv.toolCallId, output: trackedCall.result });
               trackedToolCallsRef.current.set(inv.toolCallId, {
                 ...trackedCall,
                 lastResubmittedAt: now,
@@ -2324,6 +2364,7 @@ export function RightSidebar({
 
         // Mark immediately to prevent duplicate execution while in-flight.
         trackedToolCallsRef.current.set(inv.toolCallId, { status: "running" });
+        markToolStarted(inv.toolCallId);
 
         // Tool gating:
         // Tier 1 — NO_DEPENDENCY_TOOLS (load_skill, delegate): always pass through.
@@ -2370,7 +2411,7 @@ export function RightSidebar({
               status: "completed",
               result: { error: blockReason },
             });
-            addToolOutputRef.current({
+            addTimedToolOutput({
               state: "output-error",
               tool: toolNameTyped,
               toolCallId: inv.toolCallId,
@@ -2401,7 +2442,7 @@ export function RightSidebar({
                   status: "completed",
                   result: { error: errorText },
                 });
-                addToolOutputRef.current({ state: "output-error", tool: toolNameTyped, toolCallId: inv.toolCallId, errorText });
+                addTimedToolOutput({ state: "output-error", tool: toolNameTyped, toolCallId: inv.toolCallId, errorText });
                 return;
               }
               if (!assistant) return;
@@ -2409,13 +2450,13 @@ export function RightSidebar({
                 const toolResult = await assistant.executeToolCall(toolNameTyped, inv.input);
                 trackedToolCallsRef.current.set(inv.toolCallId, { status: "completed", result: toolResult });
                 if (!stopRequestedRef.current) {
-                  addToolOutputRef.current({ tool: toolNameTyped, toolCallId: inv.toolCallId, output: toolResult });
+                  addTimedToolOutput({ tool: toolNameTyped, toolCallId: inv.toolCallId, output: toolResult });
                 }
               } catch (err) {
                 const errorText = err instanceof Error ? err.message : String(err);
                 trackedToolCallsRef.current.set(inv.toolCallId, { status: "completed", result: { error: errorText } });
                 if (!stopRequestedRef.current) {
-                  addToolOutputRef.current({ state: "output-error", tool: toolNameTyped, toolCallId: inv.toolCallId, errorText });
+                  addTimedToolOutput({ state: "output-error", tool: toolNameTyped, toolCallId: inv.toolCallId, errorText });
                 }
               }
             })
@@ -2437,6 +2478,8 @@ export function RightSidebar({
     enqueueToolExecution,
     isLoading,
     toolApprovalMode,
+    markToolStarted,
+    addTimedToolOutput,
   ]);
 
   // When the Jupyter server connects (toolsReady), flush server-only tool calls that were
@@ -3179,6 +3222,7 @@ export function RightSidebar({
               status: "completed",
               result: CANCELLED_TOOL_RESULT,
             });
+            markToolEnded(inv.toolCallId);
             return {
               ...part,
               state: "output-error" as const,
@@ -3205,7 +3249,7 @@ export function RightSidebar({
     setPendingApprovalIds(new Set());
 
     stop();
-  }, [setChats, setMessages, stop]);
+  }, [markToolEnded, setChats, setMessages, stop]);
 
   /** Handles confirmation from the stop-and-switch dialog */
   const handleStopConfirm = useCallback(() => {
@@ -3389,6 +3433,7 @@ export function RightSidebar({
             onToolApprovalModeChange={handleToolApprovalModeChange}
             subagentProgress={subagentProgress}
             subagentReportPaths={subagentReportPaths}
+            toolTimings={toolTimings}
             onOpenSubagentChat={setActiveSubagentToolCallId}
             onOpenSubagentReport={handleOpenSubagentReport}
           />

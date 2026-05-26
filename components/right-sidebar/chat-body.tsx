@@ -6,12 +6,19 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, AtSign } from "lucide-react";
 import { ToolInvocationCard } from "./tool-invocation-card";
 import { DelegateInvocationCard } from "./delegate-invocation-card";
+import { AssistantActivityGroup } from "./assistant-activity-group";
 import { UserMessage } from "./user-message";
 import { AssistantMessage } from "./assistant-message";
 import { LoadingMessage } from "@/components/common/loading-message";
 import { ErrorCard } from "../common/error-card";
 import { NoKernelPrompt } from "../common/no-kernel-prompt";
 import { ThinkingBlock } from "./thinking-block";
+import {
+  buildAssistantRenderBlocks,
+  shouldAutoCollapseActivityGroup,
+  type AssistantPartWithIndex,
+  type ToolTiming,
+} from "./assistant-activity-grouping";
 import { Button } from "@/components/ui/button";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
@@ -36,6 +43,8 @@ export interface ChatBodyProps {
   subagentProgress?: Map<string, string>;
   /** Tmp notebook report paths for sub-agent runs, keyed by delegate toolCallId. */
   subagentReportPaths?: Map<string, string>;
+  /** Tool execution timings for the active browser session, keyed by toolCallId. */
+  toolTimings?: Map<string, ToolTiming>;
   onOpenSubagentChat?: (toolCallId: string) => void;
   onOpenSubagentReport?: (path: string) => void;
 }
@@ -54,6 +63,7 @@ interface ChatMessageRowProps {
   onToolApprovalModeChange?: (mode: ToolApprovalMode) => void;
   subagentProgress?: Map<string, string>;
   subagentReportPaths?: Map<string, string>;
+  toolTimings?: Map<string, ToolTiming>;
   onOpenSubagentChat?: (toolCallId: string) => void;
   onOpenSubagentReport?: (path: string) => void;
 }
@@ -302,6 +312,32 @@ function areToolMapValuesEqual(
   return true;
 }
 
+/** Compare row-scoped timing values without depending on Map identity. */
+function areToolTimingValuesEqual(
+  prevMessage: UIMessage,
+  nextMessage: UIMessage,
+  prevMap: Map<string, ToolTiming> | undefined,
+  nextMap: Map<string, ToolTiming> | undefined
+): boolean {
+  if (prevMap === nextMap) return true;
+
+  const toolCallIds = new Set<string>();
+  for (const msg of [prevMessage, nextMessage]) {
+    for (const part of msg.parts) {
+      if (isToolUIPart(part)) toolCallIds.add(part.toolCallId);
+    }
+  }
+
+  for (const toolCallId of toolCallIds) {
+    const prevValue = prevMap?.get(toolCallId);
+    const nextValue = nextMap?.get(toolCallId);
+    if (prevValue?.startedAt !== nextValue?.startedAt) return false;
+    if (prevValue?.endedAt !== nextValue?.endedAt) return false;
+  }
+
+  return true;
+}
+
 /** Compare row-scoped approval membership without depending on Set identity. */
 function arePendingApprovalValuesEqual(
   message: UIMessage,
@@ -314,6 +350,99 @@ function arePendingApprovalValuesEqual(
     if (prevIds?.has(part.toolCallId) !== nextIds?.has(part.toolCallId)) return false;
   }
   return true;
+}
+
+/** True while a tool part is still waiting for input, approval, or output. */
+function isPendingToolState(state: string): boolean {
+  return (
+    state === "input-available" ||
+    state === "input-streaming" ||
+    state === "approval-requested" ||
+    state === "approval-responded"
+  );
+}
+
+/** Extract the leading text payload from a tool result for status detection. */
+function leadingResultText(result: unknown): string | null {
+  if (typeof result === "string") return result;
+  if (Array.isArray(result) && result.length > 0 && typeof result[0] === "string") {
+    return result[0];
+  }
+  return null;
+}
+
+/** Detect tool errors represented either structurally or as legacy text prefixes. */
+function toolOutputIsError(result: unknown, leadingText: string | null): boolean {
+  if (
+    typeof result === "object" &&
+    result !== null &&
+    !Array.isArray(result) &&
+    "error" in result
+  ) {
+    return true;
+  }
+  return leadingText != null && leadingText.startsWith("[ERROR");
+}
+
+/** Resolve the aggregate status shown on a compact activity group. */
+function getActivityStatus(
+  items: AssistantPartWithIndex[],
+  pendingApprovalIds: Set<string> | undefined
+): "running" | "approval" | "error" | "warning" | "complete" {
+  let hasPending = false;
+  let hasApproval = false;
+  let hasError = false;
+  let hasWarning = false;
+
+  for (const item of items) {
+    if (!isToolUIPart(item.part)) continue;
+    const state = String(item.part.state);
+    const result = "output" in item.part ? item.part.output : undefined;
+    const leadingText = leadingResultText(result);
+    if (pendingApprovalIds?.has(item.part.toolCallId) || state === "approval-requested") {
+      hasApproval = true;
+    }
+    if (isPendingToolState(state)) {
+      hasPending = true;
+    }
+    if (
+      state === "output-error" ||
+      state === "output-denied" ||
+      toolOutputIsError(result, leadingText)
+    ) {
+      hasError = true;
+    }
+    if (leadingText != null && leadingText.startsWith("[WARNING")) {
+      hasWarning = true;
+    }
+  }
+
+  if (hasApproval) return "approval";
+  if (hasPending) return "running";
+  if (hasError) return "error";
+  if (hasWarning) return "warning";
+  return "complete";
+}
+
+/** Compute elapsed time for a group from the earliest tool start to latest tool end. */
+function getActivityDurationMs(
+  items: AssistantPartWithIndex[],
+  toolTimings: Map<string, ToolTiming> | undefined
+): number | undefined {
+  let startedAt: number | undefined;
+  let endedAt: number | undefined;
+
+  for (const item of items) {
+    if (!isToolUIPart(item.part)) continue;
+    const timing = toolTimings?.get(item.part.toolCallId);
+    if (!timing?.startedAt || !timing.endedAt) continue;
+    startedAt =
+      startedAt === undefined ? timing.startedAt : Math.min(startedAt, timing.startedAt);
+    endedAt = endedAt === undefined ? timing.endedAt : Math.max(endedAt, timing.endedAt);
+  }
+
+  if (startedAt === undefined || endedAt === undefined) return undefined;
+  return Math.max(0, endedAt - startedAt);
 }
 
 /**
@@ -334,12 +463,93 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onToolApprovalModeChange,
   subagentProgress,
   subagentReportPaths,
+  toolTimings,
   onOpenSubagentChat,
   onOpenSubagentReport,
 }: ChatMessageRowProps) {
   const handleUserClick = React.useCallback(() => {
     onUserMessageClick(message, index);
   }, [index, message, onUserMessageClick]);
+
+  /** Render one grouped reasoning/tool part using the existing detailed components. */
+  const renderActivityItem = (item: AssistantPartWithIndex) => {
+    const { part, partIndex } = item;
+    if (isToolUIPart(part)) {
+      const inv = part;
+      const toolName = inv.type.slice(5) as OrionToolName;
+      const invArgs =
+        ("input" in inv && inv.input != null) ? (inv.input as Record<string, unknown>) : {};
+      const invResult = "output" in inv ? inv.output : undefined;
+
+      if (toolName === "delegate") {
+        return (
+          <DelegateInvocationCard
+            key={inv.toolCallId}
+            subagentType={(invArgs.subagent as string | undefined) ?? ""}
+            progressDescription={subagentProgress?.get(inv.toolCallId)}
+            result={invResult}
+            state={inv.state}
+            reportPath={subagentReportPaths?.get(inv.toolCallId)}
+            onShowReport={onOpenSubagentReport}
+            onOpenSubchat={
+              onOpenSubagentChat
+                ? () => onOpenSubagentChat(inv.toolCallId)
+                : undefined
+            }
+            conversationReference={{
+              messageId: message.id,
+              messageIndex: index,
+              partIndex,
+              toolCallId: inv.toolCallId,
+            }}
+          />
+        );
+      }
+
+      return (
+        <ToolInvocationCard
+          key={inv.toolCallId}
+          toolName={toolName}
+          args={invArgs}
+          result={invResult}
+          state={inv.state}
+          pendingApproval={pendingApprovalIds?.has(inv.toolCallId)}
+          onApprove={onApprove ? () => onApprove(inv.toolCallId) : undefined}
+          onReject={onReject ? () => onReject(inv.toolCallId) : undefined}
+          toolApprovalMode={toolApprovalMode}
+          onToolApprovalModeChange={onToolApprovalModeChange}
+          conversationReference={{
+            messageId: message.id,
+            messageIndex: index,
+            partIndex,
+            toolCallId: inv.toolCallId,
+          }}
+        />
+      );
+    }
+
+    if (part.type === "reasoning" && part.text) {
+      const hasTextAfter = message.parts
+        .slice(partIndex + 1)
+        .some((p) => p.type === "text" && "text" in p && p.text);
+      const isActivelyThinking =
+        isLoading && isLastMessage && !hasTextAfter;
+
+      return (
+        <ThinkingBlock
+          key={`${message.id}-reasoning-${partIndex}`}
+          reasoning={part.text}
+          isStreaming={isActivelyThinking}
+        />
+      );
+    }
+
+    return null;
+  };
+
+  const renderBlocks = message.role === "assistant"
+    ? buildAssistantRenderBlocks(message.parts)
+    : [];
 
   return (
     <div
@@ -354,92 +564,38 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
         />
       ) : (
         <div className="w-full min-w-0 space-y-2">
-          {/* Render parts in chronological order (text, tool calls, etc.) */}
-          {message.parts.map((part, partIndex) => {
-            if (isToolUIPart(part)) {
-              const inv = part;
-              // Extract tool name from part type ("tool-execute_code" -> "execute_code")
-              const toolName = inv.type.slice(5) as OrionToolName;
-              const invArgs = ("input" in inv && inv.input != null) ? (inv.input as Record<string, unknown>) : {};
-              const invResult = "output" in inv ? inv.output : undefined;
-
-              // Delegate tool gets a dedicated card with live progress
-              if (toolName === "delegate") {
-                return (
-                  <DelegateInvocationCard
-                    key={inv.toolCallId}
-                    subagentType={(invArgs.subagent as string | undefined) ?? ""}
-                    progressDescription={subagentProgress?.get(inv.toolCallId)}
-                    result={invResult}
-                    state={inv.state}
-                    reportPath={subagentReportPaths?.get(inv.toolCallId)}
-                    onShowReport={onOpenSubagentReport}
-                    onOpenSubchat={
-                      onOpenSubagentChat
-                        ? () => onOpenSubagentChat(inv.toolCallId)
-                        : undefined
-                    }
-                    conversationReference={{
-                      messageId: message.id,
-                      messageIndex: index,
-                      partIndex,
-                      toolCallId: inv.toolCallId,
-                    }}
-                  />
-                );
-              }
-
-              return (
-                <ToolInvocationCard
-                  key={inv.toolCallId}
-                  toolName={toolName}
-                  args={invArgs}
-                  result={invResult}
-                  state={inv.state}
-                  pendingApproval={pendingApprovalIds?.has(inv.toolCallId)}
-                  onApprove={onApprove ? () => onApprove(inv.toolCallId) : undefined}
-                  onReject={onReject ? () => onReject(inv.toolCallId) : undefined}
-                  toolApprovalMode={toolApprovalMode}
-                  onToolApprovalModeChange={onToolApprovalModeChange}
-                  conversationReference={{
-                    messageId: message.id,
-                    messageIndex: index,
-                    partIndex,
-                    toolCallId: inv.toolCallId,
-                  }}
-                />
-              );
-            }
-            if (part.type === "text" && part.text) {
+          {/* Render assistant text and grouped activity in chronological order. */}
+          {renderBlocks.map((block, blockIndex) => {
+            if (block.type === "text") {
               return (
                 <AssistantMessage
-                  key={`${message.id}-text-${partIndex}`}
-                  content={part.text}
+                  key={`${message.id}-text-${block.item.partIndex}`}
+                  content={block.item.part.text}
                   isStreaming={isLoading && isLastMessage}
                   conversationReference={{
                     messageId: message.id,
                     messageIndex: index,
-                    partIndex,
+                    partIndex: block.item.partIndex,
                   }}
                 />
               );
             }
-            if (part.type === "reasoning" && part.text) {
-              const hasTextAfter = message.parts
-                .slice(partIndex + 1)
-                .some((p) => p.type === "text" && "text" in p && p.text);
-              const isActivelyThinking =
-                isLoading && isLastMessage && !hasTextAfter;
 
-              return (
-                <ThinkingBlock
-                  key={`${message.id}-reasoning-${partIndex}`}
-                  reasoning={part.text}
-                  isStreaming={isActivelyThinking}
-                />
-              );
-            }
-            return null;
+            const status = getActivityStatus(block.items, pendingApprovalIds);
+            const hasPending = status === "running" || status === "approval";
+            const toolCount = block.items.filter((item) => isToolUIPart(item.part)).length;
+            return (
+              <AssistantActivityGroup
+                key={`${message.id}-activity-${block.items[0]?.partIndex ?? blockIndex}`}
+                toolCount={toolCount}
+                durationMs={getActivityDurationMs(block.items, toolTimings)}
+                status={status}
+                autoCollapse={shouldAutoCollapseActivityGroup(block.hasFollowingText, hasPending)}
+                forceExpanded={(isLoading && isLastMessage) || hasPending}
+              >
+                {block.items.map(renderActivityItem)}
+              </AssistantActivityGroup>
+            );
           })}
         </div>
       )}
@@ -470,6 +626,9 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   if (!areToolMapValuesEqual(prev.message, next.message, prev.subagentReportPaths, next.subagentReportPaths)) {
     return false;
   }
+  if (!areToolTimingValuesEqual(prev.message, next.message, prev.toolTimings, next.toolTimings)) {
+    return false;
+  }
   if (prev.toolApprovalMode !== next.toolApprovalMode) return false;
   if (prev.onToolApprovalModeChange !== next.onToolApprovalModeChange) return false;
 
@@ -493,6 +652,7 @@ export function ChatBody({
   onToolApprovalModeChange,
   subagentProgress,
   subagentReportPaths,
+  toolTimings,
   onOpenSubagentChat,
   onOpenSubagentReport,
 }: ChatBodyProps) {
@@ -656,6 +816,7 @@ export function ChatBody({
                     onToolApprovalModeChange={onToolApprovalModeChange}
                     subagentProgress={subagentProgress}
                     subagentReportPaths={subagentReportPaths}
+                    toolTimings={toolTimings}
                     onOpenSubagentChat={onOpenSubagentChat}
                     onOpenSubagentReport={onOpenSubagentReport}
                   />
