@@ -50,10 +50,7 @@ import { NO_DEPENDENCY_TOOLS, SERVER_ONLY_TOOLS } from "@/lib/agent/tool-schemas
 import { isReadOnlyBashBlocked } from "@/lib/agent/read-only-bash-guard";
 import { needsApproval } from "@/lib/agent/tool-approval";
 import type { ProviderCredential, ToolApprovalMode } from "@/lib/settings/schema";
-import {
-  DEFAULT_SELECTED_CHAT_MODEL_ID,
-  DEFAULT_TITLE_GENERATION_MODEL_ID,
-} from "@/lib/settings/defaults";
+import { DEFAULT_TITLE_GENERATION_MODEL_ID } from "@/lib/settings/defaults";
 import type { KernelStatus, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
@@ -91,6 +88,11 @@ import {
 import { resolveSubagentExecutionModel } from "./subagent-model-resolution";
 import type { EditingState, InteractionMode, LLM, ModelSettings, ModelSettingsMap } from "./types";
 import type { SettingsTab } from "@/components/settings-dialog/types";
+import {
+  loadSelectedModelFromSession,
+  resolveSelectedModelFallback,
+  saveSelectedModelToSession,
+} from "./model-selection";
 
 /**
  * Extract assistant text from `/api/chat` stream responses for title generation.
@@ -446,8 +448,6 @@ interface DelegateToolOutput {
   reconnected: boolean;
 }
 
-/** Catalog id used when the session-selected chat model is missing or invalid. */
-const SESSION_FALLBACK_CHAT_MODEL_ID = DEFAULT_SELECTED_CHAT_MODEL_ID;
 const CURRENT_CHAT_SESSION_KEY = "orion:currentChatId";
 
 /** Reads the last selected chat for the current browser tab. */
@@ -505,6 +505,7 @@ export function RightSidebar({
   const {
     effectiveSettings,
     isHydrated: settingsHydrated,
+    userSettingsLoadStatus,
     setUserSettings,
   } = useOrionSettings();
   const { openWithTab } = useOpenSettings();
@@ -523,14 +524,7 @@ export function RightSidebar({
     }
     return "Agent";
   });
-  const SESSION_MODEL_KEY = "orion:selectedModel";
-  const [selectedModel, setSelectedModel] = useState(() => {
-    if (typeof window !== "undefined") {
-      const stored = sessionStorage.getItem(SESSION_MODEL_KEY);
-      if (stored) return stored;
-    }
-    return SESSION_FALLBACK_CHAT_MODEL_ID;
-  });
+  const [selectedModel, setSelectedModel] = useState(loadSelectedModelFromSession);
   const [editingState, setEditingState] = useState<EditingState | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [models, setModels] = useState<LLM[]>([]);
@@ -703,16 +697,17 @@ export function RightSidebar({
   }, [allModels, effectiveSettings.providers?.credentials]);
 
   useEffect(() => {
-    if (allModels.length === 0) return;
-    if (getModel(selectedModel)) return;
-
-    const preferred = allModels.find((m) => m.value === SESSION_FALLBACK_CHAT_MODEL_ID);
-    const fallbackModel = preferred?.value ?? allModels[0]?.value;
+    const fallbackModel = resolveSelectedModelFallback({
+      selectedModel,
+      models: allModels,
+      modelsCatalogLoaded,
+      settingsReady: settingsHydrated && userSettingsLoadStatus !== "failed",
+    });
     if (!fallbackModel) return;
 
     setSelectedModel(fallbackModel);
-    sessionStorage.setItem(SESSION_MODEL_KEY, fallbackModel);
-  }, [allModels, getModel, selectedModel]);
+    saveSelectedModelToSession(fallbackModel);
+  }, [allModels, modelsCatalogLoaded, selectedModel, settingsHydrated, userSettingsLoadStatus]);
 
   const handleInteractionModeChange = useCallback(
     (nextMode: InteractionMode) => {
@@ -738,7 +733,7 @@ export function RightSidebar({
   const handleModelChange = useCallback(
     (nextModel: string) => {
       setSelectedModel(nextModel);
-      sessionStorage.setItem(SESSION_MODEL_KEY, nextModel);
+      saveSelectedModelToSession(nextModel);
     },
     []
   );

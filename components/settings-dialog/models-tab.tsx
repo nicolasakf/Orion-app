@@ -213,8 +213,12 @@ export function ModelsTab() {
     void fetchModels();
   }, [fetchModels]);
 
+  /** Backfill invalid stored title models once the catalog has loaded. */
   React.useEffect(() => {
-    if (allModels.length === 0) return;
+    // Cloud catalog models are unavailable until fetchModels completes; validating
+    // earlier would treat cloud IDs as invalid and fall back to the first local model.
+    if (isLoading || models.length === 0 || allModels.length === 0) return;
+
     const currentId = effectiveSettings.chat.titleGenerationModelId;
     if (allModels.some((model) => model.model_id === currentId)) return;
 
@@ -222,16 +226,29 @@ export function ModelsTab() {
       (model) => model.model_id === DEFAULT_TITLE_GENERATION_MODEL_ID
     );
     const fallbackId = preferred?.model_id ?? allModels[0]?.model_id;
-    if (!fallbackId) return;
+    if (!fallbackId || fallbackId === currentId) return;
 
-    void setUserSettings((current) => ({
-      ...current,
-      chat: {
-        ...current.chat,
-        titleGenerationModelId: fallbackId,
-      },
-    }));
-  }, [allModels, effectiveSettings.chat.titleGenerationModelId, setUserSettings]);
+    void setUserSettings((current) => {
+      const latestId = current.chat.titleGenerationModelId;
+      if (allModels.some((model) => model.model_id === latestId)) {
+        return current;
+      }
+
+      return {
+        ...current,
+        chat: {
+          ...current.chat,
+          titleGenerationModelId: fallbackId,
+        },
+      };
+    });
+  }, [
+    allModels,
+    effectiveSettings.chat.titleGenerationModelId,
+    isLoading,
+    models.length,
+    setUserSettings,
+  ]);
 
   const modelsWithConfiguredLabels = React.useMemo(() => {
     const credentials = effectiveSettings.providers?.credentials ?? {};
