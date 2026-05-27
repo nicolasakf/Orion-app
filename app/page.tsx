@@ -793,6 +793,7 @@ export default function Page() {
     pendingFileSelectionRef.current = null;
     setCurrentFile({ name: "", path: "" });
     setNotebook(null);
+    setHasUnsavedChanges(false);
     setOpen(false);
   }, []);
 
@@ -851,6 +852,11 @@ export default function Page() {
         file.path === currentFile.path &&
         file.openAsText === currentFile.openAsText
       ) {
+        return;
+      }
+      if (!currentFile.path) {
+        setHasUnsavedChanges(false);
+        selectFile(file);
         return;
       }
       if (hasUnsavedChanges) {

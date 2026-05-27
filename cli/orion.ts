@@ -92,6 +92,7 @@ function printUsage(): void {
 Starts a local Orion app, starts Jupyter Server, and opens Orion already connected.
 
 Options:
+  -V, --version  Print the Orion CLI version and exit.
   -y, --yes       Approve Orion-managed setup prompts.
   --no-browser   Start services without opening a browser.
   --here         Start Jupyter from the current directory instead of ~.
@@ -301,9 +302,20 @@ async function runStartCommand(argv: string[]): Promise<void> {
   keepAliveUntilExit(jupyter ? [jupyter.process, app.process] : [app.process]);
 }
 
+/** Prints the published Orion CLI version. */
+function printVersion(): void {
+  console.log(readPackageVersion());
+}
+
 /** Runs the Orion CLI entrypoint. */
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
+
+  if (argv.includes("--version") || argv.includes("-V")) {
+    printVersion();
+    return;
+  }
+
   const command = argv[0];
 
   if (command === "uninstall") {

@@ -520,6 +520,9 @@ def start_main(argv: list[str]) -> None:
 def main() -> None:
     """Run the PyPI Orion CLI entrypoint."""
     argv = sys.argv[1:]
+    if "--version" in argv or "-V" in argv:
+        print(VERSION)
+        return
     if argv and argv[0] == "uninstall":
         uninstall_main(argv[1:])
         return
