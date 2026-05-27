@@ -7,11 +7,7 @@ description: Builds Orion-native notebook UI outputs with the Python `orion_ui` 
 
 ## Full documentation
 
-For extended user guides, component workflows, App View integration, and troubleshooting beyond this skill file, read:
-https://docs.orion-agent.ai/ai-assistant/builtin-skills/orion-ui
-
-Also see the component parameter reference:
-https://docs.orion-agent.ai/notebooks/orion-ui-component-reference
+For extended user guides, component workflows, App View integration, and troubleshooting beyond this skill file, read: [Orion UI component reference](https://docs.orion-agent.ai/notebooks/orion-ui-component-reference.html).
 
 Use this skill when the deliverable is a Python-authored UI inside an Orion notebook cell, rendered through Orion's native `application/vnd.orion.ui+json` MIME output.
 
