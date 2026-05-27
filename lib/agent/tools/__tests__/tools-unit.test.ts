@@ -179,6 +179,7 @@ function createSnapshotProvider(options: {
         ? null
         : { notebook, dirty: options.dirty ?? true, source: "editor-buffer" };
     },
+    saveOpenDocumentIfDirty: async () => ({ status: "not-open" }),
   };
 }
 

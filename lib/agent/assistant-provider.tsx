@@ -29,6 +29,8 @@ import { TerminalPool } from "@/lib/shell/terminal-pool";
 import { guardToolResult } from "./tool-output-guard";
 import {
   ORION_AGENT_FILE_MODIFIED_EVENT,
+  type OpenDocumentKind,
+  type OpenDocumentSaveResult,
   type OpenDocumentSnapshotProvider,
 } from "./open-document-snapshots";
 import {
@@ -81,6 +83,24 @@ function resolveJupyterTerminalShell(options: {
     return "powershell";
   }
   return "posix";
+}
+
+/** Returns true when a tool can write notebook state through the ContentsManager. */
+function isNotebookMutationTool(toolName: OrionToolName): boolean {
+  return (
+    toolName === "insert_cell" ||
+    toolName === "delete_cell" ||
+    toolName === "overwrite_cell_source" ||
+    toolName === "edit_orion_metadata" ||
+    toolName === "execute_cell"
+  );
+}
+
+/** Extracts a string property from sanitized tool parameters. */
+function getStringParam(params: unknown, key: string): string | null {
+  if (!params || typeof params !== "object") return null;
+  const value = (params as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : null;
 }
 
 export interface AssistantContextValue {
@@ -283,6 +303,9 @@ export function AssistantProvider({
           openDocumentSnapshotsRef.current?.getTextSnapshot(path) ?? null,
         getNotebookSnapshot: (path) =>
           openDocumentSnapshotsRef.current?.getNotebookSnapshot(path) ?? null,
+        saveOpenDocumentIfDirty: (path, kind) =>
+          openDocumentSnapshotsRef.current?.saveOpenDocumentIfDirty(path, kind) ??
+          Promise.resolve({ status: "not-open" }),
       }
     );
     setToolsReady(true);
@@ -580,6 +603,45 @@ export function AssistantProvider({
   );
 
   /**
+   * Saves the active dirty editor buffer before tools write to the same path.
+   */
+  const saveOpenDocumentBeforeMutation = useCallback(
+    async (
+      toolSet: JupyterToolSet,
+      toolName: OrionToolName,
+      sanitizedParams: unknown,
+    ): Promise<OpenDocumentSaveResult> => {
+      let path: string | null = null;
+      let kind: OpenDocumentKind | null = null;
+
+      if (toolName === "edit_file") {
+        path = getStringParam(sanitizedParams, "filePath");
+        kind = "text";
+      } else if (isNotebookMutationTool(toolName)) {
+        kind = "notebook";
+        if (toolName === "edit_orion_metadata") {
+          const notebookId = getStringParam(sanitizedParams, "notebookId")?.trim();
+          path = notebookId
+            ? toolSet.notebookManager.getNotebookPath(notebookId)
+            : toolSet.notebookManager.getCurrentNotebookPath();
+        } else {
+          path = toolSet.notebookManager.getCurrentNotebookPath();
+        }
+      }
+
+      if (!path || !kind) return { status: "not-open" };
+
+      return (
+        (await openDocumentSnapshotsRef.current?.saveOpenDocumentIfDirty(
+          path,
+          kind,
+        )) ?? { status: "not-open" }
+      );
+    },
+    [],
+  );
+
+  /**
    * Execute a named agent tool client-side using the JupyterToolSet.
    * Tool results are serialized to strings (JSON when needed).
    */
@@ -658,6 +720,23 @@ export function AssistantProvider({
       const sanitizedParams = sanitizeToolParams(params);
 
       try {
+        const preSaveResult = await saveOpenDocumentBeforeMutation(
+          toolSet,
+          toolName,
+          sanitizedParams,
+        );
+        if (preSaveResult.status === "error") {
+          const finalResult = guardToolResult(
+            `[ERROR] Could not save the open editor buffer before running ${toolName}. ${preSaveResult.message ?? "No changes were made."}`,
+          ) as string;
+          const durationMs = Date.now() - startMs;
+          logToolResult(
+            { requestId, toolName, params, result: finalResult, durationMs },
+            chatIdRef.current,
+          );
+          return finalResult;
+        }
+
         let result: string | string[];
 
         switch (toolName) {
@@ -774,7 +853,7 @@ export function AssistantProvider({
         return guardToolResult({ error: `Tool execution failed: ${message}` });
       }
     },
-    [refreshSkills, sanitizeToolParams]
+    [refreshSkills, sanitizeToolParams, saveOpenDocumentBeforeMutation]
   );
 
   /**

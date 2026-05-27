@@ -4,7 +4,10 @@ import type { TextFileModelState } from "@/components/editors/use-text-file-mode
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { EditorDefinition as BaseEditorDefinition } from "@/lib/editor/editor-registry";
 import type { KernelInfo, KernelStatus, NotebookType } from "@/lib/types";
-import type { OpenDocumentSnapshotProvider } from "@/lib/agent/open-document-snapshots";
+import type {
+  OpenDocumentSaveResult,
+  OpenDocumentSnapshotProvider,
+} from "@/lib/agent/open-document-snapshots";
 
 export interface EditorRuntimeProps {
   filepath: string;
@@ -23,6 +26,9 @@ export interface EditorRuntimeProps {
   onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
   onNotebookSnapshotGetterChange?: (
     getter: OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null,
+  ) => void;
+  onNotebookSaveHandlerChange?: (
+    handler: ((path: string) => Promise<OpenDocumentSaveResult>) | null,
   ) => void;
   presentationHideAllCellInputs?: boolean;
   textFileModel?: TextFileModelState;

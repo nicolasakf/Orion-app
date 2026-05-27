@@ -14,6 +14,7 @@ import {
 import { isSkillDefinitionPath } from "@/lib/skills/paths";
 import {
   ORION_AGENT_FILE_MODIFIED_EVENT,
+  type OpenDocumentSaveResult,
   type TextDocumentSnapshot,
 } from "@/lib/agent/open-document-snapshots";
 
@@ -35,6 +36,7 @@ export interface TextFileModelState {
   setFileContent: (content: string) => void;
   markDirty: () => void;
   getSnapshot: (path: string) => TextDocumentSnapshot | null;
+  saveOpenDocumentIfDirty: (path: string) => Promise<OpenDocumentSaveResult>;
   saveFile: () => Promise<void>;
   handleRunInTerminal: (code: string) => void;
   handleMonacoMount: (_editor: unknown, monaco: Monaco) => void;
@@ -206,57 +208,78 @@ export function useTextFileModel({
     };
   }, [filepath, loadFileFromSource]);
 
+  /**
+   * Persists the active dirty text buffer when it matches the requested path.
+   */
+  const saveOpenDocumentIfDirty = useCallback(
+    async (path: string): Promise<OpenDocumentSaveResult> => {
+      if (!filepath || path !== filepath) return { status: "not-open" };
+      if (!isDirtyRef.current) return { status: "clean" };
+      if (!isUserSettingsEditorPath(filepath) && !kernelService) {
+        return {
+          status: "error",
+          message: "Cannot save the open text editor without a Jupyter connection.",
+        };
+      }
+      if (pathExtension === "ipynb" && !openNotebookAsText) {
+        return { status: "not-open" };
+      }
+
+      try {
+        const contentToSave = fileContentRef.current;
+        if (isUserSettingsEditorPath(filepath)) {
+          await saveUserSettingsRawFileToApi(contentToSave);
+          markClean();
+          window.dispatchEvent(new CustomEvent("orion:user-settings-file-changed"));
+          console.log("User settings file saved successfully");
+          return { status: "saved" };
+        }
+
+        const contentsManager = kernelService!.getContentsManager();
+        if (pathExtension === "ipynb" && openNotebookAsText) {
+          await contentsManager.save(filepath, {
+            type: "notebook",
+            format: "json",
+            content: JSON.parse(contentToSave) as unknown,
+          });
+        } else {
+          await contentsManager.save(filepath, {
+            type: "file",
+            format: "text",
+            content: contentToSave,
+          });
+        }
+
+        markClean();
+        if (isSkillDefinitionPath(filepath)) {
+          window.dispatchEvent(
+            new CustomEvent("orion:skills-changed", {
+              detail: { path: filepath },
+            }),
+          );
+        }
+        console.log("File saved successfully");
+        return { status: "saved" };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("Error saving file:", error);
+        return { status: "error", message };
+      }
+    },
+    [
+      kernelService,
+      filepath,
+      pathExtension,
+      openNotebookAsText,
+      markClean,
+    ],
+  );
+
   /** Saves current text content through Jupyter ContentsManager or the settings file API. */
   const saveFile = useCallback(async () => {
     if (!filepath) return;
-    if (!isUserSettingsEditorPath(filepath) && !kernelService) return;
-    if (pathExtension === "ipynb" && !openNotebookAsText) return;
-    if (!isDirtyRef.current) return;
-
-    try {
-      if (isUserSettingsEditorPath(filepath)) {
-        await saveUserSettingsRawFileToApi(fileContent);
-        markClean();
-        window.dispatchEvent(new CustomEvent("orion:user-settings-file-changed"));
-        console.log("User settings file saved successfully");
-        return;
-      }
-
-      const contentsManager = kernelService!.getContentsManager();
-      if (pathExtension === "ipynb" && openNotebookAsText) {
-        await contentsManager.save(filepath, {
-          type: "notebook",
-          format: "json",
-          content: JSON.parse(fileContent) as unknown,
-        });
-      } else {
-        await contentsManager.save(filepath, {
-          type: "file",
-          format: "text",
-          content: fileContent,
-        });
-      }
-
-      markClean();
-      if (isSkillDefinitionPath(filepath)) {
-        window.dispatchEvent(
-          new CustomEvent("orion:skills-changed", {
-            detail: { path: filepath },
-          }),
-        );
-      }
-      console.log("File saved successfully");
-    } catch (error) {
-      console.error("Error saving file:", error);
-    }
-  }, [
-    kernelService,
-    filepath,
-    pathExtension,
-    openNotebookAsText,
-    fileContent,
-    markClean,
-  ]);
+    await saveOpenDocumentIfDirty(filepath);
+  }, [filepath, saveOpenDocumentIfDirty]);
 
   /**
    * Sends code to the terminal and starts a language REPL for Python/R files
@@ -303,6 +326,7 @@ export function useTextFileModel({
     setFileContent,
     markDirty,
     getSnapshot,
+    saveOpenDocumentIfDirty,
     saveFile,
     handleRunInTerminal,
     handleMonacoMount,

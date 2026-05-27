@@ -160,7 +160,7 @@ export const orionTools = {
 
   insert_cell: tool({
     description:
-      "Insert one or more code or markdown cells at a specific position in the notebook. Existing cells at or after the index are shifted down. Provide multiple cells to insert several at once.",
+      "Insert one or more code or markdown cells at a specific position in the notebook. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Existing cells at or after the index are shifted down. Provide multiple cells to insert several at once.",
     inputSchema: z.object({
       cells: z
         .array(
@@ -189,7 +189,7 @@ export const orionTools = {
 
   delete_cell: tool({
     description:
-      "Delete one or more cells from the notebook by their indices. Provide multiple indices to delete several cells at once.",
+      "Delete one or more cells from the notebook by their indices. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Provide multiple indices to delete several cells at once.",
     inputSchema: z.object({
       cellIndices: z
         .array(z.number().int().min(0))
@@ -207,7 +207,7 @@ export const orionTools = {
 
   overwrite_cell_source: tool({
     description:
-      "Replace the source code of one or more existing cells, preserving unsaved editor-buffer changes in other cells when the active notebook is open. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. The notebook is saved once after all updates.",
+      "Replace the source code of one or more existing cells. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. The notebook is saved once after all updates.",
     inputSchema: z.object({
       cells: z
         .array(
@@ -229,13 +229,13 @@ export const orionTools = {
 
   edit_orion_metadata: tool({
     description:
-      "Modify notebook-level or cell-level metadata.orion fields in the current managed notebook, preserving unsaved editor-buffer source changes when the active notebook is open. Use this instead of edit_file for Orion notebook metadata. Supports batched merge, replace, and delete operations; preserves source, outputs, execution counts, unrelated metadata, and protected cell metadata.orion.id values.",
+      "Modify notebook-level or cell-level metadata.orion fields in the current managed notebook. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Use this instead of edit_file for Orion notebook metadata. Supports batched merge, replace, and delete operations; preserves source, outputs, execution counts, unrelated metadata, and protected cell metadata.orion.id values.",
     inputSchema: EditOrionMetadataParamsSchema,
   }),
 
   execute_cell: tool({
     description:
-      "Execute one or more cells in the notebook by their indices and return their outputs, using Orion's unsaved editor buffer for the active notebook before falling back to the Jupyter server. Cells are executed sequentially in the order provided. All cells must already exist in the notebook.",
+      "Execute one or more cells in the notebook by their indices and return their outputs. If the active notebook has unsaved editor changes, Orion saves them before execution. Cells are executed sequentially in the order provided. All cells must already exist in the notebook.",
     inputSchema: z.object({
       cellIndices: z
         .array(z.number().int().min(0))
@@ -421,7 +421,7 @@ export const orionTools = {
 
   edit_file: tool({
     description:
-      "Write or modify a non-notebook text file, using Orion's unsaved editor buffer as the replace base for the active file before falling back to the Jupyter server. Use mode='overwrite' to replace the entire file content, or mode='replace' to make a targeted string substitution. Never use this tool on .ipynb files — use the notebook cell tools instead.",
+      "Write or modify a non-notebook text file. If the active text file has unsaved editor changes, Orion saves them before this mutation runs. Use mode='overwrite' to replace the entire file content, or mode='replace' to make a targeted string substitution. Never use this tool on .ipynb files — use the notebook cell tools instead.",
     inputSchema: z.object({
       filePath: z
         .string()

@@ -17,7 +17,10 @@ import { resolveOrionEditorDefinition } from "@/components/editors/editor-defini
 import { useTextFileModel } from "@/components/editors/use-text-file-model";
 import type { KernelStatus, KernelInfo, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
-import type { OpenDocumentSnapshotProvider } from "@/lib/agent/open-document-snapshots";
+import type {
+  OpenDocumentSaveResult,
+  OpenDocumentSnapshotProvider,
+} from "@/lib/agent/open-document-snapshots";
 import type { Dispatch, SetStateAction, MutableRefObject } from "react";
 
 interface EditorFileReference {
@@ -49,6 +52,12 @@ interface EditorProps {
   ) => void;
   onNotebookSnapshotGetterChange?: (
     getter: OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null,
+  ) => void;
+  onTextSaveHandlerChange?: (
+    handler: ((path: string) => Promise<OpenDocumentSaveResult>) | null,
+  ) => void;
+  onNotebookSaveHandlerChange?: (
+    handler: ((path: string) => Promise<OpenDocumentSaveResult>) | null,
   ) => void;
   /**
    * Called when opening a file fails so the parent can restore the previous selection.
@@ -92,6 +101,8 @@ export function Editor({
   onUnsavedChangesChange,
   onTextSnapshotGetterChange,
   onNotebookSnapshotGetterChange,
+  onTextSaveHandlerChange,
+  onNotebookSaveHandlerChange,
   onFileLoadError,
   hasWorkspace = false,
   hasServerConnection = false,
@@ -128,10 +139,28 @@ export function Editor({
   }, [isTextBackedEditor, onTextSnapshotGetterChange, textFileModel.getSnapshot]);
 
   useEffect(() => {
+    onTextSaveHandlerChange?.(
+      isTextBackedEditor ? textFileModel.saveOpenDocumentIfDirty : null,
+    );
+    return () => {
+      onTextSaveHandlerChange?.(null);
+    };
+  }, [
+    isTextBackedEditor,
+    onTextSaveHandlerChange,
+    textFileModel.saveOpenDocumentIfDirty,
+  ]);
+
+  useEffect(() => {
     if (activeEditor?.id !== "notebook") {
       onNotebookSnapshotGetterChange?.(null);
+      onNotebookSaveHandlerChange?.(null);
     }
-  }, [activeEditor?.id, onNotebookSnapshotGetterChange]);
+  }, [
+    activeEditor?.id,
+    onNotebookSaveHandlerChange,
+    onNotebookSnapshotGetterChange,
+  ]);
 
   useEffect(() => {
     const handleSaveFile = () => {
@@ -162,6 +191,7 @@ export function Editor({
         onNotebookChange={onNotebookChange}
         onUnsavedChangesChange={onUnsavedChangesChange}
         onNotebookSnapshotGetterChange={onNotebookSnapshotGetterChange}
+        onNotebookSaveHandlerChange={onNotebookSaveHandlerChange}
         presentationHideAllCellInputs={presentationHideAllCellInputs}
         textFileModel={textFileModel}
       />

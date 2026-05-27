@@ -127,7 +127,10 @@ import {
   isSubagentNotebookPath,
   validateSubagentNotebookStructure,
 } from "./subagent-validation";
-import type { OpenDocumentSnapshotProvider } from "@/lib/agent/open-document-snapshots";
+import type {
+  OpenDocumentSaveResult,
+  OpenDocumentSnapshotProvider,
+} from "@/lib/agent/open-document-snapshots";
 
 interface NotebookEditorProps {
   /**
@@ -149,6 +152,9 @@ interface NotebookEditorProps {
   onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
   onNotebookSnapshotGetterChange?: (
     getter: OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null,
+  ) => void;
+  onNotebookSaveHandlerChange?: (
+    handler: ((path: string) => Promise<OpenDocumentSaveResult>) | null,
   ) => void;
   /**
    * When true, code cell inputs are hidden in the UI only (does not change notebook metadata).
@@ -339,11 +345,13 @@ export function NotebookEditor({
   onNotebookChange,
   onUnsavedChangesChange,
   onNotebookSnapshotGetterChange,
+  onNotebookSaveHandlerChange,
   presentationHideAllCellInputs,
   activeNotebookView: controlledActiveNotebookView,
   onActiveNotebookViewChange,
 }: NotebookEditorProps) {
   const [notebook, setNotebook] = useState<NotebookType | null>(null);
+  const notebookRef = useRef<NotebookType | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedCellIds, setSelectedCellIds] = useState<Set<CellId>>(
@@ -374,6 +382,10 @@ export function NotebookEditor({
   const [subagentModelOptions, setSubagentModelOptions] = useState<
     SubagentModelOption[]
   >([]);
+
+  useEffect(() => {
+    notebookRef.current = notebook;
+  }, [notebook]);
 
   const cellRefs = useRef<Map<CellId, HTMLDivElement | null>>(new Map());
   const notebookRootRef = useRef<HTMLDivElement | null>(null);
@@ -969,15 +981,16 @@ export function NotebookEditor({
    */
   const getNotebookSnapshot = useCallback(
     (path: string) => {
-      if (path !== filepath || !notebook) return null;
+      const currentNotebook = notebookRef.current;
+      if (path !== filepath || !currentNotebook) return null;
       capturePendingCellSources();
       return {
-        notebook: applyPendingChanges(notebook),
+        notebook: applyPendingChanges(currentNotebook),
         dirty: isUnsavedRef.current,
         source: "editor-buffer" as const,
       };
     },
-    [applyPendingChanges, capturePendingCellSources, filepath, notebook],
+    [applyPendingChanges, capturePendingCellSources, filepath],
   );
 
   useEffect(() => {
@@ -1006,29 +1019,24 @@ export function NotebookEditor({
   }, [activeNotebookView, applyPendingChanges, capturePendingCellSources]);
 
   /**
-   * Saves the current notebook to disk
-   * NEW: Direct approach without custom events or timeouts
+   * Persists the active dirty notebook after capturing mounted Monaco cell text.
    */
-  const saveNotebook = useEffect(() => {
-    const handleSaveFile = async () => {
-      if (!parentKernelService || !notebook) {
-        return;
+  const saveOpenNotebookIfDirty = useCallback(
+    async (path: string): Promise<OpenDocumentSaveResult> => {
+      if (path !== filepath) return { status: "not-open" };
+      if (!isUnsavedRef.current) return { status: "clean" };
+      const currentNotebook = notebookRef.current;
+      if (!parentKernelService || !currentNotebook) {
+        return {
+          status: "error",
+          message: "Cannot save the open notebook before it has finished loading.",
+        };
       }
 
       try {
-        // Get the latest content from all modified cells directly
-        modifiedCellsRef.current.forEach((cellId) => {
-          const cellRef = cellComponentRefs.current.get(cellId);
-          if (cellRef) {
-            const currentSource = cellRef.getSource();
-            pendingCellChangesRef.current.set(cellId, currentSource);
-          }
-        });
+        capturePendingCellSources();
+        const notebookToSave = applyPendingChanges(currentNotebook);
 
-        // Apply all pending changes to create the final notebook
-        const notebookToSave = applyPendingChanges(notebook);
-
-        // Write to file via Jupyter's ContentsManager
         const contentsManager = parentKernelService.getContentsManager();
         await contentsManager.save(filepath, {
           type: "notebook",
@@ -1047,22 +1055,44 @@ export function NotebookEditor({
 
         // Keep local notebook state aligned with what was persisted.
         // This prevents a later "clean" save (e.g. on file switch) from writing an older snapshot.
+        notebookRef.current = notebookToSave;
         setNotebook(notebookToSave);
 
-        // Clear pending changes and modified cells after successful save
         pendingCellChangesRef.current.clear();
         modifiedCellsRef.current.clear();
         markClean();
 
         console.log("Notebook saved successfully");
+        return { status: "saved" };
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         console.error("Error saving notebook:", error);
+        return { status: "error", message };
       }
-    };
+    },
+    [
+      applyPendingChanges,
+      capturePendingCellSources,
+      filepath,
+      markClean,
+      parentKernelService,
+    ],
+  );
 
+  useEffect(() => {
+    onNotebookSaveHandlerChange?.(saveOpenNotebookIfDirty);
+    return () => {
+      onNotebookSaveHandlerChange?.(null);
+    };
+  }, [onNotebookSaveHandlerChange, saveOpenNotebookIfDirty]);
+
+  /**
+   * Saves the current notebook to disk when the global save event fires.
+   */
+  useEffect(() => {
     // Listen for save file events
     const handleSaveFileEvent = () => {
-      handleSaveFile();
+      void saveOpenNotebookIfDirty(filepath);
     };
 
     window.addEventListener("saveFile", handleSaveFileEvent as EventListener);
@@ -1073,7 +1103,7 @@ export function NotebookEditor({
         handleSaveFileEvent as EventListener,
       );
     };
-  }, [parentKernelService, filepath, notebook, applyPendingChanges, markClean]);
+  }, [filepath, saveOpenNotebookIfDirty]);
 
   /** Finds the currently visible notebook surface used for screen-rendered exports. */
   const getScreenExportElement = useCallback((): HTMLElement | null => {

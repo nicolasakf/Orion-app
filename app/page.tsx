@@ -106,7 +106,10 @@ import {
   type PanelVisibilityState,
 } from "@/lib/ui-session-state";
 import { isUserSettingsEditorPath } from "@/lib/settings/user-settings-editor-path";
-import type { OpenDocumentSnapshotProvider } from "@/lib/agent/open-document-snapshots";
+import type {
+  OpenDocumentSaveResult,
+  OpenDocumentSnapshotProvider,
+} from "@/lib/agent/open-document-snapshots";
 
 type ActiveFile = {
   name: string;
@@ -242,6 +245,12 @@ interface MobileLayoutProps {
   onNotebookSnapshotGetterChange: (
     getter: OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null,
   ) => void;
+  onTextSaveHandlerChange: (
+    handler: ((path: string) => Promise<OpenDocumentSaveResult>) | null,
+  ) => void;
+  onNotebookSaveHandlerChange: (
+    handler: ((path: string) => Promise<OpenDocumentSaveResult>) | null,
+  ) => void;
   /** When true, code cell editors are hidden in the UI only (not persisted). */
   notebookPresentationHideAllInputs: boolean;
   onFileLoadError: (path: string) => void;
@@ -295,6 +304,8 @@ function MobileLayout({
   openDocumentSnapshots,
   onTextSnapshotGetterChange,
   onNotebookSnapshotGetterChange,
+  onTextSaveHandlerChange,
+  onNotebookSaveHandlerChange,
   notebookPresentationHideAllInputs,
   onFileLoadError,
   onWorkspacePathRenamed,
@@ -423,6 +434,8 @@ function MobileLayout({
               onUnsavedChangesChange={onUnsavedChangesChange}
               onTextSnapshotGetterChange={onTextSnapshotGetterChange}
               onNotebookSnapshotGetterChange={onNotebookSnapshotGetterChange}
+              onTextSaveHandlerChange={onTextSaveHandlerChange}
+              onNotebookSaveHandlerChange={onNotebookSaveHandlerChange}
               presentationHideAllCellInputs={notebookPresentationHideAllInputs}
               onFileLoadError={onFileLoadError}
             />
@@ -484,6 +497,12 @@ export default function Page() {
   const notebookSnapshotGetterRef = useRef<
     OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null
   >(null);
+  const textSaveHandlerRef = useRef<
+    ((path: string) => Promise<OpenDocumentSaveResult>) | null
+  >(null);
+  const notebookSaveHandlerRef = useRef<
+    ((path: string) => Promise<OpenDocumentSaveResult>) | null
+  >(null);
   const handleTextSnapshotGetterChange = useCallback(
     (getter: OpenDocumentSnapshotProvider["getTextSnapshot"] | null) => {
       textSnapshotGetterRef.current = getter;
@@ -496,11 +515,30 @@ export default function Page() {
     },
     [],
   );
+  const handleTextSaveHandlerChange = useCallback(
+    (handler: ((path: string) => Promise<OpenDocumentSaveResult>) | null) => {
+      textSaveHandlerRef.current = handler;
+    },
+    [],
+  );
+  const handleNotebookSaveHandlerChange = useCallback(
+    (handler: ((path: string) => Promise<OpenDocumentSaveResult>) | null) => {
+      notebookSaveHandlerRef.current = handler;
+    },
+    [],
+  );
   const openDocumentSnapshots = React.useMemo<OpenDocumentSnapshotProvider>(
     () => ({
       getTextSnapshot: (path) => textSnapshotGetterRef.current?.(path) ?? null,
       getNotebookSnapshot: (path) =>
         notebookSnapshotGetterRef.current?.(path) ?? null,
+      saveOpenDocumentIfDirty: async (path, kind) => {
+        const handler =
+          kind === "text"
+            ? textSaveHandlerRef.current
+            : notebookSaveHandlerRef.current;
+        return handler ? handler(path) : { status: "not-open" };
+      },
     }),
     [],
   );
@@ -2396,6 +2434,8 @@ export default function Page() {
                 onNotebookSnapshotGetterChange={
                   handleNotebookSnapshotGetterChange
                 }
+                onTextSaveHandlerChange={handleTextSaveHandlerChange}
+                onNotebookSaveHandlerChange={handleNotebookSaveHandlerChange}
                 notebookPresentationHideAllInputs={
                   effectiveSettings.notebook.presentationHideAllCellInputs
                 }
@@ -2887,6 +2927,10 @@ export default function Page() {
                             }
                             onNotebookSnapshotGetterChange={
                               handleNotebookSnapshotGetterChange
+                            }
+                            onTextSaveHandlerChange={handleTextSaveHandlerChange}
+                            onNotebookSaveHandlerChange={
+                              handleNotebookSaveHandlerChange
                             }
                             presentationHideAllCellInputs={
                               effectiveSettings.notebook.presentationHideAllCellInputs

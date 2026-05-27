@@ -3,6 +3,18 @@ import type { NotebookType } from "@/lib/types";
 /** Origin label for content supplied by Orion's in-memory editor state. */
 export type OpenDocumentSnapshotSource = "editor-buffer";
 
+/** Active editor document family used when saving dirty buffers before tool writes. */
+export type OpenDocumentKind = "text" | "notebook";
+
+/** Outcome of asking an open editor document to persist its dirty buffer. */
+export type OpenDocumentSaveStatus = "saved" | "clean" | "not-open" | "error";
+
+/** Result returned after attempting to save an open editor document. */
+export interface OpenDocumentSaveResult {
+  status: OpenDocumentSaveStatus;
+  message?: string;
+}
+
 /** Current contents of a Monaco-backed text document open in Orion. */
 export interface TextDocumentSnapshot {
   content: string;
@@ -21,6 +33,10 @@ export interface NotebookDocumentSnapshot {
 export interface OpenDocumentSnapshotProvider {
   getTextSnapshot: (path: string) => TextDocumentSnapshot | null;
   getNotebookSnapshot: (path: string) => NotebookDocumentSnapshot | null;
+  saveOpenDocumentIfDirty: (
+    path: string,
+    kind: OpenDocumentKind,
+  ) => Promise<OpenDocumentSaveResult>;
 }
 
 /** Browser event emitted after an agent writes a non-notebook file. */
