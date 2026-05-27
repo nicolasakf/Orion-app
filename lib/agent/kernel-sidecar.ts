@@ -19,22 +19,6 @@ import type { Kernel } from "@jupyterlab/services";
 
 export type TrafficLightState = "green" | "yellow" | "red";
 
-export interface VariableSummary {
-  name: string;
-  type: string;
-  shape?: [number, number] | number[];
-  dtype?: string;
-  memoryUsage?: number;
-  columns?: ColumnInfo[];
-  sample?: any;
-  stats?: Record<string, any>;
-  repr?: string;
-  device?: string; // For torch tensors
-  error?: string;
-  timestamp: number;
-  executionCount?: number;
-}
-
 export interface ColumnInfo {
   name: string;
   dtype: string;
@@ -45,6 +29,37 @@ export interface ColumnInfo {
   max?: number | string;
   mean?: number;
   std?: number;
+}
+
+/** JSON-serializable cell value from a pandas DataFrame preview. */
+export type DataFrameCell = string | number | boolean | null;
+
+/** Tabular preview of a DataFrame for the variable detail dialog. */
+export interface DataFramePreview {
+  columnNames: string[];
+  rows: DataFrameCell[][];
+  totalRows: number;
+  totalColumns: number;
+  truncatedRows?: boolean;
+  truncatedColumns?: boolean;
+}
+
+export interface VariableSummary {
+  name: string;
+  type: string;
+  shape?: [number, number] | number[];
+  dtype?: string;
+  memoryUsage?: number;
+  columns?: ColumnInfo[];
+  sample?: unknown;
+  stats?: Record<string, unknown>;
+  repr?: string;
+  device?: string; // For torch tensors
+  length?: number;
+  dataframePreview?: DataFramePreview;
+  error?: string;
+  timestamp: number;
+  executionCount?: number;
 }
 
 export interface KernelMessage {
@@ -185,7 +200,8 @@ def _summarize_dataframe(df):
     summary = {
         'shape': list(df.shape),
         'memoryUsage': int(df.memory_usage(deep=True).sum()),
-        'columns': []
+        'columns': [],
+        'dataframePreview': _serialize_dataframe_preview(df),
     }
     
     for col in df.columns[:50]:  # Limit to 50 columns
@@ -216,6 +232,60 @@ def _summarize_dataframe(df):
         summary['columns'].append(col_info)
     
     return summary
+
+def _serialize_cell(val):
+    """Convert a DataFrame cell to a JSON-friendly scalar."""
+    import pandas as pd
+    import numpy as np
+
+    if val is None:
+        return None
+    if isinstance(val, (float, np.floating)):
+        if pd.isna(val):
+            return None
+        f = float(val)
+        if np.isinf(f):
+            return 'inf' if f > 0 else '-inf'
+        return f
+    if isinstance(val, (int, np.integer)):
+        if pd.isna(val):
+            return None
+        return int(val)
+    if isinstance(val, (bool, np.bool_)):
+        return bool(val)
+    if isinstance(val, str):
+        return val[:200] + ('…' if len(val) > 200 else '')
+    try:
+        if pd.isna(val):
+            return None
+    except Exception:
+        pass
+    try:
+        s = str(val)
+        return s[:200] + ('…' if len(s) > 200 else '')
+    except Exception:
+        return '<?>'
+
+def _serialize_dataframe_preview(df, max_rows=1000, max_cols=100):
+    """Serialize DataFrame rows/columns for the variable detail dialog."""
+    total_rows, total_cols = df.shape
+    preview = df.iloc[:max_rows, :max_cols]
+    column_names = [str(c) for c in preview.columns.tolist()]
+
+    rows = []
+    for row_vals in preview.itertuples(index=False, name=None):
+        if not isinstance(row_vals, tuple):
+            row_vals = (row_vals,)
+        rows.append([_serialize_cell(v) for v in row_vals])
+
+    return {
+        'columnNames': column_names,
+        'rows': rows,
+        'totalRows': int(total_rows),
+        'totalColumns': int(total_cols),
+        'truncatedRows': total_rows > max_rows,
+        'truncatedColumns': total_cols > max_cols,
+    }
 
 def _summarize_series(series):
     """Summarize a pandas Series."""
@@ -307,6 +377,7 @@ def _summarize_sequence(seq):
     """Summarize a list or tuple."""
     summary = {
         'length': len(seq),
+        'repr': _truncated_sequence_repr(seq, 50000),
     }
     
     if len(seq) > 0:
@@ -330,6 +401,7 @@ def _summarize_dict(d):
     """Summarize a dictionary."""
     summary = {
         'length': len(d),
+        'repr': _truncated_dict_repr(d, 50000),
     }
     
     # Sample keys
@@ -344,6 +416,67 @@ def _summarize_dict(d):
     summary['valueTypes'] = type_counts
     
     return summary
+
+def _truncated_item_repr(item, max_item_len):
+    """repr() for one nested value, capped per item."""
+    try:
+        r = repr(item)
+    except Exception:
+        return '<?>'
+    if len(r) > max_item_len:
+        return r[: max_item_len - 1] + '…'
+    return r
+
+def _truncated_sequence_repr(seq, max_len):
+    """Build a bracketed preview of list/tuple contents up to max_len characters."""
+    open_b = '[' if isinstance(seq, list) else '('
+    close_b = ']' if isinstance(seq, list) else ')'
+    n = len(seq)
+    if n == 0:
+        return open_b + close_b
+
+    parts = []
+    for item in seq:
+        parts.append(_truncated_item_repr(item, 80))
+        body = ', '.join(parts)
+        remaining = n - len(parts)
+        candidate = (
+            f"{open_b}{body}, …{close_b}" if remaining > 0 else f"{open_b}{body}{close_b}"
+        )
+        if len(candidate) > max_len:
+            if len(parts) == 1:
+                budget = max_len - len(open_b) - len(close_b) - 1
+                inner = body[:budget] if budget > 0 else ''
+                return f"{open_b}{inner}…{close_b}"
+            parts.pop()
+            return f"{open_b}{', '.join(parts)}, …{close_b}"
+
+    return f"{open_b}{', '.join(parts)}{close_b}"
+
+def _truncated_dict_repr(d, max_len):
+    """Build a brace preview of dict contents up to max_len characters."""
+    if len(d) == 0:
+        return '{}'
+
+    parts = []
+    n = len(d)
+    for k, v in d.items():
+        rk = _truncated_item_repr(k, 40)
+        rv = _truncated_item_repr(v, 80)
+        parts.append(f"{rk}: {rv}")
+        remaining = n - len(parts)
+        candidate = (
+            '{' + ', '.join(parts) + ', …}' if remaining > 0 else '{' + ', '.join(parts) + '}'
+        )
+        if len(candidate) > max_len:
+            if len(parts) == 1:
+                budget = max_len - 3
+                inner = ', '.join(parts)[:budget] if budget > 0 else ''
+                return '{' + inner + '…}'
+            parts.pop()
+            return '{' + ', '.join(parts) + ', …}'
+
+    return '{' + ', '.join(parts) + '}'
 
 def _summarize_generic(obj):
     """Generic object summary."""
@@ -377,9 +510,9 @@ def _preview_repr(obj):
         if _is_torch_tensor(obj):
             return "Tensor(shape=%s, dtype=%s, device=%s)" % (tuple(obj.shape), obj.dtype, obj.device)
         if isinstance(obj, (list, tuple)):
-            return "%s(len=%s)" % (type(obj).__name__, len(obj))
+            return _truncated_sequence_repr(obj, 240)
         if isinstance(obj, dict):
-            return "dict(len=%s)" % (len(obj),)
+            return _truncated_dict_repr(obj, 240)
         r = repr(obj)
         max_len = 240
         if len(r) > max_len:
@@ -409,7 +542,9 @@ def _list_variables():
         if name in ('_ai_inspector_handler', '_inspect_variable', '_list_variables',
                     '_summarize_dataframe', '_summarize_series', '_summarize_numpy',
                     '_summarize_torch', '_summarize_sequence', '_summarize_dict',
-                    '_summarize_generic', '_preview_repr', '_is_dataframe', '_is_series',
+                    '_summarize_generic', '_preview_repr', '_truncated_item_repr',
+                    '_truncated_sequence_repr', '_truncated_dict_repr', '_serialize_cell',
+                    '_serialize_dataframe_preview', '_is_dataframe', '_is_series',
                     '_is_numpy_array', '_is_torch_tensor', '_AI_INSPECTOR_VERSION',
                     '_AI_INSPECTOR_TARGET'):
             continue
@@ -800,6 +935,8 @@ export class KernelSidecar {
       stats: response.stats,
       repr: response.repr,
       device: response.device,
+      length: response.length,
+      dataframePreview: response.dataframePreview,
       timestamp: Date.now(),
       executionCount: this.lastExecutionCount,
     };

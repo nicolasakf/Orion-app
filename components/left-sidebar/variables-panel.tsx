@@ -209,7 +209,7 @@ export function VariablesAccordionItem({
                           align="start"
                           sideOffset={8}
                           className={cn(
-                            "corner-squircle w-52 max-h-[min(40vh,20rem)] overflow-y-auto overscroll-contain",
+                            "corner-squircle w-fit max-w-52 max-h-[min(40vh,20rem)] overflow-y-auto overscroll-contain",
                             "border-border/50 px-2.5 py-2 shadow-sm text-inherit"
                           )}
                         >

@@ -20,6 +20,8 @@ export {
   type TrafficLightState,
   type VariableSummary,
   type ColumnInfo,
+  type DataFramePreview,
+  type DataFrameCell,
   type KernelMessage,
   type IOPubEvent,
 } from "./kernel-sidecar";
