@@ -1735,7 +1735,7 @@ function renderDateTimePicker(
   return (
     <div className={primitiveClass(node, "space-y-3")}>
       {label ? <Label>{label}</Label> : null}
-      <div className="inline-flex w-fit max-w-full flex-col">
+      <div className="inline-flex w-fit max-w-full flex-col gap-3">
         <CalendarWithSyncedMonth
           mode="single"
           selected={selectedDate}
@@ -1753,41 +1753,43 @@ function renderDateTimePicker(
         >
           {(syncMonth) => renderDatePresets(node, context, "single", syncMonth)}
         </CalendarWithSyncedMonth>
-      </div>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-1.5">
-          <Label htmlFor={startTimeKey}>{startTimeLabel}</Label>
-          <Input
-            id={startTimeKey}
-            type="time"
-            step={1}
-            value={startTimeValue}
-            onChange={(event) =>
-              setStateByPropKey(
-                node.props,
-                context,
-                "startTimeKey",
-                event.target.value,
-              )
-            }
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor={endTimeKey}>{endTimeLabel}</Label>
-          <Input
-            id={endTimeKey}
-            type="time"
-            step={1}
-            value={endTimeValue}
-            onChange={(event) =>
-              setStateByPropKey(
-                node.props,
-                context,
-                "endTimeKey",
-                event.target.value,
-              )
-            }
-          />
+        <div className="grid w-full min-w-0 gap-3">
+          <div className="min-w-0 space-y-1.5">
+            <Label htmlFor={startTimeKey}>{startTimeLabel}</Label>
+            <Input
+              id={startTimeKey}
+              type="time"
+              step={1}
+              className="min-w-0"
+              value={startTimeValue}
+              onChange={(event) =>
+                setStateByPropKey(
+                  node.props,
+                  context,
+                  "startTimeKey",
+                  event.target.value,
+                )
+              }
+            />
+          </div>
+          <div className="min-w-0 space-y-1.5">
+            <Label htmlFor={endTimeKey}>{endTimeLabel}</Label>
+            <Input
+              id={endTimeKey}
+              type="time"
+              step={1}
+              className="min-w-0"
+              value={endTimeValue}
+              onChange={(event) =>
+                setStateByPropKey(
+                  node.props,
+                  context,
+                  "endTimeKey",
+                  event.target.value,
+                )
+              }
+            />
+          </div>
         </div>
       </div>
     </div>

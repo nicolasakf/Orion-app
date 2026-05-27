@@ -1,6 +1,6 @@
 ---
 name: publish-orion-release
-description: Publishes an Orion CLI release in two phases — the agent prepares version bump, build, tag, and GitHub release, then the user manually runs npm/PyPI publish (OTP/credentials); when the user says "done", the agent runs post-release verification. Use when the user asks to publish a release, ship a version, bump and publish orion-notebook, or cut a new npm/PyPI release.
+description: Publishes an Orion release in two phases — the agent prepares version bump, build, tag, and GitHub release, then the user manually runs npm/PyPI publish (OTP/credentials); when the user says "done", the agent runs post-release verification. Use when the user asks to publish a release, ship a version, bump and publish orion-notebook or orion-ui, or cut a new npm/PyPI release.
 ---
 
 # Publish Orion Release
@@ -13,7 +13,9 @@ Orion ships three publishable packages:
 | PyPI | `orion-notebook` | Python launcher only (app bundle downloaded from GitHub release) |
 | PyPI | `orion-ui` | Notebook UI library (`import orion_ui`) for kernel environments |
 
-The Python module directory stays `python/orion_agent/`; only `[project].name` in `python/pyproject.toml` is `orion-notebook`. The `orion-ui` package is built from `python/orion-ui/` and ships `python/orion-ui/orion_ui/`. The legacy npm package `@nicolasakf/orion-agent` should be deprecated after the first `orion-notebook` npm publish (see Phase 2).
+The Python module directory stays `python/orion_agent/`; only `[project].name` in `python/pyproject.toml` is `orion-notebook`. The `orion-ui` package is built from `python/orion-ui/` and ships `python/orion-ui/orion_ui/`. Managed Orion runtimes pin `orion-ui==<Orion version>` via `python/orion_agent/managed_packages.py` — keep versions in lockstep on every release.
+
+The legacy npm package `@nicolasakf/orion-agent` should be deprecated after the first `orion-notebook` npm publish (see Phase 2).
 
 Detailed reference: [CONTRIBUTING.md — Publishing The CLI](../../../CONTRIBUTING.md#publishing-the-cli)
 
@@ -32,7 +34,7 @@ If the user invokes this skill and has already completed Phase 1 (tag + GitHub r
 - Clean `main` (or an agreed release branch) with changes merged
 - `gh` authenticated (`gh auth status`)
 - User has npm publish access (`npm whoami`)
-- User has PyPI credentials for `orion-notebook` (`twine` or `uv publish`)
+- User has PyPI credentials for both `orion-notebook` and `orion-ui` (`twine` or `uv publish`)
 - Node.js 20+, Python 3.8+ locally for build/test
 
 The agent checks `gh auth status` and `npm whoami` during pre-flight but does **not** need to be logged into PyPI.
@@ -115,7 +117,7 @@ All notable changes to Orion are documented here.
 [0.5.1]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.5.1
 ```
 
-Include user-visible CLI/app changes. Link the version heading to the GitHub release URL (can be filled in during Phase 1 step 8).
+Include user-visible CLI/app changes and **`orion-ui`** API or output-format changes. Link the version heading to the GitHub release URL (can be filled in during Phase 1 step 8).
 
 ### Step 3: Version bump commit
 
@@ -206,21 +208,39 @@ curl -I "https://github.com/nicolasakf/Orion-app/releases/download/v<version>/or
 
 ### Step 7: Build PyPI artifacts (do not upload)
 
-Confirm `python/pyproject.toml` has `name = "orion-notebook"` and the version matches npm.
+Build both Python packages. Confirm each `pyproject.toml` version matches npm.
+
+**`orion-ui`** (`python/orion-ui/pyproject.toml` → `name = "orion-ui"`):
 
 ```bash
-cd python
-rm -rf dist/ build/ orion_notebook.egg-info/ orion_agent.egg-info/
+cd python/orion-ui
+rm -rf dist/ build/ *.egg-info/
 python3 -m pip install build twine
 python3 -m build
 twine check dist/*
+```
+
+**`orion-notebook`** (`python/pyproject.toml` → `name = "orion-notebook"`):
+
+```bash
+cd ../
+rm -rf dist/ build/ orion_notebook.egg-info/ orion_agent.egg-info/
+python3 -m build
+twine check dist/*
+```
+
+Optional `orion-ui` import smoke test (agent may run from repo root):
+
+```bash
+PYTHONPATH=python/orion-ui python3 -c "import orion_ui; print(orion_ui.__version__)"
+cd python && python3 -m pytest tests/test_orion_ui.py tests/test_managed_packages.py -q
 ```
 
 Stop here. Do **not** run `twine upload` or `npm publish`.
 
 ### Step 8: Hand off to user — STOP
 
-Print the manual instructions below (substitute `<version>`), then **stop**. Do not attempt npm/PyPI publish. Tell the user to reply **"done"** when both publishes succeed.
+Print the manual instructions below (substitute `<version>`), then **stop**. Do not attempt npm/PyPI publish. Tell the user to reply **"done"** when all three publishes succeed (npm + both PyPI packages).
 
 Use this template in the handoff message:
 
@@ -251,7 +271,7 @@ twine upload dist/*
 
 Use `twine upload --verbose dist/*` if PyPI returns a generic `400 Bad Request`.
 
-When both commands succeed, reply **done** and I will run post-release verification.
+When all three publishes succeed, reply **done** and I will run post-release verification.
 
 ---
 
@@ -288,7 +308,7 @@ npm deprecate @nicolasakf/orion-agent "Renamed to orion-notebook. Install with: 
 
 ### PyPI publish (`orion-ui` then `orion-notebook`)
 
-Publish **`orion-ui` first**. Managed Orion runtimes install `orion-ui==<version>` from PyPI on startup; uploading `orion-notebook` before `orion-ui` breaks first-run managed venv setup for that version.
+Publish **`orion-ui` first**. Managed Orion runtimes install `orion-ui==<version>` from PyPI on startup (`managed_runtime_packages` in `python/orion_agent/managed_packages.py`); uploading `orion-notebook` before `orion-ui` breaks first-run managed venv setup for that version.
 
 **`orion-ui`** artifacts should exist under `python/orion-ui/dist/` from Phase 1. If missing, rebuild:
 
@@ -310,7 +330,7 @@ twine check dist/*
 twine upload dist/*
 ```
 
-Publish order: GitHub release asset **must** exist before PyPI upload. **`orion-ui` must** be on PyPI before users on the new version sync managed runtimes.
+Publish order: GitHub release asset **must** exist before PyPI upload (Phase 1 step 6 handles this). **`orion-ui` must** be on PyPI before users on the new version sync managed runtimes.
 
 Optional local PyPI smoke test before upload:
 
@@ -349,7 +369,7 @@ pip index versions orion-notebook
 pip index versions orion-ui
 ```
 
-All must match the release version (e.g. `0.5.1`).
+All three must match the release version (e.g. `0.6.2`).
 
 ### GitHub release asset
 
@@ -388,15 +408,16 @@ If any check fails, diagnose using the troubleshooting table and tell the user w
 
 ## Publish order (critical)
 
-1. Version bump + CHANGELOG commit
+1. Version bump + CHANGELOG commit (all version files, including `orion-ui`)
 2. Tag + push
 3. `npm run prepack` (if not already run)
-4. **GitHub release with app bundle** ← PyPI depends on this
-5. **User:** npm publish
-6. **User:** PyPI publish (`orion-notebook`)
-7. **Agent:** post-release verification (on "done")
+4. **GitHub release with app bundle** ← `orion-notebook` PyPI depends on this
+5. Build PyPI artifacts for **`orion-ui`** and **`orion-notebook`**
+6. **User:** npm publish
+7. **User:** PyPI publish (`orion-ui` first, then `orion-notebook`)
+8. **Agent:** post-release verification (on "done")
 
-Publishing PyPI before the GitHub release asset exists will break first-run `pip install orion-notebook` users.
+Publishing `orion-notebook` to PyPI before the GitHub release asset exists will break first-run `pip install orion-notebook` users. Publishing `orion-notebook` before `orion-ui` will break managed runtime venv sync on first startup.
 
 ## Troubleshooting
 
@@ -410,17 +431,22 @@ Publishing PyPI before the GitHub release asset exists will break first-run `pip
 | PyPI `400` generic | Bad metadata or description | `twine check dist/*`; use `--verbose` for details |
 | Verification: npm still on old version | Publish not finished or wrong registry | User re-runs `npm publish`; wait a minute and re-check |
 | Verification: pip install 404 on bundle | PyPI published before GitHub asset | Upload GitHub asset first, then tell users to retry |
+| Managed runtime `ModuleNotFoundError: orion_ui` | `orion-ui` not on PyPI for this version, or published after users upgraded | Publish `orion-ui` first; users retry after both PyPI packages are live |
+| Verification: `orion-ui` missing on PyPI | User skipped `orion-ui` upload | `cd python/orion-ui && twine upload dist/*` |
 
 ## Notes
 
 - Do not run `npm run dev` during release unless the user asks; use `prepack` / production build.
 - Do not run `npm publish` or `twine upload` — always hand off to the user.
+- Remove release temp files before stopping Phase 1: `CHANGELOG-excerpt.md`, local `npm pack` tarballs, and any other scratch artifacts — never commit them.
 - Do not force-push tags or rewrite published versions without explicit user approval.
 - For breaking changes, bump minor/major semver and call them out in CHANGELOG.
-- npm package size is large (~160 MB compressed, includes app bundle); PyPI wheel stays small by design.
-- User-facing install commands: `npm install -g orion-notebook` and `pip install orion-notebook`.
+- npm package size is large (~160 MB compressed, includes app bundle); both PyPI wheels stay small by design.
+- User-facing install commands: `npm install -g orion-notebook`, `pip install orion-notebook`, and `pip install orion-ui` (external kernels only — managed runtimes sync `orion-ui` automatically).
+- `orion-ui` is version-coupled to the Orion app: the Python output MIME format and the frontend renderer ship together. Do not publish a mismatched `orion-ui` version for a given Orion release.
 
 ## Additional Resources
 
 - User install docs: [README.md — Quick start](../../../README.md#quick-start)
-- PyPI-specific behavior: [python/README.md](../../../python/README.md)
+- PyPI launcher behavior: [python/README.md](../../../python/README.md)
+- `orion-ui` library docs: [python/orion-ui/README.md](../../../python/orion-ui/README.md)
