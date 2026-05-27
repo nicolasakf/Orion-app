@@ -173,6 +173,7 @@ Your workspace directory is: \`${workspaceDirectory}\`
 The user currently has a notebook open in the editor at path: \`${notebookPath}\`
 - To work on this notebook, call \`use_notebook\` with notebookName=<notebook-filename>, notebookPath="${notebookPath}", and mode="connect".
 - If the user asks to create a **new** notebook, call \`use_notebook\` with a new notebookName, a new notebookPath (e.g. \`${directory}/<descriptive_name>.ipynb\`), and mode="create". Do NOT connect to the existing notebook when the user wants a new one.
+- Official notebook tools see Orion's unsaved editor buffer for the active notebook; shell commands read only the saved disk copy.
 - Determine whether to connect or create based on the user's request.`);
   }
 
@@ -184,6 +185,7 @@ The user currently has a non-notebook file open in the editor at path: \`${fileP
 - This is already known — do not call tools to discover or verify this path.
 - To read this file, use \`read_file\` with path="${filePath}".
 - To edit this file, use \`edit_file\` with path="${filePath}".
+- Official file and notebook read/edit tools see Orion's unsaved editor buffer for the active file; shell commands read only the saved disk copy.
 - This is not a notebook — do not call \`use_notebook\`, \`read_notebook\`, \`list_notebooks\`, or any notebook tools unless the user explicitly asks to work with a notebook.`);
   }
 

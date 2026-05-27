@@ -10,6 +10,7 @@ import { BaseTool } from "./base-tool";
 import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { OverwriteCellSourceParams } from "./types";
 
 export class OverwriteCellSourceTool extends BaseTool {
@@ -18,9 +19,10 @@ export class OverwriteCellSourceTool extends BaseTool {
   constructor(
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
-    notebookManager: NotebookManager
+    notebookManager: NotebookManager,
+    snapshotProvider?: OpenDocumentSnapshotProvider | null
   ) {
-    super(kernelService, sidecar);
+    super(kernelService, sidecar, snapshotProvider);
     this.notebookManager = notebookManager;
   }
 

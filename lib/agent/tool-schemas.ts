@@ -80,7 +80,7 @@ export const orionTools = {
 
   read_notebook: tool({
     description:
-      "Read the content of a managed notebook. Returns cell types, sources, and optionally Orion metadata. Use 'brief' format for an overview, 'detailed' for full content. Set includeOrionMetadata=false unless you specifically need metadata.orion.",
+      "Read the content of a managed notebook, preferring Orion's unsaved editor buffer for the active notebook before falling back to the Jupyter server. Returns cell types, sources, and optionally Orion metadata. Use 'brief' format for an overview, 'detailed' for full content. Set includeOrionMetadata=false unless you specifically need metadata.orion.",
     inputSchema: z.object({
       notebookId: z
         .string()
@@ -139,7 +139,7 @@ export const orionTools = {
 
   read_cell: tool({
     description:
-      "Read the source code and optionally the outputs and Orion metadata of one or more cells by index. Provide multiple indices to read several cells in one call (order is preserved). Negative indices count from the end of the notebook. Set includeOrionMetadata=false unless you specifically need metadata.orion.",
+      "Read the source code and optionally the outputs and Orion metadata of one or more cells by index, preferring Orion's unsaved editor buffer for the active notebook before falling back to the Jupyter server. Provide multiple indices to read several cells in one call (order is preserved). Negative indices count from the end of the notebook. Set includeOrionMetadata=false unless you specifically need metadata.orion.",
     inputSchema: z.object({
       cellIndices: z
         .array(z.number().int())
@@ -207,7 +207,7 @@ export const orionTools = {
 
   overwrite_cell_source: tool({
     description:
-      "Replace the source code of one or more existing cells. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. The notebook is saved once after all updates.",
+      "Replace the source code of one or more existing cells, preserving unsaved editor-buffer changes in other cells when the active notebook is open. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. The notebook is saved once after all updates.",
     inputSchema: z.object({
       cells: z
         .array(
@@ -229,13 +229,13 @@ export const orionTools = {
 
   edit_orion_metadata: tool({
     description:
-      "Modify notebook-level or cell-level metadata.orion fields in the current managed notebook. Use this instead of edit_file for Orion notebook metadata. Supports batched merge, replace, and delete operations; preserves source, outputs, execution counts, unrelated metadata, and protected cell metadata.orion.id values.",
+      "Modify notebook-level or cell-level metadata.orion fields in the current managed notebook, preserving unsaved editor-buffer source changes when the active notebook is open. Use this instead of edit_file for Orion notebook metadata. Supports batched merge, replace, and delete operations; preserves source, outputs, execution counts, unrelated metadata, and protected cell metadata.orion.id values.",
     inputSchema: EditOrionMetadataParamsSchema,
   }),
 
   execute_cell: tool({
     description:
-      "Execute one or more cells in the notebook by their indices and return their outputs. Cells are executed sequentially in the order provided. All cells must already exist in the notebook.",
+      "Execute one or more cells in the notebook by their indices and return their outputs, using Orion's unsaved editor buffer for the active notebook before falling back to the Jupyter server. Cells are executed sequentially in the order provided. All cells must already exist in the notebook.",
     inputSchema: z.object({
       cellIndices: z
         .array(z.number().int().min(0))
@@ -267,7 +267,7 @@ export const orionTools = {
 
   read_cell_output: tool({
     description:
-      "Read one or more outputs from notebook cells, intelligently formatted by mime type. For DataFrames it returns a TSV table; for Plotly charts a structured summary; for images the actual image data (so you can see it); for plain text the raw text. Use this after execute_cell to inspect results you cannot fully see. Pass multiple reads to fetch several outputs in one call.",
+      "Read one or more outputs from notebook cells, preferring Orion's unsaved editor buffer for the active notebook before falling back to the Jupyter server. Outputs are intelligently formatted by mime type. For DataFrames it returns a TSV table; for Plotly charts a structured summary; for images the actual image data (so you can see it); for plain text the raw text. Use this after execute_cell to inspect results you cannot fully see. Pass multiple reads to fetch several outputs in one call.",
     inputSchema: z.object({
       reads: z
         .array(
@@ -395,7 +395,7 @@ export const orionTools = {
 
   read_file: tool({
     description:
-      "Read a non-notebook text file (e.g. .py, .csv, .json, .yaml, .txt) from the Jupyter server. Returns line-numbered content. Use startLine/endLine to read a specific range; pass 0 for both to read the entire file.",
+      "Read a non-notebook text file (e.g. .py, .csv, .json, .yaml, .txt), preferring Orion's unsaved editor buffer for the active file before falling back to the Jupyter server. Returns line-numbered content. Use startLine/endLine to read a specific range; pass 0 for both to read the entire file.",
     inputSchema: z.object({
       filePath: z
         .string()
@@ -421,7 +421,7 @@ export const orionTools = {
 
   edit_file: tool({
     description:
-      "Write or modify a non-notebook text file on the Jupyter server. Use mode='overwrite' to replace the entire file content, or mode='replace' to make a targeted string substitution. Never use this tool on .ipynb files — use the notebook cell tools instead.",
+      "Write or modify a non-notebook text file, using Orion's unsaved editor buffer as the replace base for the active file before falling back to the Jupyter server. Use mode='overwrite' to replace the entire file content, or mode='replace' to make a targeted string substitution. Never use this tool on .ipynb files — use the notebook cell tools instead.",
     inputSchema: z.object({
       filePath: z
         .string()

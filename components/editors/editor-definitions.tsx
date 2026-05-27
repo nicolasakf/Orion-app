@@ -33,6 +33,7 @@ function NotebookEditorSurface({
   onIsRunningChange,
   onNotebookChange,
   onUnsavedChangesChange,
+  onNotebookSnapshotGetterChange,
   presentationHideAllCellInputs,
 }: EditorRuntimeProps) {
   const { notebookViewMode, setNotebookViewMode } = useNotebookViewMode();
@@ -50,6 +51,7 @@ function NotebookEditorSurface({
       onIsRunningChange={onIsRunningChange}
       onNotebookChange={onNotebookChange}
       onUnsavedChangesChange={onUnsavedChangesChange}
+      onNotebookSnapshotGetterChange={onNotebookSnapshotGetterChange}
       presentationHideAllCellInputs={presentationHideAllCellInputs}
       activeNotebookView={notebookViewMode}
       onActiveNotebookViewChange={setNotebookViewMode}

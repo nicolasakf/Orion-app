@@ -106,6 +106,7 @@ import {
   type PanelVisibilityState,
 } from "@/lib/ui-session-state";
 import { isUserSettingsEditorPath } from "@/lib/settings/user-settings-editor-path";
+import type { OpenDocumentSnapshotProvider } from "@/lib/agent/open-document-snapshots";
 
 type ActiveFile = {
   name: string;
@@ -234,6 +235,13 @@ interface MobileLayoutProps {
   onIsRunningChange: React.Dispatch<React.SetStateAction<boolean>>;
   onNotebookChange: React.Dispatch<React.SetStateAction<NotebookType | null>>;
   onUnsavedChangesChange: React.Dispatch<React.SetStateAction<boolean>>;
+  openDocumentSnapshots: OpenDocumentSnapshotProvider;
+  onTextSnapshotGetterChange: (
+    getter: OpenDocumentSnapshotProvider["getTextSnapshot"] | null,
+  ) => void;
+  onNotebookSnapshotGetterChange: (
+    getter: OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null,
+  ) => void;
   /** When true, code cell editors are hidden in the UI only (not persisted). */
   notebookPresentationHideAllInputs: boolean;
   onFileLoadError: (path: string) => void;
@@ -284,6 +292,9 @@ function MobileLayout({
   onIsRunningChange,
   onNotebookChange,
   onUnsavedChangesChange,
+  openDocumentSnapshots,
+  onTextSnapshotGetterChange,
+  onNotebookSnapshotGetterChange,
   notebookPresentationHideAllInputs,
   onFileLoadError,
   onWorkspacePathRenamed,
@@ -340,6 +351,7 @@ function MobileLayout({
             kernelService={kernelService}
             notebook={notebook}
             workspaceDirectory={workspaceDirectory ?? undefined}
+            openDocumentSnapshots={openDocumentSnapshots}
             onAgentNotebookChange={() => {
               window.dispatchEvent(new CustomEvent("agentNotebookModified"));
             }}
@@ -409,6 +421,8 @@ function MobileLayout({
               onIsRunningChange={onIsRunningChange}
               onNotebookChange={onNotebookChange}
               onUnsavedChangesChange={onUnsavedChangesChange}
+              onTextSnapshotGetterChange={onTextSnapshotGetterChange}
+              onNotebookSnapshotGetterChange={onNotebookSnapshotGetterChange}
               presentationHideAllCellInputs={notebookPresentationHideAllInputs}
               onFileLoadError={onFileLoadError}
             />
@@ -464,6 +478,32 @@ export default function Page() {
   const [notebookMinimap, setNotebookMinimap] = useState<
     NotebookMinimapSection[]
   >([]);
+  const textSnapshotGetterRef = useRef<
+    OpenDocumentSnapshotProvider["getTextSnapshot"] | null
+  >(null);
+  const notebookSnapshotGetterRef = useRef<
+    OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null
+  >(null);
+  const handleTextSnapshotGetterChange = useCallback(
+    (getter: OpenDocumentSnapshotProvider["getTextSnapshot"] | null) => {
+      textSnapshotGetterRef.current = getter;
+    },
+    [],
+  );
+  const handleNotebookSnapshotGetterChange = useCallback(
+    (getter: OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null) => {
+      notebookSnapshotGetterRef.current = getter;
+    },
+    [],
+  );
+  const openDocumentSnapshots = React.useMemo<OpenDocumentSnapshotProvider>(
+    () => ({
+      getTextSnapshot: (path) => textSnapshotGetterRef.current?.(path) ?? null,
+      getNotebookSnapshot: (path) =>
+        notebookSnapshotGetterRef.current?.(path) ?? null,
+    }),
+    [],
+  );
   // Unsaved changes and reload dialog state
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [unsavedDialogIntent, setUnsavedDialogIntent] =
@@ -2351,6 +2391,11 @@ export default function Page() {
                 onIsRunningChange={setIsRunning}
                 onNotebookChange={setNotebook}
                 onUnsavedChangesChange={setHasUnsavedChanges}
+                openDocumentSnapshots={openDocumentSnapshots}
+                onTextSnapshotGetterChange={handleTextSnapshotGetterChange}
+                onNotebookSnapshotGetterChange={
+                  handleNotebookSnapshotGetterChange
+                }
                 notebookPresentationHideAllInputs={
                   effectiveSettings.notebook.presentationHideAllCellInputs
                 }
@@ -2837,6 +2882,12 @@ export default function Page() {
                             onIsRunningChange={setIsRunning}
                             onNotebookChange={setNotebook}
                             onUnsavedChangesChange={setHasUnsavedChanges}
+                            onTextSnapshotGetterChange={
+                              handleTextSnapshotGetterChange
+                            }
+                            onNotebookSnapshotGetterChange={
+                              handleNotebookSnapshotGetterChange
+                            }
                             presentationHideAllCellInputs={
                               effectiveSettings.notebook.presentationHideAllCellInputs
                             }
@@ -2886,6 +2937,7 @@ export default function Page() {
                     kernelService={kernelService}
                     notebook={notebook}
                     workspaceDirectory={workspaceDirectory ?? undefined}
+                    openDocumentSnapshots={openDocumentSnapshots}
                     onAgentNotebookChange={() => {
                       window.dispatchEvent(new CustomEvent("agentNotebookModified"));
                     }}

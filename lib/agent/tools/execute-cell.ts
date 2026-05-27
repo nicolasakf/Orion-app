@@ -22,6 +22,7 @@ import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { CellExecutionStatus, OutputType } from "@/lib/types";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type {
   ExecuteCellParams,
   NotebookDocument,
@@ -53,9 +54,10 @@ export class ExecuteCellTool extends BaseTool {
   constructor(
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
-    notebookManager: NotebookManager
+    notebookManager: NotebookManager,
+    snapshotProvider?: OpenDocumentSnapshotProvider | null
   ) {
-    super(kernelService, sidecar);
+    super(kernelService, sidecar, snapshotProvider);
     this.notebookManager = notebookManager;
   }
 
@@ -92,10 +94,9 @@ export class ExecuteCellTool extends BaseTool {
     const timeoutMs = timeoutSeconds * 1000;
     const multiCell = cellIndices.length > 1;
     const allOutput: string[] = [];
+    const notebook = await this.readNotebook(path);
 
     for (const cellIndex of cellIndices) {
-      // Re-read notebook before each cell so index shifts from prior writes are reflected
-      const notebook = await this.readNotebook(path);
       const totalCells = notebook.cells.length;
 
       // Handle negative indices

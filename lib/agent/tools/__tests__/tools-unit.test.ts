@@ -20,6 +20,8 @@ import { ListNotebooksTool } from "../list-notebooks";
 import { UnuseNotebookTool } from "../unuse-notebook";
 import { ReadNotebookTool } from "../read-notebook";
 import { ReadCellTool } from "../read-cell";
+import { ReadFileTool } from "../read-file";
+import { EditFileTool } from "../edit-file";
 import { ExecuteCellTool } from "../execute-cell";
 import { InsertCellTool } from "../insert-cell";
 import { DeleteCellTool } from "../delete-cell";
@@ -33,6 +35,7 @@ import type { NotebookType, NotebookOutputType } from "@/lib/types";
 import type { MultimodalToolResult } from "../types";
 import { guardToolText } from "../../tool-output-guard";
 import { TerminalPool } from "@/lib/shell/terminal-pool";
+import type { OpenDocumentSnapshotProvider } from "../../open-document-snapshots";
 
 // ============================================================================
 // Test Harness
@@ -130,6 +133,53 @@ function createStatefulKernelService(
     shutdown: async () => {},
   } as unknown as KernelService;
   return { ks, store };
+}
+
+/** Stateful mock KernelService backed by text file contents. */
+function createTextKernelService(
+  initial: Record<string, string> = {}
+): { ks: KernelService; store: Map<string, string> } {
+  const store = new Map<string, string>(Object.entries(initial));
+  const ks = {
+    getContentsManager: () => ({
+      get: async (path: string) => {
+        if (!store.has(path)) throw new Error(`Not found: ${path}`);
+        return { content: store.get(path), type: "file", name: path };
+      },
+      save: async (path: string, model: { content: string }) => {
+        store.set(path, model.content);
+      },
+    }),
+    getStatus: () => "idle" as const,
+    setActivePath: () => true,
+    interrupt: async () => {},
+    execute: async () => ({ done: Promise.resolve() }),
+    testConnection: async () => true,
+    shutdown: async () => {},
+  } as unknown as KernelService;
+  return { ks, store };
+}
+
+/** Create a snapshot provider from optional text and notebook snapshots. */
+function createSnapshotProvider(options: {
+  text?: Record<string, string>;
+  notebooks?: Record<string, NotebookType>;
+  dirty?: boolean;
+}): OpenDocumentSnapshotProvider {
+  return {
+    getTextSnapshot: (path) => {
+      const content = options.text?.[path];
+      return content === undefined
+        ? null
+        : { content, dirty: options.dirty ?? true, source: "editor-buffer" };
+    },
+    getNotebookSnapshot: (path) => {
+      const notebook = options.notebooks?.[path];
+      return notebook === undefined
+        ? null
+        : { notebook, dirty: options.dirty ?? true, source: "editor-buffer" };
+    },
+  };
 }
 
 /** Minimal terminal-capable KernelService for TerminalPool / BashTool unit tests. */
@@ -729,6 +779,73 @@ await runTest("unuse last notebook says no notebooks remaining", async () => {
 });
 
 // ============================================================================
+// File Tools
+// ============================================================================
+
+console.log("\n--- File Tools ---");
+
+await runTest("read_file prefers active editor buffer over disk", async () => {
+  const { ks } = createTextKernelService({ "script.py": "disk_value = 1\n" });
+  const snapshots = createSnapshotProvider({
+    text: { "script.py": "buffer_value = 2\n" },
+  });
+  const tool = new ReadFileTool(ks, null, snapshots);
+  const result = await tool.execute({
+    filePath: "script.py",
+    startLine: 0,
+    endLine: 0,
+  });
+  assertIncludes(result, "buffer_value = 2", "should read buffer content");
+  assertIncludes(result, "source: editor buffer", "should identify buffer source");
+  assertNotIncludes(result, "disk_value", "should not read stale disk content");
+});
+
+await runTest("read_file applies line ranges to editor buffer content", async () => {
+  const { ks } = createTextKernelService({ "script.py": "disk\n" });
+  const snapshots = createSnapshotProvider({
+    text: { "script.py": "line0\nline1\nline2\n" },
+  });
+  const tool = new ReadFileTool(ks, null, snapshots);
+  const result = await tool.execute({
+    filePath: "script.py",
+    startLine: 1,
+    endLine: 1,
+  });
+  assertIncludes(result, "line1", "should include requested buffer line");
+  assertNotIncludes(result, "line0", "should omit earlier buffer line");
+  assertNotIncludes(result, "line2", "should omit later buffer line");
+});
+
+await runTest("read_file falls back to disk when no editor snapshot exists", async () => {
+  const { ks } = createTextKernelService({ "script.py": "disk_value = 1\n" });
+  const tool = new ReadFileTool(ks, null, createSnapshotProvider({}));
+  const result = await tool.execute({
+    filePath: "script.py",
+    startLine: 0,
+    endLine: 0,
+  });
+  assertIncludes(result, "disk_value = 1", "should read disk content");
+  assertNotIncludes(result, "source: editor buffer", "should not mark disk reads");
+});
+
+await runTest("edit_file replace uses active editor buffer as base", async () => {
+  const { ks, store } = createTextKernelService({ "script.py": "disk_value = 1\n" });
+  const snapshots = createSnapshotProvider({
+    text: { "script.py": "buffer_value = 2\n" },
+  });
+  const tool = new EditFileTool(ks, null, snapshots);
+  const result = await tool.execute({
+    filePath: "script.py",
+    mode: "replace",
+    content: "",
+    oldString: "buffer_value = 2",
+    newString: "buffer_value = 3",
+  });
+  assertIncludes(result, "Successfully edited", "should confirm edit");
+  assert(store.get("script.py") === "buffer_value = 3\n", "should save patched buffer content");
+});
+
+// ============================================================================
 // ReadNotebookTool
 // ============================================================================
 
@@ -759,6 +876,24 @@ await runTest("brief format returns cell count and table", async () => {
   assertIncludes(result, "Index", "should have Index column");
   assertIncludes(result, "markdown", "should list markdown cell");
   assertIncludes(result, "code", "should list code cells");
+});
+
+await runTest("read_notebook prefers active editor buffer over disk", async () => {
+  const diskFixture = makeNotebook([makeMarkdownCell("# Disk")]);
+  const bufferFixture = makeNotebook([makeMarkdownCell("# Buffer")]);
+  const ks = createReadOnlyKernelService({ "buffered.ipynb": diskFixture });
+  const mgr = new NotebookManager();
+  const notebookId = mgr.addNotebook("main", "buffered.ipynb", "k1");
+  const tool = new ReadNotebookTool(
+    ks,
+    null,
+    mgr,
+    createSnapshotProvider({ notebooks: { "buffered.ipynb": bufferFixture } })
+  );
+  const result = await tool.execute({ notebookId, responseFormat: "detailed", startIndex: 0, limit: 10, includeOrionMetadata: false });
+  assertIncludes(result, "# Buffer", "should read buffer notebook");
+  assertIncludes(result, "source: editor buffer", "should identify buffer source");
+  assertNotIncludes(result, "# Disk", "should not read stale disk notebook");
 });
 
 await runTest("brief format shows first line of source", async () => {
@@ -882,6 +1017,24 @@ await runTest("reads cell type and source", async () => {
   const result = await tool.execute({ cellIndices: [0], includeOutputs: false, includeOrionMetadata: false });
   assertIncludes(result, "markdown", "should include cell type");
   assertIncludes(result, "# Markdown Cell", "should include cell source");
+});
+
+await runTest("read_cell prefers active editor buffer over disk", async () => {
+  const diskFixture = makeNotebook([makeCodeCell("disk_value = 1", [], null)]);
+  const bufferFixture = makeNotebook([makeCodeCell("buffer_value = 2", [], null)]);
+  const ks = createReadOnlyKernelService({ "buffered_cell.ipynb": diskFixture });
+  const mgr = new NotebookManager();
+  mgr.addNotebook("main", "buffered_cell.ipynb", "k1");
+  const tool = new ReadCellTool(
+    ks,
+    null,
+    mgr,
+    createSnapshotProvider({ notebooks: { "buffered_cell.ipynb": bufferFixture } })
+  );
+  const result = await tool.execute({ cellIndices: [0], includeOutputs: false, includeOrionMetadata: false });
+  assertIncludes(result, "buffer_value = 2", "should read buffer cell");
+  assertIncludes(result, "source: editor buffer", "should identify buffer source");
+  assertNotIncludes(result, "disk_value", "should not read stale disk cell");
 });
 
 await runTest("includeOutputs=true includes output text", async () => {
@@ -1214,6 +1367,30 @@ await runTest("overwrites cell source", async () => {
   assert(nb.cells[1].source[0] === "z = 99", "source should be updated");
 });
 
+await runTest("overwrite_cell_source preserves unsaved editor-buffer cells", async () => {
+  const diskNotebook = makeNotebook([
+    makeCodeCell("disk cell 0", [], null),
+    makeCodeCell("disk cell 1", [], null),
+  ]);
+  const bufferNotebook = makeNotebook([
+    makeCodeCell("unsaved cell 0", [], null),
+    makeCodeCell("unsaved cell 1", [], null),
+  ]);
+  const { ks, store } = createStatefulKernelService({ "buffered_overwrite.ipynb": diskNotebook });
+  const mgr = new NotebookManager();
+  mgr.addNotebook("main", "buffered_overwrite.ipynb", "k1");
+  const tool = new OverwriteCellSourceTool(
+    ks,
+    null,
+    mgr,
+    createSnapshotProvider({ notebooks: { "buffered_overwrite.ipynb": bufferNotebook } })
+  );
+  await tool.execute({ cells: [{ cellIndex: 1, newSource: "agent cell 1" }] });
+  const saved = store.get("buffered_overwrite.ipynb")!;
+  assert(saved.cells[0].source[0] === "unsaved cell 0", "should preserve unsaved cell");
+  assert(saved.cells[1].source[0] === "agent cell 1", "should apply agent edit");
+});
+
 await runTest("clears outputs and execution_count for code cells", async () => {
   const { tool, store } = makeOverwriteTool();
   await tool.execute({ cells: [{ cellIndex: 1, newSource: "z = 99" }] });
@@ -1529,6 +1706,32 @@ await runTest("out-of-range cell index returns error", async () => {
   const tool = setupReadCellOutput([]);
   const result = await tool.execute({ reads: [{ cellIndex: 99, outputIndex: 0 }] });
   assertIncludes(result as string, "[ERROR]", "should be an error");
+});
+
+await runTest("read_cell_output prefers active editor buffer over disk", async () => {
+  const diskNotebook = makeNotebook([
+    makeCodeCell("# disk", [
+      { output_type: OutputType.STREAM, name: "stdout", text: ["disk output\n"] },
+    ]),
+  ]);
+  const bufferNotebook = makeNotebook([
+    makeCodeCell("# buffer", [
+      { output_type: OutputType.STREAM, name: "stdout", text: ["buffer output\n"] },
+    ]),
+  ]);
+  const ks = createReadOnlyKernelService({ "buffered_output.ipynb": diskNotebook });
+  const mgr = new NotebookManager();
+  mgr.addNotebook("main", "buffered_output.ipynb", "k1");
+  const tool = new ReadCellOutputTool(
+    ks,
+    null,
+    mgr,
+    createSnapshotProvider({ notebooks: { "buffered_output.ipynb": bufferNotebook } })
+  );
+  const result = await tool.execute({ reads: [{ cellIndex: 0, outputIndex: 0 }] });
+  assertIncludes(result as string, "buffer output", "should read buffer output");
+  assertIncludes(result as string, "source: editor buffer", "should identify buffer source");
+  assertNotIncludes(result as string, "disk output", "should not read stale disk output");
 });
 
 await runTest("negative cell index resolves correctly", async () => {

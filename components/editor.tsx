@@ -17,6 +17,7 @@ import { resolveOrionEditorDefinition } from "@/components/editors/editor-defini
 import { useTextFileModel } from "@/components/editors/use-text-file-model";
 import type { KernelStatus, KernelInfo, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
+import type { OpenDocumentSnapshotProvider } from "@/lib/agent/open-document-snapshots";
 import type { Dispatch, SetStateAction, MutableRefObject } from "react";
 
 interface EditorFileReference {
@@ -43,6 +44,12 @@ interface EditorProps {
   onIsRunningChange?: Dispatch<SetStateAction<boolean>>;
   onNotebookChange?: (notebook: NotebookType | null) => void;
   onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
+  onTextSnapshotGetterChange?: (
+    getter: OpenDocumentSnapshotProvider["getTextSnapshot"] | null,
+  ) => void;
+  onNotebookSnapshotGetterChange?: (
+    getter: OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null,
+  ) => void;
   /**
    * Called when opening a file fails so the parent can restore the previous selection.
    */
@@ -83,6 +90,8 @@ export function Editor({
   onIsRunningChange,
   onNotebookChange,
   onUnsavedChangesChange,
+  onTextSnapshotGetterChange,
+  onNotebookSnapshotGetterChange,
   onFileLoadError,
   hasWorkspace = false,
   hasServerConnection = false,
@@ -108,6 +117,21 @@ export function Editor({
     onFileLoadError,
   });
   const saveTextFile = textFileModel.saveFile;
+
+  useEffect(() => {
+    onTextSnapshotGetterChange?.(
+      isTextBackedEditor ? textFileModel.getSnapshot : null,
+    );
+    return () => {
+      onTextSnapshotGetterChange?.(null);
+    };
+  }, [isTextBackedEditor, onTextSnapshotGetterChange, textFileModel.getSnapshot]);
+
+  useEffect(() => {
+    if (activeEditor?.id !== "notebook") {
+      onNotebookSnapshotGetterChange?.(null);
+    }
+  }, [activeEditor?.id, onNotebookSnapshotGetterChange]);
 
   useEffect(() => {
     const handleSaveFile = () => {
@@ -137,6 +161,7 @@ export function Editor({
         onIsRunningChange={onIsRunningChange}
         onNotebookChange={onNotebookChange}
         onUnsavedChangesChange={onUnsavedChangesChange}
+        onNotebookSnapshotGetterChange={onNotebookSnapshotGetterChange}
         presentationHideAllCellInputs={presentationHideAllCellInputs}
         textFileModel={textFileModel}
       />

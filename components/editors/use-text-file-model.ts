@@ -12,6 +12,10 @@ import {
   saveUserSettingsRawFileToApi,
 } from "@/lib/settings/user-settings-file.client";
 import { isSkillDefinitionPath } from "@/lib/skills/paths";
+import {
+  ORION_AGENT_FILE_MODIFIED_EVENT,
+  type TextDocumentSnapshot,
+} from "@/lib/agent/open-document-snapshots";
 
 interface UseTextFileModelOptions {
   filepath: string | null;
@@ -30,6 +34,7 @@ export interface TextFileModelState {
   setShowErrorDialog: (show: boolean) => void;
   setFileContent: (content: string) => void;
   markDirty: () => void;
+  getSnapshot: (path: string) => TextDocumentSnapshot | null;
   saveFile: () => Promise<void>;
   handleRunInTerminal: (code: string) => void;
   handleMonacoMount: (_editor: unknown, monaco: Monaco) => void;
@@ -51,6 +56,7 @@ export function useTextFileModel({
   const [showErrorDialog, setShowErrorDialog] = useState<boolean>(false);
   const [errorDialogMessage, setErrorDialogMessage] = useState<string>("");
   const isDirtyRef = useRef(false);
+  const fileContentRef = useRef("");
 
   const pathExtension = filepath
     ? extname(filepath).slice(1).toLowerCase()
@@ -74,25 +80,31 @@ export function useTextFileModel({
 
   /** Updates content without changing dirty state. */
   const setFileContent = useCallback((content: string) => {
+    fileContentRef.current = content;
     setFileContentState(content);
   }, []);
 
-  useEffect(() => {
-    const loadFile = async () => {
+  /**
+   * Loads the current file from Orion's backing store and updates editor state.
+   */
+  const loadFileFromSource = useCallback(
+    async (targetPath: string): Promise<boolean> => {
       if (!filepath) {
+        fileContentRef.current = "";
         setFileContentState("");
         setFileLanguage("plaintext");
         isDirtyRef.current = false;
         onUnsavedChangesChange?.(false);
-        return;
+        return true;
       }
 
       if (!isUserSettingsEditorPath(filepath) && !kernelService) {
+        fileContentRef.current = "";
         setFileContentState("");
         setFileLanguage("plaintext");
         isDirtyRef.current = false;
         onUnsavedChangesChange?.(false);
-        return;
+        return true;
       }
 
       try {
@@ -106,10 +118,11 @@ export function useTextFileModel({
 
         if (isUserSettingsEditorPath(filepath)) {
           const file = await loadUserSettingsRawFileFromApi();
+          fileContentRef.current = file.content;
           setFileContentState(file.content);
           isDirtyRef.current = false;
           onUnsavedChangesChange?.(false);
-          return;
+          return true;
         }
 
         const contentsManager = kernelService!.getContentsManager();
@@ -124,34 +137,74 @@ export function useTextFileModel({
             ? model.content
             : JSON.stringify(model.content, null, 2);
 
+        fileContentRef.current = content;
         setFileContentState(content);
         isDirtyRef.current = false;
         onUnsavedChangesChange?.(false);
+        return true;
       } catch (error) {
         console.error("Error loading or processing file:", error);
-        const handledExternally = onFileLoadError?.(filepath) === true;
-        if (handledExternally) return;
+        const handledExternally = onFileLoadError?.(targetPath) === true;
+        if (handledExternally) return false;
 
         const message =
           error instanceof Error
             ? error.message
             : "An unknown error occurred.";
         setErrorDialogMessage(
-          `Failed to load file '${filepath}'. Reason: ${message}`,
+          `Failed to load file '${targetPath}'. Reason: ${message}`,
         );
         setShowErrorDialog(true);
+        return false;
       }
+    },
+    [
+      filepath,
+      pathExtension,
+      kernelService,
+      onFileLoadError,
+      onUnsavedChangesChange,
+      openNotebookAsText,
+    ],
+  );
+
+  useEffect(() => {
+    void loadFileFromSource(filepath ?? "");
+  }, [filepath, loadFileFromSource]);
+
+  /**
+   * Return the active in-memory text buffer for agent tools.
+   */
+  const getSnapshot = useCallback(
+    (path: string): TextDocumentSnapshot | null => {
+      if (!filepath || path !== filepath) return null;
+      return {
+        content: fileContentRef.current,
+        dirty: isDirtyRef.current,
+        source: "editor-buffer",
+      };
+    },
+    [filepath],
+  );
+
+  useEffect(() => {
+    const handleAgentFileModified = (event: Event) => {
+      const detail = (event as CustomEvent<{ path?: unknown }>).detail;
+      if (!filepath || detail?.path !== filepath) return;
+      void loadFileFromSource(filepath);
     };
 
-    void loadFile();
-  }, [
-    filepath,
-    pathExtension,
-    kernelService,
-    onFileLoadError,
-    onUnsavedChangesChange,
-    openNotebookAsText,
-  ]);
+    window.addEventListener(
+      ORION_AGENT_FILE_MODIFIED_EVENT,
+      handleAgentFileModified as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        ORION_AGENT_FILE_MODIFIED_EVENT,
+        handleAgentFileModified as EventListener,
+      );
+    };
+  }, [filepath, loadFileFromSource]);
 
   /** Saves current text content through Jupyter ContentsManager or the settings file API. */
   const saveFile = useCallback(async () => {
@@ -249,6 +302,7 @@ export function useTextFileModel({
     setShowErrorDialog,
     setFileContent,
     markDirty,
+    getSnapshot,
     saveFile,
     handleRunInTerminal,
     handleMonacoMount,

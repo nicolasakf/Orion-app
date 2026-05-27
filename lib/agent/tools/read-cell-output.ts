@@ -23,6 +23,7 @@ import { BaseTool } from "./base-tool";
 import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import { guardMultimodalToolResult } from "../tool-output-guard";
 import type {
   ReadCellOutputParams,
@@ -82,9 +83,10 @@ export class ReadCellOutputTool extends BaseTool {
   constructor(
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
-    notebookManager: NotebookManager
+    notebookManager: NotebookManager,
+    snapshotProvider?: OpenDocumentSnapshotProvider | null
   ) {
-    super(kernelService, sidecar);
+    super(kernelService, sidecar, snapshotProvider);
     this.notebookManager = notebookManager;
   }
 
@@ -106,7 +108,12 @@ export class ReadCellOutputTool extends BaseTool {
       return "[ERROR] No current notebook is active. Use use_notebook first.";
     }
 
-    const notebook = await this.readNotebook(path);
+    const readResult = await this.readNotebookWithSource(path);
+    const notebook = readResult.notebook;
+    const sourcePrefix =
+      readResult.source === "editor-buffer" && readResult.dirty
+        ? "[source: editor buffer]\n"
+        : "";
     const parts: Array<string | MultimodalToolResult> = [];
 
     for (const { cellIndex, outputIndex } of reads) {
@@ -117,14 +124,18 @@ export class ReadCellOutputTool extends BaseTool {
 
     const merged = mergeReadCellOutputParts(parts);
     if (typeof merged === "string") {
-      return this.truncateOutput(merged);
+      return this.truncateOutput(`${sourcePrefix}${merged}`);
     }
     const guarded = guardMultimodalToolResult(merged);
     if (!guarded.images || guarded.images.length === 0) {
-      return this.truncateOutput(guarded.text ?? "[Image output omitted: content too large to send safely.]");
+      const text =
+        guarded.text ?? "[Image output omitted: content too large to send safely.]";
+      return this.truncateOutput(`${sourcePrefix}${text}`);
     }
     return {
-      text: guarded.text ? this.truncateOutput(guarded.text) : "",
+      text: guarded.text
+        ? this.truncateOutput(`${sourcePrefix}${guarded.text}`)
+        : sourcePrefix.trim(),
       images: guarded.images,
     };
   }

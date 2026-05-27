@@ -127,6 +127,7 @@ import {
   isSubagentNotebookPath,
   validateSubagentNotebookStructure,
 } from "./subagent-validation";
+import type { OpenDocumentSnapshotProvider } from "@/lib/agent/open-document-snapshots";
 
 interface NotebookEditorProps {
   /**
@@ -146,6 +147,9 @@ interface NotebookEditorProps {
   onIsRunningChange?: React.Dispatch<React.SetStateAction<boolean>>;
   onNotebookChange?: (notebook: NotebookType | null) => void;
   onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
+  onNotebookSnapshotGetterChange?: (
+    getter: OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null,
+  ) => void;
   /**
    * When true, code cell inputs are hidden in the UI only (does not change notebook metadata).
    */
@@ -334,6 +338,7 @@ export function NotebookEditor({
   onIsRunningChange: parentSetIsRunning,
   onNotebookChange,
   onUnsavedChangesChange,
+  onNotebookSnapshotGetterChange,
   presentationHideAllCellInputs,
   activeNotebookView: controlledActiveNotebookView,
   onActiveNotebookViewChange,
@@ -958,6 +963,29 @@ export function NotebookEditor({
       }
     });
   }, []);
+
+  /**
+   * Return the active in-memory notebook, including pending Monaco cell edits.
+   */
+  const getNotebookSnapshot = useCallback(
+    (path: string) => {
+      if (path !== filepath || !notebook) return null;
+      capturePendingCellSources();
+      return {
+        notebook: applyPendingChanges(notebook),
+        dirty: isUnsavedRef.current,
+        source: "editor-buffer" as const,
+      };
+    },
+    [applyPendingChanges, capturePendingCellSources, filepath, notebook],
+  );
+
+  useEffect(() => {
+    onNotebookSnapshotGetterChange?.(getNotebookSnapshot);
+    return () => {
+      onNotebookSnapshotGetterChange?.(null);
+    };
+  }, [getNotebookSnapshot, onNotebookSnapshotGetterChange]);
 
   useEffect(() => {
     if (

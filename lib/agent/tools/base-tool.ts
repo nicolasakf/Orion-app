@@ -12,11 +12,21 @@
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { CellType } from "@/lib/types";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type {
+  OpenDocumentSnapshotProvider,
+  OpenDocumentSnapshotSource,
+} from "../open-document-snapshots";
 import {
   guardToolText,
   TOOL_OUTPUT_TEXT_CHAR_BUDGET,
 } from "../tool-output-guard";
 import type { NotebookDocument, CellOutput, NotebookCell } from "./types";
+
+interface NotebookReadResult {
+  notebook: NotebookDocument;
+  source: "jupyter-contents" | OpenDocumentSnapshotSource;
+  dirty: boolean;
+}
 
 // ============================================================================
 // Abstract Base Class
@@ -25,15 +35,21 @@ import type { NotebookDocument, CellOutput, NotebookCell } from "./types";
 export abstract class BaseTool {
   protected kernelService: KernelService;
   protected sidecar: KernelSidecar | null;
+  protected snapshotProvider: OpenDocumentSnapshotProvider | null;
 
   /** Safety backstop: max characters returned to the LLM per tool call */
   private static readonly MAX_OUTPUT_CHARS = TOOL_OUTPUT_TEXT_CHAR_BUDGET;
   /** Max traceback lines to include before truncating */
   private static readonly MAX_TRACEBACK_LINES = 30;
 
-  constructor(kernelService: KernelService, sidecar?: KernelSidecar | null) {
+  constructor(
+    kernelService: KernelService,
+    sidecar?: KernelSidecar | null,
+    snapshotProvider?: OpenDocumentSnapshotProvider | null
+  ) {
     this.kernelService = kernelService;
     this.sidecar = sidecar ?? null;
+    this.snapshotProvider = snapshotProvider ?? null;
   }
 
   /**
@@ -68,6 +84,25 @@ export abstract class BaseTool {
    * @returns Parsed NotebookDocument
    */
   protected async readNotebook(path: string): Promise<NotebookDocument> {
+    return (await this.readNotebookWithSource(path)).notebook;
+  }
+
+  /**
+   * Read a notebook, preferring Orion's open editor buffer when available.
+   *
+   * Snapshot notebooks are cloned before returning so tools can safely mutate
+   * their working copy without directly changing React editor state.
+   */
+  protected async readNotebookWithSource(path: string): Promise<NotebookReadResult> {
+    const snapshot = this.snapshotProvider?.getNotebookSnapshot(path);
+    if (snapshot) {
+      return {
+        notebook: this.cloneNotebook(snapshot.notebook),
+        source: snapshot.source,
+        dirty: snapshot.dirty,
+      };
+    }
+
     const contents = this.kernelService.getContentsManager();
 
     const model = await contents.get(path, {
@@ -79,7 +114,16 @@ export abstract class BaseTool {
       throw new Error(`Notebook '${path}' has no content`);
     }
 
-    return model.content as unknown as NotebookDocument;
+    return {
+      notebook: model.content as unknown as NotebookDocument,
+      source: "jupyter-contents",
+      dirty: false,
+    };
+  }
+
+  /** Clone notebook JSON data into a mutable working copy. */
+  protected cloneNotebook(notebook: NotebookDocument): NotebookDocument {
+    return JSON.parse(JSON.stringify(notebook)) as NotebookDocument;
   }
 
   /**

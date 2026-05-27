@@ -10,6 +10,7 @@ import { BaseTool } from "./base-tool";
 import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { ReadNotebookParams, NotebookDocument } from "./types";
 
 export class ReadNotebookTool extends BaseTool {
@@ -18,9 +19,10 @@ export class ReadNotebookTool extends BaseTool {
   constructor(
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
-    notebookManager: NotebookManager
+    notebookManager: NotebookManager,
+    snapshotProvider?: OpenDocumentSnapshotProvider | null
   ) {
-    super(kernelService, sidecar);
+    super(kernelService, sidecar, snapshotProvider);
     this.notebookManager = notebookManager;
   }
 
@@ -61,7 +63,8 @@ export class ReadNotebookTool extends BaseTool {
     }
 
     const entry = this.notebookManager.get(id);
-    const notebook = await this.readNotebook(path);
+    const readResult = await this.readNotebookWithSource(path);
+    const notebook = readResult.notebook;
     const totalCells = notebook.cells.length;
 
     if (startIndex >= totalCells) {
@@ -69,7 +72,13 @@ export class ReadNotebookTool extends BaseTool {
     }
 
     const infoList: string[] = [];
-    infoList.push(`Notebook '${entry?.name ?? id}' has ${totalCells} cells.\n`);
+    const sourceSuffix =
+      readResult.source === "editor-buffer" && readResult.dirty
+        ? " [source: editor buffer]"
+        : "";
+    infoList.push(
+      `Notebook '${entry?.name ?? id}' has ${totalCells} cells.${sourceSuffix}\n`
+    );
     if (includeOrionMetadata) {
       infoList.push(`Notebook Orion Metadata: ${this.formatOrionMetadata(notebook.metadata)}\n`);
     }

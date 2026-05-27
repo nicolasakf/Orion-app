@@ -38,6 +38,7 @@
 
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { TerminalPool } from "@/lib/shell/terminal-pool";
 
 // Foundation
@@ -152,6 +153,7 @@ export interface JupyterToolSet {
  * @param getChatId              - Optional getter for the current chat session ID (used to associate fresh BashTool terminals with the current chat)
  * @param getWorkspaceDirectory  - Optional getter for the current workspace directory (reserved for future workspace tools)
  * @param getTerminalShell       - Optional getter for the Jupyter terminal shell family used by BashTool
+ * @param snapshotProvider       - Optional provider for active in-memory editor content
  * @returns Complete JupyterToolSet with all tools and shared NotebookManager
  */
 export function createJupyterTools(
@@ -160,7 +162,8 @@ export function createJupyterTools(
   terminalPool?: TerminalPool | null,
   getChatId?: (() => string | null) | null,
   getWorkspaceDirectory?: (() => string | undefined) | null,
-  getTerminalShell?: (() => TerminalShell) | null
+  getTerminalShell?: (() => TerminalShell) | null,
+  snapshotProvider?: OpenDocumentSnapshotProvider | null
 ): JupyterToolSet {
   const notebookManager = new NotebookManager();
   const sc = sidecar ?? null;
@@ -171,22 +174,65 @@ export function createJupyterTools(
     tools: {
       // Server Management
       listKernels: new ListKernelsTool(kernelService, sc),
-      shutdownKernel: new ShutdownKernelTool(kernelService, sc, notebookManager),
+      shutdownKernel: new ShutdownKernelTool(
+        kernelService,
+        sc,
+        notebookManager
+      ),
 
       // Notebook Management
       useNotebook: new UseNotebookTool(kernelService, sc, notebookManager),
       listNotebooks: new ListNotebooksTool(kernelService, sc, notebookManager),
-      restartNotebook: new RestartNotebookTool(kernelService, sc, notebookManager),
+      restartNotebook: new RestartNotebookTool(
+        kernelService,
+        sc,
+        notebookManager
+      ),
       unuseNotebook: new UnuseNotebookTool(kernelService, sc, notebookManager),
-      readNotebook: new ReadNotebookTool(kernelService, sc, notebookManager),
+      readNotebook: new ReadNotebookTool(
+        kernelService,
+        sc,
+        notebookManager,
+        snapshotProvider
+      ),
 
       // Cell Operations
-      readCell: new ReadCellTool(kernelService, sc, notebookManager),
-      insertCell: new InsertCellTool(kernelService, sc, notebookManager),
-      deleteCell: new DeleteCellTool(kernelService, sc, notebookManager),
-      overwriteCellSource: new OverwriteCellSourceTool(kernelService, sc, notebookManager),
-      editOrionMetadata: new EditOrionMetadataTool(kernelService, sc, notebookManager),
-      executeCell: new ExecuteCellTool(kernelService, sc, notebookManager),
+      readCell: new ReadCellTool(
+        kernelService,
+        sc,
+        notebookManager,
+        snapshotProvider
+      ),
+      insertCell: new InsertCellTool(
+        kernelService,
+        sc,
+        notebookManager,
+        snapshotProvider
+      ),
+      deleteCell: new DeleteCellTool(
+        kernelService,
+        sc,
+        notebookManager,
+        snapshotProvider
+      ),
+      overwriteCellSource: new OverwriteCellSourceTool(
+        kernelService,
+        sc,
+        notebookManager,
+        snapshotProvider
+      ),
+      editOrionMetadata: new EditOrionMetadataTool(
+        kernelService,
+        sc,
+        notebookManager,
+        snapshotProvider
+      ),
+      executeCell: new ExecuteCellTool(
+        kernelService,
+        sc,
+        notebookManager,
+        snapshotProvider
+      ),
       executeCode: new ExecuteCodeTool(kernelService, sc, notebookManager),
 
       // Terminal Management (pool-aware)
@@ -194,11 +240,16 @@ export function createJupyterTools(
       awaitCommand: new AwaitCommandTool(kernelService, sc, pool),
 
       // File Operations
-      readFile: new ReadFileTool(kernelService, sc),
-      editFile: new EditFileTool(kernelService, sc),
+      readFile: new ReadFileTool(kernelService, sc, snapshotProvider),
+      editFile: new EditFileTool(kernelService, sc, snapshotProvider),
 
       // Cell Output Inspection
-      readCellOutput: new ReadCellOutputTool(kernelService, sc, notebookManager),
+      readCellOutput: new ReadCellOutputTool(
+        kernelService,
+        sc,
+        notebookManager,
+        snapshotProvider
+      ),
     },
   };
 }

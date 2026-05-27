@@ -12,11 +12,16 @@
 import { BaseTool } from "./base-tool";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { EditFileParams } from "./types";
 
 export class EditFileTool extends BaseTool {
-  constructor(kernelService: KernelService, sidecar: KernelSidecar | null) {
-    super(kernelService, sidecar);
+  constructor(
+    kernelService: KernelService,
+    sidecar: KernelSidecar | null,
+    snapshotProvider?: OpenDocumentSnapshotProvider | null
+  ) {
+    super(kernelService, sidecar, snapshotProvider);
   }
 
   /**
@@ -87,19 +92,23 @@ export class EditFileTool extends BaseTool {
       return "[ERROR] oldString is required in replace mode.";
     }
 
-    // Read current content
     let currentContent: string;
     try {
-      const model = await contents.get(filePath, {
-        content: true,
-        format: "text",
-      });
+      const snapshot = this.snapshotProvider?.getTextSnapshot(filePath);
+      if (snapshot) {
+        currentContent = snapshot.content;
+      } else {
+        const model = await contents.get(filePath, {
+          content: true,
+          format: "text",
+        });
 
-      if (model.content === null || model.content === undefined) {
-        return `[ERROR] File '${filePath}' has no content or is not a text file.`;
+        if (model.content === null || model.content === undefined) {
+          return `[ERROR] File '${filePath}' has no content or is not a text file.`;
+        }
+
+        currentContent = model.content as string;
       }
-
-      currentContent = model.content as string;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return `[ERROR] Could not read file '${filePath}': ${message}`;

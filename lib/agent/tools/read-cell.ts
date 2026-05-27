@@ -9,6 +9,7 @@ import { BaseTool } from "./base-tool";
 import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { ReadCellParams } from "./types";
 
 const BATCH_SEPARATOR = "\n\n==========\n\n";
@@ -19,9 +20,10 @@ export class ReadCellTool extends BaseTool {
   constructor(
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
-    notebookManager: NotebookManager
+    notebookManager: NotebookManager,
+    snapshotProvider?: OpenDocumentSnapshotProvider | null
   ) {
-    super(kernelService, sidecar);
+    super(kernelService, sidecar, snapshotProvider);
     this.notebookManager = notebookManager;
   }
 
@@ -45,8 +47,13 @@ export class ReadCellTool extends BaseTool {
       return "[ERROR] No current notebook is active. Use use_notebook first.";
     }
 
-    const notebook = await this.readNotebook(path);
+    const readResult = await this.readNotebookWithSource(path);
+    const notebook = readResult.notebook;
     const totalCells = notebook.cells.length;
+    const sourceSuffix =
+      readResult.source === "editor-buffer" && readResult.dirty
+        ? " [source: editor buffer]"
+        : "";
 
     const blocks: string[] = [];
 
@@ -71,7 +78,7 @@ export class ReadCellTool extends BaseTool {
           ? String(cell.execution_count)
           : "N/A";
       infoList.push(
-        `=====Cell ${resolvedIndex} | type: ${cell.cell_type} | execution count: ${execCount}=====`
+        `=====Cell ${resolvedIndex} | type: ${cell.cell_type} | execution count: ${execCount}${sourceSuffix}=====`
       );
 
       const source = this.normalizeCellSource(cell.source);

@@ -9,11 +9,16 @@
 import { BaseTool } from "./base-tool";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { ReadFileParams } from "./types";
 
 export class ReadFileTool extends BaseTool {
-  constructor(kernelService: KernelService, sidecar: KernelSidecar | null) {
-    super(kernelService, sidecar);
+  constructor(
+    kernelService: KernelService,
+    sidecar: KernelSidecar | null,
+    snapshotProvider?: OpenDocumentSnapshotProvider | null
+  ) {
+    super(kernelService, sidecar, snapshotProvider);
   }
 
   /**
@@ -31,20 +36,26 @@ export class ReadFileTool extends BaseTool {
       return "[ERROR] filePath is required.";
     }
 
-    const contents = this.kernelService.getContentsManager();
-
     let rawContent: string;
+    const snapshot = this.snapshotProvider?.getTextSnapshot(filePath);
+    const readFromEditorBuffer = Boolean(snapshot?.dirty);
+
     try {
-      const model = await contents.get(filePath, {
-        content: true,
-        format: "text",
-      });
+      if (snapshot) {
+        rawContent = snapshot.content;
+      } else {
+        const contents = this.kernelService.getContentsManager();
+        const model = await contents.get(filePath, {
+          content: true,
+          format: "text",
+        });
 
-      if (model.content === null || model.content === undefined) {
-        return `[ERROR] File '${filePath}' has no content or is not a text file.`;
+        if (model.content === null || model.content === undefined) {
+          return `[ERROR] File '${filePath}' has no content or is not a text file.`;
+        }
+
+        rawContent = model.content as string;
       }
-
-      rawContent = model.content as string;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return `[ERROR] Could not read file '${filePath}': ${message}`;
@@ -73,11 +84,12 @@ export class ReadFileTool extends BaseTool {
       .join("\n");
 
     const isPartial = resolvedStart > 0 || resolvedEnd < totalLines;
+    const sourceSuffix = readFromEditorBuffer ? " [source: editor buffer]" : "";
     const header = isPartial
       ? `File: ${filePath} (lines ${resolvedStart + 1}–${resolvedEnd} of ${totalLines})`
       : `File: ${filePath} (${totalLines} lines)`;
 
-    const output = `${header}\n${"─".repeat(60)}\n${numbered}`;
+    const output = `${header}${sourceSuffix}\n${"─".repeat(60)}\n${numbered}`;
     return this.truncateOutput(output);
   }
 }

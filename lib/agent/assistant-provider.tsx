@@ -28,6 +28,10 @@ import type { OrionToolName } from "./tool-schemas";
 import { TerminalPool } from "@/lib/shell/terminal-pool";
 import { guardToolResult } from "./tool-output-guard";
 import {
+  ORION_AGENT_FILE_MODIFIED_EVENT,
+  type OpenDocumentSnapshotProvider,
+} from "./open-document-snapshots";
+import {
   logToolDispatch,
   logToolResult,
   logToolError,
@@ -162,6 +166,8 @@ interface AssistantProviderProps {
   onAgentNotebookChange?: () => void;
   /** Current workspace directory (relative to Jupyter root); forwarded to glob/grep tools to guarantee correct cwd */
   workspaceDirectory?: string;
+  /** Supplies live active editor content for read/edit tools before they fall back to disk. */
+  openDocumentSnapshots?: OpenDocumentSnapshotProvider;
 }
 
 export function AssistantProvider({
@@ -170,6 +176,7 @@ export function AssistantProvider({
   notebook: initialNotebook,
   onAgentNotebookChange: onAgentNotebookChangeProp,
   workspaceDirectory,
+  openDocumentSnapshots,
 }: AssistantProviderProps) {
   // Core instances
   const sidecarRef = useRef<KernelSidecar | null>(null);
@@ -203,9 +210,16 @@ export function AssistantProvider({
   const [terminalPool, setTerminalPool] = useState<TerminalPool | null>(null);
   // Use a ref so the executeToolCall callback always has the latest value
   const onAgentNotebookChangeRef = useRef(onAgentNotebookChangeProp);
+  const openDocumentSnapshotsRef = useRef<OpenDocumentSnapshotProvider | undefined>(
+    openDocumentSnapshots
+  );
   useEffect(() => {
     onAgentNotebookChangeRef.current = onAgentNotebookChangeProp;
   }, [onAgentNotebookChangeProp]);
+
+  useEffect(() => {
+    openDocumentSnapshotsRef.current = openDocumentSnapshots;
+  }, [openDocumentSnapshots]);
 
   // Update notebook when prop changes
   useEffect(() => {
@@ -263,7 +277,13 @@ export function AssistantProvider({
           jupyterServerIsLocal: isJupyterServerHostLocal(
             kernelService.getServerSettings().baseUrl
           ),
-        })
+        }),
+      {
+        getTextSnapshot: (path) =>
+          openDocumentSnapshotsRef.current?.getTextSnapshot(path) ?? null,
+        getNotebookSnapshot: (path) =>
+          openDocumentSnapshotsRef.current?.getNotebookSnapshot(path) ?? null,
+      }
     );
     setToolsReady(true);
 
@@ -731,6 +751,17 @@ export function AssistantProvider({
           const filePath = (sanitizedParams as { filePath?: unknown } | undefined)?.filePath;
           if (typeof filePath === "string" && isSkillDefinitionPath(filePath)) {
             await refreshSkills();
+          }
+          if (
+            typeof filePath === "string" &&
+            typeof finalResult === "string" &&
+            !finalResult.startsWith("[ERROR]")
+          ) {
+            window.dispatchEvent(
+              new CustomEvent(ORION_AGENT_FILE_MODIFIED_EVENT, {
+                detail: { path: filePath },
+              })
+            );
           }
         }
 
