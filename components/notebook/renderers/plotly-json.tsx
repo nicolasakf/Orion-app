@@ -306,7 +306,7 @@ function attachPlotlyHoverLabelStyling(
 ): () => void {
   const hoverLayer = plotNode.querySelector(".hoverlayer");
   if (!hoverLayer) {
-    return () => {};
+    return () => { };
   }
 
   const shellStyles = resolveEditorToolbarShellStyles(colorTheme);
@@ -563,7 +563,7 @@ export function PlotlyJsonOutputRenderer({
             : {};
         const figureHoverLabel =
           typeof figureLayout.hoverlabel === "object" &&
-          figureLayout.hoverlabel !== null
+            figureLayout.hoverlabel !== null
             ? (figureLayout.hoverlabel as Record<string, unknown>)
             : undefined;
         const colorTheme = theme === "dark" ? "dark" : "light";
