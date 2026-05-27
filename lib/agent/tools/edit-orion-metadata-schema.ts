@@ -39,11 +39,11 @@ interface AppViewSchemaNodeInput {
 const AppViewSchemaPropsSchema = z
   .record(z.string(), z.unknown())
   .superRefine((props, ctx) => {
-    if ("className" in props) {
+    if ("className" in props && typeof props.className !== "string") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["className"],
-        message: "className is not supported in app-view schema v1",
+        message: "className must be a string when present",
       });
     }
 
@@ -109,6 +109,10 @@ export const NotebookOrionMetadataSchema = z
         schema: AppViewSchemaSchema.optional().describe(
           "Declarative app-view schema rendered through Orion's built-in primitive registry.",
         ),
+        css: z
+          .string()
+          .optional()
+          .describe("Scoped CSS applied to declarative App View content."),
       })
       .passthrough()
       .optional()

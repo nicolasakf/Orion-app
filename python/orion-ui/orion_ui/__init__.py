@@ -32,9 +32,23 @@ _COMPONENT_TYPES = {
     "Slider",
     "Checkbox",
     "Switch",
+    "RadioGroup",
+    "Toggle",
+    "ToggleGroup",
+    "Calendar",
+    "DatePicker",
     "Label",
     "Badge",
     "Separator",
+    "Alert",
+    "Progress",
+    "Avatar",
+    "Popover",
+    "HoverCard",
+    "Tooltip",
+    "Carousel",
+    "Collapsible",
+    "Accordion",
 }
 
 _UNSET = object()
@@ -58,11 +72,16 @@ def _validate_json_value(value: Any, path: str) -> JsonValue:
 
 def _props(**props: Any) -> Dict[str, JsonValue]:
     """Validate and drop unset component props."""
-    return {
-        key: _validate_json_value(value, f"props.{key}")
-        for key, value in props.items()
-        if value is not None
-    }
+    result: Dict[str, JsonValue] = {}
+    for key, value in props.items():
+        if value is None:
+            continue
+        if key == "class_name" and not isinstance(value, str):
+            raise TypeError("props.class_name must be a string.")
+        result["className" if key == "class_name" else key] = _validate_json_value(
+            value, f"props.{key}"
+        )
+    return result
 
 
 def _coerce_children(children: Sequence[Any]) -> List["Component"]:
@@ -185,19 +204,52 @@ def _control(
     return _component(component_type, stateKey=key, defaultValue=default_value, **props)
 
 
-def page(*children: Any, gap: str = "md", padding: str = "md") -> Component:
+def page(
+    *children: Any,
+    gap: str = "md",
+    padding: str = "md",
+    class_name: Optional[str] = None,
+) -> Component:
     """Create a top-level page container."""
-    return _component("Page", children, gap=gap, padding=padding)
+    return _component(
+        "Page",
+        children,
+        gap=gap,
+        padding=padding,
+        class_name=class_name,
+    )
 
 
-def stack(*children: Any, gap: str = "md", align: str = "stretch") -> Component:
+def stack(
+    *children: Any,
+    gap: str = "md",
+    align: str = "stretch",
+    class_name: Optional[str] = None,
+) -> Component:
     """Create a vertical stack layout."""
-    return _component("Stack", children, gap=gap, align=align)
+    return _component(
+        "Stack",
+        children,
+        gap=gap,
+        align=align,
+        class_name=class_name,
+    )
 
 
-def grid(*children: Any, columns: int = 2, gap: str = "md") -> Component:
+def grid(
+    *children: Any,
+    columns: int = 2,
+    gap: str = "md",
+    class_name: Optional[str] = None,
+) -> Component:
     """Create a responsive grid layout."""
-    return _component("Grid", children, columns=columns, gap=gap)
+    return _component(
+        "Grid",
+        children,
+        columns=columns,
+        gap=gap,
+        class_name=class_name,
+    )
 
 
 def section(
@@ -206,6 +258,7 @@ def section(
     description: Optional[str] = None,
     gap: str = "md",
     padding: str = "md",
+    class_name: Optional[str] = None,
 ) -> Component:
     """Create a titled section."""
     return _component(
@@ -215,6 +268,7 @@ def section(
         description=description,
         gap=gap,
         padding=padding,
+        class_name=class_name,
     )
 
 
@@ -223,14 +277,31 @@ def card(
     title: Optional[str] = None,
     description: Optional[str] = None,
     gap: str = "md",
+    class_name: Optional[str] = None,
 ) -> Component:
     """Create a card container."""
-    return _component("Card", children, title=title, description=description, gap=gap)
+    return _component(
+        "Card",
+        children,
+        title=title,
+        description=description,
+        gap=gap,
+        class_name=class_name,
+    )
 
 
-def tabs(*children: Any, default_value: Optional[str] = None) -> Component:
+def tabs(
+    *children: Any,
+    default_value: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> Component:
     """Create a tab container whose children act as panels."""
-    return _component("Tabs", children, defaultValue=default_value)
+    return _component(
+        "Tabs",
+        children,
+        defaultValue=default_value,
+        class_name=class_name,
+    )
 
 
 def button(
@@ -239,9 +310,17 @@ def button(
     action: Optional[Mapping[str, Any]] = None,
     variant: Optional[str] = None,
     size: Optional[str] = None,
+    class_name: Optional[str] = None,
 ) -> Component:
     """Create a button, optionally with an Orion declarative action."""
-    return _component("Button", label=label, action=action, variant=variant, size=size)
+    return _component(
+        "Button",
+        label=label,
+        action=action,
+        variant=variant,
+        size=size,
+        class_name=class_name,
+    )
 
 
 def input(
@@ -252,6 +331,7 @@ def input(
     value: Any = _UNSET,
     placeholder: Optional[str] = None,
     input_type: str = "text",
+    class_name: Optional[str] = None,
 ) -> Component:
     """Create a text input bound to Python state."""
     return _control(
@@ -262,6 +342,7 @@ def input(
         label=label,
         placeholder=placeholder,
         inputType=input_type,
+        class_name=class_name,
     )
 
 
@@ -272,9 +353,18 @@ def textarea(
     default_value: str = "",
     value: Any = _UNSET,
     placeholder: Optional[str] = None,
+    class_name: Optional[str] = None,
 ) -> Component:
     """Create a textarea bound to Python state."""
-    return _control("Textarea", key, default_value, value, label=label, placeholder=placeholder)
+    return _control(
+        "Textarea",
+        key,
+        default_value,
+        value,
+        label=label,
+        placeholder=placeholder,
+        class_name=class_name,
+    )
 
 
 def select(
@@ -285,6 +375,7 @@ def select(
     default_value: Optional[str] = None,
     value: Any = _UNSET,
     placeholder: Optional[str] = None,
+    class_name: Optional[str] = None,
 ) -> Component:
     """Create a select control bound to Python state."""
     option_list = list(options)
@@ -300,6 +391,7 @@ def select(
         label=label,
         options=option_list,
         placeholder=placeholder,
+        class_name=class_name,
     )
 
 
@@ -312,6 +404,7 @@ def slider(
     default_value: Union[int, float] = 0,
     value: Any = _UNSET,
     step: Union[int, float] = 1,
+    class_name: Optional[str] = None,
 ) -> Component:
     """Create a numeric slider bound to Python state."""
     return _control(
@@ -323,6 +416,7 @@ def slider(
         min=min,
         max=max,
         step=step,
+        class_name=class_name,
     )
 
 
@@ -332,9 +426,17 @@ def checkbox(
     label: Optional[str] = None,
     default_value: bool = False,
     value: Any = _UNSET,
+    class_name: Optional[str] = None,
 ) -> Component:
     """Create a checkbox bound to Python state."""
-    return _control("Checkbox", key, default_value, value, label=label)
+    return _control(
+        "Checkbox",
+        key,
+        default_value,
+        value,
+        label=label,
+        class_name=class_name,
+    )
 
 
 def switch(
@@ -343,34 +445,366 @@ def switch(
     label: Optional[str] = None,
     default_value: bool = False,
     value: Any = _UNSET,
+    class_name: Optional[str] = None,
 ) -> Component:
     """Create a switch bound to Python state."""
-    return _control("Switch", key, default_value, value, label=label)
+    return _control(
+        "Switch",
+        key,
+        default_value,
+        value,
+        label=label,
+        class_name=class_name,
+    )
 
 
-def label(text: str) -> Component:
+def radio_group(
+    key: str,
+    options: Iterable[Union[str, Mapping[str, str]]],
+    *,
+    label: Optional[str] = None,
+    default_value: Optional[str] = None,
+    value: Any = _UNSET,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create a radio group bound to Python state."""
+    option_list = list(options)
+    initial = default_value
+    if initial is None:
+        first = option_list[0] if option_list else ""
+        initial = first if isinstance(first, str) else first.get("value", "")
+    return _control(
+        "RadioGroup",
+        key,
+        initial,
+        value,
+        label=label,
+        options=option_list,
+        class_name=class_name,
+    )
+
+
+def toggle(
+    key: str,
+    *,
+    label: Optional[str] = None,
+    default_value: bool = False,
+    value: Any = _UNSET,
+    variant: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create a boolean toggle bound to Python state."""
+    return _control(
+        "Toggle",
+        key,
+        default_value,
+        value,
+        label=label,
+        variant=variant,
+        class_name=class_name,
+    )
+
+
+def toggle_group(
+    key: str,
+    options: Iterable[Union[str, Mapping[str, str]]],
+    *,
+    label: Optional[str] = None,
+    default_value: Optional[str] = None,
+    value: Any = _UNSET,
+    variant: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create a toggle group bound to Python state."""
+    option_list = list(options)
+    initial = default_value
+    if initial is None:
+        first = option_list[0] if option_list else ""
+        initial = first if isinstance(first, str) else first.get("value", "")
+    return _control(
+        "ToggleGroup",
+        key,
+        initial,
+        value,
+        label=label,
+        options=option_list,
+        variant=variant,
+        class_name=class_name,
+    )
+
+
+def calendar(
+    key: str,
+    *,
+    label: Optional[str] = None,
+    default_value: str = "",
+    value: Any = _UNSET,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create a calendar bound to ISO date string Python state."""
+    return _control(
+        "Calendar",
+        key,
+        default_value,
+        value,
+        label=label,
+        class_name=class_name,
+    )
+
+
+def date_picker(
+    key: str,
+    *,
+    label: Optional[str] = None,
+    default_value: str = "",
+    value: Any = _UNSET,
+    placeholder: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create a popover date picker bound to ISO date string Python state."""
+    return _control(
+        "DatePicker",
+        key,
+        default_value,
+        value,
+        label=label,
+        placeholder=placeholder,
+        class_name=class_name,
+    )
+
+
+def label(text: str, *, class_name: Optional[str] = None) -> Component:
     """Create a text label."""
-    return _component("Label", text=text)
+    return _component("Label", text=text, class_name=class_name)
 
 
-def badge(text: str, *, variant: Optional[str] = None) -> Component:
+def badge(
+    text: str,
+    *,
+    variant: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> Component:
     """Create a status badge."""
-    return _component("Badge", text=text, variant=variant)
+    return _component("Badge", text=text, variant=variant, class_name=class_name)
 
 
-def separator() -> Component:
+def separator(*, class_name: Optional[str] = None) -> Component:
     """Create a horizontal separator."""
-    return _component("Separator")
+    return _component("Separator", class_name=class_name)
 
 
-def markdown_cell(cell_id: Optional[str] = None, *, text: Optional[str] = None) -> Component:
+def alert(
+    *children: Any,
+    title: Optional[str] = None,
+    description: Optional[str] = None,
+    text: Optional[str] = None,
+    variant: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create an inline alert message."""
+    return _component(
+        "Alert",
+        children,
+        title=title,
+        description=description or text,
+        variant=variant,
+        class_name=class_name,
+    )
+
+
+def progress(
+    key: Optional[str] = None,
+    *,
+    label: Optional[str] = None,
+    default_value: Union[int, float] = 0,
+    value: Any = _UNSET,
+    max: Union[int, float] = 100,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create a progress bar from static or Python-bound numeric state."""
+    if key:
+        return _control(
+            "Progress",
+            key,
+            default_value,
+            value,
+            label=label,
+            max=max,
+            class_name=class_name,
+        )
+    return _component(
+        "Progress",
+        defaultValue=default_value,
+        label=label,
+        max=max,
+        class_name=class_name,
+    )
+
+
+def avatar(
+    *,
+    src: Optional[str] = None,
+    alt: Optional[str] = None,
+    fallback: Optional[str] = None,
+    label: Optional[str] = None,
+    size: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create an avatar image with optional fallback text."""
+    return _component(
+        "Avatar",
+        src=src,
+        alt=alt,
+        fallback=fallback,
+        label=label,
+        size=size,
+        class_name=class_name,
+    )
+
+
+def popover(
+    *children: Any,
+    label: Optional[str] = None,
+    trigger: Optional[str] = None,
+    text: Optional[str] = None,
+    content: Optional[str] = None,
+    description: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create a popover with a button trigger and child content."""
+    return _component(
+        "Popover",
+        children,
+        label=label,
+        trigger=trigger,
+        text=text,
+        content=content,
+        description=description,
+        class_name=class_name,
+    )
+
+
+def hover_card(
+    *children: Any,
+    label: Optional[str] = None,
+    trigger: Optional[str] = None,
+    text: Optional[str] = None,
+    content: Optional[str] = None,
+    description: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create a hover card with a text trigger and child content."""
+    return _component(
+        "HoverCard",
+        children,
+        label=label,
+        trigger=trigger,
+        text=text,
+        content=content,
+        description=description,
+        class_name=class_name,
+    )
+
+
+def tooltip(
+    *children: Any,
+    label: Optional[str] = None,
+    trigger: Optional[str] = None,
+    text: Optional[str] = None,
+    content: Optional[str] = None,
+    description: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create a tooltip around a button trigger."""
+    return _component(
+        "Tooltip",
+        children,
+        label=label,
+        trigger=trigger,
+        text=text,
+        content=content,
+        description=description,
+        class_name=class_name,
+    )
+
+
+def carousel(
+    *children: Any,
+    orientation: str = "horizontal",
+    show_controls: bool = True,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create a carousel whose children become slides."""
+    return _component(
+        "Carousel",
+        children,
+        orientation=orientation,
+        showControls=show_controls,
+        class_name=class_name,
+    )
+
+
+def collapsible(
+    *children: Any,
+    label: Optional[str] = None,
+    title: Optional[str] = None,
+    default_open: bool = False,
+    content: Optional[str] = None,
+    description: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create a collapsible section with a trigger label."""
+    return _component(
+        "Collapsible",
+        children,
+        label=label,
+        title=title,
+        defaultOpen=default_open,
+        content=content,
+        description=description,
+        class_name=class_name,
+    )
+
+
+def accordion(
+    *children: Any,
+    default_value: Optional[str] = None,
+    multiple: bool = False,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create an accordion whose children become expandable items."""
+    return _component(
+        "Accordion",
+        children,
+        defaultValue=default_value,
+        multiple=multiple,
+        class_name=class_name,
+    )
+
+
+def markdown_cell(
+    cell_id: Optional[str] = None,
+    *,
+    text: Optional[str] = None,
+    class_name: Optional[str] = None,
+) -> Component:
     """Reference a markdown cell by Orion cell id, or render inline markdown text."""
-    return _component("MarkdownCell", cellId=cell_id, text=text)
+    return _component("MarkdownCell", cellId=cell_id, text=text, class_name=class_name)
 
 
-def output(cell_id: str, output_index: int = 0) -> Component:
+def output(
+    cell_id: str,
+    output_index: int = 0,
+    *,
+    class_name: Optional[str] = None,
+) -> Component:
     """Reference a notebook output by Orion cell id and zero-based output index."""
-    return _component("Output", cellId=cell_id, outputIndex=output_index)
+    return _component(
+        "Output",
+        cellId=cell_id,
+        outputIndex=output_index,
+        class_name=class_name,
+    )
 
 
 def get(key: str, default: Optional[StateValue] = None) -> Optional[StateValue]:
@@ -406,14 +840,46 @@ def _render_static_html(component: Component) -> str:
     if component.type == "Card":
         header = f"<strong>{title}</strong>" if title else ""
         return f"{shell_start}{header}<div>{children}</div></div>"
-    if component.type in {"Stack", "Page", "Section", "Grid", "Tabs"}:
+    if component.type in {"Stack", "Page", "Section", "Grid", "Tabs", "Accordion", "Carousel"}:
         header = f"<strong>{title}</strong>" if title else ""
         return f"<div style='display:flex;flex-direction:column;gap:8px'>{header}{children}</div>"
     if component.type == "Button":
         return f"<button type='button'>{html.escape(str(component.props.get('label', 'Button')))}</button>"
-    if component.type in {"Input", "Textarea", "Select", "Slider", "Checkbox", "Switch"}:
+    if component.type in {
+        "Input",
+        "Textarea",
+        "Select",
+        "Slider",
+        "Checkbox",
+        "Switch",
+        "RadioGroup",
+        "Toggle",
+        "ToggleGroup",
+        "Calendar",
+        "DatePicker",
+        "Progress",
+    }:
         value = html.escape(str(component.props.get("defaultValue", "")))
         return f"<div><strong>{label_text}</strong>: <code>{value}</code></div>"
+    if component.type == "Alert":
+        description = html.escape(
+            str(component.props.get("description", component.props.get("text", "")))
+        )
+        header = f"<strong>{title}</strong>" if title else ""
+        return f"<div style='border:1px solid #d4d4d8;border-radius:8px;padding:12px'>{header}{description}{children}</div>"
+    if component.type == "Avatar":
+        fallback = html.escape(str(component.props.get("fallback", label_text or "?")))
+        return f"<span style='display:inline-flex;align-items:center;justify-content:center;border-radius:999px;background:#e4e4e7;width:40px;height:40px'>{fallback}</span>"
+    if component.type in {"Popover", "HoverCard", "Tooltip", "Collapsible", "DatePicker"}:
+        trigger = html.escape(
+            str(
+                component.props.get("label")
+                or component.props.get("trigger")
+                or component.props.get("text")
+                or "Open"
+            )
+        )
+        return f"<button type='button'>{trigger}</button>{children}"
     if component.type == "Badge":
         return f"<span style='border:1px solid #d4d4d8;border-radius:999px;padding:2px 8px'>{label_text}</span>"
     if component.type == "Label":
@@ -430,18 +896,29 @@ def _render_static_html(component: Component) -> str:
 __all__ = [
     "Component",
     "ORION_UI_MIME_TYPE",
+    "accordion",
+    "alert",
+    "avatar",
     "badge",
     "button",
+    "calendar",
     "card",
+    "carousel",
     "checkbox",
+    "collapsible",
+    "date_picker",
     "define_default",
     "get",
     "grid",
+    "hover_card",
     "input",
     "label",
     "markdown_cell",
     "output",
     "page",
+    "popover",
+    "progress",
+    "radio_group",
     "section",
     "select",
     "separator",
@@ -453,4 +930,7 @@ __all__ = [
     "tabs",
     "textarea",
     "theme",
+    "toggle",
+    "toggle_group",
+    "tooltip",
 ]

@@ -105,7 +105,10 @@ import {
 } from "@/components/notebook/utils";
 import type { MimeClipboardPayload } from "@/lib/notebook/mime-registry";
 import { getDefaultMimeRegistry } from "@/lib/notebook/mime-registry";
-import { isCellInAppView, isOutputInAppView } from "@/lib/notebook/app-view";
+import {
+  getNotebookCellId,
+  isNotebookAppViewReferenceInMetadata,
+} from "@/lib/notebook/app-view";
 import { getRelativeTime } from "@/lib/utils";
 
 interface NotebookCellProps {
@@ -113,7 +116,7 @@ interface NotebookCellProps {
   notebookMetadata?: Record<string, unknown>;
   notebookPath?: string;
   cellIndex: number;
-  onCellModified?: (cellIndex: number) => void;
+  onCellModified?: (cellIndex: number, source?: string) => void;
   onUpdateCell?: (cellIndex: number, source: string) => void;
   onCellSelect?: (
     cellIndex: number,
@@ -1227,15 +1230,25 @@ function NotebookCellComponent({
 
   const hasCodeOutputs =
     cell.cell_type === CellType.CODE && !!cell.outputs?.length;
+  const appViewCellId = getNotebookCellId(cell);
   const allCodeOutputsInAppView =
     hasCodeOutputs &&
+    !!appViewCellId &&
     cell.outputs!.every((_, outputIndex) =>
-      isOutputInAppView(cell, outputIndex),
+      isNotebookAppViewReferenceInMetadata(notebookMetadata, {
+        kind: "output",
+        cellId: appViewCellId,
+        outputIndex,
+      }),
     );
   const isInAppView =
     cell.cell_type === CellType.CODE
       ? allCodeOutputsInAppView
-      : isCellInAppView(cell);
+      : !!appViewCellId &&
+        isNotebookAppViewReferenceInMetadata(notebookMetadata, {
+          kind: "markdown",
+          cellId: appViewCellId,
+        });
 
   // Action button definitions (App View control is omitted for code cells with no outputs)
   const actionButtons = useMemo<ActionButtonDefinition[]>(() => {
@@ -1459,27 +1472,23 @@ function NotebookCellComponent({
    * Debounced function to notify parent of changes
    * This ensures we don't call onCellModified on every keystroke
    */
-  const notifyCellModified = useCallback(() => {
-    if (changeTimeoutRef.current) {
-      clearTimeout(changeTimeoutRef.current);
-    }
+  const notifyCellModified = useCallback(
+    (source: string) => {
+      if (changeTimeoutRef.current) {
+        clearTimeout(changeTimeoutRef.current);
+      }
 
-    changeTimeoutRef.current = setTimeout(() => {
-      if (onCellModified) {
-        onCellModified(cellIndex);
-      }
-      // NEW: Also notify parent of content changes for pending updates
-      if (onContentChange && hasLocalChanges) {
-        onContentChange(cellIndex, localSource);
-      }
-    }, 300); // Debounce for 300ms
-  }, [
-    cellIndex,
-    onCellModified,
-    onContentChange,
-    hasLocalChanges,
-    localSource,
-  ]);
+      changeTimeoutRef.current = setTimeout(() => {
+        if (onCellModified) {
+          onCellModified(cellIndex, source);
+        }
+        if (onContentChange) {
+          onContentChange(cellIndex, source);
+        }
+      }, 300); // Debounce for 300ms
+    },
+    [cellIndex, onCellModified, onContentChange],
+  );
 
   /**
    * Handles changes to cell content in the editor
@@ -1493,10 +1502,10 @@ function NotebookCellComponent({
         // Only mark as changed and notify if not already changed
         if (!hasLocalChanges) {
           setHasLocalChanges(true);
-          notifyCellModified();
+          notifyCellModified(value);
         } else {
           // For subsequent edits, just notify without re-rendering
-          notifyCellModified();
+          notifyCellModified(value);
         }
       }
     },
@@ -2474,7 +2483,17 @@ function NotebookCellComponent({
                                   }
                                   onOrionUiStateChange={onOrionUiStateChange}
                                   onOrionUiAction={onOrionUiAction}
-                                  isInAppView={isOutputInAppView(cell, idx)}
+                                  isInAppView={
+                                    !!appViewCellId &&
+                                    isNotebookAppViewReferenceInMetadata(
+                                      notebookMetadata,
+                                      {
+                                        kind: "output",
+                                        cellId: appViewCellId,
+                                        outputIndex: idx,
+                                      },
+                                    )
+                                  }
                                   isCollapsed={isOutputCollapsedAtIndex(idx)}
                                   onToggleCollapse={() =>
                                     handleTogglePerOutputCollapse(idx)

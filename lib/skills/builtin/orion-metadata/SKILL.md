@@ -36,30 +36,16 @@ Legacy note:
 
 ### `appView` (object)
 
-Controls notebook App View layout. Orion supports a legacy grid/canvas layout and a declarative schema layout. When a valid `appView.schema` is present, the declarative renderer takes precedence.
+Controls notebook App View layout. Orion renders the declarative schema at `appView.schema` plus optional scoped CSS at `appView.css`.
 
 App View metadata is a composition layer, not the source of truth for runtime behavior. Prefer `orion_ui` code-cell outputs for sliders, selects, forms, action buttons, and other interactive controls, then reference those outputs from App View.
 
-- `appView.grid.cols`: positive integer (`> 0`)
-- `appView.grid.rowHeight`: positive integer (`> 0`)
-- `appView.grid.margin`: tuple `[x, y]` with non-negative integers
-- `appView.grid.containerPadding`: tuple `[x, y]` with non-negative integers
-- `appView.layout`: object keyed by app item id
-  - key for a cell card: `<cellId>`
-  - key for an output card: `<cellId>:output:<outputIndex>`
-  - each value has:
-    - `x`: non-negative integer
-    - `y`: non-negative integer
-    - `w`: positive integer (clamped to `grid.cols`)
-    - `h`: positive integer
-
-Declarative schema:
-
+- `appView.css`: optional scoped CSS string applied only to App View content
 - `appView.schema.version`: literal `1`
 - `appView.schema.primitiveRegistry.source`: literal `"builtin"` only
 - `appView.schema.root`: recursive node object
-  - `type`: one of `Page`, `Stack`, `Grid`, `Section`, `Card`, `Tabs`, `MarkdownCell`, `Output`, `Button`, `Input`, `Textarea`, `Select`, `Slider`, `Checkbox`, `Switch`, `Label`, `Badge`, `Separator`
-  - `props`: optional object; must not contain `className` or `style`
+  - `type`: one of `Page`, `Stack`, `Grid`, `Section`, `Card`, `Tabs`, `MarkdownCell`, `Output`, `Button`, `Input`, `Textarea`, `Select`, `Slider`, `Checkbox`, `Switch`, `RadioGroup`, `Toggle`, `ToggleGroup`, `Calendar`, `DatePicker`, `Label`, `Badge`, `Separator`, `Alert`, `Progress`, `Avatar`, `Popover`, `HoverCard`, `Tooltip`, `Carousel`, `Collapsible`, `Accordion`
+  - `props`: optional object; may contain string `className` hooks and must not contain `style`
   - `children`: optional array of child nodes
 
 Common declarative props:
@@ -67,17 +53,17 @@ Common declarative props:
 - Layout props: `gap`, `padding`, `columns`, `align`, `title`, `description`, `label`, `value`
 - Notebook references: `cellId`, `outputIndex`
 - Static/local controls: `stateKey`, `defaultValue`, `placeholder`, `options`, `min`, `max`, `step`, `variant`, `size`
+- Styling hooks: `className` maps to App View CSS selectors; avoid arbitrary Tailwind runtime strings.
 
 Declarative schema v1 limitations:
 
 - Only built-in primitives are supported.
-- No custom primitive paths, arbitrary React, arbitrary CSS, `className`, or `style`.
+- No custom primitive paths, arbitrary React, or inline `style`.
 - Local controls in metadata do not execute notebook cells, persist Python state, or replace `orion_ui` runtime controls.
 
 Normalization behavior:
 
-- Invalid grid/layout values are normalized or ignored by app-view readers.
-- Runtime currently emits `appView.version = 1`.
+- Legacy `appView.grid`, `appView.layout`, and `cell.metadata.orion.app` metadata may exist in old notebooks but is ignored by App View rendering.
 - Invalid declarative schema values render a non-crashing App View error panel.
 
 ## Cell-level fields (`cells[i].metadata.orion`)
@@ -115,20 +101,11 @@ Supported execution state payload:
   - `wallTime` (number, ms)
   - optional: `cpuTime`, `memoryUsage`, `peakMemory`, `ioRead`, `ioWrite` (numbers)
 
-### `app` (object)
-
-Cell/output inclusion in notebook app view.
-
-- `app.enabled`: boolean (include markdown cell in app view when true)
-- `app.title`: optional string display title
-- `app.outputs`: object keyed by output index as string:
-  - `<outputIndex>.enabled`: boolean
-  - `<outputIndex>.title`: optional string
-
 ## Legacy and internal keys
 
 These keys may exist for compatibility or recovery, but should generally not be authored in new metadata updates:
 
+- `cell.metadata.orion.app` (legacy App View inclusion metadata; prefer `appView.schema` references)
 - `cell.metadata.orion.cellType = "raw"` (legacy muted-cell marker)
 - old top-level visibility/collapse flags under `cell.metadata.orion` (prefer `cellState.*`)
 - `cell.metadata.orion._parseError` (internal recovery marker for corrupted notebooks)

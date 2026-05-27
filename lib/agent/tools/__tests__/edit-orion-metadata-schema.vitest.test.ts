@@ -6,12 +6,13 @@ describe("NotebookOrionMetadataSchema appView schema validation", () => {
   it("accepts the built-in declarative app-view schema contract", () => {
     const result = NotebookOrionMetadataSchema.safeParse({
       appView: {
+        css: ".region-control { max-width: 20rem; }",
         schema: {
           version: 1,
           primitiveRegistry: { source: "builtin" },
           root: {
             type: "Page",
-            props: { gap: "sm" },
+            props: { gap: "sm", className: "dashboard-page" },
             children: [
               {
                 type: "Input",
@@ -19,6 +20,7 @@ describe("NotebookOrionMetadataSchema appView schema validation", () => {
                   label: "Region",
                   stateKey: "region",
                   defaultValue: "west",
+                  className: "region-control",
                 },
               },
             ],
@@ -44,7 +46,7 @@ describe("NotebookOrionMetadataSchema appView schema validation", () => {
     expect(result.success).toBe(false);
   });
 
-  it("rejects arbitrary className and style props", () => {
+  it("accepts className hooks but rejects style props", () => {
     const result = NotebookOrionMetadataSchema.safeParse({
       appView: {
         schema: {
@@ -52,7 +54,7 @@ describe("NotebookOrionMetadataSchema appView schema validation", () => {
           primitiveRegistry: { source: "builtin" },
           root: {
             type: "Page",
-            props: { className: "p-8", style: { color: "red" } },
+            props: { className: "dashboard-page", style: { color: "red" } },
           },
         },
       },

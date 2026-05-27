@@ -37,6 +37,7 @@ ui.card(
         ui.slider("temperature", label="Temperature", min=0, max=2, default_value=0.7, step=0.1),
     ),
     title="Controls",
+    class_name="controls-card",
 )
 ```
 
@@ -46,6 +47,8 @@ Read values in later cells:
 model = ui.get("model")
 temperature = ui.get("temperature")
 ```
+
+`class_name` adds semantic CSS hooks for Orion App View. Define the matching CSS in notebook metadata at `metadata.orion.appView.css`; do not rely on arbitrary Tailwind classes generated at runtime.
 
 ## Requirements
 

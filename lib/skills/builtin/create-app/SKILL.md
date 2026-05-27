@@ -32,6 +32,7 @@ V1 App View schema is inline notebook metadata:
 ```json
 {
   "appView": {
+    "css": ".metric-card { border-color: hsl(var(--primary)); }",
     "schema": {
       "version": 1,
       "primitiveRegistry": { "source": "builtin" },
@@ -45,7 +46,9 @@ V1 App View schema is inline notebook metadata:
 }
 ```
 
-Only use the built-in registry in v1. Do not write custom primitive paths, `className`, or `style`.
+Only use the built-in registry in v1. Do not write custom primitive paths or inline `style`.
+Use `props.className` only as a semantic hook for CSS defined in `metadata.orion.appView.css`; do not rely on arbitrary Tailwind runtime class strings.
+Legacy `appView.grid`, `appView.layout`, and `cell.metadata.orion.app` metadata are ignored by the renderer and should not be authored.
 
 ## Built-in primitives
 
@@ -57,6 +60,9 @@ Layout and containers:
 - `Section`: titled grouping. Useful props: `title`, `description`, `gap`, `padding`.
 - `Card`: framed grouping. Useful props: `title`, `description`, `gap`.
 - `Tabs`: tabbed grouping. Children become tab panels; child props may include `label`, `title`, or `value`.
+- `Accordion`: expandable grouping. Children become items; child props may include `label`, `title`, or `value`. Useful props: `defaultValue`, `multiple`.
+- `Collapsible`: single expandable section. Useful props: `label`, `title`, `defaultOpen`.
+- `Carousel`: slide container. Children become slides. Useful props: `orientation`, `showControls`.
 - `Separator`: horizontal separator.
 
 Notebook display:
@@ -66,11 +72,14 @@ Notebook display:
 
 Static/local UI primitives:
 
-- `Input`, `Textarea`, `Select`, `Slider`, `Checkbox`, `Switch`, `Button`, `Label`, `Badge`.
+- `Input`, `Textarea`, `Select`, `Slider`, `Checkbox`, `Switch`, `RadioGroup`, `Toggle`, `ToggleGroup`, `Calendar`, `DatePicker`, `Button`, `Label`, `Badge`, `Alert`, `Progress`, `Avatar`.
+- Overlay/display helpers: `Popover`, `HoverCard`, `Tooltip`.
 - Controls in App View metadata are static/local-only compatibility primitives. Do not use them for real notebook behavior.
 - Controls may use `stateKey` and `defaultValue`; this state is renderer-local only and is not Python runtime state.
-- `Select.options` may be strings or `{ "label": "...", "value": "..." }` objects.
+- `Select`, `RadioGroup`, and `ToggleGroup` `options` may be strings or `{ "label": "...", "value": "..." }` objects.
+- `Calendar` and `DatePicker` store ISO-like `YYYY-MM-DD` strings.
 - `Button` is display-only in v1; do not imply it runs notebook code.
+- `Popover`, `HoverCard`, and `Tooltip` use `label`, `trigger`, or `text` for the trigger and children or `content`/`description` for body text.
 
 Constrained styling props:
 
@@ -78,6 +87,7 @@ Constrained styling props:
 - `padding`: `none`, `sm`, `md`, `lg`
 - `align`: `start`, `center`, `end`, `stretch`
 - `variant` and `size`: only use values supported by the primitive.
+- `className`: optional semantic CSS hook; define matching selectors in `appView.css`.
 
 ## Authoring patterns
 
@@ -126,12 +136,12 @@ Example:
 
 ## Metadata editing guidance
 
-- Prefer one notebook-level merge at path `["appView"]` or `["appView", "schema"]`.
-- Keep legacy `appView.grid` and `appView.layout` unless the user asks to remove them; the declarative schema takes precedence when valid.
+- Prefer one notebook-level merge at path `["appView"]`, `["appView", "schema"]`, or `["appView", "css"]`.
+- Ignore legacy `appView.grid`, `appView.layout`, and `cell.metadata.orion.app`; App View renders `appView.schema` plus optional scoped `appView.css`.
 - Do not edit `cells[i].metadata.orion.id`.
-- For App View inclusion metadata (`cell.metadata.orion.app`) only use it when maintaining the legacy grid App View. Declarative schema references do not require `app.enabled`.
+- Do not write App View inclusion metadata under `cell.metadata.orion.app`; declarative schema references do not require `app.enabled`.
 - If a requested feature needs cell execution, parameter binding, or runtime interactivity, implement it in a Python code cell with `orion_ui` and reference that output from App View.
-- If a requested layout needs custom React, arbitrary CSS, `className`, `style`, or custom primitive imports, explain that v1 App View metadata intentionally does not support those escape hatches yet.
+- If a requested layout needs custom React, inline `style`, arbitrary Tailwind runtime classes, or custom primitive imports, explain that v1 App View metadata intentionally does not support those escape hatches yet.
 
 ## Validation checklist
 
@@ -142,5 +152,6 @@ Example:
 - `children` is an array when present.
 - All `cellId` references exist in `cells[i].metadata.orion.id`.
 - Every `Output.outputIndex` exists on the referenced code cell.
-- No node uses `className`, `style`, custom imports, or action/run-cell props.
+- No node uses inline `style`, custom imports, or action/run-cell props.
+- Any `className` values are semantic hooks with matching CSS in `metadata.orion.appView.css`.
 - Interactive controls are implemented in `orion_ui` code cells, not authored directly in App View metadata.

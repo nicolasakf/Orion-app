@@ -86,4 +86,44 @@ describe("OrionUiOutputRenderer", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
     expect(onAction).toHaveBeenCalledWith(action);
   });
+
+  it("renders destructive button variant", () => {
+    renderOrionUiOutput({
+      value: {
+        version: 1,
+        id: "ui-destructive-button",
+        root: {
+          type: "Button",
+          props: { label: "Delete", variant: "destructive" },
+          children: [],
+        },
+        state: {},
+        bindings: {},
+      },
+    });
+
+    expect(screen.getByRole("button", { name: "Delete" })).toHaveClass(
+      "bg-destructive",
+    );
+  });
+
+  it("renders primitive class hooks without requiring App View CSS", () => {
+    renderOrionUiOutput({
+      value: {
+        version: 1,
+        id: "ui-class",
+        root: {
+          type: "Button",
+          props: { label: "Styled", className: "metric-action" },
+          children: [],
+        },
+        state: {},
+        bindings: {},
+      },
+    });
+
+    expect(screen.getByRole("button", { name: "Styled" })).toHaveClass(
+      "metric-action",
+    );
+  });
 });

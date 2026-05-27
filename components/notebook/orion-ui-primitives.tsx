@@ -1,10 +1,21 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { format } from "date-fns";
+import { CalendarIcon } from "lucide-react";
 
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
 import {
   Card,
   CardContent,
@@ -12,9 +23,33 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Carousel,
+  CarouselContent,
+  CarouselItem,
+  CarouselNext,
+  CarouselPrevious,
+} from "@/components/ui/carousel";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Progress } from "@/components/ui/progress";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
   SelectContent,
@@ -32,6 +67,14 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { Toggle } from "@/components/ui/toggle";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { NotebookAppViewSchemaNode } from "@/lib/notebook/app-view";
 import { cn } from "@/lib/utils";
 
@@ -120,9 +163,23 @@ const builtinPrimitiveRenderers: Record<string, PrimitiveRenderer> = {
   Slider: renderSlider,
   Checkbox: renderCheckbox,
   Switch: renderSwitch,
+  RadioGroup: renderRadioGroup,
+  Toggle: renderToggle,
+  ToggleGroup: renderToggleGroup,
+  Calendar: renderCalendar,
+  DatePicker: renderDatePicker,
   Label: renderLabel,
   Badge: renderBadge,
   Separator: renderSeparator,
+  Alert: renderAlert,
+  Progress: renderProgress,
+  Avatar: renderAvatar,
+  Popover: renderPopover,
+  HoverCard: renderHoverCard,
+  Tooltip: renderTooltip,
+  Carousel: renderCarousel,
+  Collapsible: renderCollapsible,
+  Accordion: renderAccordion,
 };
 
 /** Returns a string prop from a schema node when present. */
@@ -132,6 +189,14 @@ function stringProp(
 ): string | undefined {
   const value = props[key];
   return typeof value === "string" ? value : undefined;
+}
+
+/** Merges a primitive's schema class hook with renderer-owned classes. */
+function primitiveClass(
+  node: NotebookAppViewSchemaNode,
+  ...classes: Array<string | false | null | undefined>
+): string | undefined {
+  return cn(...classes, stringProp(node.props, "className"));
 }
 
 /** Returns a finite numeric prop from a schema node when present. */
@@ -250,6 +315,69 @@ function setNodeState(
   context.callbacks.onStateChange?.(stateKey, value);
 }
 
+/** Returns overlay trigger text from common schema prop names. */
+function overlayTriggerText(props: Record<string, unknown>): string {
+  return (
+    stringProp(props, "label") ??
+    stringProp(props, "trigger") ??
+    stringProp(props, "text") ??
+    "Open"
+  );
+}
+
+/** Renders overlay body content from children or inline text props. */
+function overlayBodyContent(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  if (node.children.length > 0) {
+    return context.renderChildren(node);
+  }
+
+  const content =
+    stringProp(node.props, "content") ?? stringProp(node.props, "description");
+  return content ? <p className="text-sm">{content}</p> : null;
+}
+
+/** Parses an ISO-like YYYY-MM-DD string into a local Date. */
+function parseIsoDate(value: string | undefined): Date | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) {
+    return undefined;
+  }
+
+  const date = new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+  );
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+/** Formats a Date as an ISO-like YYYY-MM-DD string. */
+function formatIsoDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/** Formats a stored date string for display in date controls. */
+function formatDateLabel(value: string | undefined, placeholder: string): string {
+  const parsed = parseIsoDate(value);
+  return parsed ? format(parsed, "PPP") : placeholder;
+}
+
+const avatarSizeClasses = {
+  sm: "h-8 w-8",
+  md: "h-10 w-10",
+  lg: "h-14 w-14",
+} as const;
+
 /** Renders a declarative Orion UI primitive tree. */
 export function OrionUiPrimitiveTree({
   root,
@@ -295,7 +423,13 @@ export function OrionUiPrimitiveTree({
     return context;
   }, [callbacks, setStateValue, state]);
 
-  return <div className={className}>{context.renderNode(root)}</div>;
+  return (
+    <div className={className}>
+      <TooltipProvider delayDuration={300}>
+        {context.renderNode(root)}
+      </TooltipProvider>
+    </div>
+  );
 }
 
 /** Renders the top-level app page container. */
@@ -309,6 +443,7 @@ function renderPage(
         "mx-auto flex min-h-full w-full max-w-7xl flex-col",
         spacingClass(node.props.gap, gapClasses),
         spacingClass(node.props.padding, paddingClasses),
+        stringProp(node.props, "className"),
       )}
     >
       {context.renderChildren(node)}
@@ -327,6 +462,7 @@ function renderStack(
         "flex flex-col",
         spacingClass(node.props.gap, gapClasses),
         alignClass(node.props.align),
+        stringProp(node.props, "className"),
       )}
     >
       {context.renderChildren(node)}
@@ -350,6 +486,7 @@ function renderGrid(
         "grid w-full",
         gridColumnClasses[columns as keyof typeof gridColumnClasses],
         spacingClass(node.props.gap, gapClasses),
+        stringProp(node.props, "className"),
       )}
     >
       {context.renderChildren(node)}
@@ -368,7 +505,11 @@ function renderSection(
 
   return (
     <section
-      className={cn("w-full", spacingClass(node.props.padding, paddingClasses))}
+      className={primitiveClass(
+        node,
+        "w-full",
+        spacingClass(node.props.padding, paddingClasses),
+      )}
     >
       {title ? (
         <div className="mb-3">
@@ -396,7 +537,7 @@ function renderCard(
   const description = stringProp(node.props, "description");
 
   return (
-    <Card>
+    <Card className={primitiveClass(node)}>
       {title || description ? (
         <CardHeader>
           {title ? <CardTitle>{title}</CardTitle> : null}
@@ -428,7 +569,7 @@ function renderTabs(
     "tab-0";
 
   return (
-    <Tabs defaultValue={defaultValue} className="w-full">
+    <Tabs defaultValue={defaultValue} className={primitiveClass(node, "w-full")}>
       <TabsList>
         {tabs.map((tab, index) => {
           const value = stringProp(tab.props, "value") ?? `tab-${index}`;
@@ -465,15 +606,21 @@ function renderMarkdownCell(
     stringProp(node.props, "source") ?? stringProp(node.props, "text");
   const rendered = context.callbacks.renderMarkdownReference?.(cellId, source);
   if (rendered) {
-    return rendered;
+    return <div className={primitiveClass(node)}>{rendered}</div>;
   }
   if (source) {
-    return <MarkdownRenderer source={source} />;
+    return (
+      <div className={primitiveClass(node)}>
+        <MarkdownRenderer source={source} />
+      </div>
+    );
   }
   return (
-    <MissingReference
-      label={cellId ? `Markdown cell '${cellId}'` : "Markdown source"}
-    />
+    <div className={primitiveClass(node)}>
+      <MissingReference
+        label={cellId ? `Markdown cell '${cellId}'` : "Markdown source"}
+      />
+    </div>
   );
 }
 
@@ -488,11 +635,13 @@ function renderOutput(
     Math.floor(numberProp(node.props, "outputIndex") ?? 0),
   );
   return (
-    context.callbacks.renderOutputReference?.(cellId, outputIndex) ?? (
-      <MissingReference
-        label={cellId ? `Output ${outputIndex} from '${cellId}'` : "Output"}
-      />
-    )
+    <div className={primitiveClass(node)}>
+      {context.callbacks.renderOutputReference?.(cellId, outputIndex) ?? (
+        <MissingReference
+          label={cellId ? `Output ${outputIndex} from '${cellId}'` : "Output"}
+        />
+      )}
+    </div>
   );
 }
 
@@ -513,11 +662,15 @@ function renderButton(
     <Button
       type="button"
       variant={
-        variant === "secondary" || variant === "outline" || variant === "ghost"
+        variant === "secondary" ||
+        variant === "outline" ||
+        variant === "ghost" ||
+        variant === "destructive"
           ? variant
           : "default"
       }
       size={size === "sm" || size === "lg" ? size : "default"}
+      className={primitiveClass(node)}
       onClick={() => {
         if (action !== undefined) {
           context.callbacks.onAction?.(action);
@@ -539,6 +692,7 @@ function renderInput(
       type={stringProp(node.props, "inputType") ?? "text"}
       value={getStringState(node, context)}
       placeholder={stringProp(node.props, "placeholder")}
+      className={primitiveClass(node)}
       aria-label={
         stringProp(node.props, "label") ??
         stringProp(node.props, "stateKey") ??
@@ -558,6 +712,7 @@ function renderTextarea(
     <Textarea
       value={getStringState(node, context)}
       placeholder={stringProp(node.props, "placeholder")}
+      className={primitiveClass(node)}
       aria-label={
         stringProp(node.props, "label") ??
         stringProp(node.props, "stateKey") ??
@@ -582,6 +737,7 @@ function renderSelect(
       onValueChange={(nextValue) => setNodeState(node, context, nextValue)}
     >
       <SelectTrigger
+        className={primitiveClass(node)}
         aria-label={
           stringProp(node.props, "label") ??
           stringProp(node.props, "stateKey") ??
@@ -616,6 +772,7 @@ function renderSlider(
       min={numberProp(node.props, "min") ?? 0}
       max={numberProp(node.props, "max") ?? 100}
       step={numberProp(node.props, "step") ?? 1}
+      className={primitiveClass(node)}
       aria-label={
         stringProp(node.props, "label") ??
         stringProp(node.props, "stateKey") ??
@@ -636,7 +793,7 @@ function renderCheckbox(
   const label = stringProp(node.props, "label");
 
   return (
-    <label className="flex items-center gap-2 text-sm">
+    <label className={primitiveClass(node, "flex items-center gap-2 text-sm")}>
       <Checkbox
         checked={getBooleanState(node, context)}
         onCheckedChange={(checked) =>
@@ -656,7 +813,7 @@ function renderSwitch(
   const label = stringProp(node.props, "label");
 
   return (
-    <label className="flex items-center gap-2 text-sm">
+    <label className={primitiveClass(node, "flex items-center gap-2 text-sm")}>
       <Switch
         checked={getBooleanState(node, context)}
         onCheckedChange={(checked) => setNodeState(node, context, checked)}
@@ -673,7 +830,11 @@ function renderLabel(
 ): React.ReactNode {
   const text = stringProp(node.props, "text") ?? stringProp(node.props, "label");
 
-  return <Label>{text ?? context.renderChildren(node)}</Label>;
+  return (
+    <Label className={primitiveClass(node)}>
+      {text ?? context.renderChildren(node)}
+    </Label>
+  );
 }
 
 /** Renders a small badge with constrained variants. */
@@ -684,6 +845,7 @@ function renderBadge(node: NotebookAppViewSchemaNode): React.ReactNode {
 
   return (
     <Badge
+      className={primitiveClass(node)}
       variant={
         variant === "secondary" ||
         variant === "destructive" ||
@@ -698,8 +860,404 @@ function renderBadge(node: NotebookAppViewSchemaNode): React.ReactNode {
 }
 
 /** Renders a horizontal separator. */
-function renderSeparator(): React.ReactNode {
-  return <Separator />;
+function renderSeparator(node: NotebookAppViewSchemaNode): React.ReactNode {
+  return <Separator className={primitiveClass(node)} />;
+}
+
+/** Renders an inline alert with optional title and description. */
+function renderAlert(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const title = stringProp(node.props, "title");
+  const description =
+    stringProp(node.props, "description") ?? stringProp(node.props, "text");
+  const variant = stringProp(node.props, "variant");
+
+  return (
+    <Alert
+      className={primitiveClass(node)}
+      variant={variant === "destructive" ? "destructive" : "default"}
+    >
+      {title ? <AlertTitle>{title}</AlertTitle> : null}
+      {description ? <AlertDescription>{description}</AlertDescription> : null}
+      {node.children.length > 0 ? (
+        <AlertDescription>{context.renderChildren(node)}</AlertDescription>
+      ) : null}
+    </Alert>
+  );
+}
+
+/** Renders a numeric progress bar from bound or static values. */
+function renderProgress(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const max = numberProp(node.props, "max") ?? 100;
+  const rawValue = getNumberState(node, context);
+  const value = Math.min(max, Math.max(0, rawValue));
+
+  return (
+    <Progress
+      value={(value / max) * 100}
+      className={primitiveClass(node)}
+      aria-label={
+        stringProp(node.props, "label") ??
+        stringProp(node.props, "stateKey") ??
+        "Progress"
+      }
+    />
+  );
+}
+
+/** Renders an avatar image with optional fallback text. */
+function renderAvatar(node: NotebookAppViewSchemaNode): React.ReactNode {
+  const src = stringProp(node.props, "src");
+  const alt = stringProp(node.props, "alt") ?? "";
+  const fallback =
+    stringProp(node.props, "fallback") ??
+    stringProp(node.props, "label") ??
+    "?";
+  const size = stringProp(node.props, "size");
+  const sizeClass =
+    size === "sm" || size === "lg"
+      ? avatarSizeClasses[size]
+      : avatarSizeClasses.md;
+
+  return (
+    <Avatar className={primitiveClass(node, sizeClass)}>
+      {src ? <AvatarImage src={src} alt={alt} /> : null}
+      <AvatarFallback>{fallback.slice(0, 2).toUpperCase()}</AvatarFallback>
+    </Avatar>
+  );
+}
+
+/** Renders a popover with a button trigger and child content. */
+function renderPopover(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline" className={primitiveClass(node)}>
+          {overlayTriggerText(node.props)}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto">{overlayBodyContent(node, context)}</PopoverContent>
+    </Popover>
+  );
+}
+
+/** Renders a hover card with a text trigger and child content. */
+function renderHoverCard(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  return (
+    <HoverCard>
+      <HoverCardTrigger asChild>
+        <Button
+          type="button"
+          variant="link"
+          className={primitiveClass(node, "h-auto p-0")}
+        >
+          {overlayTriggerText(node.props)}
+        </Button>
+      </HoverCardTrigger>
+      <HoverCardContent>{overlayBodyContent(node, context)}</HoverCardContent>
+    </HoverCard>
+  );
+}
+
+/** Renders a tooltip around a button trigger. */
+function renderTooltip(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const tooltipText =
+    stringProp(node.props, "content") ??
+    stringProp(node.props, "description") ??
+    overlayTriggerText(node.props);
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button type="button" variant="outline" className={primitiveClass(node)}>
+          {overlayTriggerText(node.props)}
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>
+        {node.children.length > 0 ? context.renderChildren(node) : tooltipText}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** Renders a carousel whose children become slides. */
+function renderCarousel(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const orientation =
+    stringProp(node.props, "orientation") === "vertical"
+      ? "vertical"
+      : "horizontal";
+  const showControls = booleanProp(node.props, "showControls") ?? true;
+
+  return (
+    <Carousel
+      orientation={orientation}
+      className={primitiveClass(node, "w-full max-w-full")}
+    >
+      <CarouselContent>
+        {node.children.map((child, index) => (
+          <CarouselItem key={`slide-${index}`}>
+            {context.renderNode(child)}
+          </CarouselItem>
+        ))}
+      </CarouselContent>
+      {showControls ? (
+        <>
+          <CarouselPrevious />
+          <CarouselNext />
+        </>
+      ) : null}
+    </Carousel>
+  );
+}
+
+/** Renders a collapsible section with a trigger label and child content. */
+function renderCollapsible(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const defaultOpen = booleanProp(node.props, "defaultOpen") ?? false;
+
+  return (
+    <Collapsible
+      defaultOpen={defaultOpen}
+      className={primitiveClass(node, "w-full")}
+    >
+      <CollapsibleTrigger asChild>
+        <Button type="button" variant="ghost" className="px-0">
+          {stringProp(node.props, "label") ??
+            stringProp(node.props, "title") ??
+            "Toggle"}
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="pt-2">
+        {overlayBodyContent(node, context)}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** Renders an accordion whose children become expandable items. */
+function renderAccordion(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const items = node.children;
+  const defaultValue =
+    stringProp(node.props, "defaultValue") ??
+    stringProp(items[0]?.props ?? {}, "value") ??
+    "item-0";
+  const multiple = booleanProp(node.props, "multiple") ?? false;
+
+  const accordionItems = items.map((item, index) => {
+    const value = stringProp(item.props, "value") ?? `item-${index}`;
+    const label =
+      stringProp(item.props, "label") ??
+      stringProp(item.props, "title") ??
+      value;
+    return (
+      <AccordionItem key={value} value={value}>
+        <AccordionTrigger>{label}</AccordionTrigger>
+        <AccordionContent>{context.renderNode(item)}</AccordionContent>
+      </AccordionItem>
+    );
+  });
+
+  if (multiple) {
+    return (
+      <Accordion
+        type="multiple"
+        defaultValue={[defaultValue]}
+        className={primitiveClass(node, "w-full")}
+      >
+        {accordionItems}
+      </Accordion>
+    );
+  }
+
+  return (
+    <Accordion
+      type="single"
+      defaultValue={defaultValue}
+      className={primitiveClass(node, "w-full")}
+    >
+      {accordionItems}
+    </Accordion>
+  );
+}
+
+/** Renders a radio group bound to renderer-local string state. */
+function renderRadioGroup(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const options = getOptions(node.props);
+  const value = getStringState(node, context) || options[0]?.value || "";
+  const label = stringProp(node.props, "label");
+
+  return (
+    <div className={primitiveClass(node, "flex flex-col gap-2")}>
+      {label ? <Label>{label}</Label> : null}
+      <RadioGroup
+        value={value}
+        onValueChange={(nextValue) => setNodeState(node, context, nextValue)}
+        aria-label={
+          label ?? stringProp(node.props, "stateKey") ?? "Radio group"
+        }
+      >
+        {options.map((option) => (
+          <label key={option.value} className="flex items-center gap-2 text-sm">
+            <RadioGroupItem value={option.value} />
+            <span>{option.label}</span>
+          </label>
+        ))}
+      </RadioGroup>
+    </div>
+  );
+}
+
+/** Renders a boolean toggle bound to renderer-local state. */
+function renderToggle(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const label =
+    stringProp(node.props, "label") ??
+    stringProp(node.props, "text") ??
+    "Toggle";
+  const variant = stringProp(node.props, "variant");
+  const pressed = getBooleanState(node, context);
+
+  return (
+    <Toggle
+      pressed={pressed}
+      variant={variant === "outline" ? "outline" : "default"}
+      className={primitiveClass(node)}
+      aria-label={label}
+      onPressedChange={(nextPressed) =>
+        setNodeState(node, context, nextPressed)
+      }
+    >
+      {label}
+    </Toggle>
+  );
+}
+
+/** Renders a toggle group bound to renderer-local string state. */
+function renderToggleGroup(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const options = getOptions(node.props);
+  const value = getStringState(node, context) || options[0]?.value || "";
+  const variant = stringProp(node.props, "variant");
+  const label = stringProp(node.props, "label");
+
+  return (
+    <div className={primitiveClass(node, "flex flex-col gap-2")}>
+      {label ? <Label>{label}</Label> : null}
+      <ToggleGroup
+        type="single"
+        value={value}
+        variant={variant === "outline" ? "outline" : "default"}
+        onValueChange={(nextValue) => {
+          if (nextValue) {
+            setNodeState(node, context, nextValue);
+          }
+        }}
+        aria-label={
+          label ?? stringProp(node.props, "stateKey") ?? "Toggle group"
+        }
+      >
+        {options.map((option) => (
+          <ToggleGroupItem key={option.value} value={option.value}>
+            {option.label}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+    </div>
+  );
+}
+
+/** Renders an inline calendar bound to ISO date string state. */
+function renderCalendar(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const value = getStringState(node, context);
+  const selected = parseIsoDate(value);
+
+  return (
+    <Calendar
+      mode="single"
+      selected={selected}
+      className={primitiveClass(node)}
+      onSelect={(date) => {
+        if (date) {
+          setNodeState(node, context, formatIsoDate(date));
+        }
+      }}
+      initialFocus
+    />
+  );
+}
+
+/** Renders a popover date picker bound to ISO date string state. */
+function renderDatePicker(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const value = getStringState(node, context);
+  const selected = parseIsoDate(value);
+  const placeholder =
+    stringProp(node.props, "placeholder") ?? "Pick a date";
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          className={primitiveClass(
+            node,
+            "justify-start text-left font-normal",
+            !value && "text-muted-foreground",
+          )}
+        >
+          <CalendarIcon className="mr-2 h-4 w-4" />
+          {formatDateLabel(value, placeholder)}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0" align="start">
+        <Calendar
+          mode="single"
+          selected={selected}
+          onSelect={(date) => {
+            if (date) {
+              setNodeState(node, context, formatIsoDate(date));
+            }
+          }}
+          initialFocus
+        />
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 /** Renders a non-fatal missing reference placeholder. */

@@ -1,12 +1,5 @@
-import {
-  CellType,
-  type NotebookCellType,
-  type NotebookType,
-} from "@/lib/types";
+import { type NotebookCellType, type NotebookType } from "@/lib/types";
 
-export const NOTEBOOK_APP_VIEW_VERSION = 1;
-export const NOTEBOOK_APP_GRID_COLUMNS = 24;
-export const NOTEBOOK_APP_GRID_ROW_HEIGHT = 44;
 export const NOTEBOOK_APP_VIEW_SCHEMA_VERSION = 1;
 export const ORION_UI_MIME_TYPE = "application/vnd.orion.ui+json";
 
@@ -26,53 +19,27 @@ export const BUILTIN_APP_VIEW_PRIMITIVES = [
   "Slider",
   "Checkbox",
   "Switch",
+  "RadioGroup",
+  "Toggle",
+  "ToggleGroup",
+  "Calendar",
+  "DatePicker",
   "Label",
   "Badge",
   "Separator",
+  "Alert",
+  "Progress",
+  "Avatar",
+  "Popover",
+  "HoverCard",
+  "Tooltip",
+  "Carousel",
+  "Collapsible",
+  "Accordion",
 ] as const;
 
-export type NotebookAppGridTuple = [number, number];
-export type BuiltinAppViewPrimitive = (typeof BUILTIN_APP_VIEW_PRIMITIVES)[number];
-
-export interface NotebookAppGridConfig {
-  cols: number;
-  rowHeight: number;
-  margin: NotebookAppGridTuple;
-  containerPadding: NotebookAppGridTuple;
-}
-
-export interface NotebookCellAppMetadata {
-  enabled?: boolean;
-  title?: string;
-  outputs?: Record<string, NotebookCellAppMetadata>;
-}
-
-export interface NotebookAppLayoutItem {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-export interface NotebookAppViewMetadata {
-  version: typeof NOTEBOOK_APP_VIEW_VERSION;
-  layout: Record<string, NotebookAppLayoutItem>;
-  grid: NotebookAppGridConfig;
-}
-
-export interface NotebookAppCell {
-  cell: NotebookCellType;
-  cellIndex: number;
-  cellId: string;
-  appItemId: string;
-  kind: "cell" | "output";
-  outputIndex?: number;
-  title: string;
-}
-
-export interface ReactGridLayoutItem extends NotebookAppLayoutItem {
-  i: string;
-}
+export type BuiltinAppViewPrimitive =
+  (typeof BUILTIN_APP_VIEW_PRIMITIVES)[number];
 
 export interface NotebookAppViewSchemaPrimitiveRegistry {
   source: "builtin";
@@ -89,6 +56,10 @@ export interface NotebookAppViewSchema {
   primitiveRegistry: NotebookAppViewSchemaPrimitiveRegistry;
   root: NotebookAppViewSchemaNode;
 }
+
+export type NotebookAppViewReference =
+  | { kind: "markdown"; cellId: string }
+  | { kind: "output"; cellId: string; outputIndex: number };
 
 export type OrionUiMimeStateValue = string | number | boolean;
 
@@ -147,11 +118,11 @@ function normalizeSchemaProps(
     return {};
   }
 
-  if ("className" in value) {
+  if ("className" in value && typeof value.className !== "string") {
     appendSchemaError(
       errors,
       `${path}.className`,
-      "className is not supported in app-view schema v1",
+      "className must be a string when present",
     );
   }
 
@@ -189,7 +160,11 @@ function normalizeSchemaNode(
   const children: NotebookAppViewSchemaNode[] = [];
   if (value.children !== undefined) {
     if (!Array.isArray(value.children)) {
-      appendSchemaError(errors, `${path}.children`, "children must be an array");
+      appendSchemaError(
+        errors,
+        `${path}.children`,
+        "children must be an array",
+      );
     } else {
       value.children.forEach((child, index) => {
         const normalized = normalizeSchemaNode(
@@ -218,6 +193,15 @@ function getRawAppViewSchema(
   const orion = isRecord(metadata?.orion) ? metadata.orion : {};
   const appView = isRecord(orion.appView) ? orion.appView : {};
   return appView.schema;
+}
+
+/** Reads App View scoped CSS from notebook metadata when present. */
+export function getNotebookAppViewCss(
+  metadata: NotebookType["metadata"] | undefined,
+): string | undefined {
+  const orion = isRecord(metadata?.orion) ? metadata.orion : {};
+  const appView = isRecord(orion.appView) ? orion.appView : {};
+  return typeof appView.css === "string" ? appView.css : undefined;
 }
 
 /**
@@ -289,6 +273,261 @@ export function parseNotebookAppViewSchema(
   };
 }
 
+/** Creates the default schema used by manual App View additions. */
+export function createDefaultNotebookAppViewSchema(): NotebookAppViewSchema {
+  return {
+    version: NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
+    primitiveRegistry: { source: "builtin" },
+    root: {
+      type: "Page",
+      props: { gap: "lg", padding: "md" },
+      children: [],
+    },
+  };
+}
+
+/** Returns the stable Orion-managed id for a notebook cell. */
+export function getNotebookCellId(cell: NotebookCellType): string | null {
+  const id = cell.metadata?.orion?.id;
+  return typeof id === "string" && id.length > 0 ? id : null;
+}
+
+function getEditableAppViewSchema(
+  metadata: NotebookType["metadata"] | undefined,
+): NotebookAppViewSchema | null {
+  const result = parseNotebookAppViewSchema(metadata);
+  if (result.status === "valid") {
+    return result.schema;
+  }
+  if (result.status === "missing") {
+    return createDefaultNotebookAppViewSchema();
+  }
+  return null;
+}
+
+function cloneSchemaNode(
+  node: NotebookAppViewSchemaNode,
+): NotebookAppViewSchemaNode {
+  return {
+    type: node.type,
+    props: { ...node.props },
+    children: node.children.map(cloneSchemaNode),
+  };
+}
+
+function cloneSchema(schema: NotebookAppViewSchema): NotebookAppViewSchema {
+  return {
+    version: NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
+    primitiveRegistry: { source: "builtin" },
+    root: cloneSchemaNode(schema.root),
+  };
+}
+
+function numberProp(
+  props: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = props[key];
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function stringProp(
+  props: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = props[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function referenceMatchesNode(
+  node: NotebookAppViewSchemaNode,
+  reference: NotebookAppViewReference,
+): boolean {
+  if (reference.kind === "markdown") {
+    return (
+      node.type === "MarkdownCell" &&
+      stringProp(node.props, "cellId") === reference.cellId
+    );
+  }
+
+  return (
+    node.type === "Output" &&
+    stringProp(node.props, "cellId") === reference.cellId &&
+    Math.max(0, Math.floor(numberProp(node.props, "outputIndex") ?? 0)) ===
+      reference.outputIndex
+  );
+}
+
+function schemaNodeHasReference(
+  node: NotebookAppViewSchemaNode,
+  reference: NotebookAppViewReference,
+): boolean {
+  return (
+    referenceMatchesNode(node, reference) ||
+    node.children.some((child) => schemaNodeHasReference(child, reference))
+  );
+}
+
+/** Checks whether a declarative App View schema references a cell or output. */
+export function isNotebookAppViewReferenceInSchema(
+  schema: NotebookAppViewSchema,
+  reference: NotebookAppViewReference,
+): boolean {
+  return schemaNodeHasReference(schema.root, reference);
+}
+
+/** Checks whether notebook metadata has a valid schema reference for a cell or output. */
+export function isNotebookAppViewReferenceInMetadata(
+  metadata: NotebookType["metadata"] | undefined,
+  reference: NotebookAppViewReference,
+): boolean {
+  const result = parseNotebookAppViewSchema(metadata);
+  return (
+    result.status === "valid" &&
+    isNotebookAppViewReferenceInSchema(result.schema, reference)
+  );
+}
+
+function createReferenceNode(
+  reference: NotebookAppViewReference,
+): NotebookAppViewSchemaNode {
+  if (reference.kind === "markdown") {
+    return {
+      type: "MarkdownCell",
+      props: { cellId: reference.cellId },
+      children: [],
+    };
+  }
+
+  return {
+    type: "Output",
+    props: { cellId: reference.cellId, outputIndex: reference.outputIndex },
+    children: [],
+  };
+}
+
+function withRootPage(schema: NotebookAppViewSchema): NotebookAppViewSchema {
+  const cloned = cloneSchema(schema);
+  if (cloned.root.type === "Page") {
+    return cloned;
+  }
+
+  return {
+    ...cloned,
+    root: {
+      type: "Page",
+      props: { gap: "lg", padding: "md" },
+      children: [cloned.root],
+    },
+  };
+}
+
+/** Adds a cell/output reference to the root Page unless it already exists. */
+export function addNotebookAppViewReferenceToSchema(
+  schema: NotebookAppViewSchema,
+  reference: NotebookAppViewReference,
+): NotebookAppViewSchema {
+  if (isNotebookAppViewReferenceInSchema(schema, reference)) {
+    return cloneSchema(schema);
+  }
+
+  const nextSchema = withRootPage(schema);
+  nextSchema.root.children = [
+    ...nextSchema.root.children,
+    createReferenceNode(reference),
+  ];
+  return nextSchema;
+}
+
+function removeReferenceFromNode(
+  node: NotebookAppViewSchemaNode,
+  reference: NotebookAppViewReference,
+): NotebookAppViewSchemaNode | null {
+  if (referenceMatchesNode(node, reference)) {
+    return null;
+  }
+
+  return {
+    type: node.type,
+    props: { ...node.props },
+    children: node.children.flatMap((child) => {
+      const nextChild = removeReferenceFromNode(child, reference);
+      return nextChild ? [nextChild] : [];
+    }),
+  };
+}
+
+/** Removes all matching cell/output references from a schema. */
+export function removeNotebookAppViewReferenceFromSchema(
+  schema: NotebookAppViewSchema,
+  reference: NotebookAppViewReference,
+): NotebookAppViewSchema {
+  const nextRoot = removeReferenceFromNode(schema.root, reference);
+  return {
+    version: NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
+    primitiveRegistry: { source: "builtin" },
+    root: nextRoot ?? createDefaultNotebookAppViewSchema().root,
+  };
+}
+
+/** Writes the declarative App View schema into notebook metadata. */
+export function withNotebookAppViewSchema(
+  notebook: NotebookType,
+  schema: NotebookAppViewSchema,
+): NotebookType {
+  const metadata = notebook.metadata ?? {};
+  const orion = isRecord(metadata.orion) ? metadata.orion : {};
+  const appView = isRecord(orion.appView) ? orion.appView : {};
+
+  return {
+    ...notebook,
+    metadata: {
+      ...metadata,
+      orion: {
+        ...orion,
+        appView: {
+          ...appView,
+          schema,
+        },
+      },
+    },
+  };
+}
+
+/** Adds a cell/output reference to notebook-level App View schema metadata. */
+export function addNotebookAppViewReference(
+  notebook: NotebookType,
+  reference: NotebookAppViewReference,
+): NotebookType {
+  const schema = getEditableAppViewSchema(notebook.metadata);
+  if (!schema) {
+    return notebook;
+  }
+
+  return withNotebookAppViewSchema(
+    notebook,
+    addNotebookAppViewReferenceToSchema(schema, reference),
+  );
+}
+
+/** Removes a cell/output reference from notebook-level App View schema metadata. */
+export function removeNotebookAppViewReference(
+  notebook: NotebookType,
+  reference: NotebookAppViewReference,
+): NotebookType {
+  const result = parseNotebookAppViewSchema(notebook.metadata);
+  if (result.status !== "valid") {
+    return notebook;
+  }
+
+  return withNotebookAppViewSchema(
+    notebook,
+    removeNotebookAppViewReferenceFromSchema(result.schema, reference),
+  );
+}
+
 /** Parses an Orion UI MIME payload into the shared primitive tree shape. */
 export function parseOrionUiMimePayload(
   value: unknown,
@@ -300,7 +539,9 @@ export function parseOrionUiMimePayload(
           try {
             return JSON.parse(value) as unknown;
           } catch {
-            errors.push(`${ORION_UI_MIME_TYPE}: payload string must be valid JSON`);
+            errors.push(
+              `${ORION_UI_MIME_TYPE}: payload string must be valid JSON`,
+            );
             return null;
           }
         })()
@@ -325,7 +566,11 @@ export function parseOrionUiMimePayload(
   }
 
   if (rawPayload.id !== undefined && typeof rawPayload.id !== "string") {
-    appendSchemaError(errors, `${ORION_UI_MIME_TYPE}.id`, "id must be a string");
+    appendSchemaError(
+      errors,
+      `${ORION_UI_MIME_TYPE}.id`,
+      "id must be a string",
+    );
   }
 
   if (rawPayload.root === undefined) {
@@ -335,7 +580,11 @@ export function parseOrionUiMimePayload(
   const root =
     rawPayload.root === undefined
       ? null
-      : normalizeSchemaNode(rawPayload.root, `${ORION_UI_MIME_TYPE}.root`, errors);
+      : normalizeSchemaNode(
+          rawPayload.root,
+          `${ORION_UI_MIME_TYPE}.root`,
+          errors,
+        );
 
   const rawState = isRecord(rawPayload.state) ? rawPayload.state : {};
   const state: Record<string, OrionUiMimeStateValue> = {};
@@ -367,419 +616,6 @@ export function parseOrionUiMimePayload(
       root,
       state,
       bindings: isRecord(rawPayload.bindings) ? rawPayload.bindings : {},
-    },
-  };
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function finitePositiveInteger(value: unknown): number | null {
-  const number = finiteNumber(value);
-  return number !== null && number > 0 ? Math.floor(number) : null;
-}
-
-function finiteNonNegativeInteger(value: unknown): number | null {
-  const number = finiteNumber(value);
-  return number !== null && number >= 0 ? Math.floor(number) : null;
-}
-
-function normalizeGridTuple(value: unknown): NotebookAppGridTuple | null {
-  if (!Array.isArray(value) || value.length !== 2) {
-    return null;
-  }
-
-  const horizontal = finiteNonNegativeInteger(value[0]);
-  const vertical = finiteNonNegativeInteger(value[1]);
-  if (horizontal === null || vertical === null) {
-    return null;
-  }
-
-  return [horizontal, vertical];
-}
-
-function normalizeGridConfig(value: unknown): NotebookAppGridConfig {
-  const grid = isRecord(value) ? value : {};
-  const cols = finitePositiveInteger(grid.cols) ?? NOTEBOOK_APP_GRID_COLUMNS;
-  const rowHeight =
-    finitePositiveInteger(grid.rowHeight) ?? NOTEBOOK_APP_GRID_ROW_HEIGHT;
-
-  return {
-    cols,
-    rowHeight,
-    margin: normalizeGridTuple(grid.margin) ?? [0, 0],
-    containerPadding: normalizeGridTuple(grid.containerPadding) ?? [0, 0],
-  };
-}
-
-function normalizeLayoutItem(
-  value: unknown,
-  columns = NOTEBOOK_APP_GRID_COLUMNS,
-): NotebookAppLayoutItem | null {
-  if (!isRecord(value)) {
-    return null;
-  }
-
-  const x = finiteNumber(value.x);
-  const y = finiteNumber(value.y);
-  const w = finiteNumber(value.w);
-  const h = finiteNumber(value.h);
-  if (x === null || y === null || w === null || h === null) {
-    return null;
-  }
-
-  const normalizedW = Math.min(columns, Math.max(1, Math.floor(w)));
-
-  return {
-    x: Math.min(columns - normalizedW, Math.max(0, Math.floor(x))),
-    y: Math.max(0, Math.floor(y)),
-    w: normalizedW,
-    h: Math.max(1, Math.floor(h)),
-  };
-}
-
-function layoutItemsOverlap(
-  left: NotebookAppLayoutItem,
-  right: NotebookAppLayoutItem,
-): boolean {
-  return (
-    left.x < right.x + right.w &&
-    left.x + left.w > right.x &&
-    left.y < right.y + right.h &&
-    left.y + left.h > right.y
-  );
-}
-
-function findNextLayoutSlot(
-  occupiedItems: NotebookAppLayoutItem[],
-  item: Pick<NotebookAppLayoutItem, "w" | "h">,
-  columns = NOTEBOOK_APP_GRID_COLUMNS,
-): Pick<NotebookAppLayoutItem, "x" | "y"> {
-  const width = Math.min(columns, Math.max(1, item.w));
-  const bottom = occupiedItems.reduce(
-    (maxY, occupied) => Math.max(maxY, occupied.y + occupied.h),
-    0,
-  );
-  const candidateRows = Array.from(
-    new Set([...occupiedItems.map((occupied) => occupied.y), bottom]),
-  ).sort((a, b) => a - b);
-
-  for (const y of candidateRows) {
-    for (let x = 0; x <= columns - width; x++) {
-      const candidate = { x, y, w: width, h: item.h };
-      if (
-        !occupiedItems.some((occupied) =>
-          layoutItemsOverlap(candidate, occupied),
-        )
-      ) {
-        return { x, y };
-      }
-    }
-  }
-
-  return { x: 0, y: bottom };
-}
-
-function defaultLayoutSizeForCell(
-  appCell: NotebookAppCell,
-  columns = NOTEBOOK_APP_GRID_COLUMNS,
-): Pick<NotebookAppLayoutItem, "w" | "h"> {
-  const defaultWidth = Math.min(6, columns);
-
-  if (appCell.kind === "cell" && appCell.cell.cell_type === CellType.MARKDOWN) {
-    return { w: defaultWidth, h: 4 };
-  }
-
-  if (appCell.kind === "output") {
-    return { w: defaultWidth, h: 8 };
-  }
-
-  return { w: defaultWidth, h: 5 };
-}
-
-export function getNotebookCellId(cell: NotebookCellType): string | null {
-  const id = cell.metadata?.orion?.id;
-  return typeof id === "string" && id.length > 0 ? id : null;
-}
-
-export function getCellAppMetadata(
-  cell: NotebookCellType,
-): NotebookCellAppMetadata {
-  const app = cell.metadata?.orion?.app;
-  if (!isRecord(app)) {
-    return {};
-  }
-
-  return {
-    enabled: app.enabled === true,
-    title: typeof app.title === "string" ? app.title : undefined,
-    outputs: isRecord(app.outputs)
-      ? Object.fromEntries(
-          Object.entries(app.outputs).flatMap(([key, value]) => {
-            if (!isRecord(value)) {
-              return [];
-            }
-            return [
-              [
-                key,
-                {
-                  enabled: value.enabled === true,
-                  title:
-                    typeof value.title === "string" ? value.title : undefined,
-                },
-              ],
-            ];
-          }),
-        )
-      : undefined,
-  };
-}
-
-export function isCellInAppView(cell: NotebookCellType): boolean {
-  return getCellAppMetadata(cell).enabled === true;
-}
-
-export function isOutputInAppView(
-  cell: NotebookCellType,
-  outputIndex: number,
-): boolean {
-  return (
-    getCellAppMetadata(cell).outputs?.[String(outputIndex)]?.enabled === true
-  );
-}
-
-export function getCellAppTitle(
-  cell: NotebookCellType,
-  cellIndex: number,
-): string {
-  const title = getCellAppMetadata(cell).title?.trim();
-  if (title) {
-    return title;
-  }
-
-  return cell.cell_type === CellType.MARKDOWN
-    ? `Markdown cell ${cellIndex}`
-    : `Code cell ${cellIndex}`;
-}
-
-export function getOutputAppItemId(
-  cellId: string,
-  outputIndex: number,
-): string {
-  return `${cellId}:output:${outputIndex}`;
-}
-
-export function getOutputAppTitle(
-  cell: NotebookCellType,
-  cellIndex: number,
-  outputIndex: number,
-): string {
-  const title =
-    getCellAppMetadata(cell).outputs?.[String(outputIndex)]?.title?.trim();
-  return title || `Cell ${cellIndex} output ${outputIndex}`;
-}
-
-export function withCellAppEnabled(
-  cell: NotebookCellType,
-  enabled: boolean,
-): NotebookCellType {
-  const metadata = cell.metadata ?? {};
-  const orion = isRecord(metadata.orion) ? metadata.orion : {};
-  const app = isRecord(orion.app) ? orion.app : {};
-
-  return {
-    ...cell,
-    metadata: {
-      ...metadata,
-      orion: {
-        ...orion,
-        app: {
-          ...app,
-          enabled,
-        },
-      },
-    },
-  };
-}
-
-export function withOutputAppEnabled(
-  cell: NotebookCellType,
-  outputIndex: number,
-  enabled: boolean,
-): NotebookCellType {
-  const metadata = cell.metadata ?? {};
-  const orion = isRecord(metadata.orion) ? metadata.orion : {};
-  const app = isRecord(orion.app) ? orion.app : {};
-  const outputs = isRecord(app.outputs) ? app.outputs : {};
-  const key = String(outputIndex);
-  const outputApp = isRecord(outputs[key]) ? outputs[key] : {};
-
-  return {
-    ...cell,
-    metadata: {
-      ...metadata,
-      orion: {
-        ...orion,
-        app: {
-          ...app,
-          outputs: {
-            ...outputs,
-            [key]: {
-              ...outputApp,
-              enabled,
-            },
-          },
-        },
-      },
-    },
-  };
-}
-
-export function getNotebookAppViewMetadata(
-  metadata: NotebookType["metadata"] | undefined,
-): NotebookAppViewMetadata {
-  const orion = isRecord(metadata?.orion) ? metadata.orion : {};
-  const appView = isRecord(orion.appView) ? orion.appView : {};
-  const grid = normalizeGridConfig(appView.grid);
-  const rawLayout = isRecord(appView.layout) ? appView.layout : {};
-  const layout: Record<string, NotebookAppLayoutItem> = {};
-
-  for (const [cellId, item] of Object.entries(rawLayout)) {
-    const normalized = normalizeLayoutItem(item, grid.cols);
-    if (normalized) {
-      layout[cellId] = normalized;
-    }
-  }
-
-  return {
-    version: NOTEBOOK_APP_VIEW_VERSION,
-    layout,
-    grid,
-  };
-}
-
-export function getAppViewCells(cells: NotebookCellType[]): NotebookAppCell[] {
-  return cells.flatMap((cell, cellIndex) => {
-    const cellId = getNotebookCellId(cell);
-    if (!cellId) {
-      return [];
-    }
-
-    const appCells: NotebookAppCell[] = [];
-
-    if (isCellInAppView(cell) && cell.cell_type !== CellType.CODE) {
-      appCells.push({
-        cell,
-        cellIndex,
-        cellId,
-        appItemId: cellId,
-        kind: "cell",
-        title: getCellAppTitle(cell, cellIndex),
-      });
-    }
-
-    if (cell.cell_type === CellType.CODE && cell.outputs?.length) {
-      const outputs = getCellAppMetadata(cell).outputs ?? {};
-      for (
-        let outputIndex = 0;
-        outputIndex < cell.outputs.length;
-        outputIndex++
-      ) {
-        if (outputs[String(outputIndex)]?.enabled !== true) {
-          continue;
-        }
-        appCells.push({
-          cell,
-          cellIndex,
-          cellId,
-          appItemId: getOutputAppItemId(cellId, outputIndex),
-          kind: "output",
-          outputIndex,
-          title: getOutputAppTitle(cell, cellIndex, outputIndex),
-        });
-      }
-    }
-
-    return appCells;
-  });
-}
-
-export function ensureAppViewLayout(
-  cells: NotebookCellType[],
-  appView: NotebookAppViewMetadata,
-): NotebookAppViewMetadata {
-  const layout = { ...appView.layout };
-  const occupiedItems: NotebookAppLayoutItem[] = Object.values(layout);
-
-  for (const appCell of getAppViewCells(cells)) {
-    if (layout[appCell.appItemId]) {
-      continue;
-    }
-
-    const size = defaultLayoutSizeForCell(appCell, appView.grid.cols);
-    const position = findNextLayoutSlot(occupiedItems, size, appView.grid.cols);
-    const item = { ...position, ...size };
-    layout[appCell.appItemId] = item;
-    occupiedItems.push(item);
-  }
-
-  return {
-    version: NOTEBOOK_APP_VIEW_VERSION,
-    layout,
-    grid: appView.grid,
-  };
-}
-
-export function toReactGridLayout(
-  appCells: NotebookAppCell[],
-  appView: NotebookAppViewMetadata,
-): ReactGridLayoutItem[] {
-  const defaultWidth = Math.min(6, appView.grid.cols);
-
-  return appCells.map((appCell) => ({
-    i: appCell.appItemId,
-    ...(appView.layout[appCell.appItemId] ?? {
-      x: 0,
-      y: 0,
-      w: defaultWidth,
-      h: 5,
-    }),
-  }));
-}
-
-export function mergeReactGridLayout(
-  currentLayout: Record<string, NotebookAppLayoutItem>,
-  nextLayout: readonly ReactGridLayoutItem[],
-  columns = NOTEBOOK_APP_GRID_COLUMNS,
-): Record<string, NotebookAppLayoutItem> {
-  const merged = { ...currentLayout };
-
-  for (const item of nextLayout) {
-    const normalized = normalizeLayoutItem(item, columns);
-    if (normalized) {
-      merged[item.i] = normalized;
-    }
-  }
-
-  return merged;
-}
-
-export function withNotebookAppViewMetadata(
-  notebook: NotebookType,
-  appView: NotebookAppViewMetadata,
-): NotebookType {
-  const metadata = notebook.metadata ?? {};
-  const orion = isRecord(metadata.orion) ? metadata.orion : {};
-
-  return {
-    ...notebook,
-    metadata: {
-      ...metadata,
-      orion: {
-        ...orion,
-        appView,
-      },
     },
   };
 }

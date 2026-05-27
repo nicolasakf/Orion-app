@@ -69,6 +69,9 @@ Layout and containers:
 - `ui.section(*children, title=None, description=None, gap="md", padding="md")`
 - `ui.card(*children, title=None, description=None, gap="md")`
 - `ui.tabs(*children, default_value=None)`
+- `ui.accordion(*children, default_value=None, multiple=False)`
+- `ui.collapsible(*children, label=None, title=None, default_open=False, content=None, description=None)`
+- `ui.carousel(*children, orientation="horizontal", show_controls=True)`
 - `ui.separator()`
 
 Controls:
@@ -79,14 +82,27 @@ Controls:
 - `ui.slider("key", label=None, min=0, max=100, default_value=0, value=<unset>, step=1)`
 - `ui.checkbox("key", label=None, default_value=False, value=<unset>)`
 - `ui.switch("key", label=None, default_value=False, value=<unset>)`
+- `ui.radio_group("key", options, label=None, default_value=None, value=<unset>)`
+- `ui.toggle("key", label=None, default_value=False, value=<unset>, variant=None)`
+- `ui.toggle_group("key", options, label=None, default_value=None, value=<unset>, variant=None)`
+- `ui.calendar("key", label=None, default_value="", value=<unset>)`
+- `ui.date_picker("key", label=None, default_value="", value=<unset>, placeholder=None)`
 - `ui.button(label, action=None, variant=None, size=None)`
 
 Display:
 
 - `ui.label(text)`
 - `ui.badge(text, variant=None)`
+- `ui.alert(*children, title=None, description=None, text=None, variant=None)`
+- `ui.progress(key=None, label=None, default_value=0, value=<unset>, max=100)`
+- `ui.avatar(src=None, alt=None, fallback=None, label=None, size=None)`
+- `ui.popover(*children, label=None, trigger=None, text=None, content=None, description=None)`
+- `ui.hover_card(*children, label=None, trigger=None, text=None, content=None, description=None)`
+- `ui.tooltip(*children, label=None, trigger=None, text=None, content=None, description=None)`
 - `ui.markdown_cell(cell_id=None, text=None)`
 - `ui.output(cell_id, output_index=0)`
+
+All component helpers accept optional `class_name="..."`. Use semantic class hooks such as `"metric-card"`; define the actual CSS in notebook App View metadata at `metadata.orion.appView.css`.
 
 State:
 
@@ -137,7 +153,9 @@ Only use this action when the target cell ids already exist in `cells[i].metadat
 - Control changes do not automatically rerun dependent cells.
 - Users should rerun dependent cells manually or use an explicit `ui.button(..., action={"type": "execute_cells", ...})`.
 - Components accept JSON-serializable props only.
-- Do not use arbitrary React, custom component imports, raw CSS, `className`, or `style`.
+- `Calendar` and `DatePicker` use ISO-like `YYYY-MM-DD` strings in Python state.
+- Do not rely on arbitrary Tailwind runtime class strings; Tailwind only includes classes known at build time.
+- Do not use arbitrary React, custom component imports, inline `style`, or raw CSS inside Python UI code.
 - Do not use `ipywidgets` or `anywidget` for Orion UI v1 unless the user explicitly asks for generic Jupyter compatibility.
 
 ## Install/runtime guidance

@@ -83,15 +83,10 @@ import {
   type NotebookExportFormat,
 } from "@/lib/notebook/notebook-export";
 import {
-  ensureAppViewLayout,
-  getNotebookAppViewMetadata,
-  isCellInAppView,
-  isOutputInAppView,
-  withCellAppEnabled,
-  withNotebookAppViewMetadata,
-  withOutputAppEnabled,
-  type NotebookAppCell,
-  type NotebookAppViewMetadata,
+  addNotebookAppViewReference,
+  isNotebookAppViewReferenceInMetadata,
+  removeNotebookAppViewReference,
+  type NotebookAppViewReference,
 } from "@/lib/notebook/app-view";
 import {
   KernelSelectionDialog,
@@ -232,6 +227,11 @@ function isNotebookKeyboardScope(
     (target instanceof Node && notebookRoot.contains(target)) ||
     (activeElement instanceof Node && notebookRoot.contains(activeElement))
   );
+}
+
+/** Normalizes editor/source line endings before comparing dirty state. */
+function normalizeSourceForDirtyCheck(source: string): string {
+  return source.replace(/\r\n/g, "\n");
 }
 
 function SubagentOptionTooltip({
@@ -559,6 +559,12 @@ export function NotebookEditor({
   }, [onUnsavedChangesChange]);
 
   useEffect(() => {
+    return () => {
+      markClean();
+    };
+  }, [markClean]);
+
+  useEffect(() => {
     if (!showSubagentOptions) return;
 
     let cancelled = false;
@@ -751,14 +757,27 @@ export function NotebookEditor({
    * Tracks which cells have been modified using a ref to avoid re-renders
    */
   const handleCellModified = useCallback(
-    (cellIndex: number) => {
+    (cellIndex: number, source?: string) => {
       const cellId = cellIdForIndex(cellIndex);
       if (!cellId) return;
+      const savedSource = notebook?.cells[cellIndex]?.source?.join("") ?? "";
+      if (
+        source !== undefined &&
+        normalizeSourceForDirtyCheck(source) ===
+          normalizeSourceForDirtyCheck(savedSource)
+      ) {
+        pendingCellChangesRef.current.delete(cellId);
+        modifiedCellsRef.current.delete(cellId);
+        return;
+      }
+      if (source !== undefined) {
+        pendingCellChangesRef.current.set(cellId, source);
+      }
       // Simply add to the ref without causing a re-render.
       modifiedCellsRef.current.add(cellId);
       markDirty();
     },
-    [cellIdForIndex, markDirty],
+    [cellIdForIndex, markDirty, notebook],
   );
 
   /**
@@ -937,62 +956,6 @@ export function NotebookEditor({
       }
     });
   }, []);
-
-  /**
-   * Persists App View layout changes in top-level notebook metadata.
-   */
-  const handleAppViewChange = useCallback(
-    (appView: NotebookAppViewMetadata) => {
-      capturePendingCellSources();
-      setNotebook((prevNotebook) => {
-        if (!prevNotebook) {
-          return prevNotebook;
-        }
-        return withNotebookAppViewMetadata(
-          applyPendingChanges(prevNotebook),
-          appView,
-        );
-      });
-      markDirty();
-    },
-    [applyPendingChanges, capturePendingCellSources, markDirty],
-  );
-
-  /**
-   * Removes a markdown cell or individual code output from App View without
-   * deleting its saved layout entry.
-   */
-  const handleRemoveAppViewItem = useCallback(
-    (appCell: NotebookAppCell) => {
-      capturePendingCellSources();
-      setNotebook((prevNotebook) => {
-        if (!prevNotebook) {
-          return prevNotebook;
-        }
-
-        const notebookWithChanges = applyPendingChanges(prevNotebook);
-        const cells = notebookWithChanges.cells.slice();
-        const currentCell = cells[appCell.cellIndex];
-        if (!currentCell) {
-          return prevNotebook;
-        }
-
-        cells[appCell.cellIndex] =
-          appCell.kind === "output" && appCell.outputIndex !== undefined
-            ? withOutputAppEnabled(currentCell, appCell.outputIndex, false)
-            : withCellAppEnabled(currentCell, false);
-
-        return {
-          ...notebookWithChanges,
-          cells,
-        };
-      });
-      const appCellId = getCellIdByIndex(notebook, appCell.cellIndex);
-      if (appCellId) modifiedCellsRef.current.add(appCellId);
-      markDirty();
-    },
-    [applyPendingChanges, capturePendingCellSources, markDirty, notebook],
-  );
 
   useEffect(() => {
     if (
@@ -2310,8 +2273,7 @@ export function NotebookEditor({
             if (!prevNotebook) return null;
 
             const notebookWithChanges = applyPendingChanges(prevNotebook);
-            const cells = notebookWithChanges.cells.slice();
-            const currentCell = cells[cellIndexFromAction];
+            const currentCell = notebookWithChanges.cells[cellIndexFromAction];
             if (!currentCell) return prevNotebook;
 
             const isCodeCell = currentCell.cell_type === CellType.CODE;
@@ -2319,37 +2281,28 @@ export function NotebookEditor({
               return notebookWithChanges;
             }
 
-            const nextEnabled = isCodeCell
-              ? !currentCell.outputs!.every((_, outputIndex) =>
-                isOutputInAppView(currentCell, outputIndex),
-              )
-              : !isCellInAppView(currentCell);
-            cells[cellIndexFromAction] = isCodeCell
-              ? currentCell.outputs!.reduce(
-                (updatedCell, _, outputIndex) =>
-                  withOutputAppEnabled(updatedCell, outputIndex, nextEnabled),
-                currentCell,
-              )
-              : withCellAppEnabled(currentCell, nextEnabled);
+            const references: NotebookAppViewReference[] = isCodeCell
+              ? currentCell.outputs!.map((_, outputIndex) => ({
+                  kind: "output",
+                  cellId: actionCellId,
+                  outputIndex,
+                }))
+              : [{ kind: "markdown", cellId: actionCellId }];
+            const allReferencesPresent = references.every((reference) =>
+              isNotebookAppViewReferenceInMetadata(
+                notebookWithChanges.metadata,
+                reference,
+              ),
+            );
 
-            let nextNotebook: NotebookType = {
-              ...notebookWithChanges,
-              cells,
-            };
-
-            if (nextEnabled) {
-              nextNotebook = withNotebookAppViewMetadata(
-                nextNotebook,
-                ensureAppViewLayout(
-                  nextNotebook.cells,
-                  getNotebookAppViewMetadata(nextNotebook.metadata),
-                ),
-              );
-            }
-
-            return nextNotebook;
+            return references.reduce(
+              (nextNotebook, reference) =>
+                allReferencesPresent
+                  ? removeNotebookAppViewReference(nextNotebook, reference)
+                  : addNotebookAppViewReference(nextNotebook, reference),
+              notebookWithChanges,
+            );
           });
-          modifiedCellsRef.current.add(actionCellId);
           markDirty();
           break;
         case "clear-outputs":
@@ -2396,8 +2349,8 @@ export function NotebookEditor({
               if (!prevNotebook) return null;
 
               const notebookWithChanges = applyPendingChanges(prevNotebook);
-              const cells = notebookWithChanges.cells.slice();
-              const currentCell = cells[cellIndexFromAction];
+              const currentCell =
+                notebookWithChanges.cells[cellIndexFromAction];
               if (
                 !currentCell ||
                 currentCell.cell_type !== CellType.CODE ||
@@ -2406,31 +2359,18 @@ export function NotebookEditor({
                 return notebookWithChanges;
               }
 
-              const nextEnabled = !isOutputInAppView(currentCell, outputIndex);
-              cells[cellIndexFromAction] = withOutputAppEnabled(
-                currentCell,
+              const reference: NotebookAppViewReference = {
+                kind: "output",
+                cellId: actionCellId,
                 outputIndex,
-                nextEnabled,
-              );
-
-              let nextNotebook: NotebookType = {
-                ...notebookWithChanges,
-                cells,
               };
-
-              if (nextEnabled) {
-                nextNotebook = withNotebookAppViewMetadata(
-                  nextNotebook,
-                  ensureAppViewLayout(
-                    nextNotebook.cells,
-                    getNotebookAppViewMetadata(nextNotebook.metadata),
-                  ),
-                );
-              }
-
-              return nextNotebook;
+              return isNotebookAppViewReferenceInMetadata(
+                notebookWithChanges.metadata,
+                reference,
+              )
+                ? removeNotebookAppViewReference(notebookWithChanges, reference)
+                : addNotebookAppViewReference(notebookWithChanges, reference);
             });
-            modifiedCellsRef.current.add(actionCellId);
             markDirty();
           } else if (action.startsWith("hide-single-output:")) {
             const outputIndex = parseInt(action.split(":")[1], 10);
@@ -3208,8 +3148,6 @@ export function NotebookEditor({
               >
                 <NotebookAppView
                   notebook={notebook}
-                  onAppViewChange={handleAppViewChange}
-                  onRemoveAppItem={handleRemoveAppViewItem}
                   onNotebookViewRequest={() =>
                     onActiveNotebookViewChange?.("notebook")
                   }

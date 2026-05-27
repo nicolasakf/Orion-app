@@ -75,6 +75,60 @@ class OrionUiTests(unittest.TestCase):
         snapshot["region"] = "mutated"
         self.assertEqual(ui.get("region"), "west")
 
+    def test_new_primitive_helpers_serialize_expected_types(self):
+        component = ui.card(
+            ui.stack(
+                ui.radio_group("mode", ["fast", "accurate"], default_value="fast"),
+                ui.toggle_group("view", ["chart", "table"], default_value="chart"),
+                ui.date_picker("start_date", default_value="2026-05-26"),
+                ui.progress("completion", default_value=25, max=100),
+                ui.alert(title="Status", description="Ready"),
+                ui.avatar(fallback="OR"),
+                ui.popover(ui.label("Details"), label="More info"),
+                ui.carousel(ui.label("Slide 1"), ui.label("Slide 2")),
+                ui.collapsible(ui.label("Hidden content"), label="Expand"),
+                ui.accordion(ui.card(ui.label("Panel"), title="Panel 1")),
+            ),
+            title="New primitives",
+        )
+
+        payload = component._repr_mimebundle_()[ui.ORION_UI_MIME_TYPE]
+        root = payload["root"]
+        stack_children = root["children"][0]["children"]
+
+        self.assertEqual(stack_children[0]["type"], "RadioGroup")
+        self.assertEqual(stack_children[1]["type"], "ToggleGroup")
+        self.assertEqual(stack_children[2]["type"], "DatePicker")
+        self.assertEqual(stack_children[3]["type"], "Progress")
+        self.assertEqual(stack_children[4]["type"], "Alert")
+        self.assertEqual(stack_children[5]["type"], "Avatar")
+        self.assertEqual(stack_children[6]["type"], "Popover")
+        self.assertEqual(stack_children[7]["type"], "Carousel")
+        self.assertEqual(stack_children[8]["type"], "Collapsible")
+        self.assertEqual(stack_children[9]["type"], "Accordion")
+        self.assertEqual(payload["state"]["mode"], "fast")
+        self.assertEqual(payload["state"]["view"], "chart")
+        self.assertEqual(payload["state"]["start_date"], "2026-05-26")
+        self.assertEqual(payload["state"]["completion"], 25)
+
+    def test_class_name_serializes_to_class_name_prop(self):
+        component = ui.card(
+            ui.label("Revenue", class_name="metric-label"),
+            title="Metric",
+            class_name="metric-card",
+        )
+
+        payload = component._repr_mimebundle_()[ui.ORION_UI_MIME_TYPE]
+        self.assertEqual(payload["root"]["props"]["className"], "metric-card")
+        self.assertEqual(
+            payload["root"]["children"][0]["props"]["className"],
+            "metric-label",
+        )
+
+    def test_class_name_must_be_a_string(self):
+        with self.assertRaises(TypeError):
+            ui.card(class_name=123)
+
 
 if __name__ == "__main__":
     unittest.main()
