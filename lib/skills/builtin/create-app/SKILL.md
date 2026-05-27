@@ -5,6 +5,14 @@ description: Creates or edits Orion notebook App View layouts using notebook met
 
 # Creating Orion notebook apps
 
+## Full documentation
+
+For extended user guides, layout patterns, and troubleshooting beyond this skill file, read:
+https://docs.orion-agent.ai/ai-assistant/builtin-skills/create-app
+
+Also see:
+https://docs.orion-agent.ai/notebooks/app-view
+
 Use this skill when the deliverable is an Orion App View inside a notebook, not a separate web app.
 
 App View metadata is the layout and composition layer. It should arrange notebook cells and outputs into a polished interface, add headings/sections/tabs/labels, and control high-level presentation. It should not be the source of truth for interactive runtime behavior.

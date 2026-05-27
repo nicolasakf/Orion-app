@@ -5,6 +5,14 @@ description: Operates Orion user and workspace settings safely. Use when reading
 
 # Orion settings
 
+## Full documentation
+
+For extended user guides, merge precedence, and workspace override examples beyond this skill file, read:
+https://docs.orion-agent.ai/ai-assistant/builtin-skills/orion-settings
+
+Also see:
+https://docs.orion-agent.ai/configuration/workspace-settings
+
 Use this skill when a task involves Orion settings files or settings behavior.
 
 ## Storage and precedence

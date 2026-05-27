@@ -5,6 +5,11 @@ description: Teaches Orion agents how to inspect and reference past chats stored
 
 # Chat history
 
+## Full documentation
+
+For extended user guides, privacy notes, and example requests beyond this skill file, read:
+https://docs.orion-agent.ai/ai-assistant/builtin-skills/chat-history
+
 Use this skill when the user asks to find, summarize, quote, or refer to past Orion chats.
 
 ## Storage

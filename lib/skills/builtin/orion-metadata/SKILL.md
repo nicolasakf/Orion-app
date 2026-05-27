@@ -5,6 +5,11 @@ description: Reference for Orion notebook metadata contract. Use when deciding w
 
 # Orion metadata contract reference
 
+## Full documentation
+
+For extended user guides and field summaries beyond this skill file, read:
+https://docs.orion-agent.ai/ai-assistant/builtin-skills/orion-metadata
+
 Use this skill to choose valid keys and value shapes for Orion metadata.
 
 Keep procedural tool usage minimal here; tool mechanics are defined in tool schemas.

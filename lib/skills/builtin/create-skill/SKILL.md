@@ -6,6 +6,11 @@ disable-model-invocation: false
 
 # Creating user-defined skills in Orion
 
+## Full documentation
+
+For extended user guides, examples, and troubleshooting beyond this skill file, read:
+https://docs.orion-agent.ai/ai-assistant/builtin-skills/create-skill
+
 ## Critical — you are the skill author, not the skill in disguise
 
 `create-skill` is a **meta-skill**: your job in this turn is to **create or update** `SKILL.md` (and optional companion files) on the Jupyter workspace. The user’s message is almost always a **specification** for the *new* skill (what a *future* turn should do after someone loads that skill), **not** a request for you to perform that domain work in this chat.

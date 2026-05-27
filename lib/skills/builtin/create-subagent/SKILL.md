@@ -5,6 +5,11 @@ description: Authors notebook-defined Orion sub-agents under `.agents/subagents/
 
 # Creating notebook-defined sub-agents in Orion
 
+## Full documentation
+
+For extended user guides, examples, and troubleshooting beyond this skill file, read:
+https://docs.orion-agent.ai/ai-assistant/builtin-skills/create-subagent
+
 ## Role
 
 `create-subagent` is a meta-skill. Your job is to create or update a reusable `.ipynb` sub-agent definition, not to perform the future sub-agent's work in the current chat.
