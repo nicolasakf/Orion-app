@@ -24,6 +24,7 @@ export const BUILTIN_APP_VIEW_PRIMITIVES = [
   "ToggleGroup",
   "Calendar",
   "DatePicker",
+  "DateTimePicker",
   "Label",
   "Badge",
   "Separator",
@@ -254,10 +255,10 @@ export function parseNotebookAppViewSchema(
     rawSchema.root === undefined
       ? null
       : normalizeSchemaNode(
-          rawSchema.root,
-          "metadata.orion.appView.schema.root",
-          errors,
-        );
+        rawSchema.root,
+        "metadata.orion.appView.schema.root",
+        errors,
+      );
 
   if (errors.length > 0 || !root) {
     return { status: "invalid", errors };
@@ -356,7 +357,7 @@ function referenceMatchesNode(
     node.type === "Output" &&
     stringProp(node.props, "cellId") === reference.cellId &&
     Math.max(0, Math.floor(numberProp(node.props, "outputIndex") ?? 0)) ===
-      reference.outputIndex
+    reference.outputIndex
   );
 }
 
@@ -536,15 +537,15 @@ export function parseOrionUiMimePayload(
   const rawPayload =
     typeof value === "string"
       ? (() => {
-          try {
-            return JSON.parse(value) as unknown;
-          } catch {
-            errors.push(
-              `${ORION_UI_MIME_TYPE}: payload string must be valid JSON`,
-            );
-            return null;
-          }
-        })()
+        try {
+          return JSON.parse(value) as unknown;
+        } catch {
+          errors.push(
+            `${ORION_UI_MIME_TYPE}: payload string must be valid JSON`,
+          );
+          return null;
+        }
+      })()
       : value;
 
   if (!isRecord(rawPayload)) {
@@ -581,10 +582,10 @@ export function parseOrionUiMimePayload(
     rawPayload.root === undefined
       ? null
       : normalizeSchemaNode(
-          rawPayload.root,
-          `${ORION_UI_MIME_TYPE}.root`,
-          errors,
-        );
+        rawPayload.root,
+        `${ORION_UI_MIME_TYPE}.root`,
+        errors,
+      );
 
   const rawState = isRecord(rawPayload.state) ? rawPayload.state : {};
   const state: Record<string, OrionUiMimeStateValue> = {};

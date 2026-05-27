@@ -3,6 +3,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import { CalendarIcon } from "lucide-react";
+import type { DateRange } from "react-day-picker";
 
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import {
@@ -118,6 +119,19 @@ interface SelectOption {
   value: string;
 }
 
+interface DatePreset {
+  label: string;
+  value?: string;
+  from?: string;
+  to?: string;
+  daysOffset?: number;
+  fromDaysOffset?: number;
+  toDaysOffset?: number;
+}
+
+type CalendarCaptionLayout = "buttons" | "dropdown" | "dropdown-buttons";
+type DateSelectionMode = "single" | "range";
+
 const gapClasses = {
   none: "gap-0",
   xs: "gap-1",
@@ -168,6 +182,7 @@ const builtinPrimitiveRenderers: Record<string, PrimitiveRenderer> = {
   ToggleGroup: renderToggleGroup,
   Calendar: renderCalendar,
   DatePicker: renderDatePicker,
+  DateTimePicker: renderDateTimePicker,
   Label: renderLabel,
   Badge: renderBadge,
   Separator: renderSeparator,
@@ -257,6 +272,38 @@ function getOptions(props: Record<string, unknown>): SelectOption[] {
   });
 }
 
+/** Converts date preset schema entries to clickable preset buttons. */
+function getDatePresets(props: Record<string, unknown>): DatePreset[] {
+  const presets = props.presets;
+  if (!Array.isArray(presets)) {
+    return [];
+  }
+
+  return presets.flatMap((preset) => {
+    if (!preset || typeof preset !== "object" || Array.isArray(preset)) {
+      return [];
+    }
+
+    const record = preset as Record<string, unknown>;
+    const label = stringProp(record, "label");
+    if (!label) {
+      return [];
+    }
+
+    return [
+      {
+        label,
+        value: stringProp(record, "value"),
+        from: stringProp(record, "from"),
+        to: stringProp(record, "to"),
+        daysOffset: numberProp(record, "daysOffset"),
+        fromDaysOffset: numberProp(record, "fromDaysOffset"),
+        toDaysOffset: numberProp(record, "toDaysOffset"),
+      },
+    ];
+  });
+}
+
 /** Reads a local string value using the schema default when state is unset. */
 function getStringState(
   node: NotebookAppViewSchemaNode,
@@ -268,6 +315,21 @@ function getStringState(
   }
 
   return stringProp(node.props, "defaultValue") ?? "";
+}
+
+/** Reads string state from a prop-named state key. */
+function getStringStateByPropKey(
+  props: Record<string, unknown>,
+  context: SchemaRenderContext,
+  keyProp: string,
+  defaultProp: string,
+): string {
+  const stateKey = stringProp(props, keyProp);
+  if (stateKey && typeof context.state[stateKey] === "string") {
+    return context.state[stateKey] as string;
+  }
+
+  return stringProp(props, defaultProp) ?? "";
 }
 
 /** Reads a local boolean value using the schema default when state is unset. */
@@ -307,6 +369,22 @@ function setNodeState(
   value: OrionUiLocalValue,
 ): void {
   const stateKey = stringProp(node.props, "stateKey");
+  if (!stateKey) {
+    return;
+  }
+
+  context.setStateValue(stateKey, value);
+  context.callbacks.onStateChange?.(stateKey, value);
+}
+
+/** Writes local state through a prop-named state key. */
+function setStateByPropKey(
+  props: Record<string, unknown>,
+  context: SchemaRenderContext,
+  keyProp: string,
+  value: OrionUiLocalValue,
+): void {
+  const stateKey = stringProp(props, keyProp);
   if (!stateKey) {
     return;
   }
@@ -370,6 +448,277 @@ function formatIsoDate(date: Date): string {
 function formatDateLabel(value: string | undefined, placeholder: string): string {
   const parsed = parseIsoDate(value);
   return parsed ? format(parsed, "PPP") : placeholder;
+}
+
+/** Parses a stored JSON date range into DayPicker's DateRange shape. */
+function parseDateRange(value: string | undefined): DateRange | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+
+    const record = parsed as Record<string, unknown>;
+    const from =
+      typeof record.from === "string" ? parseIsoDate(record.from) : undefined;
+    const to =
+      typeof record.to === "string" ? parseIsoDate(record.to) : undefined;
+    return from || to ? { from, to } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Formats DayPicker's DateRange shape as compact JSON string state. */
+function formatDateRange(range: DateRange | undefined): string {
+  if (!range?.from && !range?.to) {
+    return "";
+  }
+
+  const value: { from?: string; to?: string } = {};
+  if (range.from) {
+    value.from = formatIsoDate(range.from);
+  }
+  if (range.to) {
+    value.to = formatIsoDate(range.to);
+  }
+  return JSON.stringify(value);
+}
+
+/** Formats a stored range string for display in date picker triggers. */
+function formatDateRangeLabel(
+  value: string | undefined,
+  placeholder: string,
+): string {
+  const range = parseDateRange(value);
+  if (range?.from && range.to) {
+    return `${format(range.from, "LLL dd, y")} - ${format(range.to, "LLL dd, y")}`;
+  }
+  if (range?.from) {
+    return `${format(range.from, "LLL dd, y")} - ...`;
+  }
+  if (range?.to) {
+    return `... - ${format(range.to, "LLL dd, y")}`;
+  }
+  return placeholder;
+}
+
+/** Returns the requested DayPicker selection mode. */
+function dateSelectionMode(props: Record<string, unknown>): DateSelectionMode {
+  return stringProp(props, "mode") === "range" ? "range" : "single";
+}
+
+/** Returns the requested DayPicker caption layout when supported. */
+function calendarCaptionLayout(
+  props: Record<string, unknown>,
+): CalendarCaptionLayout | undefined {
+  const value = stringProp(props, "captionLayout");
+  if (value === "buttons") {
+    return "buttons";
+  }
+  if (value === "dropdown") {
+    return "dropdown";
+  }
+  if (value === "dropdown-buttons") {
+    return "dropdown-buttons";
+  }
+  return undefined;
+}
+
+/** Returns whether days outside the current month should be shown. */
+function calendarShowOutsideDays(props: Record<string, unknown>): boolean {
+  return booleanProp(props, "showOutsideDays") ?? false;
+}
+
+/** Returns a positive month count for multi-month calendar layouts. */
+function calendarNumberOfMonths(
+  props: Record<string, unknown>,
+): number | undefined {
+  const value = numberProp(props, "numberOfMonths");
+  return value && value > 0 ? Math.floor(value) : undefined;
+}
+
+/** DayPicker props for month count. Omit when unset — explicit undefined breaks rendering. */
+function calendarMonthProps(
+  props: Record<string, unknown>,
+): { numberOfMonths?: number } {
+  const numberOfMonths = calendarNumberOfMonths(props);
+  return numberOfMonths ? { numberOfMonths } : {};
+}
+
+/** Formats a local date offset from today as YYYY-MM-DD. */
+function formatDateOffset(daysOffset: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + daysOffset);
+  return formatIsoDate(date);
+}
+
+/** Returns a preset's single date value, if valid. */
+function presetSingleValue(preset: DatePreset): string | undefined {
+  if (preset.value && parseIsoDate(preset.value)) {
+    return preset.value;
+  }
+  if (preset.daysOffset !== undefined) {
+    return formatDateOffset(preset.daysOffset);
+  }
+  return undefined;
+}
+
+/** Returns a preset's range date value, if valid. */
+function presetRangeValue(preset: DatePreset): string | undefined {
+  const from =
+    preset.from && parseIsoDate(preset.from)
+      ? preset.from
+      : preset.fromDaysOffset !== undefined
+        ? formatDateOffset(preset.fromDaysOffset)
+        : undefined;
+  const to =
+    preset.to && parseIsoDate(preset.to)
+      ? preset.to
+      : preset.toDaysOffset !== undefined
+        ? formatDateOffset(preset.toDaysOffset)
+        : undefined;
+
+  if (from || to) {
+    return JSON.stringify({
+      ...(from ? { from } : {}),
+      ...(to ? { to } : {}),
+    });
+  }
+
+  const singleDate = presetSingleValue(preset);
+  return singleDate
+    ? JSON.stringify({ from: singleDate, to: singleDate })
+    : undefined;
+}
+
+/** Returns the selected date that should anchor the currently visible calendar month. */
+function selectedCalendarMonth(
+  value: string | undefined,
+  mode: DateSelectionMode,
+): Date | undefined {
+  if (mode === "range") {
+    const range = parseDateRange(value);
+    return range?.from ?? range?.to;
+  }
+
+  return parseIsoDate(value);
+}
+
+/** Returns whether two date objects point to the same month and year. */
+function isSameCalendarMonth(
+  left: Date | undefined,
+  right: Date | undefined,
+): boolean {
+  if (!left || !right) {
+    return false;
+  }
+
+  return (
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth()
+  );
+}
+
+/** Keeps visible month synced with selected value while allowing manual navigation. */
+function CalendarWithSyncedMonth({
+  monthAnchor,
+  onMonthChange,
+  children,
+  ...props
+}: React.ComponentProps<typeof Calendar> & {
+  monthAnchor?: Date;
+  children?: (syncMonth: (nextMonthAnchor: Date | undefined) => void) => React.ReactNode;
+}): React.JSX.Element {
+  const [visibleMonth, setVisibleMonth] = useState<Date | undefined>(() =>
+    monthAnchor
+      ? new Date(monthAnchor.getFullYear(), monthAnchor.getMonth(), 1)
+      : undefined,
+  );
+  const monthAnchorYear = monthAnchor?.getFullYear();
+  const monthAnchorIndex = monthAnchor?.getMonth();
+
+  useEffect(() => {
+    if (monthAnchorYear === undefined || monthAnchorIndex === undefined) {
+      return;
+    }
+
+    const anchoredMonth = new Date(monthAnchorYear, monthAnchorIndex, 1);
+    setVisibleMonth((currentMonth) =>
+      isSameCalendarMonth(currentMonth, anchoredMonth)
+        ? currentMonth
+        : anchoredMonth,
+    );
+  }, [monthAnchorIndex, monthAnchorYear]);
+
+  const syncMonth = useCallback((nextMonthAnchor: Date | undefined) => {
+    if (!nextMonthAnchor) {
+      return;
+    }
+
+    setVisibleMonth(
+      new Date(nextMonthAnchor.getFullYear(), nextMonthAnchor.getMonth(), 1),
+    );
+  }, []);
+
+  return (
+    <>
+      <Calendar
+        {...props}
+        month={visibleMonth}
+        onMonthChange={(nextMonth) => {
+          setVisibleMonth(nextMonth);
+          onMonthChange?.(nextMonth);
+        }}
+      />
+      {children?.(syncMonth)}
+    </>
+  );
+}
+
+/** Renders quick-pick date presets under a calendar. */
+function renderDatePresets(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+  mode: DateSelectionMode,
+  onPresetMonth?: (monthAnchor: Date | undefined) => void,
+): React.ReactNode {
+  const presets = getDatePresets(node.props);
+  if (presets.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="w-full px-2 pb-2 pt-2">
+      <div className="flex flex-wrap gap-1.5">
+        {presets.map((preset) => (
+          <Button
+            key={preset.label}
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="h-7 px-2 text-xs"
+            onClick={() => {
+              const nextValue =
+                mode === "range"
+                  ? presetRangeValue(preset)
+                  : presetSingleValue(preset);
+              if (nextValue !== undefined) {
+                setNodeState(node, context, nextValue);
+                onPresetMonth?.(selectedCalendarMonth(nextValue, mode));
+              }
+            }}
+          >
+            {preset.label}
+          </Button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 const avatarSizeClasses = {
@@ -663,9 +1012,9 @@ function renderButton(
       type="button"
       variant={
         variant === "secondary" ||
-        variant === "outline" ||
-        variant === "ghost" ||
-        variant === "destructive"
+          variant === "outline" ||
+          variant === "ghost" ||
+          variant === "destructive"
           ? variant
           : "default"
       }
@@ -848,8 +1197,8 @@ function renderBadge(node: NotebookAppViewSchemaNode): React.ReactNode {
       className={primitiveClass(node)}
       variant={
         variant === "secondary" ||
-        variant === "destructive" ||
-        variant === "outline"
+          variant === "destructive" ||
+          variant === "outline"
           ? variant
           : "default"
       }
@@ -1195,68 +1544,253 @@ function renderToggleGroup(
   );
 }
 
-/** Renders an inline calendar bound to ISO date string state. */
+/** Renders an inline calendar bound to ISO date or JSON range string state. */
 function renderCalendar(
   node: NotebookAppViewSchemaNode,
   context: SchemaRenderContext,
 ): React.ReactNode {
   const value = getStringState(node, context);
-  const selected = parseIsoDate(value);
+  const mode = dateSelectionMode(node.props);
+  const monthAnchor = selectedCalendarMonth(value, mode);
+  const captionLayout = calendarCaptionLayout(node.props);
+  const fromYear = numberProp(node.props, "fromYear");
+  const toYear = numberProp(node.props, "toYear");
+  const showOutsideDays = calendarShowOutsideDays(node.props);
+  const label = stringProp(node.props, "label");
 
+  if (mode === "range") {
+    const selectedRange = parseDateRange(value);
+    return (
+      <div className={primitiveClass(node, "space-y-2")}>
+        {label ? <Label>{label}</Label> : null}
+        <div className="inline-flex w-fit max-w-full flex-col">
+          <CalendarWithSyncedMonth
+            mode="range"
+            selected={selectedRange}
+            monthAnchor={monthAnchor}
+            captionLayout={captionLayout}
+            fromYear={fromYear}
+            toYear={toYear}
+            {...calendarMonthProps(node.props)}
+            showOutsideDays={showOutsideDays}
+            onSelect={(range) =>
+              setNodeState(node, context, formatDateRange(range))
+            }
+            initialFocus
+          >
+            {(syncMonth) => renderDatePresets(node, context, mode, syncMonth)}
+          </CalendarWithSyncedMonth>
+        </div>
+      </div>
+    );
+  }
+
+  const selectedDate = parseIsoDate(value);
   return (
-    <Calendar
-      mode="single"
-      selected={selected}
-      className={primitiveClass(node)}
-      onSelect={(date) => {
-        if (date) {
-          setNodeState(node, context, formatIsoDate(date));
-        }
-      }}
-      initialFocus
-    />
-  );
-}
-
-/** Renders a popover date picker bound to ISO date string state. */
-function renderDatePicker(
-  node: NotebookAppViewSchemaNode,
-  context: SchemaRenderContext,
-): React.ReactNode {
-  const value = getStringState(node, context);
-  const selected = parseIsoDate(value);
-  const placeholder =
-    stringProp(node.props, "placeholder") ?? "Pick a date";
-
-  return (
-    <Popover>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          className={primitiveClass(
-            node,
-            "justify-start text-left font-normal",
-            !value && "text-muted-foreground",
-          )}
-        >
-          <CalendarIcon className="mr-2 h-4 w-4" />
-          {formatDateLabel(value, placeholder)}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className="w-auto p-0" align="start">
-        <Calendar
+    <div className={primitiveClass(node, "space-y-2")}>
+      {label ? <Label>{label}</Label> : null}
+      <div className="inline-flex w-fit max-w-full flex-col">
+        <CalendarWithSyncedMonth
           mode="single"
-          selected={selected}
+          selected={selectedDate}
+          monthAnchor={monthAnchor}
+          captionLayout={captionLayout}
+          fromYear={fromYear}
+          toYear={toYear}
+          {...calendarMonthProps(node.props)}
+          showOutsideDays={showOutsideDays}
           onSelect={(date) => {
             if (date) {
               setNodeState(node, context, formatIsoDate(date));
             }
           }}
           initialFocus
-        />
-      </PopoverContent>
-    </Popover>
+        >
+          {(syncMonth) => renderDatePresets(node, context, mode, syncMonth)}
+        </CalendarWithSyncedMonth>
+      </div>
+    </div>
+  );
+}
+
+/** Renders a popover date picker bound to ISO date or JSON range string state. */
+function renderDatePicker(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const value = getStringState(node, context);
+  const mode = dateSelectionMode(node.props);
+  const monthAnchor = selectedCalendarMonth(value, mode);
+  const captionLayout = calendarCaptionLayout(node.props);
+  const fromYear = numberProp(node.props, "fromYear");
+  const toYear = numberProp(node.props, "toYear");
+  const showOutsideDays = calendarShowOutsideDays(node.props);
+  const label = stringProp(node.props, "label");
+  const placeholder =
+    stringProp(node.props, "placeholder") ??
+    (mode === "range" ? "Pick a date range" : "Pick a date");
+
+  return (
+    <div className={primitiveClass(node, "space-y-2")}>
+      {label ? <Label>{label}</Label> : null}
+      <Popover>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            className={cn(
+              "w-full justify-start text-left font-normal",
+              !value && "text-muted-foreground",
+            )}
+          >
+            <CalendarIcon className="mr-2 h-4 w-4" />
+            {mode === "range"
+              ? formatDateRangeLabel(value, placeholder)
+              : formatDateLabel(value, placeholder)}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-auto p-0" align="start">
+          {mode === "range" ? (
+            <div className="inline-flex w-fit max-w-full flex-col">
+              <CalendarWithSyncedMonth
+                mode="range"
+                selected={parseDateRange(value)}
+                monthAnchor={monthAnchor}
+                captionLayout={captionLayout}
+                fromYear={fromYear}
+                toYear={toYear}
+                {...calendarMonthProps(node.props)}
+                showOutsideDays={showOutsideDays}
+                onSelect={(range) =>
+                  setNodeState(node, context, formatDateRange(range))
+                }
+                initialFocus
+              >
+                {(syncMonth) =>
+                  renderDatePresets(node, context, mode, syncMonth)
+                }
+              </CalendarWithSyncedMonth>
+            </div>
+          ) : (
+            <div className="inline-flex w-fit max-w-full flex-col">
+              <CalendarWithSyncedMonth
+                mode="single"
+                selected={parseIsoDate(value)}
+                monthAnchor={monthAnchor}
+                captionLayout={captionLayout}
+                fromYear={fromYear}
+                toYear={toYear}
+                {...calendarMonthProps(node.props)}
+                showOutsideDays={showOutsideDays}
+                onSelect={(date) => {
+                  if (date) {
+                    setNodeState(node, context, formatIsoDate(date));
+                  }
+                }}
+                initialFocus
+              >
+                {(syncMonth) =>
+                  renderDatePresets(node, context, mode, syncMonth)
+                }
+              </CalendarWithSyncedMonth>
+            </div>
+          )}
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
+/** Renders a calendar paired with start/end time inputs. */
+function renderDateTimePicker(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  const value = getStringState(node, context);
+  const selectedDate = parseIsoDate(value);
+  const captionLayout = calendarCaptionLayout(node.props);
+  const fromYear = numberProp(node.props, "fromYear");
+  const toYear = numberProp(node.props, "toYear");
+  const showOutsideDays = calendarShowOutsideDays(node.props);
+  const label = stringProp(node.props, "label");
+  const startTimeLabel = stringProp(node.props, "startTimeLabel") ?? "Start time";
+  const endTimeLabel = stringProp(node.props, "endTimeLabel") ?? "End time";
+  const startTimeKey =
+    stringProp(node.props, "startTimeKey") ?? stringProp(node.props, "stateKey");
+  const endTimeKey =
+    stringProp(node.props, "endTimeKey") ?? stringProp(node.props, "stateKey");
+  const startTimeValue = getStringStateByPropKey(
+    node.props,
+    context,
+    "startTimeKey",
+    "startTimeDefaultValue",
+  );
+  const endTimeValue = getStringStateByPropKey(
+    node.props,
+    context,
+    "endTimeKey",
+    "endTimeDefaultValue",
+  );
+
+  return (
+    <div className={primitiveClass(node, "space-y-3")}>
+      {label ? <Label>{label}</Label> : null}
+      <div className="inline-flex w-fit max-w-full flex-col">
+        <CalendarWithSyncedMonth
+          mode="single"
+          selected={selectedDate}
+          monthAnchor={selectedDate}
+          captionLayout={captionLayout}
+          fromYear={fromYear}
+          toYear={toYear}
+          showOutsideDays={showOutsideDays}
+          onSelect={(date) => {
+            if (date) {
+              setNodeState(node, context, formatIsoDate(date));
+            }
+          }}
+          initialFocus
+        >
+          {(syncMonth) => renderDatePresets(node, context, "single", syncMonth)}
+        </CalendarWithSyncedMonth>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor={startTimeKey}>{startTimeLabel}</Label>
+          <Input
+            id={startTimeKey}
+            type="time"
+            step={1}
+            value={startTimeValue}
+            onChange={(event) =>
+              setStateByPropKey(
+                node.props,
+                context,
+                "startTimeKey",
+                event.target.value,
+              )
+            }
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={endTimeKey}>{endTimeLabel}</Label>
+          <Input
+            id={endTimeKey}
+            type="time"
+            step={1}
+            value={endTimeValue}
+            onChange={(event) =>
+              setStateByPropKey(
+                node.props,
+                context,
+                "endTimeKey",
+                event.target.value,
+              )
+            }
+          />
+        </div>
+      </div>
+    </div>
   );
 }
 

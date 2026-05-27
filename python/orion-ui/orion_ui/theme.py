@@ -6,7 +6,27 @@ from typing import Any, Dict
 
 
 def plotly(name: str = "orion", set_default: bool = True) -> Dict[str, Any]:
-    """Register an Orion-styled Plotly template and optionally make it default."""
+    """Register an Orion-styled Plotly template and optionally make it default.
+
+    Parameters
+    ----------
+    name : str, optional
+        Template name registered with ``plotly.io.templates``. Default is
+        ``"orion"``.
+    set_default : bool, optional
+        When ``True``, assigns ``name`` as ``plotly.io.templates.default``.
+        Default is ``True``.
+
+    Returns
+    -------
+    dict
+        Plotly template definition passed to ``plotly.io.templates[name]``.
+
+    Raises
+    ------
+    ImportError
+        If Plotly is not installed.
+    """
     try:
         import plotly.io as pio
     except ImportError as exc:

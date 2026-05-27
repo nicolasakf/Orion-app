@@ -70,8 +70,8 @@ html {
         hsl(var(--ai-foreground-hover)) 50%,
         hsl(var(--ai-foreground)) 65%,
         hsl(var(--ai-foreground)) 100%);
-    background-size: 220% 100%;
-    background-position: 200% 0;
+    background-size: 300% 100%;
+    background-position: 100% 0;
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
@@ -85,8 +85,8 @@ html {
         hsl(var(--foreground)) 50%,
         hsl(var(--muted-foreground)) 65%,
         hsl(var(--muted-foreground)) 100%);
-    background-size: 220% 100%;
-    background-position: 200% 0;
+    background-size: 300% 100%;
+    background-position: 100% 0;
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
@@ -154,11 +154,11 @@ html {
 
 @keyframes ai-text-shine {
   0% {
-    background-position: 200% 0;
+    background-position: 100% 0;
   }
 
   100% {
-    background-position: -20% 0;
+    background-position: 0% 0;
   }
 }
 

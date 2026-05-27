@@ -37,6 +37,7 @@ _COMPONENT_TYPES = {
     "ToggleGroup",
     "Calendar",
     "DatePicker",
+    "DateTimePicker",
     "Label",
     "Badge",
     "Separator",
@@ -139,6 +140,20 @@ class Component:
                 "kind": "python_state",
                 "valueType": _value_type(default_value),
             }
+        if self.type == "DateTimePicker":
+            for key_prop, default_prop in (
+                ("startTimeKey", "startTimeDefaultValue"),
+                ("endTimeKey", "endTimeDefaultValue"),
+            ):
+                time_key = self.props.get(key_prop)
+                time_default = self.props.get(default_prop)
+                if isinstance(time_key, str) and isinstance(
+                    time_default, (str, int, float, bool)
+                ):
+                    bindings[time_key] = {
+                        "kind": "python_state",
+                        "valueType": _value_type(time_default),
+                    }
         for child in self.children:
             bindings.update(child._collect_bindings())
         return bindings
@@ -210,7 +225,27 @@ def page(
     padding: str = "md",
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a top-level page container."""
+    """Create a top-level page container.
+
+    Parameters
+    ----------
+    *children
+        Child components or plain strings (coerced to labels).
+    gap : str, optional
+        Spacing between children. One of ``"none"``, ``"xs"``, ``"sm"``,
+        ``"md"``, or ``"lg"``. Default is ``"md"``.
+    padding : str, optional
+        Inner padding. One of ``"none"``, ``"sm"``, ``"md"``, or ``"lg"``.
+        Default is ``"md"``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time (for example ``"metric-card"``).
+        Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Page`` component node.
+    """
     return _component(
         "Page",
         children,
@@ -226,7 +261,26 @@ def stack(
     align: str = "stretch",
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a vertical stack layout."""
+    """Create a vertical stack layout.
+
+    Parameters
+    ----------
+    *children
+        Child components or plain strings (coerced to labels).
+    gap : str, optional
+        Spacing between children. One of ``"none"``, ``"xs"``, ``"sm"``,
+        ``"md"``, or ``"lg"``. Default is ``"md"``.
+    align : str, optional
+        Cross-axis alignment. One of ``"start"``, ``"center"``, ``"end"``, or
+        ``"stretch"``. Default is ``"stretch"``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Stack`` component node.
+    """
     return _component(
         "Stack",
         children,
@@ -242,7 +296,26 @@ def grid(
     gap: str = "md",
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a responsive grid layout."""
+    """Create a responsive grid layout.
+
+    Parameters
+    ----------
+    *children
+        Child components or plain strings (coerced to labels).
+    columns : int, optional
+        Number of columns. Must be ``1``, ``2``, ``3``, or ``4``. Other values
+        fall back to a two-column layout. Default is ``2``.
+    gap : str, optional
+        Spacing between cells. One of ``"none"``, ``"xs"``, ``"sm"``, ``"md"``,
+        or ``"lg"``. Default is ``"md"``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Grid`` component node.
+    """
     return _component(
         "Grid",
         children,
@@ -260,7 +333,30 @@ def section(
     padding: str = "md",
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a titled section."""
+    """Create a titled section.
+
+    Parameters
+    ----------
+    *children
+        Child components or plain strings (coerced to labels).
+    title : str or None, optional
+        Section heading. Default is ``None``.
+    description : str or None, optional
+        Supporting text shown under the title. Default is ``None``.
+    gap : str, optional
+        Spacing between children. One of ``"none"``, ``"xs"``, ``"sm"``,
+        ``"md"``, or ``"lg"``. Default is ``"md"``.
+    padding : str, optional
+        Inner padding. One of ``"none"``, ``"sm"``, ``"md"``, or ``"lg"``.
+        Default is ``"md"``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Section`` component node.
+    """
     return _component(
         "Section",
         children,
@@ -279,7 +375,27 @@ def card(
     gap: str = "md",
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a card container."""
+    """Create a card container.
+
+    Parameters
+    ----------
+    *children
+        Child components or plain strings (coerced to labels).
+    title : str or None, optional
+        Card heading. Default is ``None``.
+    description : str or None, optional
+        Supporting text shown under the title. Default is ``None``.
+    gap : str, optional
+        Spacing between children. One of ``"none"``, ``"xs"``, ``"sm"``,
+        ``"md"``, or ``"lg"``. Default is ``"md"``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Card`` component node.
+    """
     return _component(
         "Card",
         children,
@@ -295,7 +411,23 @@ def tabs(
     default_value: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a tab container whose children act as panels."""
+    """Create a tab container whose children act as panels.
+
+    Parameters
+    ----------
+    *children
+        Tab panel components or plain strings (coerced to labels).
+    default_value : str or None, optional
+        Value of the initially selected tab. Must match a child tab value when
+        provided. Default is ``None`` (first tab selected).
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Tabs`` component node.
+    """
     return _component(
         "Tabs",
         children,
@@ -312,7 +444,34 @@ def button(
     size: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a button, optionally with an Orion declarative action."""
+    """Create a button, optionally with an Orion declarative action.
+
+    Parameters
+    ----------
+    label : str
+        Button label text.
+    action : mapping or None, optional
+        Declarative action dispatched on click. Supported shape::
+
+            {"type": "execute_cells", "cellIds": ["stable-orion-cell-id"]}
+
+        ``cellIds`` must reference existing ``cells[i].metadata.orion.id``
+        values. Default is ``None`` (no action).
+    variant : str or None, optional
+        Visual style. One of ``"default"``, ``"secondary"``, ``"outline"``,
+        ``"ghost"``, or ``"destructive"``. Unrecognized values fall back to
+        ``"default"``. Default is ``None``.
+    size : str or None, optional
+        Button size. One of ``"default"``, ``"sm"``, or ``"lg"``. Unrecognized
+        values fall back to ``"default"``. Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Button`` component node.
+    """
     return _component(
         "Button",
         label=label,
@@ -333,7 +492,33 @@ def input(
     input_type: str = "text",
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a text input bound to Python state."""
+    """Create a text input bound to Python state.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key used by ``get()``, ``set()``, and ``state()``.
+    label : str or None, optional
+        Visible field label. Default is ``None``.
+    default_value : str, optional
+        Initial value when no runtime state exists yet. Default is ``""``.
+    value
+        When omitted, registers ``default_value`` without overwriting user
+        input on rerun. When provided, must be a ``str``, ``int``, ``float``,
+        or ``bool`` and forces that value into runtime state on rerun.
+    placeholder : str or None, optional
+        Placeholder hint shown when empty. Default is ``None``.
+    input_type : str, optional
+        HTML ``type`` attribute (for example ``"text"``, ``"email"``,
+        ``"password"``, ``"number"``). Default is ``"text"``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        An ``Input`` component node bound to ``key``.
+    """
     return _control(
         "Input",
         key,
@@ -355,7 +540,30 @@ def textarea(
     placeholder: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a textarea bound to Python state."""
+    """Create a textarea bound to Python state.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key used by ``get()``, ``set()``, and ``state()``.
+    label : str or None, optional
+        Visible field label. Default is ``None``.
+    default_value : str, optional
+        Initial value when no runtime state exists yet. Default is ``""``.
+    value
+        When omitted, registers ``default_value`` without overwriting user
+        input on rerun. When provided, must be a ``str``, ``int``, ``float``,
+        or ``bool`` and forces that value into runtime state on rerun.
+    placeholder : str or None, optional
+        Placeholder hint shown when empty. Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Textarea`` component node bound to ``key``.
+    """
     return _control(
         "Textarea",
         key,
@@ -377,7 +585,36 @@ def select(
     placeholder: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a select control bound to Python state."""
+    """Create a select control bound to Python state.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key used by ``get()``, ``set()``, and ``state()``.
+    options : iterable of str or mapping
+        Choices shown in the dropdown. Each entry may be a display string
+        (used as both label and value) or a mapping with ``"value"`` and
+        optional ``"label"`` keys.
+    label : str or None, optional
+        Visible field label. Default is ``None``.
+    default_value : str or None, optional
+        Initially selected option value. When ``None``, the first option's
+        value is used. Default is ``None``.
+    value
+        When omitted, registers the resolved default without overwriting user
+        selection on rerun. When provided, must be a ``str``, ``int``,
+        ``float``, or ``bool`` and forces that value into runtime state on
+        rerun.
+    placeholder : str or None, optional
+        Placeholder shown when no value is selected. Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Select`` component node bound to ``key``.
+    """
     option_list = list(options)
     initial = default_value
     if initial is None:
@@ -406,7 +643,34 @@ def slider(
     step: Union[int, float] = 1,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a numeric slider bound to Python state."""
+    """Create a numeric slider bound to Python state.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key used by ``get()``, ``set()``, and ``state()``.
+    label : str or None, optional
+        Visible field label. Default is ``None``.
+    min : int or float, optional
+        Minimum slider value. Default is ``0``.
+    max : int or float, optional
+        Maximum slider value. Default is ``100``.
+    default_value : int or float, optional
+        Initial value when no runtime state exists yet. Default is ``0``.
+    value
+        When omitted, registers ``default_value`` without overwriting user
+        input on rerun. When provided, must be a ``str``, ``int``, ``float``,
+        or ``bool`` and forces that value into runtime state on rerun.
+    step : int or float, optional
+        Increment between allowed values. Default is ``1``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Slider`` component node bound to ``key``.
+    """
     return _control(
         "Slider",
         key,
@@ -428,7 +692,29 @@ def checkbox(
     value: Any = _UNSET,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a checkbox bound to Python state."""
+    """Create a checkbox bound to Python state.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key used by ``get()``, ``set()``, and ``state()``.
+    label : str or None, optional
+        Visible field label. Default is ``None``.
+    default_value : bool, optional
+        Initial checked state when no runtime state exists yet. Default is
+        ``False``.
+    value
+        When omitted, registers ``default_value`` without overwriting user
+        input on rerun. When provided, must be a ``str``, ``int``, ``float``,
+        or ``bool`` and forces that value into runtime state on rerun.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Checkbox`` component node bound to ``key``.
+    """
     return _control(
         "Checkbox",
         key,
@@ -447,7 +733,29 @@ def switch(
     value: Any = _UNSET,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a switch bound to Python state."""
+    """Create a switch bound to Python state.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key used by ``get()``, ``set()``, and ``state()``.
+    label : str or None, optional
+        Visible field label. Default is ``None``.
+    default_value : bool, optional
+        Initial on/off state when no runtime state exists yet. Default is
+        ``False``.
+    value
+        When omitted, registers ``default_value`` without overwriting user
+        input on rerun. When provided, must be a ``str``, ``int``, ``float``,
+        or ``bool`` and forces that value into runtime state on rerun.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Switch`` component node bound to ``key``.
+    """
     return _control(
         "Switch",
         key,
@@ -467,7 +775,34 @@ def radio_group(
     value: Any = _UNSET,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a radio group bound to Python state."""
+    """Create a radio group bound to Python state.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key used by ``get()``, ``set()``, and ``state()``.
+    options : iterable of str or mapping
+        Mutually exclusive choices. Each entry may be a display string (used
+        as both label and value) or a mapping with ``"value"`` and optional
+        ``"label"`` keys.
+    label : str or None, optional
+        Visible group label. Default is ``None``.
+    default_value : str or None, optional
+        Initially selected option value. When ``None``, the first option's
+        value is used. Default is ``None``.
+    value
+        When omitted, registers the resolved default without overwriting user
+        selection on rerun. When provided, must be a ``str``, ``int``,
+        ``float``, or ``bool`` and forces that value into runtime state on
+        rerun.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``RadioGroup`` component node bound to ``key``.
+    """
     option_list = list(options)
     initial = default_value
     if initial is None:
@@ -493,7 +828,32 @@ def toggle(
     variant: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a boolean toggle bound to Python state."""
+    """Create a boolean toggle bound to Python state.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key used by ``get()``, ``set()``, and ``state()``.
+    label : str or None, optional
+        Visible field label. Default is ``None``.
+    default_value : bool, optional
+        Initial pressed state when no runtime state exists yet. Default is
+        ``False``.
+    value
+        When omitted, registers ``default_value`` without overwriting user
+        input on rerun. When provided, must be a ``str``, ``int``, ``float``,
+        or ``bool`` and forces that value into runtime state on rerun.
+    variant : str or None, optional
+        Visual style. One of ``"default"`` or ``"outline"``. Unrecognized
+        values fall back to ``"default"``. Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Toggle`` component node bound to ``key``.
+    """
     return _control(
         "Toggle",
         key,
@@ -515,7 +875,37 @@ def toggle_group(
     variant: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a toggle group bound to Python state."""
+    """Create a toggle group bound to Python state.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key used by ``get()``, ``set()``, and ``state()``.
+    options : iterable of str or mapping
+        Exclusive toggle choices. Each entry may be a display string (used as
+        both label and value) or a mapping with ``"value"`` and optional
+        ``"label"`` keys.
+    label : str or None, optional
+        Visible group label. Default is ``None``.
+    default_value : str or None, optional
+        Initially selected option value. When ``None``, the first option's
+        value is used. Default is ``None``.
+    value
+        When omitted, registers the resolved default without overwriting user
+        selection on rerun. When provided, must be a ``str``, ``int``,
+        ``float``, or ``bool`` and forces that value into runtime state on
+        rerun.
+    variant : str or None, optional
+        Visual style. One of ``"default"`` or ``"outline"``. Unrecognized
+        values fall back to ``"default"``. Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``ToggleGroup`` component node bound to ``key``.
+    """
     option_list = list(options)
     initial = default_value
     if initial is None:
@@ -537,17 +927,82 @@ def calendar(
     key: str,
     *,
     label: Optional[str] = None,
+    mode: str = "single",
     default_value: str = "",
     value: Any = _UNSET,
+    caption_layout: Optional[str] = None,
+    from_year: Optional[int] = None,
+    to_year: Optional[int] = None,
+    number_of_months: Optional[int] = None,
+    show_outside_days: bool = False,
+    presets: Optional[Sequence[Mapping[str, Any]]] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a calendar bound to ISO date string Python state."""
+    """Create a calendar bound to ISO date or JSON range string Python state.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key used by ``get()``, ``set()``, and ``state()``.
+    label : str or None, optional
+        Visible field label. Default is ``None``.
+    mode : str, optional
+        Selection mode. ``"single"`` stores one ``"YYYY-MM-DD"`` string;
+        ``"range"`` stores a JSON string such as
+        ``'{"from":"2026-06-01","to":"2026-06-07"}'``. Any value other than
+        ``"range"`` is treated as ``"single"``. Default is ``"single"``.
+    default_value : str, optional
+        Initial date value in the same format as ``mode`` expects. Default is
+        ``""``.
+    value
+        When omitted, registers ``default_value`` without overwriting user
+        selection on rerun. When provided, must be a ``str``, ``int``,
+        ``float``, or ``bool`` and forces that value into runtime state on
+        rerun.
+    caption_layout : str or None, optional
+        Month/year navigation UI. One of ``"buttons"``, ``"dropdown"``, or
+        ``"dropdown-buttons"``. ``"dropdown"`` shows month/year selects only;
+        ``"dropdown-buttons"`` adds previous/next month buttons alongside the
+        selects. Unrecognized values use the renderer default. Default is
+        ``None``.
+    from_year : int or None, optional
+        Earliest selectable year when using dropdown caption layouts. Default
+        is ``None``.
+    to_year : int or None, optional
+        Latest selectable year when using dropdown caption layouts. Default is
+        ``None``.
+    number_of_months : int or None, optional
+        Positive number of months shown side by side. Non-positive values are
+        ignored. Default is ``None`` (single month).
+    show_outside_days : bool, optional
+        When ``True``, days from adjacent months fill the leading/trailing week
+        rows. When ``False``, those cells are left empty. Default is ``False``.
+    presets : sequence of mapping or None, optional
+        Quick-pick buttons rendered below the calendar. Each mapping must
+        include ``"label"`` and may include any of ``"value"`` (ISO date),
+        ``"from"``, ``"to"``, ``"daysOffset"``, ``"fromDaysOffset"``, or
+        ``"toDaysOffset"``. Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Calendar`` component node bound to ``key``.
+    """
     return _control(
         "Calendar",
         key,
         default_value,
         value,
         label=label,
+        mode=mode,
+        captionLayout=caption_layout,
+        fromYear=from_year,
+        toYear=to_year,
+        numberOfMonths=number_of_months,
+        showOutsideDays=show_outside_days,
+        presets=presets,
         class_name=class_name,
     )
 
@@ -556,25 +1011,210 @@ def date_picker(
     key: str,
     *,
     label: Optional[str] = None,
+    mode: str = "single",
     default_value: str = "",
     value: Any = _UNSET,
     placeholder: Optional[str] = None,
+    caption_layout: Optional[str] = None,
+    from_year: Optional[int] = None,
+    to_year: Optional[int] = None,
+    number_of_months: Optional[int] = None,
+    show_outside_days: bool = False,
+    presets: Optional[Sequence[Mapping[str, Any]]] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a popover date picker bound to ISO date string Python state."""
+    """Create a popover date picker bound to ISO date or JSON range string state.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key used by ``get()``, ``set()``, and ``state()``.
+    label : str or None, optional
+        Visible field label. Default is ``None``.
+    mode : str, optional
+        Selection mode. ``"single"`` stores one ``"YYYY-MM-DD"`` string;
+        ``"range"`` stores a JSON string such as
+        ``'{"from":"2026-06-01","to":"2026-06-07"}'``. Any value other than
+        ``"range"`` is treated as ``"single"``. Default is ``"single"``.
+    default_value : str, optional
+        Initial date value in the same format as ``mode`` expects. Default is
+        ``""``.
+    value
+        When omitted, registers ``default_value`` without overwriting user
+        selection on rerun. When provided, must be a ``str``, ``int``,
+        ``float``, or ``bool`` and forces that value into runtime state on
+        rerun.
+    placeholder : str or None, optional
+        Trigger button placeholder when no date is selected. Default is
+        ``None`` (renderer uses ``"Pick a date"`` or ``"Pick a date range"``).
+    caption_layout : str or None, optional
+        Month/year navigation UI. One of ``"buttons"``, ``"dropdown"``, or
+        ``"dropdown-buttons"``. ``"dropdown"`` shows month/year selects only;
+        ``"dropdown-buttons"`` adds previous/next month buttons alongside the
+        selects. Unrecognized values use the renderer default. Default is
+        ``None``.
+    from_year : int or None, optional
+        Earliest selectable year when using dropdown caption layouts. Default
+        is ``None``.
+    to_year : int or None, optional
+        Latest selectable year when using dropdown caption layouts. Default is
+        ``None``.
+    number_of_months : int or None, optional
+        Positive number of months shown in the popover calendar. Non-positive
+        values are ignored. Default is ``None`` (single month).
+    show_outside_days : bool, optional
+        When ``True``, days from adjacent months fill the leading/trailing week
+        rows. When ``False``, those cells are left empty. Default is ``False``.
+    presets : sequence of mapping or None, optional
+        Quick-pick buttons rendered below the calendar. Each mapping must
+        include ``"label"`` and may include any of ``"value"`` (ISO date),
+        ``"from"``, ``"to"``, ``"daysOffset"``, ``"fromDaysOffset"``, or
+        ``"toDaysOffset"``. Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``DatePicker`` component node bound to ``key``.
+    """
     return _control(
         "DatePicker",
         key,
         default_value,
         value,
         label=label,
+        mode=mode,
         placeholder=placeholder,
+        captionLayout=caption_layout,
+        fromYear=from_year,
+        toYear=to_year,
+        numberOfMonths=number_of_months,
+        showOutsideDays=show_outside_days,
+        presets=presets,
+        class_name=class_name,
+    )
+
+
+def date_time_picker(
+    key: str,
+    *,
+    label: Optional[str] = None,
+    default_value: str = "",
+    value: Any = _UNSET,
+    start_time_key: Optional[str] = None,
+    end_time_key: Optional[str] = None,
+    start_time_label: str = "Start time",
+    end_time_label: str = "End time",
+    default_start_time: str = "09:00:00",
+    default_end_time: str = "17:00:00",
+    caption_layout: Optional[str] = None,
+    from_year: Optional[int] = None,
+    to_year: Optional[int] = None,
+    show_outside_days: bool = False,
+    presets: Optional[Sequence[Mapping[str, Any]]] = None,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create a date picker paired with start and end time inputs.
+
+    The date portion uses ``key`` and stores a ``"YYYY-MM-DD"`` string. Start
+    and end times are bound to separate state keys as ``"HH:MM:SS"`` strings.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key for the selected date.
+    label : str or None, optional
+        Visible field label for the date portion. Default is ``None``.
+    default_value : str, optional
+        Initial date as ``"YYYY-MM-DD"`` when no runtime state exists yet.
+        Default is ``""``.
+    value
+        When omitted, registers ``default_value`` without overwriting user
+        selection on rerun. When provided, must be a ``str``, ``int``,
+        ``float``, or ``bool`` and forces that value into runtime state on
+        rerun.
+    start_time_key : str or None, optional
+        State key for the start time. Default is ``"{key}_start_time"``.
+    end_time_key : str or None, optional
+        State key for the end time. Default is ``"{key}_end_time"``.
+    start_time_label : str, optional
+        Label shown beside the start time input. Default is ``"Start time"``.
+    end_time_label : str, optional
+        Label shown beside the end time input. Default is ``"End time"``.
+    default_start_time : str, optional
+        Initial start time as ``"HH:MM:SS"``. Default is ``"09:00:00"``.
+    default_end_time : str, optional
+        Initial end time as ``"HH:MM:SS"``. Default is ``"17:00:00"``.
+    caption_layout : str or None, optional
+        Month/year navigation UI. One of ``"buttons"``, ``"dropdown"``, or
+        ``"dropdown-buttons"``. ``"dropdown"`` shows month/year selects only;
+        ``"dropdown-buttons"`` adds previous/next month buttons alongside the
+        selects. Unrecognized values use the renderer default. Default is
+        ``None``.
+    from_year : int or None, optional
+        Earliest selectable year when using dropdown caption layouts. Default
+        is ``None``.
+    to_year : int or None, optional
+        Latest selectable year when using dropdown caption layouts. Default is
+        ``None``.
+    show_outside_days : bool, optional
+        When ``True``, days from adjacent months fill the leading/trailing week
+        rows. When ``False``, those cells are left empty. Default is ``False``.
+    presets : sequence of mapping or None, optional
+        Quick-pick date buttons. Each mapping must include ``"label"`` and may
+        include ``"value"`` (ISO date) or ``"daysOffset"``. Default is
+        ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``DateTimePicker`` component node bound to ``key`` and the resolved
+        time keys.
+    """
+    resolved_start_time_key = start_time_key or f"{key}_start_time"
+    resolved_end_time_key = end_time_key or f"{key}_end_time"
+    define_default(resolved_start_time_key, default_start_time)
+    define_default(resolved_end_time_key, default_end_time)
+    return _control(
+        "DateTimePicker",
+        key,
+        default_value,
+        value,
+        label=label,
+        mode="single",
+        startTimeKey=resolved_start_time_key,
+        endTimeKey=resolved_end_time_key,
+        startTimeLabel=start_time_label,
+        endTimeLabel=end_time_label,
+        startTimeDefaultValue=default_start_time,
+        endTimeDefaultValue=default_end_time,
+        captionLayout=caption_layout,
+        fromYear=from_year,
+        toYear=to_year,
+        showOutsideDays=show_outside_days,
+        presets=presets,
         class_name=class_name,
     )
 
 
 def label(text: str, *, class_name: Optional[str] = None) -> Component:
-    """Create a text label."""
+    """Create a text label.
+
+    Parameters
+    ----------
+    text : str
+        Label text content.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Label`` component node.
+    """
     return _component("Label", text=text, class_name=class_name)
 
 
@@ -584,12 +1224,40 @@ def badge(
     variant: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a status badge."""
+    """Create a status badge.
+
+    Parameters
+    ----------
+    text : str
+        Badge label text.
+    variant : str or None, optional
+        Visual style. One of ``"default"``, ``"secondary"``, ``"destructive"``,
+        or ``"outline"``. Unrecognized values fall back to ``"default"``.
+        Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Badge`` component node.
+    """
     return _component("Badge", text=text, variant=variant, class_name=class_name)
 
 
 def separator(*, class_name: Optional[str] = None) -> Component:
-    """Create a horizontal separator."""
+    """Create a horizontal separator.
+
+    Parameters
+    ----------
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Separator`` component node.
+    """
     return _component("Separator", class_name=class_name)
 
 
@@ -601,7 +1269,30 @@ def alert(
     variant: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create an inline alert message."""
+    """Create an inline alert message.
+
+    Parameters
+    ----------
+    *children
+        Optional child components or plain strings (coerced to labels).
+    title : str or None, optional
+        Alert heading. Default is ``None``.
+    description : str or None, optional
+        Alert body text. Default is ``None``.
+    text : str or None, optional
+        Alias for ``description`` when ``description`` is not provided.
+        Default is ``None``.
+    variant : str or None, optional
+        Visual style. One of ``"default"`` or ``"destructive"``. Unrecognized
+        values fall back to ``"default"``. Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        An ``Alert`` component node.
+    """
     return _component(
         "Alert",
         children,
@@ -621,7 +1312,35 @@ def progress(
     max: Union[int, float] = 100,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a progress bar from static or Python-bound numeric state."""
+    """Create a progress bar from static or Python-bound numeric state.
+
+    Parameters
+    ----------
+    key : str or None, optional
+        When provided, binds the current value to this state key. When
+        ``None``, the bar displays ``default_value`` only. Default is
+        ``None``.
+    label : str or None, optional
+        Visible label above the bar. Default is ``None``.
+    default_value : int or float, optional
+        Initial progress value when ``key`` is set and no runtime state exists
+        yet, or the static value when ``key`` is ``None``. Default is ``0``.
+    value
+        When ``key`` is set and ``value`` is omitted, registers
+        ``default_value`` without overwriting user input on rerun. When
+        provided with ``key``, must be a ``str``, ``int``, ``float``, or
+        ``bool`` and forces that value into runtime state on rerun. Ignored
+        when ``key`` is ``None``.
+    max : int or float, optional
+        Maximum progress value (100% fill). Default is ``100``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Progress`` component node.
+    """
     if key:
         return _control(
             "Progress",
@@ -650,7 +1369,31 @@ def avatar(
     size: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create an avatar image with optional fallback text."""
+    """Create an avatar image with optional fallback text.
+
+    Parameters
+    ----------
+    src : str or None, optional
+        Image URL. Default is ``None``.
+    alt : str or None, optional
+        Accessible alt text for the image. Default is ``None``.
+    fallback : str or None, optional
+        Text shown when ``src`` is missing or fails to load. Default is
+        ``None``.
+    label : str or None, optional
+        Alias used as fallback text when ``fallback`` is not set. Default is
+        ``None``.
+    size : str or None, optional
+        Avatar dimensions. One of ``"sm"``, ``"md"``, or ``"lg"``. Unrecognized
+        values fall back to ``"md"``. Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        An ``Avatar`` component node.
+    """
     return _component(
         "Avatar",
         src=src,
@@ -671,7 +1414,32 @@ def popover(
     description: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a popover with a button trigger and child content."""
+    """Create a popover with a button trigger and child content.
+
+    Parameters
+    ----------
+    *children
+        Content shown inside the popover panel.
+    label : str or None, optional
+        Trigger button label. Used when ``trigger`` and ``text`` are not set.
+        Default is ``None``.
+    trigger : str or None, optional
+        Trigger button label (preferred over ``label``). Default is ``None``.
+    text : str or None, optional
+        Trigger button label alias. Default is ``None``.
+    content : str or None, optional
+        Inline body text when no ``children`` are provided. Default is
+        ``None``.
+    description : str or None, optional
+        Supporting text shown with ``content``. Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Popover`` component node.
+    """
     return _component(
         "Popover",
         children,
@@ -693,7 +1461,32 @@ def hover_card(
     description: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a hover card with a text trigger and child content."""
+    """Create a hover card with a text trigger and child content.
+
+    Parameters
+    ----------
+    *children
+        Content shown inside the hover card panel.
+    label : str or None, optional
+        Trigger link text. Used when ``trigger`` and ``text`` are not set.
+        Default is ``None``.
+    trigger : str or None, optional
+        Trigger link text (preferred over ``label``). Default is ``None``.
+    text : str or None, optional
+        Trigger link text alias. Default is ``None``.
+    content : str or None, optional
+        Inline body text when no ``children`` are provided. Default is
+        ``None``.
+    description : str or None, optional
+        Supporting text shown with ``content``. Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``HoverCard`` component node.
+    """
     return _component(
         "HoverCard",
         children,
@@ -715,7 +1508,33 @@ def tooltip(
     description: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a tooltip around a button trigger."""
+    """Create a tooltip around a button trigger.
+
+    Parameters
+    ----------
+    *children
+        Optional content rendered inside the tooltip (in addition to text
+        props).
+    label : str or None, optional
+        Trigger button label. Used when ``trigger`` and ``text`` are not set.
+        Default is ``None``.
+    trigger : str or None, optional
+        Trigger button label (preferred over ``label``). Default is ``None``.
+    text : str or None, optional
+        Tooltip body text or trigger label alias. Default is ``None``.
+    content : str or None, optional
+        Tooltip body text alias for ``text``. Default is ``None``.
+    description : str or None, optional
+        Supporting tooltip text shown with ``content`` or ``text``. Default is
+        ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Tooltip`` component node.
+    """
     return _component(
         "Tooltip",
         children,
@@ -734,7 +1553,25 @@ def carousel(
     show_controls: bool = True,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a carousel whose children become slides."""
+    """Create a carousel whose children become slides.
+
+    Parameters
+    ----------
+    *children
+        Slide components or plain strings (coerced to labels).
+    orientation : str, optional
+        Scroll axis. ``"vertical"`` stacks slides vertically; any other value
+        uses horizontal layout. Default is ``"horizontal"``.
+    show_controls : bool, optional
+        Whether previous/next controls are shown. Default is ``True``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Carousel`` component node.
+    """
     return _component(
         "Carousel",
         children,
@@ -753,7 +1590,32 @@ def collapsible(
     description: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create a collapsible section with a trigger label."""
+    """Create a collapsible section with a trigger label.
+
+    Parameters
+    ----------
+    *children
+        Content shown when expanded.
+    label : str or None, optional
+        Trigger button label. Used when ``title`` is not set. Default is
+        ``None``.
+    title : str or None, optional
+        Trigger button label (preferred over ``label``). Default is ``None``.
+    default_open : bool, optional
+        Whether the section starts expanded. Default is ``False``.
+    content : str or None, optional
+        Inline body text when no ``children`` are provided. Default is
+        ``None``.
+    description : str or None, optional
+        Supporting text shown with ``content``. Default is ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Collapsible`` component node.
+    """
     return _component(
         "Collapsible",
         children,
@@ -772,7 +1634,27 @@ def accordion(
     multiple: bool = False,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Create an accordion whose children become expandable items."""
+    """Create an accordion whose children become expandable items.
+
+    Parameters
+    ----------
+    *children
+        Accordion item components or plain strings (coerced to labels).
+    default_value : str or None, optional
+        Value of the initially expanded item. When ``None``, the first child
+        item is expanded (``"item-0"`` when child values are unset). Default
+        is ``None``.
+    multiple : bool, optional
+        When ``True``, allows more than one item to stay open at once.
+        Default is ``False``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        An ``Accordion`` component node.
+    """
     return _component(
         "Accordion",
         children,
@@ -788,7 +1670,24 @@ def markdown_cell(
     text: Optional[str] = None,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Reference a markdown cell by Orion cell id, or render inline markdown text."""
+    """Reference a markdown cell by Orion cell id, or render inline markdown text.
+
+    Parameters
+    ----------
+    cell_id : str or None, optional
+        Orion notebook cell id (``cells[i].metadata.orion.id``) whose markdown
+        source should be embedded. Default is ``None``.
+    text : str or None, optional
+        Inline markdown rendered when ``cell_id`` is not provided. Default is
+        ``None``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``MarkdownCell`` component node.
+    """
     return _component("MarkdownCell", cellId=cell_id, text=text, class_name=class_name)
 
 
@@ -798,7 +1697,23 @@ def output(
     *,
     class_name: Optional[str] = None,
 ) -> Component:
-    """Reference a notebook output by Orion cell id and zero-based output index."""
+    """Reference a notebook output by Orion cell id and zero-based output index.
+
+    Parameters
+    ----------
+    cell_id : str
+        Orion notebook cell id (``cells[i].metadata.orion.id``) that owns the
+        output.
+    output_index : int, optional
+        Zero-based index into that cell's ``outputs`` list. Default is ``0``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        An ``Output`` component node.
+    """
     return _component(
         "Output",
         cellId=cell_id,
@@ -808,22 +1723,62 @@ def output(
 
 
 def get(key: str, default: Optional[StateValue] = None) -> Optional[StateValue]:
-    """Return an Orion UI control value from Python runtime state."""
+    """Return an Orion UI control value from Python runtime state.
+
+    Parameters
+    ----------
+    key : str
+        State key previously bound by a control helper or ``define_default()``.
+    default : str, int, float, bool, or None, optional
+        Value returned when ``key`` has no stored state. Default is ``None``.
+
+    Returns
+    -------
+    str, int, float, bool, or None
+        Current runtime value for ``key``, or ``default`` when unset.
+    """
     return _runtime.get_value(key, default)
 
 
 def define_default(key: str, default: StateValue) -> StateValue:
-    """Define a default value without replacing an existing user-selected value."""
+    """Define a default value without replacing an existing user-selected value.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key to initialize.
+    default : str, int, float, or bool
+        Value stored only when ``key`` has no existing runtime state.
+
+    Returns
+    -------
+    str, int, float, or bool
+        Current runtime value for ``key`` (existing state or ``default``).
+    """
     return _runtime.define_default(key, default)
 
 
 def set(key: str, value: StateValue) -> None:
-    """Set an Orion UI control value in Python runtime state."""
+    """Set an Orion UI control value in Python runtime state.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key to update.
+    value : str, int, float, or bool
+        Value written into runtime state, replacing any prior value.
+    """
     _runtime.set_value(key, value)
 
 
 def state() -> Dict[str, StateValue]:
-    """Return a shallow copy of Orion UI runtime state."""
+    """Return a shallow copy of Orion UI runtime state.
+
+    Returns
+    -------
+    dict of str to str, int, float, or bool
+        Mapping of every bound state key to its current value.
+    """
     return _runtime.state()
 
 
@@ -857,6 +1812,7 @@ def _render_static_html(component: Component) -> str:
         "ToggleGroup",
         "Calendar",
         "DatePicker",
+        "DateTimePicker",
         "Progress",
     }:
         value = html.escape(str(component.props.get("defaultValue", "")))
@@ -907,6 +1863,7 @@ __all__ = [
     "checkbox",
     "collapsible",
     "date_picker",
+    "date_time_picker",
     "define_default",
     "get",
     "grid",

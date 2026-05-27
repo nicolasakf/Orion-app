@@ -85,8 +85,9 @@ Controls:
 - `ui.radio_group("key", options, label=None, default_value=None, value=<unset>)`
 - `ui.toggle("key", label=None, default_value=False, value=<unset>, variant=None)`
 - `ui.toggle_group("key", options, label=None, default_value=None, value=<unset>, variant=None)`
-- `ui.calendar("key", label=None, default_value="", value=<unset>)`
-- `ui.date_picker("key", label=None, default_value="", value=<unset>, placeholder=None)`
+- `ui.calendar("key", label=None, mode="single", default_value="", value=<unset>, caption_layout=None, from_year=None, to_year=None, number_of_months=None, show_outside_days=False, presets=None)`
+- `ui.date_picker("key", label=None, mode="single", default_value="", value=<unset>, placeholder=None, caption_layout=None, from_year=None, to_year=None, number_of_months=None, show_outside_days=False, presets=None)`
+- `ui.date_time_picker("key", label=None, default_value="", value=<unset>, start_time_key=None, end_time_key=None, start_time_label="Start time", end_time_label="End time", default_start_time="09:00:00", default_end_time="17:00:00", caption_layout=None, from_year=None, to_year=None, show_outside_days=False, presets=None)`
 - `ui.button(label, action=None, variant=None, size=None)`
 
 Display:
@@ -153,7 +154,9 @@ Only use this action when the target cell ids already exist in `cells[i].metadat
 - Control changes do not automatically rerun dependent cells.
 - Users should rerun dependent cells manually or use an explicit `ui.button(..., action={"type": "execute_cells", ...})`.
 - Components accept JSON-serializable props only.
-- `Calendar` and `DatePicker` use ISO-like `YYYY-MM-DD` strings in Python state.
+- `Calendar`, `DatePicker`, and `DateTimePicker` use ISO-like `YYYY-MM-DD` strings in Python state for single dates.
+- `Calendar` and `DatePicker` support `mode="range"`; range state is a JSON string such as `{"from":"2026-06-01","to":"2026-06-07"}`.
+- Calendar-style components support `caption_layout="buttons"`, `"dropdown"`, or `"dropdown-buttons"` (dropdowns plus prev/next month buttons), `from_year`, `to_year`, `number_of_months`, `show_outside_days` (default `False`), and `presets=[{"label": "Today", "daysOffset": 0}]`.
 - Do not rely on arbitrary Tailwind runtime class strings; Tailwind only includes classes known at build time.
 - Do not use arbitrary React, custom component imports, inline `style`, or raw CSS inside Python UI code.
 - Do not use `ipywidgets` or `anywidget` for Orion UI v1 unless the user explicitly asks for generic Jupyter compatibility.
