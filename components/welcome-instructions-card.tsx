@@ -25,6 +25,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import {
+  ORION_USER_DOCS_CONNECT_JUPYTER_URL,
+} from "@/lib/constants/user-docs";
 
 const JUPYTER_INSTALL_URL =
   "https://jupyter-server.readthedocs.io/en/latest/users/installation.html";
@@ -211,6 +214,15 @@ export function WelcomeInstructionsCard({
                               className="inline-flex items-center gap-2 text-sm font-medium text-blue-600 dark:text-blue-300/80 underline-offset-4 hover:underline"
                             >
                               More installation options
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </a>
+                            <a
+                              href={ORION_USER_DOCS_CONNECT_JUPYTER_URL}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-2 text-sm font-medium text-blue-600 dark:text-blue-300/80 underline-offset-4 hover:underline"
+                            >
+                              Connect Orion to Jupyter (help)
                               <ExternalLink className="h-3.5 w-3.5" />
                             </a>
                           </div>

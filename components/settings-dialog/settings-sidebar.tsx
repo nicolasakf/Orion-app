@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Palette, Box, Key, FileJson } from "lucide-react";
+import { Palette, Box, Key, FileJson, ExternalLink } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -12,6 +12,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import type { SettingsTab } from "@/components/settings-dialog/types";
+import { ORION_USER_DOCS_URL } from "@/lib/constants/user-docs";
 import { cn } from "@/lib/utils";
 
 const SETTINGS_NAV_BASE: { id: SettingsTab; title: string; icon: React.ElementType }[] = [
@@ -73,6 +74,22 @@ export function SettingsSidebar({
                 </SidebarMenuItem>
               );
             })}
+          </SidebarMenu>
+        </SidebarGroup>
+        <SidebarGroup className="mt-auto">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild className="cursor-pointer">
+                <a
+                  href={ORION_USER_DOCS_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink className="h-4 w-4" />
+                  Help
+                </a>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
           </SidebarMenu>
         </SidebarGroup>
       </SidebarContent>

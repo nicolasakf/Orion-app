@@ -117,6 +117,8 @@ import {
   type CellSelectionState,
 } from "./notebook-commands";
 import { toast } from "@/hooks/use-toast";
+import { ToastAction } from "@/components/ui/toast";
+import { ORION_USER_DOCS_PDF_EXPORT_URL } from "@/lib/constants/user-docs";
 import {
   getSubagentDisableModelInvocation,
   getSubagentMetadata,
@@ -1080,6 +1082,16 @@ export function NotebookEditor({
           description:
             "Allow pop-ups for Orion, then try exporting the notebook again.",
           variant: "destructive",
+          action: (
+            <ToastAction
+              altText="Open PDF export help"
+              onClick={() => {
+                window.open(ORION_USER_DOCS_PDF_EXPORT_URL, "_blank", "noopener,noreferrer");
+              }}
+            >
+              Help
+            </ToastAction>
+          ),
         });
         return;
       }
