@@ -1,6 +1,6 @@
 ---
 name: orion-ui
-description: Builds Orion-native notebook UI outputs with the Python `orion_ui` package. Use when the user asks for ShadCN-like notebook controls, interactive notebook UI, Python-authored UI components, Orion UI MIME outputs, or notebook controls that also work in App View.
+description: Builds Orion-native notebook UI outputs with the Python `orion_ui` package. Use when the user asks for interactive notebook UI features like plotly charts, sliders, selects, buttons, etc.
 ---
 
 # Orion UI notebook components

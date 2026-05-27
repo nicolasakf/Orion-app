@@ -420,3 +420,8 @@ html {
 .wmde-markdown-var {
   font-family: var(--font-sans), sans-serif !important;
 }
+
+/* Let Plotly hover-card shadows render outside the plot viewport. */
+.orion-plotly-output svg.main-svg {
+  overflow: visible !important;
+}
