@@ -77,6 +77,7 @@ import {
   formatReferencesForMessage,
   type ResolvedChatReference,
 } from "@/lib/chat/chat-references";
+import { normalizeInlineDataUrlFileParts } from "@/lib/agent/model-message-files";
 
 /** Standard request duration limit in seconds */
 export const maxDuration = 300;
@@ -492,6 +493,7 @@ export async function POST(req: Request) {
       { status: 400, headers: { "Content-Type": "application/json" } }
     );
   }
+  messages = normalizeInlineDataUrlFileParts(messages);
 
   /**
    * Whether prior messages already include a load_skill invocation for this skill.
@@ -659,6 +661,7 @@ export async function POST(req: Request) {
         } else {
           compactionMessages = rawList as ModelMessage[];
         }
+        compactionMessages = normalizeInlineDataUrlFileParts(compactionMessages);
       }
 
       // Prepend previous summary context if provided

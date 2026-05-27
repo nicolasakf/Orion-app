@@ -100,7 +100,8 @@ export function useContextEstimate(
   messages: UIMessage[],
   contextWindow: number,
   compactionSummary: CompactionSummary | null | undefined,
-  systemPromptEstimateChars?: number
+  systemPromptEstimateChars?: number,
+  additionalImageCount = 0
 ) {
   const [estimate, setEstimate] = React.useState<ReturnType<typeof estimateMessageTokens> | null>(
     null
@@ -114,11 +115,14 @@ export function useContextEstimate(
   React.useEffect(() => {
     const id = window.setTimeout(() => {
       const wire = buildWirePayload(messages, compactionSummary);
-      const est = estimateMessageTokens(wire, systemPrompt, { contextWindow });
+      const est = estimateMessageTokens(wire, systemPrompt, {
+        contextWindow,
+        additionalImageCount,
+      });
       setEstimate(est);
     }, 150);
     return () => window.clearTimeout(id);
-  }, [messages, contextWindow, compactionSummary, systemPrompt]);
+  }, [messages, contextWindow, compactionSummary, systemPrompt, additionalImageCount]);
 
   return estimate;
 }
@@ -218,7 +222,7 @@ export function ContextUsagePill({
             <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.tools)}</span>
           </div>
           <div className="flex justify-between gap-6">
-            <span>Images</span>
+            <span>Images & attachments</span>
             <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.images)}</span>
           </div>
         </div>

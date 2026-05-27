@@ -1,0 +1,113 @@
+import * as React from "react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { ChatTextbox } from "./chat-textbox";
+import type { ChatDraftAttachment, LLM } from "./types";
+
+vi.mock("next-themes", () => ({
+  useTheme: () => ({ theme: "light" }),
+}));
+
+vi.mock("@/hooks/use-orion-settings", () => ({
+  useOrionSettings: () => ({
+    effectiveSettings: {
+      chat: { fontSize: 14 },
+    },
+  }),
+}));
+
+const models: LLM[] = [
+  {
+    value: "gpt-test",
+    label: "GPT Test",
+    provider: "openai",
+    supportsImageInput: true,
+  },
+];
+
+function renderTextbox(
+  props: Partial<React.ComponentProps<typeof ChatTextbox>> = {}
+) {
+  const textareaRef = React.createRef<HTMLTextAreaElement>();
+  return render(
+    <ChatTextbox
+      input=""
+      handleInputChange={vi.fn()}
+      handleSubmit={vi.fn((event) => event.preventDefault())}
+      onStop={vi.fn()}
+      isLoading={false}
+      interactionMode="Agent"
+      selectedModel="gpt-test"
+      editingState={null}
+      textareaRef={textareaRef}
+      onInteractionModeChange={vi.fn()}
+      onModelChange={vi.fn()}
+      onCancelEdit={vi.fn()}
+      models={models}
+      modelSettings={{}}
+      onModelSettingsChange={vi.fn()}
+      {...props}
+    />
+  );
+}
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("ChatTextbox attachments", () => {
+  it("opens the hidden file input through the plus button", () => {
+    const onAttachFiles = vi.fn();
+    const { container } = renderTextbox({ onAttachFiles });
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const clickSpy = vi.spyOn(fileInput, "click").mockImplementation(() => undefined);
+
+    fireEvent.click(screen.getByRole("button", { name: "Attach external file" }));
+
+    expect(clickSpy).toHaveBeenCalledOnce();
+  });
+
+  it("passes selected files to the parent", () => {
+    const onAttachFiles = vi.fn();
+    const { container } = renderTextbox({ onAttachFiles });
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+
+    fireEvent.change(fileInput, { target: { files: [file] } });
+
+    expect(onAttachFiles).toHaveBeenCalledOnce();
+    expect(onAttachFiles.mock.calls[0]?.[0]?.[0]).toBe(file);
+  });
+
+  it("renders and removes attachment chips", () => {
+    const attachment: ChatDraftAttachment = {
+      id: "attachment-1",
+      fileName: "chart.png",
+      mediaType: "image/png",
+      size: 4096,
+      reference: {
+        id: "external-file:chart",
+        type: "external-file",
+        label: "chart.png",
+        locator: {
+          type: "external-file",
+          fileName: "chart.png",
+          mediaType: "image/png",
+          size: 4096,
+        },
+        status: "resolved",
+        preview: "Image: chart.png",
+        resolvedAt: "2026-05-27T00:00:00.000Z",
+      },
+    };
+    const onAttachmentsChange = vi.fn();
+    renderTextbox({ attachments: [attachment], onAttachmentsChange });
+
+    expect(screen.getByText("chart.png")).toBeInTheDocument();
+
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Remove chart.png" }));
+
+    expect(onAttachmentsChange).toHaveBeenCalledWith([]);
+  });
+});

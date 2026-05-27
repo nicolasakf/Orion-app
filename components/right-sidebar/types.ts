@@ -1,6 +1,7 @@
 import type { NotebookType } from "@/lib/types";
 import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
 import type { ResolvedChatReference } from "@/lib/chat/chat-references";
+import type { FileUIPart } from "ai";
 
 export type InteractionMode = "Agent" | "Ask" | "Edit";
 
@@ -16,6 +17,8 @@ export interface LLM {
   isAccessible?: boolean;
   /** Model context window size in tokens. */
   contextWindow?: number;
+  /** True when the model can receive image file parts as input. */
+  supportsImageInput?: boolean;
 }
 
 export interface EditingState {
@@ -67,6 +70,18 @@ export interface QueuedMessage {
   id: string;
   text: string;
   references: ResolvedChatReference[];
+  attachments: ChatDraftAttachment[];
+}
+
+/** Session-only file selected in the composer before a message is sent. */
+export interface ChatDraftAttachment {
+  id: string;
+  fileName: string;
+  mediaType: string;
+  size: number;
+  lastModified?: number;
+  reference: ResolvedChatReference;
+  imageFilePart?: FileUIPart;
 }
 
 export type { NotebookType };

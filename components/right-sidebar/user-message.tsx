@@ -35,6 +35,7 @@ const REFERENCE_TYPE_ICONS: Record<ChatReferenceType, React.ComponentType<{ clas
   variable: Braces,
   terminal: Terminal,
   conversation: MessagesSquare,
+  "external-file": FileText,
 };
 
 interface UserMessageProps {

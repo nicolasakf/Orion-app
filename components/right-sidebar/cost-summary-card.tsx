@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { DollarSign } from "lucide-react";
+import { DollarSign, RefreshCw, X } from "lucide-react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -33,6 +33,9 @@ interface CostSummaryCardProps {
   summary: ChatCostSummary;
   modelLabels: Record<string, string>;
   className?: string;
+  onDismiss?: () => void;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
 /** Human-readable provider names for cost summary rows. */
@@ -94,14 +97,47 @@ function CostCell({
 }
 
 /** Renders session usage totals as a card with a per-model breakdown table. */
-export function CostSummaryCard({ summary, modelLabels, className }: CostSummaryCardProps) {
+export function CostSummaryCard({
+  summary,
+  modelLabels,
+  className,
+  onDismiss,
+  onRefresh,
+  isRefreshing = false,
+}: CostSummaryCardProps) {
   const hasRequests = summary.requestCount > 0;
+  const showHeaderActions = onDismiss != null || onRefresh != null;
 
   return (
     <Card className={cn("w-full max-w-full overflow-hidden border-border/80 shadow-sm", className)}>
       <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b border-border/60 bg-muted/40 px-3 py-2">
         <DollarSign className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
         <CardTitle className="text-sm font-medium leading-none">Session cost</CardTitle>
+        {showHeaderActions && (
+          <div className="ml-auto flex items-center gap-0.5">
+            {onRefresh && (
+              <button
+                type="button"
+                className="corner-squircle rounded p-1 text-muted-foreground opacity-70 transition-opacity hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-40"
+                onClick={onRefresh}
+                disabled={isRefreshing}
+                aria-label="Refresh session cost"
+              >
+                <RefreshCw className={cn("h-3.5 w-3.5", isRefreshing && "animate-spin")} />
+              </button>
+            )}
+            {onDismiss && (
+              <button
+                type="button"
+                className="corner-squircle rounded p-1 text-muted-foreground opacity-70 transition-opacity hover:opacity-100"
+                onClick={onDismiss}
+                aria-label="Dismiss session cost"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        )}
       </CardHeader>
 
       <CardContent className="p-0">

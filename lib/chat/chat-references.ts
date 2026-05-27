@@ -7,6 +7,7 @@ export const CHAT_REFERENCE_TYPES = [
   "variable",
   "terminal",
   "conversation",
+  "external-file",
 ] as const;
 
 export type ChatReferenceType = (typeof CHAT_REFERENCE_TYPES)[number];
@@ -37,6 +38,13 @@ export type ChatReferenceLocator =
       toolName?: string;
       toolCallId?: string;
       selectionHash?: string;
+    }
+  | {
+      type: "external-file";
+      fileName: string;
+      mediaType: string;
+      size: number;
+      lastModified?: number;
     };
 
 export interface ChatReference {
@@ -100,6 +108,13 @@ const ChatReferenceLocatorSchema = z.discriminatedUnion("type", [
     toolCallId: z.string().min(1).optional(),
     selectionHash: z.string().min(1).optional(),
   }),
+  z.object({
+    type: z.literal("external-file"),
+    fileName: z.string().min(1),
+    mediaType: z.string().min(1),
+    size: z.number().int().min(0),
+    lastModified: z.number().int().min(0).optional(),
+  }),
 ]);
 
 export const ResolvedChatReferenceSchema = z.object({
@@ -138,7 +153,22 @@ export function getReferenceTypeLabel(type: ChatReferenceType): string {
       return "Terminal";
     case "conversation":
       return "Conversation";
+    case "external-file":
+      return "External file";
   }
+}
+
+function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = size / 1024;
+  for (const unit of units) {
+    if (value < 1024 || unit === units[units.length - 1]) {
+      return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${unit}`;
+    }
+    value /= 1024;
+  }
+  return `${size} B`;
 }
 
 /**
@@ -185,6 +215,8 @@ function formatLocator(reference: ResolvedChatReference): string {
           : `Message ${locator.messageIndex + 1}, tool call`;
       }
       return `Message ${locator.messageIndex + 1}, assistant response`;
+    case "external-file":
+      return `${locator.fileName} (${locator.mediaType}, ${formatBytes(locator.size)})`;
   }
 }
 
@@ -222,7 +254,7 @@ export function formatReferencesForMessage(references: ResolvedChatReference[]):
 
   return `## Referenced Context For This Message
 
-The user attached these references specifically to this message. Treat regular mentions as pointers, and use tools when exact content is needed. Highlighted editor and conversation selections include their selected text inline.
+The user attached these references specifically to this message. Treat regular mentions as pointers, and use tools when exact content is needed. Highlighted editor and conversation selections include their selected text inline. External file references are pointer-only unless a separate image input is present in the message.
 
 ${blocks.join("\n\n")}`;
 }

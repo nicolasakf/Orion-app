@@ -5,6 +5,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react
 import { useChat } from "@ai-sdk/react";
 import {
   type UIMessage,
+  type FileUIPart,
   DefaultChatTransport,
   lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
@@ -79,7 +80,7 @@ import { ChatToolbar } from "./chat-toolbar";
 import { ChatBody } from "./chat-body";
 import { createCostSummaryMessageId } from "./cost-summary-card";
 import { ChatTextbox, type ReferenceTab } from "./chat-textbox";
-import type { ToolTiming } from "./assistant-activity-grouping";
+import { finalizeCompletedToolTimings, type ToolTiming } from "./assistant-activity-grouping";
 import { useContextEstimate } from "./context-usage-pill";
 import {
   ORION_GITHUB_ISSUES_URL,
@@ -90,6 +91,7 @@ import {
 } from "./slash-commands";
 import { resolveSubagentExecutionModel } from "./subagent-model-resolution";
 import type {
+  ChatDraftAttachment,
   EditingState,
   InteractionMode,
   LLM,
@@ -269,6 +271,50 @@ function makeReference(
     preview: truncatePreview(preview),
     resolvedAt: new Date().toISOString(),
     ...(toolHint ? { toolHint } : {}),
+  };
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+      } else {
+        reject(new Error("File reader returned a non-string result."));
+      }
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function makeExternalFileReference(file: File): ResolvedChatReference {
+  const mediaType = file.type || "application/octet-stream";
+  const locator = {
+    type: "external-file" as const,
+    fileName: file.name,
+    mediaType,
+    size: file.size,
+    ...(file.lastModified > 0 ? { lastModified: file.lastModified } : {}),
+  };
+  const kind = mediaType.startsWith("image/") ? "image" : "file";
+  return makeReference(
+    "external-file",
+    file.name,
+    locator,
+    `${kind === "image" ? "Image" : "External file"}: ${file.name} (${mediaType}, ${file.size} bytes).`,
+    "This external file is pointer-only unless a separate image input is present in the message; no file contents are available through workspace tools."
+  );
+}
+
+function stripSessionOnlyFileParts(message: UIMessage): UIMessage {
+  if (!Array.isArray(message.parts) || !message.parts.some((part) => part.type === "file")) {
+    return message;
+  }
+  return {
+    ...message,
+    parts: message.parts.filter((part) => part.type !== "file"),
   };
 }
 
@@ -492,6 +538,7 @@ export function RightSidebar({
     summary: ChatCostSummary;
     modelLabels: Record<string, string>;
   } | null>(null);
+  const [isRefreshingCostSummary, setIsRefreshingCostSummary] = useState(false);
 
   /** Shared request id for model calls triggered by the current user turn. */
   const modelRequestIdRef = useRef<string | undefined>(undefined);
@@ -542,6 +589,7 @@ export function RightSidebar({
             outputPrice: m.output_price_per_1m ?? undefined,
             icon: getProviderIcon(provider),
             contextWindow: m.context_window ?? undefined,
+            supportsImageInput: m.supports_image_input === true,
           };
         });
         setModels(mappedModels);
@@ -601,6 +649,7 @@ export function RightSidebar({
           outputPrice: 0,
           icon: getProviderIcon(providerId),
           contextWindow: 32768,
+          supportsImageInput: false,
         });
       }
     }
@@ -1287,8 +1336,13 @@ export function RightSidebar({
   // Manual input state — v6 useChat no longer manages input
   const [input, setInput] = useState("");
   const [draftReferences, setDraftReferences] = useState<ResolvedChatReference[]>([]);
+  const [draftAttachments, setDraftAttachments] = useState<ChatDraftAttachment[]>([]);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
-  const pendingSubmitRef = useRef<{ text: string; references: ResolvedChatReference[] } | null>(null);
+  const pendingSubmitRef = useRef<{
+    text: string;
+    references: ResolvedChatReference[];
+    attachments: ChatDraftAttachment[];
+  } | null>(null);
   const queueProcessingRef = useRef(false);
   const prevAgentTurnActiveRef = useRef(false);
   const handleInputChange = useCallback(
@@ -1306,6 +1360,65 @@ export function RightSidebar({
       textareaRef.current?.focus();
     }, 0);
   }, []);
+
+  /** Converts selected external files into session-only composer attachments. */
+  const handleAttachFiles = useCallback(async (files: FileList) => {
+    const selectedFiles = Array.from(files);
+    if (selectedFiles.length === 0) return;
+
+    const supportsImageInput = getModel(selectedModel)?.supportsImageInput === true;
+    const nextAttachments: ChatDraftAttachment[] = [];
+    let unsupportedImageCount = 0;
+
+    for (const file of selectedFiles) {
+      const mediaType = file.type || "application/octet-stream";
+      const reference = makeExternalFileReference(file);
+      let imageFilePart: FileUIPart | undefined;
+
+      if (mediaType.startsWith("image/")) {
+        if (supportsImageInput) {
+          try {
+            imageFilePart = {
+              type: "file",
+              mediaType,
+              filename: file.name,
+              url: await fileToDataUrl(file),
+            };
+          } catch (error) {
+            console.error("Failed to read image attachment:", error);
+            toast.error(`Could not attach ${file.name}.`);
+            continue;
+          }
+        } else {
+          unsupportedImageCount += 1;
+        }
+      }
+
+      nextAttachments.push({
+        id: `${reference.id}:${crypto.randomUUID()}`,
+        fileName: file.name,
+        mediaType,
+        size: file.size,
+        ...(file.lastModified > 0 ? { lastModified: file.lastModified } : {}),
+        reference,
+        ...(imageFilePart ? { imageFilePart } : {}),
+      });
+    }
+
+    if (unsupportedImageCount > 0) {
+      toast.warning(
+        unsupportedImageCount === 1
+          ? "This model cannot see image attachments, so the image was attached as a pointer."
+          : "This model cannot see image attachments, so the images were attached as pointers."
+      );
+    }
+
+    if (nextAttachments.length === 0) return;
+    setDraftAttachments((current) => [...current, ...nextAttachments].slice(-20));
+    window.setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 0);
+  }, [getModel, selectedModel, textareaRef]);
 
   useEffect(() => {
     const handleMentionNotebookCell = (event: Event) => {
@@ -1711,10 +1824,11 @@ export function RightSidebar({
 
       const chatForPersist = chats.find((c) => c.id === persistId);
       const newChatMessages: ChatMessage[] = finalMessages.map((m) => {
+        const messageForStorage = stripSessionOnlyFileParts(m);
         const existing = chatForPersist?.messages.find((msg) => msg.id === m.id);
         const references = parseChatMessageReferences(m.metadata);
         return {
-          ...m,
+          ...messageForStorage,
           metadata: references.length > 0 ? { references } : undefined,
           timestamp: existing?.timestamp || new Date(),
           modelUsed: selectedModel,
@@ -1792,11 +1906,17 @@ export function RightSidebar({
   // Derived isLoading for backward compat with child components
   const isLoading = status === "streaming" || status === "submitted";
   const selectedContextWindow = getModel(selectedModel)?.contextWindow ?? HARD_CAP_TOKENS;
+  const draftImageAttachmentCount = React.useMemo(
+    () => draftAttachments.filter((attachment) => attachment.imageFilePart).length,
+    [draftAttachments]
+  );
   const deferredMessagesForContext = React.useDeferredValue(messages);
   const contextEstimate = useContextEstimate(
     deferredMessagesForContext,
     selectedContextWindow,
-    currentChat?.compactionSummary
+    currentChat?.compactionSummary,
+    undefined,
+    draftImageAttachmentCount
   );
 
   // Ref to always hold the latest addToolOutput so async tool callbacks
@@ -1832,6 +1952,18 @@ export function RightSidebar({
   }, [status, hasPendingToolCalls, pendingApprovalIds, messages]);
 
   const isInputLocked = isAgentTurnActive;
+
+  /** Stamp terminal tool timings when a turn completes so compact rows can show duration. */
+  const prevTurnActiveForTimingsRef = useRef(isAgentTurnActive);
+  useLayoutEffect(() => {
+    const wasActive = prevTurnActiveForTimingsRef.current;
+    prevTurnActiveForTimingsRef.current = isAgentTurnActive;
+
+    if (!wasActive || isAgentTurnActive) return;
+
+    const endedAt = Date.now();
+    setToolTimings((prev) => finalizeCompletedToolTimings(messages, prev, endedAt));
+  }, [isAgentTurnActive, messages]);
 
   /** Skill slash commands built from the currently available skills. */
   const skillSlashCommands = React.useMemo(
@@ -1901,29 +2033,44 @@ export function RightSidebar({
   }, [effectiveChatId, currentChat?.compactionSummary, userCredential, selectedModel, modelInfo?.provider, setChats]);
 
   /** Fetches recorded usage for this chat and renders it as a temporary assistant row. */
-  const showCostSummary = useCallback(async (): Promise<void> => {
+  const showCostSummary = useCallback(async (options?: { refresh?: boolean }): Promise<void> => {
     if (!effectiveChatId) return;
 
+    setIsRefreshingCostSummary(true);
     try {
       const summary = await chatStorage.getChatCostSummary(effectiveChatId);
       const modelLabels = Object.fromEntries(
         modelsWithAccess.map((model) => [model.value, model.label])
       );
-      setEphemeralCostMessage({
-        chatId: effectiveChatId,
-        summary,
-        modelLabels,
-        message: {
-          id: createCostSummaryMessageId(),
-          role: "assistant",
-          parts: [],
-        },
+      setEphemeralCostMessage((current) => {
+        const preserveMessageId =
+          options?.refresh === true && current?.chatId === effectiveChatId;
+        return {
+          chatId: effectiveChatId,
+          summary,
+          modelLabels,
+          message: {
+            id: preserveMessageId ? current.message.id : createCostSummaryMessageId(),
+            role: "assistant",
+            parts: [],
+          },
+        };
       });
     } catch (error) {
       console.error("Failed to load cost summary:", error);
       toast.error("Failed to load session cost summary.");
+    } finally {
+      setIsRefreshingCostSummary(false);
     }
   }, [effectiveChatId, modelsWithAccess]);
+
+  const dismissCostSummary = useCallback((): void => {
+    setEphemeralCostMessage(null);
+  }, []);
+
+  const refreshCostSummary = useCallback((): void => {
+    void showCostSummary({ refresh: true });
+  }, [showCostSummary]);
 
   // Keep messagesRef up to date
   useEffect(() => {
@@ -1978,6 +2125,7 @@ export function RightSidebar({
               status: "completed",
               result: CANCELLED_TOOL_RESULT,
             });
+            markToolEnded(toolCallId);
             return;
           }
 
@@ -2294,6 +2442,7 @@ export function RightSidebar({
       modelsWithAccess,
       refreshCredentialForProviderIfNeeded,
       addTimedToolOutput,
+      markToolEnded,
       setChats,
     ]
   );
@@ -2624,6 +2773,7 @@ export function RightSidebar({
       setEditingState(null);
       setInput("");
       setDraftReferences([]);
+      setDraftAttachments([]);
       setMessageQueue([]);
       textareaRef.current?.focus();
       return;
@@ -2639,6 +2789,7 @@ export function RightSidebar({
     setChats((prev) => [newChat, ...prev]);
     setCurrentChatId(newChat.id);
     setDraftReferences([]);
+    setDraftAttachments([]);
     setMessageQueue([]);
   };
 
@@ -2702,6 +2853,7 @@ export function RightSidebar({
     }
     setCurrentChatId(chatId);
     setDraftReferences([]);
+    setDraftAttachments([]);
   };
 
   /** Download the current chat transcript as a markdown file. */
@@ -2742,6 +2894,7 @@ export function RightSidebar({
     });
     setInput(textContent);
     setDraftReferences(parseChatMessageReferences(message.metadata));
+    setDraftAttachments([]);
 
     setTimeout(() => {
       textareaRef.current?.focus();
@@ -2753,6 +2906,7 @@ export function RightSidebar({
       setInput("");
       setEditingState(null);
       setDraftReferences([]);
+      setDraftAttachments([]);
     }
   };
 
@@ -2766,7 +2920,20 @@ export function RightSidebar({
 
       const pendingSubmit = pendingSubmitRef.current;
       const userInput = pendingSubmit?.text ?? input;
-      const referencesForSubmit = pendingSubmit?.references ?? draftReferences;
+      const attachmentsForSubmit = pendingSubmit?.attachments ?? draftAttachments;
+      const referencesForSubmit = [
+        ...(pendingSubmit?.references ?? draftReferences),
+        ...attachmentsForSubmit.map((attachment) => attachment.reference),
+      ].slice(-20);
+      const imageFileParts = attachmentsForSubmit
+        .map((attachment) => attachment.imageFilePart)
+        .filter((part): part is FileUIPart => part !== undefined);
+      const messageText =
+        userInput.trim().length > 0
+          ? userInput
+          : referencesForSubmit.length > 0 || imageFileParts.length > 0
+            ? "Attached external file(s)."
+            : "";
 
       if (isInputLocked && !pendingSubmit) {
         return;
@@ -2777,7 +2944,7 @@ export function RightSidebar({
         return;
       }
 
-      if (!userInput.trim()) return;
+      if (!messageText.trim() && imageFileParts.length === 0) return;
       const modelRequestId = crypto.randomUUID();
       modelRequestIdRef.current = modelRequestId;
       stopRequestedRef.current = false;
@@ -2785,6 +2952,7 @@ export function RightSidebar({
       if (!pendingSubmit) {
         setInput("");
         setDraftReferences([]);
+        setDraftAttachments([]);
       }
       setEphemeralCostMessage(null);
 
@@ -2796,7 +2964,10 @@ export function RightSidebar({
       if (!compactionInFlightRef.current) {
         const ctxWindow = getModel(selectedModel)?.contextWindow ?? HARD_CAP_TOKENS;
         const wirePayload = buildWirePayload(messagesRef.current, compactionSummaryRef.current);
-        const est = estimateMessageTokens(wirePayload, "", { contextWindow: ctxWindow });
+        const est = estimateMessageTokens(wirePayload, "", {
+          contextWindow: ctxWindow,
+          additionalImageCount: imageFileParts.length,
+        });
         if (est.percentUsed >= COMPACTION_AUTO_THRESHOLD) {
           await runCompaction();
         }
@@ -2812,7 +2983,8 @@ export function RightSidebar({
       const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
       await sendMessage(
         {
-          text: userInput,
+          text: messageText,
+          ...(imageFileParts.length > 0 ? { files: imageFileParts } : {}),
           ...(referencesForSubmit.length > 0
             ? { metadata: { references: referencesForSubmit } }
             : {}),
@@ -2843,6 +3015,7 @@ export function RightSidebar({
     [
       input,
       draftReferences,
+      draftAttachments,
       sendMessage,
       modelInfo,
       selectedModel,
@@ -2872,6 +3045,11 @@ export function RightSidebar({
     const pendingSubmit = pendingSubmitRef.current;
     const effectiveInput = pendingSubmit?.text ?? input;
     const effectiveReferences = pendingSubmit?.references ?? draftReferences;
+    const effectiveAttachments = pendingSubmit?.attachments ?? draftAttachments;
+    const hasEffectiveDraftContent =
+      effectiveInput.trim().length > 0 ||
+      effectiveReferences.length > 0 ||
+      effectiveAttachments.length > 0;
     const submitSlashCommand = detectActiveSlashCommand(effectiveInput, [
       ...subagentSlashCommands,
       ...skillSlashCommands,
@@ -2882,6 +3060,7 @@ export function RightSidebar({
       if (!fromQueue) {
         setInput("");
         setDraftReferences([]);
+        setDraftAttachments([]);
       }
     };
 
@@ -3004,17 +3183,19 @@ export function RightSidebar({
     }
 
     if (isInputLocked && !fromQueue) {
-      if (editingState || !effectiveInput.trim()) return;
+      if (editingState || !hasEffectiveDraftContent) return;
       setMessageQueue((current) => [
         ...current,
         {
           id: crypto.randomUUID(),
           text: effectiveInput,
           references: effectiveReferences,
+          attachments: effectiveAttachments,
         },
       ]);
       setInput("");
       setDraftReferences([]);
+      setDraftAttachments([]);
       return;
     }
 
@@ -3029,12 +3210,20 @@ export function RightSidebar({
       modelRequestIdRef.current = modelRequestId;
       const currentMessages = messages;
       const editIndex = editingState.messageIndex;
+      const referencesForEditedMessage = [
+        ...effectiveReferences,
+        ...effectiveAttachments.map((attachment) => attachment.reference),
+      ].slice(-20);
 
       const newMessages = [...currentMessages];
       // Update the user message parts with the new text content
       newMessages[editIndex] = {
         ...newMessages[editIndex],
         parts: [{ type: "text" as const, text: effectiveInput }],
+        metadata:
+          referencesForEditedMessage.length > 0
+            ? { references: referencesForEditedMessage }
+            : undefined,
       };
       newMessages.splice(editIndex + 1);
 
@@ -3164,10 +3353,11 @@ export function RightSidebar({
 
         setMessages((finalMessages) => {
           const newChatMessages: ChatMessage[] = finalMessages.map((m) => {
+            const messageForStorage = stripSessionOnlyFileParts(m);
             const existing = currentChat?.messages.find((msg) => msg.id === m.id);
             const references = parseChatMessageReferences(m.metadata);
             return {
-              ...m,
+              ...messageForStorage,
               metadata: references.length > 0 ? { references } : undefined,
               timestamp: existing?.timestamp || new Date(),
               modelUsed: selectedModel,
@@ -3209,7 +3399,11 @@ export function RightSidebar({
     const [next, ...rest] = messageQueue;
     queueProcessingRef.current = true;
     setMessageQueue(rest);
-    pendingSubmitRef.current = { text: next.text, references: next.references };
+    pendingSubmitRef.current = {
+      text: next.text,
+      references: next.references,
+      attachments: next.attachments,
+    };
 
     void customHandleSubmitRef
       .current({ preventDefault: () => {} } as React.FormEvent<HTMLFormElement>)
@@ -3318,6 +3512,8 @@ export function RightSidebar({
           );
           setEditingState(null);
           setInput("");
+          setDraftReferences([]);
+          setDraftAttachments([]);
           textareaRef.current?.focus();
         } else {
           const newChat: Chat = {
@@ -3329,9 +3525,13 @@ export function RightSidebar({
           };
           setChats((prev) => [newChat, ...prev]);
           setCurrentChatId(newChat.id);
+          setDraftReferences([]);
+          setDraftAttachments([]);
         }
       } else if (action.type === "switch-chat") {
         setCurrentChatId(action.targetChatId);
+        setDraftReferences([]);
+        setDraftAttachments([]);
       }
     });
   }, [
@@ -3406,6 +3606,7 @@ export function RightSidebar({
             messages={activeSubagentSession.messages}
             error={undefined}
             isLoading={activeSubagentSession.status === "running"}
+            isAgentTurnActive={activeSubagentSession.status === "running"}
             onUserMessageClick={() => { }}
             editingState={null}
           />
@@ -3464,6 +3665,7 @@ export function RightSidebar({
             messages={visibleMessages}
             error={error}
             isLoading={isLoading}
+            isAgentTurnActive={isAgentTurnActive}
             onUserMessageClick={handleUserMessageClick}
             editingState={editingState}
             showKernelPrompt={showKernelPrompt}
@@ -3480,6 +3682,9 @@ export function RightSidebar({
             onOpenSubagentChat={setActiveSubagentToolCallId}
             onOpenSubagentReport={handleOpenSubagentReport}
             costSummaryByMessageId={costSummaryByMessageId}
+            onDismissCostSummary={dismissCostSummary}
+            onRefreshCostSummary={refreshCostSummary}
+            isRefreshingCostSummary={isRefreshingCostSummary}
           />
 
           <ChatTextbox
@@ -3516,6 +3721,9 @@ export function RightSidebar({
             referenceOptions={referenceOptions}
             references={draftReferences}
             onReferencesChange={setDraftReferences}
+            attachments={draftAttachments}
+            onAttachmentsChange={setDraftAttachments}
+            onAttachFiles={handleAttachFiles}
             onReferenceSearch={refreshReferenceSearch}
             disabledReferenceTabs={disabledReferenceTabs}
             queuedMessages={messageQueue}

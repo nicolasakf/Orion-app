@@ -5,6 +5,7 @@ import { useState } from "react";
 import {
   SendHorizontal,
   Square,
+  Plus,
   FileText,
   Folder,
   StretchHorizontal,
@@ -19,6 +20,7 @@ import {
   PenLine,
   Pencil,
   Boxes,
+  Image,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
@@ -49,7 +51,14 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ModelSettingsPopover } from "./model-settings-popover";
-import type { EditingState, InteractionMode, LLM, ModelSettings, QueuedMessage } from "./types";
+import type {
+  ChatDraftAttachment,
+  EditingState,
+  InteractionMode,
+  LLM,
+  ModelSettings,
+  QueuedMessage,
+} from "./types";
 import { SLASH_COMMANDS, type SlashCommand } from "./slash-commands";
 import { ContextUsagePill } from "./context-usage-pill";
 import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
@@ -157,6 +166,12 @@ export interface ChatTextboxProps {
   references?: ResolvedChatReference[];
   /** Called when the attached reference chips change. */
   onReferencesChange?: (references: ResolvedChatReference[]) => void;
+  /** Session-only files selected in the composer. */
+  attachments?: ChatDraftAttachment[];
+  /** Called when composer attachment chips change. */
+  onAttachmentsChange?: (attachments: ChatDraftAttachment[]) => void;
+  /** Called when the user picks external files from the composer. */
+  onAttachFiles?: (files: FileList) => void;
   /** Called when the @ picker opens, so the parent can refresh live candidates. */
   onReferencePickerOpen?: () => void;
   /** Called as the user searches references, scoped by the selected picker tab. */
@@ -176,7 +191,14 @@ const REFERENCE_TYPE_ICONS: Record<ChatReferenceType, React.ComponentType<{ clas
   variable: Boxes,
   terminal: Terminal,
   conversation: MessagesSquare,
+  "external-file": FileText,
 };
+
+function formatAttachmentSize(size: number): string {
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
 
 /** Normalizes mention search text so `@cell#3` can match the `Cell #3` option label. */
 function normalizeReferenceSearchText(value: string): string {
@@ -192,6 +214,66 @@ interface SlashTokenMatch {
 interface SelectedSkillChip {
   name: string;
   label: string;
+  definitionPath?: string;
+}
+
+interface ComposerSlashChipProps {
+  label: string;
+  category: SlashCommandCategory;
+  definitionPath?: string;
+  onOpenDefinition?: (path: string) => void;
+  onRemove: () => void;
+  removeAriaLabel: string;
+}
+
+/** Skill, subagent, or builtin slash token shown above the composer textarea. */
+function ComposerSlashChip({
+  label,
+  category,
+  definitionPath,
+  onOpenDefinition,
+  onRemove,
+  removeAriaLabel,
+}: ComposerSlashChipProps) {
+  const canOpen =
+    Boolean(definitionPath) && typeof onOpenDefinition === "function";
+
+  return (
+    <span
+      className={cn(
+        "corner-squircle inline-flex h-5 shrink-0 max-w-[55%] items-center gap-1 rounded-md border px-1.5 text-inherit font-medium leading-none",
+        SLASH_CHIP_CLASS_BY_CATEGORY[category],
+        canOpen && "cursor-pointer"
+      )}
+    >
+      {canOpen && definitionPath ? (
+        <button
+          type="button"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            onOpenDefinition(definitionPath);
+          }}
+          className="min-w-0 truncate text-left hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring rounded-sm"
+          aria-label={`Open ${label} definition`}
+        >
+          {label}
+        </button>
+      ) : (
+        <span className="truncate">{label}</span>
+      )}
+      <button
+        type="button"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          onRemove();
+        }}
+        className="flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity"
+        aria-label={removeAriaLabel}
+      >
+        <X className="h-2.5 w-2.5" />
+      </button>
+    </span>
+  );
 }
 
 type SlashCommandCategory = NonNullable<SlashCommand["category"]>;
@@ -244,7 +326,11 @@ function extractSelectedSkillChips(
       const name = command.name.slice("skill:".length);
       if (!seen.has(name)) {
         seen.add(name);
-        chips.push({ name, label: command.label });
+        chips.push({
+          name,
+          label: command.label,
+          ...(command.definitionPath ? { definitionPath: command.definitionPath } : {}),
+        });
       }
       return leading;
     })
@@ -294,6 +380,9 @@ export function ChatTextbox({
   referenceOptions = [],
   references = [],
   onReferencesChange,
+  attachments = [],
+  onAttachmentsChange,
+  onAttachFiles,
   onReferencePickerOpen,
   onReferenceSearch,
   disabledReferenceTabs = [],
@@ -306,6 +395,7 @@ export function ChatTextbox({
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [isCardFocused, setIsCardFocused] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
   const { theme } = useTheme();
   const { effectiveSettings } = useOrionSettings();
   const chatFontSize = effectiveSettings.chat.fontSize;
@@ -382,6 +472,9 @@ export function ChatTextbox({
       message,
       leadingWhitespace,
       category: slashCommandCategory(activeCommand),
+      ...(activeCommand.definitionPath
+        ? { definitionPath: activeCommand.definitionPath }
+        : {}),
     };
   }, [activeSlashCommand, allSlashCommands, input]);
   const selectedSubagentName = slashChip?.category === "subagent" ? slashChip.name : null;
@@ -465,6 +558,8 @@ export function ChatTextbox({
   }, [activeReferenceTab, isMentioning, mentionQuery, referenceOptions, selectedReferenceIds]);
   const hasReferenceMatches = orderedReferenceMatches.length > 0;
   const isReferenceTypeaheadOpen = isMentioning;
+  const hasDraftContent =
+    input.trim().length > 0 || references.length > 0 || attachments.length > 0;
 
   /** Refs for slash list rows so keyboard navigation can scroll the popover. */
   const slashMatchItemRefs = React.useRef<Map<number, HTMLElement>>(new Map());
@@ -636,6 +731,19 @@ export function ChatTextbox({
     },
     [onReferencesChange, references, textareaRef]
   );
+
+  const removeAttachment = React.useCallback(
+    (attachmentId: string) => {
+      onAttachmentsChange?.(attachments.filter((attachment) => attachment.id !== attachmentId));
+      textareaRef.current?.focus();
+    },
+    [attachments, onAttachmentsChange, textareaRef]
+  );
+
+  const openFilePicker = React.useCallback(() => {
+    if (readOnly) return;
+    fileInputRef.current?.click();
+  }, [readOnly]);
 
   /**
    * Clears the in-progress `/command` token so the slash typeahead closes.
@@ -810,12 +918,12 @@ export function ChatTextbox({
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-inherit text-xs text-muted-foreground">
-                      {queued.text}
+                      {queued.text || "Attached external file(s)."}
                     </p>
-                    {queued.references.length > 0 && (
+                    {queued.references.length + queued.attachments.length > 0 && (
                       <p className="mt-0.5 text-[10px] text-muted-foreground/70">
-                        {queued.references.length} reference
-                        {queued.references.length === 1 ? "" : "s"}
+                        {queued.references.length + queued.attachments.length} attachment
+                        {queued.references.length + queued.attachments.length === 1 ? "" : "s"}
                       </p>
                     )}
                   </div>
@@ -863,54 +971,47 @@ export function ChatTextbox({
           onSubmit={onFormSubmit}
           onKeyDownCapture={onFormKeyDownCapture}
         >
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              const files = event.target.files;
+              if (files && files.length > 0) {
+                onAttachFiles?.(files);
+              }
+              event.target.value = "";
+            }}
+          />
           <Popover open={isTypeaheadOpen || isReferenceTypeaheadOpen}>
             <PopoverAnchor asChild>
               <div className="w-full flex flex-col">
                 {(slashChip || selectedSkillChips.length > 0) && (
                   <div className="flex items-center gap-1 px-3 pt-2 pb-0">
                     {slashChip && (
-                      <span
-                        className={cn(
-                          "corner-squircle inline-flex h-5 shrink-0 max-w-[55%] items-center gap-1 rounded-md border px-1.5 text-inherit font-medium leading-none",
-                          SLASH_CHIP_CLASS_BY_CATEGORY[slashChip.category]
-                        )}
-                      >
-                        <span className="truncate">{slashChip.label}</span>
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            updateInputValue(slashChip.message);
-                            textareaRef.current?.focus();
-                          }}
-                          className="flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity"
-                          aria-label="Remove slash command"
-                        >
-                          <X className="h-2.5 w-2.5" />
-                        </button>
-                      </span>
+                      <ComposerSlashChip
+                        label={slashChip.label}
+                        category={slashChip.category}
+                        definitionPath={slashChip.definitionPath}
+                        onOpenDefinition={onOpenSlashDefinition}
+                        onRemove={() => {
+                          updateInputValue(slashChip.message);
+                          textareaRef.current?.focus();
+                        }}
+                        removeAriaLabel="Remove slash command"
+                      />
                     )}
                     {selectedSkillChips.map((chip) => (
-                      <span
+                      <ComposerSlashChip
                         key={chip.name}
-                        className={cn(
-                          "corner-squircle inline-flex h-5 shrink-0 max-w-[55%] items-center gap-1 rounded-md border px-1.5 text-inherit font-medium leading-none",
-                          SLASH_CHIP_CLASS_BY_CATEGORY.skill
-                        )}
-                      >
-                        <span className="truncate">{chip.label}</span>
-                        <button
-                          type="button"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            removeSelectedSkillChip(chip.name);
-                          }}
-                          className="flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity"
-                          aria-label={`Remove ${chip.label}`}
-                        >
-                          <X className="h-2.5 w-2.5" />
-                        </button>
-                      </span>
+                        label={chip.label}
+                        category="skill"
+                        definitionPath={chip.definitionPath}
+                        onOpenDefinition={onOpenSlashDefinition}
+                        onRemove={() => removeSelectedSkillChip(chip.name)}
+                        removeAriaLabel={`Remove ${chip.label}`}
+                      />
                     ))}
                   </div>
                 )}
@@ -934,6 +1035,37 @@ export function ChatTextbox({
                             }}
                             className="flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity"
                             aria-label={`Remove ${reference.label}`}
+                          >
+                            <X className="h-2.5 w-2.5" />
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+                {attachments.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1 px-3 pt-2 pb-0">
+                    {attachments.map((attachment) => {
+                      const Icon = attachment.mediaType.startsWith("image/") ? Image : FileText;
+                      return (
+                        <span
+                          key={attachment.id}
+                          className="corner-squircle inline-flex h-5 max-w-[70%] items-center gap-1 rounded-md border border-border/60 bg-muted px-1.5 text-inherit font-medium leading-none text-muted-foreground"
+                          title={`${attachment.fileName} · ${attachment.mediaType} · ${formatAttachmentSize(attachment.size)}`}
+                        >
+                          <Icon className="h-2.5 w-2.5 shrink-0 opacity-70" />
+                          <span className="truncate">{attachment.fileName}</span>
+                          <span className="shrink-0 text-[0.7em] opacity-60">
+                            {formatAttachmentSize(attachment.size)}
+                          </span>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              removeAttachment(attachment.id);
+                            }}
+                            className="flex items-center justify-center opacity-60 hover:opacity-100 transition-opacity"
+                            aria-label={`Remove ${attachment.fileName}`}
                           >
                             <X className="h-2.5 w-2.5" />
                           </button>
@@ -1053,6 +1185,21 @@ export function ChatTextbox({
                           e.preventDefault();
                           e.stopPropagation();
                           updateInputValue(`${slashChip.leadingWhitespace}${slashChip.message}`);
+                          return;
+                        }
+                      }
+
+                      if (!slashChip && e.key === "Backspace" && attachments.length > 0) {
+                        const target = e.target as HTMLTextAreaElement;
+                        const isEmptyComposer =
+                          textareaValue.length === 0 &&
+                          target.selectionStart === 0 &&
+                          target.selectionEnd === 0;
+                        if (isEmptyComposer) {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onAttachmentsChange?.(attachments.slice(0, -1));
+                          textareaRef.current?.focus();
                           return;
                         }
                       }
@@ -1354,20 +1501,16 @@ export function ChatTextbox({
                   <Button
                     variant="ghost"
                     disabled={readOnly}
-                    className="h-7 px-2 text-inherit bg-muted hover:bg-accent gap-1 [&_svg]:!size-3"
+                    className="h-7 px-1.5 text-inherit bg-muted hover:bg-accent gap-0.5 [&_svg]:!size-3"
                     style={chatBoxFont}
+                    aria-label={`Interaction mode: ${interactionMode}`}
                   >
                     {(() => {
                       const m = MODES.find((m) => m.value === interactionMode) ?? MODES[0];
                       const Icon = m.icon;
-                      return (
-                        <>
-                          <Icon className="shrink-0 opacity-70" />
-                          <span>{m.label}</span>
-                        </>
-                      );
+                      return <Icon className="shrink-0 opacity-70" />;
                     })()}
-                    <ChevronDown className="opacity-60" />
+                    <ChevronDown className="shrink-0 opacity-60" />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent
@@ -1617,10 +1760,23 @@ export function ChatTextbox({
             </div>
 
             {/* Bottom right - context usage + send */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
+              {!readOnly && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 text-muted-foreground hover:bg-transparent hover:text-foreground"
+                  style={chatBoxFont}
+                  onClick={openFilePicker}
+                  aria-label="Attach external file"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              )}
               <ContextUsagePill
                 estimate={contextEstimate}
-                hasMessages={!readOnly && hasMessages}
+                hasMessages={!readOnly && (hasMessages || attachments.length > 0)}
                 onCompact={onCompact}
               />
               {!readOnly && isLoading ? (
@@ -1637,7 +1793,7 @@ export function ChatTextbox({
               ) : (
                 <Button
                   type="submit"
-                  disabled={readOnly || !input.trim() || isOverContextBudget}
+                  disabled={readOnly || !hasDraftContent || isOverContextBudget}
                   size="icon"
                   className="h-7 w-7"
                   style={chatBoxFont}

@@ -9,6 +9,7 @@ export interface ModelCatalogEntry {
   cached_price_per_1m: number | null;
   context_window: number | null;
   max_output_tokens: number | null;
+  supports_image_input?: boolean;
   long_context_threshold: number | null;
   long_context_input_price_per_1m: number | null;
   long_context_output_price_per_1m: number | null;
@@ -726,9 +727,25 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
   },
 ];
 
+/** Hosted catalog models are known multimodal unless explicitly overridden. */
+function defaultSupportsImageInput(model: ModelCatalogEntry): boolean {
+  if (
+    model.provider_id === "ollama" ||
+    model.provider_id === "lmstudio" ||
+    model.provider_id === "mlx" ||
+    model.provider_id === "custom"
+  ) {
+    return false;
+  }
+  return true;
+}
+
 export const CLIENT_MODEL_CATALOG = MODEL_CATALOG.filter(
   (model) => model.client_avail
-);
+).map((model) => ({
+  ...model,
+  supports_image_input: model.supports_image_input ?? defaultSupportsImageInput(model),
+}));
 
 export function getModelCatalogEntry(
   modelId: string

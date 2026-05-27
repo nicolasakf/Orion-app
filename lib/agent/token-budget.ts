@@ -141,6 +141,14 @@ function countImageParts(parts: unknown[]): number {
   for (const part of parts) {
     if (typeof part !== "object" || part === null) continue;
     const p = part as Record<string, unknown>;
+    if (
+      p.type === "file" &&
+      typeof p.mediaType === "string" &&
+      p.mediaType.startsWith("image/")
+    ) {
+      count += 1;
+      continue;
+    }
     // DynamicToolUIPart or ToolUIPart with image output
     if (
       typeof p.type === "string" &&
@@ -171,7 +179,7 @@ function countImageParts(parts: unknown[]): number {
 export function estimateMessageTokens(
   messages: UIMessage[],
   systemPrompt: string,
-  opts: { contextWindow: number; calibrationRatio?: number }
+  opts: { contextWindow: number; calibrationRatio?: number; additionalImageCount?: number }
 ): TokenEstimate {
   const ratio = opts.calibrationRatio ?? DEFAULT_CHARS_PER_TOKEN;
   const cap = Math.min(HARD_CAP_TOKENS, opts.contextWindow);
@@ -206,7 +214,7 @@ export function estimateMessageTokens(
     }
   }
 
-  const imageTokens = imageCount * FIXED_IMAGE_TOKEN_COST;
+  const imageTokens = (imageCount + (opts.additionalImageCount ?? 0)) * FIXED_IMAGE_TOKEN_COST;
   const msgTokens = Math.ceil(msgTextChars / ratio);
   const toolTokens = Math.ceil(toolOutputChars / ratio);
 

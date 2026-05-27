@@ -22,7 +22,7 @@ export const DEFAULT_PANEL_VISIBILITY_STATE: PanelVisibilityState = {
 
 export const DEFAULT_PANEL_LAYOUT_STATE: PanelLayoutState = {
   horizontal: [15, 50, 20],
-  vertical: [70, 20],
+  vertical: [70, 30],
 };
 
 /**

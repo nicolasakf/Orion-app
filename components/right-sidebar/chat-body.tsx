@@ -16,6 +16,8 @@ import { ThinkingBlock } from "./thinking-block";
 import { CostSummaryCard, type CostSummaryMessageData } from "./cost-summary-card";
 import {
   buildAssistantRenderBlocks,
+  getActivityDurationMs,
+  isActivityGroupWaitingForFinalResponse,
   shouldAutoCollapseActivityGroup,
   shouldForceExpandActivityGroup,
   type AssistantPartWithIndex,
@@ -31,6 +33,8 @@ export interface ChatBodyProps {
   messages: UIMessage[];
   error: Error | undefined;
   isLoading: boolean;
+  /** True while the assistant turn is still in progress (streaming, tools, follow-up gap). */
+  isAgentTurnActive?: boolean;
   onUserMessageClick: (message: UIMessage, index: number) => void;
   editingState: EditingState | null;
   showKernelPrompt?: boolean;
@@ -51,6 +55,9 @@ export interface ChatBodyProps {
   onOpenSubagentReport?: (path: string) => void;
   /** Ephemeral `/cost` slash-command rows keyed by assistant message id. */
   costSummaryByMessageId?: Record<string, CostSummaryMessageData>;
+  onDismissCostSummary?: () => void;
+  onRefreshCostSummary?: () => void;
+  isRefreshingCostSummary?: boolean;
 }
 
 interface ChatMessageRowProps {
@@ -59,6 +66,8 @@ interface ChatMessageRowProps {
   isLastMessage: boolean;
   isDimmed: boolean;
   isLoading: boolean;
+  /** True while the assistant turn is still in progress (streaming, tools, follow-up gap). */
+  isAgentTurnActive?: boolean;
   onUserMessageClick: (message: UIMessage, index: number) => void;
   pendingApprovalIds?: Set<string>;
   onApprove?: (toolCallId: string) => void;
@@ -71,6 +80,9 @@ interface ChatMessageRowProps {
   onOpenSubagentChat?: (toolCallId: string) => void;
   onOpenSubagentReport?: (path: string) => void;
   costSummaryByMessageId?: Record<string, CostSummaryMessageData>;
+  onDismissCostSummary?: () => void;
+  onRefreshCostSummary?: () => void;
+  isRefreshingCostSummary?: boolean;
 }
 
 type ChatRenderItem =
@@ -429,27 +441,6 @@ function getActivityStatus(
   return "complete";
 }
 
-/** Compute elapsed time for a group from the earliest tool start to latest tool end. */
-function getActivityDurationMs(
-  items: AssistantPartWithIndex[],
-  toolTimings: Map<string, ToolTiming> | undefined
-): number | undefined {
-  let startedAt: number | undefined;
-  let endedAt: number | undefined;
-
-  for (const item of items) {
-    if (!isToolUIPart(item.part)) continue;
-    const timing = toolTimings?.get(item.part.toolCallId);
-    if (!timing?.startedAt || !timing.endedAt) continue;
-    startedAt =
-      startedAt === undefined ? timing.startedAt : Math.min(startedAt, timing.startedAt);
-    endedAt = endedAt === undefined ? timing.endedAt : Math.max(endedAt, timing.endedAt);
-  }
-
-  if (startedAt === undefined || endedAt === undefined) return undefined;
-  return Math.max(0, endedAt - startedAt);
-}
-
 /**
  * Render one chat row. Historical rows are memoized because AI SDK streaming
  * can clone message objects on every chunk.
@@ -460,6 +451,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   isLastMessage,
   isDimmed,
   isLoading,
+  isAgentTurnActive = false,
   onUserMessageClick,
   pendingApprovalIds,
   onApprove,
@@ -472,6 +464,9 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onOpenSubagentChat,
   onOpenSubagentReport,
   costSummaryByMessageId,
+  onDismissCostSummary,
+  onRefreshCostSummary,
+  isRefreshingCostSummary,
 }: ChatMessageRowProps) {
   const handleUserClick = React.useCallback(() => {
     onUserMessageClick(message, index);
@@ -574,6 +569,9 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
         <CostSummaryCard
           summary={costSummary.summary}
           modelLabels={costSummary.modelLabels}
+          onDismiss={onDismissCostSummary}
+          onRefresh={onRefreshCostSummary}
+          isRefreshing={isRefreshingCostSummary}
         />
       ) : (
         <div className="w-full min-w-0 space-y-2">
@@ -597,12 +595,20 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
             const status = getActivityStatus(block.items, pendingApprovalIds);
             const hasPendingApproval = status === "approval";
             const toolCount = block.items.filter((item) => isToolUIPart(item.part)).length;
+            const isWaitingForFinalResponse = isActivityGroupWaitingForFinalResponse({
+              hasFollowingText: block.hasFollowingText,
+              isLastMessage,
+              activityStatus: status,
+              isTurnActive: isAgentTurnActive,
+            });
             return (
               <AssistantActivityGroup
                 key={`${message.id}-activity-${block.items[0]?.partIndex ?? blockIndex}`}
                 toolCount={toolCount}
-                durationMs={getActivityDurationMs(block.items, toolTimings)}
-                isWaitingForFinalResponse={!block.hasFollowingText}
+                durationMs={getActivityDurationMs(block.items, toolTimings, {
+                  isActivityComplete: !isWaitingForFinalResponse,
+                })}
+                isWaitingForFinalResponse={isWaitingForFinalResponse}
                 autoCollapse={shouldAutoCollapseActivityGroup(block.hasFollowingText, hasPendingApproval)}
                 forceExpanded={shouldForceExpandActivityGroup(hasPendingApproval)}
               >
@@ -624,7 +630,10 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   const prevEffectiveLoading = prev.isLastMessage ? prev.isLoading : false;
   const nextEffectiveLoading = next.isLastMessage ? next.isLoading : false;
   if (prevEffectiveLoading !== nextEffectiveLoading) return false;
-  if (next.isLastMessage && next.isLoading) {
+  const prevTurnActive = prev.isLastMessage ? (prev.isAgentTurnActive ?? false) : false;
+  const nextTurnActive = next.isLastMessage ? (next.isAgentTurnActive ?? false) : false;
+  if (prevTurnActive !== nextTurnActive) return false;
+  if (next.isLastMessage && (next.isLoading || next.isAgentTurnActive)) {
     return false;
   }
 
@@ -647,6 +656,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   if (prev.costSummaryByMessageId?.[prev.message.id] !== next.costSummaryByMessageId?.[next.message.id]) {
     return false;
   }
+  if (prev.isRefreshingCostSummary !== next.isRefreshingCostSummary) return false;
 
   return true;
 });
@@ -656,6 +666,7 @@ export function ChatBody({
   messages,
   error,
   isLoading,
+  isAgentTurnActive = false,
   onUserMessageClick,
   editingState,
   showKernelPrompt,
@@ -672,6 +683,9 @@ export function ChatBody({
   onOpenSubagentChat,
   onOpenSubagentReport,
   costSummaryByMessageId,
+  onDismissCostSummary,
+  onRefreshCostSummary,
+  isRefreshingCostSummary,
 }: ChatBodyProps) {
   const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = React.useRef(true);
@@ -825,6 +839,9 @@ export function ChatBody({
                       !!editingState && editingState.messageId !== item.message.id
                     }
                     isLoading={isLoading && item.messageIndex === messages.length - 1}
+                    isAgentTurnActive={
+                      isAgentTurnActive && item.messageIndex === messages.length - 1
+                    }
                     onUserMessageClick={onUserMessageClick}
                     pendingApprovalIds={pendingApprovalIds}
                     onApprove={onApprove}
@@ -837,6 +854,9 @@ export function ChatBody({
                     onOpenSubagentChat={onOpenSubagentChat}
                     onOpenSubagentReport={onOpenSubagentReport}
                     costSummaryByMessageId={costSummaryByMessageId}
+                    onDismissCostSummary={onDismissCostSummary}
+                    onRefreshCostSummary={onRefreshCostSummary}
+                    isRefreshingCostSummary={isRefreshingCostSummary}
                   />
                 )}
 
