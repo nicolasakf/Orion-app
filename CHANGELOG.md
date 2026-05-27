@@ -4,6 +4,20 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.3] - 2026-05-27
+
+### Added
+
+- Agent: save dirty editor buffers before read/edit mutation tools run
+- Notebook: DataFrame variable inspector tab with tabular preview (up to 1000 rows × 100 columns)
+- Orion UI: Plotly charts styled with Orion design tokens (Saira font, dashed grids, hover cards)
+
+### Fixed
+
+- Orion UI: DateTimePicker stacks time inputs under the calendar on narrow layouts
+
+[0.6.3]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.6.3
+
 ## [0.6.2] - 2026-05-27
 
 ### Added
