@@ -1,5 +1,6 @@
 import type { NotebookType } from "@/lib/types";
 import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
+import type { ResolvedChatReference } from "@/lib/chat/chat-references";
 
 export type InteractionMode = "Agent" | "Ask" | "Edit";
 
@@ -60,5 +61,12 @@ export type ModelSettings =
 
 /** Map of modelId → provider-specific settings */
 export type ModelSettingsMap = Record<string, ModelSettings>;
+
+/** A user message waiting to send until the agent finishes its current run. */
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  references: ResolvedChatReference[];
+}
 
 export type { NotebookType };

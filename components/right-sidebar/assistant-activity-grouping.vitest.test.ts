@@ -4,6 +4,7 @@ import type { UIMessage } from "ai";
 import {
   buildAssistantRenderBlocks,
   shouldAutoCollapseActivityGroup,
+  shouldForceExpandActivityGroup,
 } from "./assistant-activity-grouping";
 
 type Part = UIMessage["parts"][number];
@@ -77,7 +78,7 @@ describe("buildAssistantRenderBlocks", () => {
     expect(blocks[2]).toMatchObject({ type: "activityGroup", hasFollowingText: true });
   });
 
-  it("keeps pending tool groups expanded", () => {
+  it("keeps pre-response activity out of final auto-collapse", () => {
     const blocks = buildAssistantRenderBlocks([
       textPart("before"),
       toolPart("bash", "call-1", "input-available"),
@@ -88,7 +89,7 @@ describe("buildAssistantRenderBlocks", () => {
       hasFollowingText: false,
       items: [{ partIndex: 1 }],
     });
-    expect(shouldAutoCollapseActivityGroup(false, true)).toBe(false);
+    expect(shouldAutoCollapseActivityGroup(false, false)).toBe(false);
   });
 
   it("auto-collapses completed tools with following final text", () => {
@@ -102,5 +103,10 @@ describe("buildAssistantRenderBlocks", () => {
       hasFollowingText: true,
     });
     expect(shouldAutoCollapseActivityGroup(true, false)).toBe(true);
+  });
+
+  it("only forces expansion for activity needing approval", () => {
+    expect(shouldForceExpandActivityGroup(true)).toBe(true);
+    expect(shouldForceExpandActivityGroup(false)).toBe(false);
   });
 });

@@ -1,0 +1,167 @@
+"use client";
+
+import * as React from "react";
+import { DollarSign } from "lucide-react";
+
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import type { ChatCostSummary } from "@/lib/chat/chat-storage";
+import { cn } from "@/lib/utils";
+
+/** Prefix for ephemeral assistant rows rendered by the `/cost` slash command. */
+export const COST_SUMMARY_MESSAGE_ID_PREFIX = "cost-summary-";
+
+/** Creates a unique message id for a `/cost` slash-command response row. */
+export function createCostSummaryMessageId(): string {
+  return `${COST_SUMMARY_MESSAGE_ID_PREFIX}${Date.now()}`;
+}
+
+export interface CostSummaryMessageData {
+  summary: ChatCostSummary;
+  modelLabels: Record<string, string>;
+}
+
+interface CostSummaryCardProps {
+  summary: ChatCostSummary;
+  modelLabels: Record<string, string>;
+  className?: string;
+}
+
+/** Human-readable provider names for cost summary rows. */
+const PROVIDER_LABELS: Record<string, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  google: "Google",
+  xai: "xAI",
+  ollama: "Ollama",
+  lmstudio: "LM Studio",
+  mlx: "MLX",
+  custom: "Custom Endpoint",
+};
+
+/** Resolves a provider id to a display label. */
+function getProviderLabel(providerId: string): string {
+  return PROVIDER_LABELS[providerId] ?? providerId;
+}
+
+/** Formats a request count as a plain number for table cells. */
+function formatRequestCountNumber(count: number): string {
+  return count.toLocaleString();
+}
+
+/** Formats a USD cost value compactly while keeping tiny session costs visible. */
+function formatUsd(costUsd: number | null): string {
+  if (costUsd == null) return "Unknown";
+  const maximumFractionDigits = costUsd === 0 ? 2 : costUsd < 0.01 ? 6 : 4;
+  return costUsd.toLocaleString(undefined, {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits,
+  });
+}
+
+/** Renders the cost cell, including a note when some requests were unpriced. */
+function CostCell({
+  costUsd,
+  unknownCount,
+}: {
+  costUsd: number | null;
+  unknownCount: number;
+}) {
+  if (unknownCount === 0) {
+    return <span className="font-mono tabular-nums">{formatUsd(costUsd)}</span>;
+  }
+
+  const unknownLabel = `${unknownCount.toLocaleString()} unpriced ${
+    unknownCount === 1 ? "request" : "requests"
+  }`;
+
+  return (
+    <div className="space-y-0.5">
+      <span className="font-mono tabular-nums">{formatUsd(costUsd)}</span>
+      <p className="text-[10px] text-muted-foreground">{unknownLabel}</p>
+    </div>
+  );
+}
+
+/** Renders session usage totals as a card with a per-model breakdown table. */
+export function CostSummaryCard({ summary, modelLabels, className }: CostSummaryCardProps) {
+  const hasRequests = summary.requestCount > 0;
+
+  return (
+    <Card className={cn("w-full max-w-full overflow-hidden border-border/80 shadow-sm", className)}>
+      <CardHeader className="flex flex-row items-center gap-2 space-y-0 border-b border-border/60 bg-muted/40 px-3 py-2">
+        <DollarSign className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+        <CardTitle className="text-sm font-medium leading-none">Session cost</CardTitle>
+      </CardHeader>
+
+      <CardContent className="p-0">
+        {!hasRequests ? (
+          <p className="px-3 py-3 text-sm text-muted-foreground">
+            No model requests have been recorded for this chat yet.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="h-8 px-3 text-xs">Model</TableHead>
+                <TableHead className="h-8 px-3 text-right text-xs"># Requests</TableHead>
+                <TableHead className="h-8 px-3 text-right text-xs">Cost</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {summary.models.map((model) => {
+                const label = modelLabels[model.modelId] ?? model.modelId;
+
+                return (
+                  <TableRow key={model.modelId} className="hover:bg-muted/30">
+                    <TableCell className="px-3 py-2 align-top text-xs">
+                      <div className="min-w-0 space-y-0.5">
+                        <span className="font-medium text-foreground">{label}</span>
+                        <p className="text-[10px] text-muted-foreground">
+                          {getProviderLabel(model.providerId)}
+                        </p>
+                      </div>
+                    </TableCell>
+                    <TableCell className="px-3 py-2 text-right align-top font-mono text-xs tabular-nums">
+                      {formatRequestCountNumber(model.requestCount)}
+                    </TableCell>
+                    <TableCell className="px-3 py-2 text-right align-top text-xs">
+                      <CostCell
+                        costUsd={model.totalCostUsd}
+                        unknownCount={model.unknownCostRequestCount}
+                      />
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+            <TableFooter>
+              <TableRow className="bg-muted/20 hover:bg-muted/20">
+                <TableCell className="px-3 py-2 text-xs font-medium">Total</TableCell>
+                <TableCell className="px-3 py-2 text-right align-top font-mono text-xs font-medium tabular-nums">
+                  {formatRequestCountNumber(summary.requestCount)}
+                </TableCell>
+                <TableCell className="px-3 py-2 text-right align-top text-xs font-medium">
+                  <CostCell
+                    costUsd={summary.totalCostUsd}
+                    unknownCount={summary.unknownCostRequestCount}
+                  />
+                </TableCell>
+              </TableRow>
+            </TableFooter>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

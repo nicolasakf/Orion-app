@@ -22,6 +22,7 @@ import {
   type SubagentSession,
   type SubagentSessionStatus,
 } from "@/lib/chat/chat-storage";
+import { downloadChatTranscriptMarkdown } from "@/lib/chat/export-chat-transcript";
 import {
   formatCellReferenceLabel,
   parseChatMessageReferences,
@@ -76,18 +77,26 @@ import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
 import type { ModelCatalogEntry } from "@/lib/agent/model-catalog";
 import { ChatToolbar } from "./chat-toolbar";
 import { ChatBody } from "./chat-body";
+import { createCostSummaryMessageId } from "./cost-summary-card";
 import { ChatTextbox, type ReferenceTab } from "./chat-textbox";
 import type { ToolTiming } from "./assistant-activity-grouping";
 import { useContextEstimate } from "./context-usage-pill";
 import {
   ORION_GITHUB_ISSUES_URL,
-  SLASH_COMMANDS,
   buildSkillSlashCommands,
   buildSubagentSlashCommands,
+  detectActiveSlashCommand,
   type SlashCommand,
 } from "./slash-commands";
 import { resolveSubagentExecutionModel } from "./subagent-model-resolution";
-import type { EditingState, InteractionMode, LLM, ModelSettings, ModelSettingsMap } from "./types";
+import type {
+  EditingState,
+  InteractionMode,
+  LLM,
+  ModelSettings,
+  ModelSettingsMap,
+  QueuedMessage,
+} from "./types";
 import type { SettingsTab } from "@/components/settings-dialog/types";
 import {
   loadSelectedModelFromSession,
@@ -322,67 +331,6 @@ function formatApplySkillsRequest(skillNames: string[]): string {
   return `Apply the ${skillNames.join(", ")} skills.`;
 }
 
-/** Formats a model request count with the correct singular/plural label. */
-function formatRequestCount(count: number): string {
-  return `${count} model ${count === 1 ? "request" : "requests"}`;
-}
-
-/** Formats a USD cost value compactly while keeping tiny session costs visible. */
-function formatUsd(costUsd: number | null): string {
-  if (costUsd == null) return "Unknown";
-  const maximumFractionDigits = costUsd === 0 ? 2 : costUsd < 0.01 ? 6 : 4;
-  return costUsd.toLocaleString(undefined, {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits,
-  });
-}
-
-/** Adds an unknown-cost note when some requests did not return priced usage. */
-function formatCostWithUnknowns(costUsd: number | null, unknownCount: number): string {
-  const formatted = formatUsd(costUsd);
-  if (unknownCount === 0) return formatted;
-  const unknownText = `${formatRequestCount(unknownCount)} unknown`;
-  return costUsd == null ? `${formatted} (${unknownText})` : `${formatted} known (${unknownText})`;
-}
-
-/** Builds the assistant-style markdown shown by the `/cost` slash command. */
-function formatCostSummaryMessage(
-  summary: ChatCostSummary,
-  modelLabels: Map<string, string>
-): string {
-  if (summary.requestCount === 0) {
-    return [
-      "Session cost",
-      "",
-      "No model requests have been recorded for this chat yet.",
-    ].join("\n");
-  }
-
-  const modelLines = summary.models.map((model) => {
-    const label = modelLabels.get(model.modelId) ?? model.modelId;
-    const modelName = label === model.modelId ? label : `${label} (${model.modelId})`;
-    return `- ${modelName}: ${formatCostWithUnknowns(
-      model.totalCostUsd,
-      model.unknownCostRequestCount
-    )} across ${formatRequestCount(model.requestCount)}`;
-  });
-
-  return [
-    "Session cost",
-    "",
-    `Total cost: ${formatCostWithUnknowns(
-      summary.totalCostUsd,
-      summary.unknownCostRequestCount
-    )}`,
-    `Model requests: ${summary.requestCount}`,
-    "",
-    "Cost per model:",
-    ...modelLines,
-  ].join("\n");
-}
-
 type NotebookCellMentionEventDetail = {
   notebookPath?: unknown;
   cellIndex?: unknown;
@@ -541,6 +489,8 @@ export function RightSidebar({
   const [ephemeralCostMessage, setEphemeralCostMessage] = useState<{
     chatId: string;
     message: UIMessage;
+    summary: ChatCostSummary;
+    modelLabels: Record<string, string>;
   } | null>(null);
 
   /** Shared request id for model calls triggered by the current user turn. */
@@ -1337,6 +1287,10 @@ export function RightSidebar({
   // Manual input state — v6 useChat no longer manages input
   const [input, setInput] = useState("");
   const [draftReferences, setDraftReferences] = useState<ResolvedChatReference[]>([]);
+  const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
+  const pendingSubmitRef = useRef<{ text: string; references: ResolvedChatReference[] } | null>(null);
+  const queueProcessingRef = useRef(false);
+  const prevAgentTurnActiveRef = useRef(false);
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) => setInput(e.target.value),
     []
@@ -1865,7 +1819,19 @@ export function RightSidebar({
     );
   }, [interactionMode, messages]);
 
-  const isInputLocked = isLoading || hasPendingToolCalls;
+  /**
+   * True while the agent is mid-turn: streaming, executing tools, or waiting for
+   * the automatic follow-up request after tool results (the gap where status is
+   * briefly "ready" but the assistant has not finished responding yet).
+   */
+  const isAgentTurnActive = React.useMemo(() => {
+    if (status === "streaming" || status === "submitted") return true;
+    if (hasPendingToolCalls) return true;
+    if (pendingApprovalIds.size > 0) return true;
+    return lastAssistantMessageIsCompleteWithToolCalls({ messages });
+  }, [status, hasPendingToolCalls, pendingApprovalIds, messages]);
+
+  const isInputLocked = isAgentTurnActive;
 
   /** Skill slash commands built from the currently available skills. */
   const skillSlashCommands = React.useMemo(
@@ -1879,24 +1845,20 @@ export function RightSidebar({
 
   /**
    * Detect which slash command (if any) is active based on the current input.
-   * Returns the command name (e.g. "compact", "skill:eda") or null.
-   * Uses the longest matching label so `/foobar` does not resolve as `/foo`.
    */
-  const activeSlashCommand = React.useMemo(() => {
-    const trimmed = input.trimStart();
-    const allCommands = [...SLASH_COMMANDS, ...subagentSlashCommands, ...skillSlashCommands];
-    let best: { name: string; labelLen: number } | null = null;
-    for (const cmd of allCommands) {
-      if (!trimmed.startsWith(cmd.label)) continue;
-      const nextChar = trimmed.charAt(cmd.label.length);
-      const hasValidBoundary = !nextChar || /\s/.test(nextChar);
-      if (!hasValidBoundary) continue;
-      if (!best || cmd.label.length > best.labelLen) {
-        best = { name: cmd.name, labelLen: cmd.label.length };
-      }
-    }
-    return best?.name ?? null;
-  }, [input, subagentSlashCommands, skillSlashCommands]);
+  const activeSlashCommand = React.useMemo(
+    () => detectActiveSlashCommand(input, [...subagentSlashCommands, ...skillSlashCommands]),
+    [input, subagentSlashCommands, skillSlashCommands]
+  );
+
+  /** Clears queued messages when switching chats. */
+  useEffect(() => {
+    setMessageQueue([]);
+  }, [effectiveChatId]);
+
+  const handleRemoveQueuedMessage = useCallback((id: string) => {
+    setMessageQueue((current) => current.filter((message) => message.id !== id));
+  }, []);
 
   /** Run compaction and update state + persisted chat. Returns the new summary on success, null on failure. */
   const runCompaction = useCallback(async (opts?: { retentionTurns?: number }): Promise<CompactionSummary | null> => {
@@ -1944,16 +1906,17 @@ export function RightSidebar({
 
     try {
       const summary = await chatStorage.getChatCostSummary(effectiveChatId);
-      const modelLabels = new Map(
+      const modelLabels = Object.fromEntries(
         modelsWithAccess.map((model) => [model.value, model.label])
       );
-      const content = formatCostSummaryMessage(summary, modelLabels);
       setEphemeralCostMessage({
         chatId: effectiveChatId,
+        summary,
+        modelLabels,
         message: {
-          id: `cost-summary-${Date.now()}`,
+          id: createCostSummaryMessageId(),
           role: "assistant",
-          parts: [{ type: "text", text: content }],
+          parts: [],
         },
       });
     } catch (error) {
@@ -1973,6 +1936,19 @@ export function RightSidebar({
         ? [...messages, ephemeralCostMessage.message]
         : messages,
     [effectiveChatId, ephemeralCostMessage, messages]
+  );
+
+  const costSummaryByMessageId = React.useMemo(
+    () =>
+      ephemeralCostMessage?.chatId === effectiveChatId
+        ? {
+            [ephemeralCostMessage.message.id]: {
+              summary: ephemeralCostMessage.summary,
+              modelLabels: ephemeralCostMessage.modelLabels,
+            },
+          }
+        : undefined,
+    [effectiveChatId, ephemeralCostMessage]
   );
 
   // Keep addToolOutputRef in sync so async callbacks always use the latest closure
@@ -2648,6 +2624,7 @@ export function RightSidebar({
       setEditingState(null);
       setInput("");
       setDraftReferences([]);
+      setMessageQueue([]);
       textareaRef.current?.focus();
       return;
     }
@@ -2662,6 +2639,7 @@ export function RightSidebar({
     setChats((prev) => [newChat, ...prev]);
     setCurrentChatId(newChat.id);
     setDraftReferences([]);
+    setMessageQueue([]);
   };
 
   const saveTitle = () => {
@@ -2677,13 +2655,6 @@ export function RightSidebar({
       )
     );
     setIsEditingTitle(false);
-  };
-
-  const handleTitleDoubleClick = () => {
-    if (currentChat) {
-      setEditedTitle(currentChat.title);
-      setIsEditingTitle(true);
-    }
   };
 
   const handleRenameChat = (chatId: string) => {
@@ -2733,6 +2704,20 @@ export function RightSidebar({
     setDraftReferences([]);
   };
 
+  /** Download the current chat transcript as a markdown file. */
+  const handleExportTranscript = useCallback(() => {
+    if (!currentChatId) return;
+
+    const title = currentChat?.title?.trim() || "New Chat";
+    try {
+      downloadChatTranscriptMarkdown(title, visibleMessages);
+      toast.success("Chat transcript exported.");
+    } catch (error) {
+      console.error("Failed to export chat transcript:", error);
+      toast.error("Failed to export chat transcript.");
+    }
+  }, [currentChat?.title, currentChatId, visibleMessages]);
+
   /** Focus chatbox when requested after a menu action closes. */
   useEffect(() => {
     const handler = () => {
@@ -2779,24 +2764,28 @@ export function RightSidebar({
     async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
 
-      if (isInputLocked) {
+      const pendingSubmit = pendingSubmitRef.current;
+      const userInput = pendingSubmit?.text ?? input;
+      const referencesForSubmit = pendingSubmit?.references ?? draftReferences;
+
+      if (isInputLocked && !pendingSubmit) {
         return;
       }
 
       const msSinceStop = Date.now() - lastStopRequestedAtRef.current;
-      if (lastStopRequestedAtRef.current > 0 && msSinceStop < 500) {
+      if (!pendingSubmit && lastStopRequestedAtRef.current > 0 && msSinceStop < 500) {
         return;
       }
 
-      if (!input.trim()) return;
-      const userInput = input;
-      const referencesForSubmit = draftReferences;
+      if (!userInput.trim()) return;
       const modelRequestId = crypto.randomUUID();
       modelRequestIdRef.current = modelRequestId;
       stopRequestedRef.current = false;
       forcedSubagentForCurrentTurnRef.current = null;
-      setInput("");
-      setDraftReferences([]);
+      if (!pendingSubmit) {
+        setInput("");
+        setDraftReferences([]);
+      }
       setEphemeralCostMessage(null);
 
       // Refresh OAuth token if needed before sending
@@ -2880,22 +2869,38 @@ export function RightSidebar({
   const customHandleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
+    const pendingSubmit = pendingSubmitRef.current;
+    const effectiveInput = pendingSubmit?.text ?? input;
+    const effectiveReferences = pendingSubmit?.references ?? draftReferences;
+    const submitSlashCommand = detectActiveSlashCommand(effectiveInput, [
+      ...subagentSlashCommands,
+      ...skillSlashCommands,
+    ]);
+    const fromQueue = pendingSubmit !== null;
+
+    const clearComposer = () => {
+      if (!fromQueue) {
+        setInput("");
+        setDraftReferences([]);
+      }
+    };
+
     // Intercept slash commands before normal chat submission.
-    if (activeSlashCommand === "compact") {
-      setInput("");
+    if (submitSlashCommand === "compact") {
+      clearComposer();
       setEphemeralCostMessage(null);
       await runCompaction();
       return;
     }
 
-    if (activeSlashCommand === "cost") {
-      setInput("");
+    if (submitSlashCommand === "cost") {
+      clearComposer();
       await showCostSummary();
       return;
     }
 
-    if (activeSlashCommand === "report-bug") {
-      setInput("");
+    if (submitSlashCommand === "report-bug") {
+      clearComposer();
       setEphemeralCostMessage(null);
       window.open(ORION_GITHUB_ISSUES_URL, "_blank", "noopener,noreferrer");
       return;
@@ -2903,10 +2908,10 @@ export function RightSidebar({
 
     // Handle subagent slash commands: /<name> <message>
     // Strip the command prefix and enforce delegation server-side via hidden metadata.
-    if (activeSlashCommand?.startsWith("subagent:")) {
-      const subagentName = activeSlashCommand.slice("subagent:".length);
+    if (submitSlashCommand?.startsWith("subagent:")) {
+      const subagentName = submitSlashCommand.slice("subagent:".length);
       const commandLabel = `/${subagentName}`;
-      const userMessage = input.trimStart().slice(commandLabel.length).trimStart();
+      const userMessage = effectiveInput.trimStart().slice(commandLabel.length).trimStart();
 
       const subagent = assistant?.availableSubagents.find((s) => s.name === subagentName);
       if (subagent && !isInputLocked) {
@@ -2915,7 +2920,7 @@ export function RightSidebar({
         modelRequestIdRef.current = modelRequestId;
         const plainUserText = userMessage || `Run the ${subagent.name} sub-agent.`;
 
-        setInput("");
+        clearComposer();
         setEphemeralCostMessage(null);
         forcedSubagentForCurrentTurnRef.current = subagent.name;
         bodyRef.current = { ...bodyRef.current, modelRequestId };
@@ -2951,8 +2956,7 @@ export function RightSidebar({
     }
 
     // Handle skill slash commands anywhere in the message as skill mentions.
-    // Strip the command tokens and enforce loading server-side via hidden metadata.
-    const selectedSkills = extractSkillSlashCommands(input, skillSlashCommands);
+    const selectedSkills = extractSkillSlashCommands(effectiveInput, skillSlashCommands);
     if (selectedSkills.skillNames.length > 0) {
       const allSelectedSkillsAvailable = selectedSkills.skillNames.every((skillName) =>
         assistant?.availableSkills.some((skill) => skill.name === skillName)
@@ -2964,7 +2968,7 @@ export function RightSidebar({
         const plainUserText =
           selectedSkills.message || formatApplySkillsRequest(selectedSkills.skillNames);
 
-        setInput("");
+        clearComposer();
         setEphemeralCostMessage(null);
         forcedSubagentForCurrentTurnRef.current = null;
         bodyRef.current = { ...bodyRef.current, modelRequestId };
@@ -2999,12 +3003,23 @@ export function RightSidebar({
       }
     }
 
-    if (isInputLocked) {
+    if (isInputLocked && !fromQueue) {
+      if (editingState || !effectiveInput.trim()) return;
+      setMessageQueue((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          text: effectiveInput,
+          references: effectiveReferences,
+        },
+      ]);
+      setInput("");
+      setDraftReferences([]);
       return;
     }
 
     const msSinceStop = Date.now() - lastStopRequestedAtRef.current;
-    if (lastStopRequestedAtRef.current > 0 && msSinceStop < 500) {
+    if (!fromQueue && lastStopRequestedAtRef.current > 0 && msSinceStop < 500) {
       return;
     }
 
@@ -3019,12 +3034,12 @@ export function RightSidebar({
       // Update the user message parts with the new text content
       newMessages[editIndex] = {
         ...newMessages[editIndex],
-        parts: [{ type: "text" as const, text: input }],
+        parts: [{ type: "text" as const, text: effectiveInput }],
       };
       newMessages.splice(editIndex + 1);
 
       setMessages(newMessages);
-      setInput("");
+      clearComposer();
       setEphemeralCostMessage(null);
       setEditingState(null);
 
@@ -3179,9 +3194,37 @@ export function RightSidebar({
     }
   };
 
+  const customHandleSubmitRef = useRef(customHandleSubmit);
+  customHandleSubmitRef.current = customHandleSubmit;
+
+  /** Sends the next queued message once the agent finishes its full turn. */
+  useEffect(() => {
+    const wasActive = prevAgentTurnActiveRef.current;
+    prevAgentTurnActiveRef.current = isAgentTurnActive;
+
+    if (!wasActive || isAgentTurnActive || messageQueue.length === 0 || queueProcessingRef.current) {
+      return;
+    }
+
+    const [next, ...rest] = messageQueue;
+    queueProcessingRef.current = true;
+    setMessageQueue(rest);
+    pendingSubmitRef.current = { text: next.text, references: next.references };
+
+    void customHandleSubmitRef
+      .current({ preventDefault: () => {} } as React.FormEvent<HTMLFormElement>)
+      .finally(() => {
+        pendingSubmitRef.current = null;
+        queueProcessingRef.current = false;
+      });
+  }, [isAgentTurnActive, messageQueue]);
+
   const handleStopGeneration = useCallback(() => {
     stopRequestedRef.current = true;
     lastStopRequestedAtRef.current = Date.now();
+    setMessageQueue([]);
+    pendingSubmitRef.current = null;
+    queueProcessingRef.current = false;
     const cancellingSubagentToolCallIds = new Set(activeSubagentRunToolCallsRef.current);
     const cancellingChatId = effectiveChatIdRef.current;
 
@@ -3405,7 +3448,6 @@ export function RightSidebar({
             editedTitle={editedTitle}
             chats={chats}
             currentChatId={currentChatId}
-            onTitleDoubleClick={handleTitleDoubleClick}
             onTitleChange={setEditedTitle}
             onTitleSave={saveTitle}
             onTitleCancel={() => setIsEditingTitle(false)}
@@ -3413,6 +3455,7 @@ export function RightSidebar({
             onHistorySelect={handleHistorySelect}
             onRenameChat={handleRenameChat}
             onDeleteChat={handleDeleteChat}
+            onExportTranscript={handleExportTranscript}
           />
 
           <ChatBody
@@ -3436,6 +3479,7 @@ export function RightSidebar({
             toolTimings={toolTimings}
             onOpenSubagentChat={setActiveSubagentToolCallId}
             onOpenSubagentReport={handleOpenSubagentReport}
+            costSummaryByMessageId={costSummaryByMessageId}
           />
 
           <ChatTextbox
@@ -3474,6 +3518,8 @@ export function RightSidebar({
             onReferencesChange={setDraftReferences}
             onReferenceSearch={refreshReferenceSearch}
             disabledReferenceTabs={disabledReferenceTabs}
+            queuedMessages={messageQueue}
+            onRemoveQueuedMessage={handleRemoveQueuedMessage}
           />
         </>
       )}

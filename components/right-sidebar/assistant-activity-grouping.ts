@@ -74,7 +74,12 @@ export function buildAssistantRenderBlocks(parts: UIMessage["parts"]): Assistant
 /** Completed activity with final text can collapse; active/pending activity stays expanded. */
 export function shouldAutoCollapseActivityGroup(
   hasFollowingText: boolean,
-  hasPendingTool: boolean
+  hasPendingApproval: boolean
 ): boolean {
-  return hasFollowingText && !hasPendingTool;
+  return hasFollowingText && !hasPendingApproval;
+}
+
+/** Activity should only force details open when user action is needed. */
+export function shouldForceExpandActivityGroup(hasPendingApproval: boolean): boolean {
+  return hasPendingApproval;
 }

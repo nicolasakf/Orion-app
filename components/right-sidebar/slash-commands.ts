@@ -79,3 +79,26 @@ export function buildSubagentSlashCommands(
     ...(subagent.location ? { definitionPath: subagent.location } : {}),
   }));
 }
+
+/**
+ * Returns the active slash command name for the given input, if any.
+ * Uses the longest matching label so `/foobar` does not resolve as `/foo`.
+ */
+export function detectActiveSlashCommand(
+  input: string,
+  extraCommands: SlashCommand[] = []
+): string | null {
+  const trimmed = input.trimStart();
+  const allCommands = [...SLASH_COMMANDS, ...extraCommands];
+  let best: { name: string; labelLen: number } | null = null;
+  for (const cmd of allCommands) {
+    if (!trimmed.startsWith(cmd.label)) continue;
+    const nextChar = trimmed.charAt(cmd.label.length);
+    const hasValidBoundary = !nextChar || /\s/.test(nextChar);
+    if (!hasValidBoundary) continue;
+    if (!best || cmd.label.length > best.labelLen) {
+      best = { name: cmd.name, labelLen: cmd.label.length };
+    }
+  }
+  return best?.name ?? null;
+}

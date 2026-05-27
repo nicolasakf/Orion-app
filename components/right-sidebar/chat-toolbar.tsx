@@ -1,10 +1,16 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { Plus, History, Pencil, Trash2, Copy } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { Plus, History, Pencil, Trash2, MoreHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Command,
   CommandEmpty,
@@ -28,6 +34,10 @@ import { toast } from "sonner";
 import { ToolbarButton } from "../common/toolbar-button";
 import { getRelativeDay } from "@/lib/utils";
 import type { Chat } from "@/lib/chat/chat-storage";
+import {
+  ChatOptionsMenuItems,
+  type ChatOptionsMenuActions,
+} from "./chat-options-menu";
 
 // ============================================================================
 // ChatHistoryItem
@@ -95,7 +105,6 @@ export interface ChatToolbarProps {
   editedTitle: string;
   chats: Chat[];
   currentChatId: string | null;
-  onTitleDoubleClick: () => void;
   onTitleChange: (value: string) => void;
   onTitleSave: () => void;
   onTitleCancel: () => void;
@@ -103,6 +112,7 @@ export interface ChatToolbarProps {
   onHistorySelect: (chatId: string) => void;
   onRenameChat: (chatId: string) => void;
   onDeleteChat: (chatId: string) => void;
+  onExportTranscript: () => void;
 }
 
 export function ChatToolbar({
@@ -111,7 +121,6 @@ export function ChatToolbar({
   editedTitle,
   chats,
   currentChatId,
-  onTitleDoubleClick,
   onTitleChange,
   onTitleSave,
   onTitleCancel,
@@ -119,9 +128,11 @@ export function ChatToolbar({
   onHistorySelect,
   onRenameChat,
   onDeleteChat,
+  onExportTranscript,
 }: ChatToolbarProps) {
   const [isHistoryPopoverOpen, setIsHistoryPopoverOpen] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const copyClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (isEditingTitle && titleInputRef.current) {
@@ -129,6 +140,12 @@ export function ChatToolbar({
       titleInputRef.current.select();
     }
   }, [isEditingTitle]);
+
+  useEffect(() => {
+    return () => {
+      if (copyClickTimerRef.current) clearTimeout(copyClickTimerRef.current);
+    };
+  }, []);
 
   const handleHistorySelect = (chatId: string) => {
     onHistorySelect(chatId);
@@ -138,6 +155,47 @@ export function ChatToolbar({
   const handleRenameClick = (chatId: string) => {
     onRenameChat(chatId);
     setIsHistoryPopoverOpen(false);
+  };
+
+  const handleCopyChatId = useCallback(async () => {
+    if (!currentChatId) return;
+    try {
+      await navigator.clipboard.writeText(currentChatId);
+      toast.success("Chat ID copied to clipboard");
+    } catch (error) {
+      console.error("Failed to copy chat ID:", error);
+      toast.error("Failed to copy chat ID.");
+    }
+  }, [currentChatId]);
+
+  /** Single click copies the chat ID; delayed so double-click can cancel and rename instead. */
+  const handleTitleClick = useCallback(() => {
+    if (!currentChatId) return;
+    if (copyClickTimerRef.current) clearTimeout(copyClickTimerRef.current);
+    copyClickTimerRef.current = setTimeout(() => {
+      void handleCopyChatId();
+      copyClickTimerRef.current = null;
+    }, 250);
+  }, [currentChatId, handleCopyChatId]);
+
+  const handleTitleDoubleClick = useCallback(() => {
+    if (copyClickTimerRef.current) {
+      clearTimeout(copyClickTimerRef.current);
+      copyClickTimerRef.current = null;
+    }
+    if (currentChatId) onRenameChat(currentChatId);
+  }, [currentChatId, onRenameChat]);
+
+  const chatOptionsActions: ChatOptionsMenuActions = {
+    currentChatId,
+    onCopyChatId: handleCopyChatId,
+    onExportTranscript,
+    onRenameChat: () => {
+      if (currentChatId) onRenameChat(currentChatId);
+    },
+    onDeleteChat: () => {
+      if (currentChatId) onDeleteChat(currentChatId);
+    },
   };
 
   const sortedChats = [...chats].sort(
@@ -174,27 +232,27 @@ export function ChatToolbar({
             <ContextMenu>
               <ContextMenuTrigger asChild>
                 <button
-                  onDoubleClick={onTitleDoubleClick}
-                  className="corner-squircle text-sm font-bold text-left truncate hover:text-foreground/50 transition-colors bg-accent rounded-md px-2 py-1 w-auto max-w-full block"
+                  type="button"
+                  disabled={!currentChatId}
+                  onClick={handleTitleClick}
+                  onDoubleClick={handleTitleDoubleClick}
+                  title={
+                    currentChatId
+                      ? "Click to copy chat ID · Double-click to rename"
+                      : undefined
+                  }
+                  className="corner-squircle text-sm font-bold text-left truncate hover:text-foreground/50 transition-colors bg-accent rounded-md px-2 py-1 w-auto max-w-full block disabled:cursor-default disabled:opacity-60"
                 >
                   <span className="truncate block">
                     {currentChat?.title || "New Chat"}
                   </span>
                 </button>
               </ContextMenuTrigger>
-              <ContextMenuContent>
-                <ContextMenuItem
-                  disabled={!currentChatId}
-                  onSelect={async () => {
-                    if (currentChatId) {
-                      await navigator.clipboard.writeText(currentChatId);
-                      toast.success("Chat ID copied to clipboard");
-                    }
-                  }}
-                >
-                  <Copy className="h-4 w-4" />
-                  Copy chat ID
-                </ContextMenuItem>
+              <ContextMenuContent className="w-52">
+                <ChatOptionsMenuItems
+                  actions={chatOptionsActions}
+                  Item={ContextMenuItem}
+                />
               </ContextMenuContent>
             </ContextMenu>
           )}
@@ -202,6 +260,22 @@ export function ChatToolbar({
 
         {/* Right side — pinned to the trailing edge of the toolbar row */}
         <div className="flex shrink-0 items-center gap-1">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <ToolbarButton
+                toolTipLabel="Chat options"
+                disabled={!currentChatId}
+              >
+                <MoreHorizontal className="h-4 w-4" />
+              </ToolbarButton>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-52">
+              <ChatOptionsMenuItems
+                actions={chatOptionsActions}
+                Item={DropdownMenuItem}
+              />
+            </DropdownMenuContent>
+          </DropdownMenu>
           {/* New Chat Button */}
           <ToolbarButton onClick={onNewChat} toolTipLabel="New Chat">
             <Plus className="h-4 w-4" />

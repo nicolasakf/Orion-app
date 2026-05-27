@@ -13,9 +13,11 @@ import { LoadingMessage } from "@/components/common/loading-message";
 import { ErrorCard } from "../common/error-card";
 import { NoKernelPrompt } from "../common/no-kernel-prompt";
 import { ThinkingBlock } from "./thinking-block";
+import { CostSummaryCard, type CostSummaryMessageData } from "./cost-summary-card";
 import {
   buildAssistantRenderBlocks,
   shouldAutoCollapseActivityGroup,
+  shouldForceExpandActivityGroup,
   type AssistantPartWithIndex,
   type ToolTiming,
 } from "./assistant-activity-grouping";
@@ -47,6 +49,8 @@ export interface ChatBodyProps {
   toolTimings?: Map<string, ToolTiming>;
   onOpenSubagentChat?: (toolCallId: string) => void;
   onOpenSubagentReport?: (path: string) => void;
+  /** Ephemeral `/cost` slash-command rows keyed by assistant message id. */
+  costSummaryByMessageId?: Record<string, CostSummaryMessageData>;
 }
 
 interface ChatMessageRowProps {
@@ -66,6 +70,7 @@ interface ChatMessageRowProps {
   toolTimings?: Map<string, ToolTiming>;
   onOpenSubagentChat?: (toolCallId: string) => void;
   onOpenSubagentReport?: (path: string) => void;
+  costSummaryByMessageId?: Record<string, CostSummaryMessageData>;
 }
 
 type ChatRenderItem =
@@ -466,10 +471,13 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   toolTimings,
   onOpenSubagentChat,
   onOpenSubagentReport,
+  costSummaryByMessageId,
 }: ChatMessageRowProps) {
   const handleUserClick = React.useCallback(() => {
     onUserMessageClick(message, index);
   }, [index, message, onUserMessageClick]);
+
+  const costSummary = costSummaryByMessageId?.[message.id];
 
   /** Render one grouped reasoning/tool part using the existing detailed components. */
   const renderActivityItem = (item: AssistantPartWithIndex) => {
@@ -562,6 +570,11 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
           onClick={handleUserClick}
           isClickable={true}
         />
+      ) : costSummary ? (
+        <CostSummaryCard
+          summary={costSummary.summary}
+          modelLabels={costSummary.modelLabels}
+        />
       ) : (
         <div className="w-full min-w-0 space-y-2">
           {/* Render assistant text and grouped activity in chronological order. */}
@@ -582,16 +595,16 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
             }
 
             const status = getActivityStatus(block.items, pendingApprovalIds);
-            const hasPending = status === "running" || status === "approval";
+            const hasPendingApproval = status === "approval";
             const toolCount = block.items.filter((item) => isToolUIPart(item.part)).length;
             return (
               <AssistantActivityGroup
                 key={`${message.id}-activity-${block.items[0]?.partIndex ?? blockIndex}`}
                 toolCount={toolCount}
                 durationMs={getActivityDurationMs(block.items, toolTimings)}
-                status={status}
-                autoCollapse={shouldAutoCollapseActivityGroup(block.hasFollowingText, hasPending)}
-                forceExpanded={(isLoading && isLastMessage) || hasPending}
+                isWaitingForFinalResponse={!block.hasFollowingText}
+                autoCollapse={shouldAutoCollapseActivityGroup(block.hasFollowingText, hasPendingApproval)}
+                forceExpanded={shouldForceExpandActivityGroup(hasPendingApproval)}
               >
                 {block.items.map(renderActivityItem)}
               </AssistantActivityGroup>
@@ -631,6 +644,9 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   }
   if (prev.toolApprovalMode !== next.toolApprovalMode) return false;
   if (prev.onToolApprovalModeChange !== next.onToolApprovalModeChange) return false;
+  if (prev.costSummaryByMessageId?.[prev.message.id] !== next.costSummaryByMessageId?.[next.message.id]) {
+    return false;
+  }
 
   return true;
 });
@@ -655,6 +671,7 @@ export function ChatBody({
   toolTimings,
   onOpenSubagentChat,
   onOpenSubagentReport,
+  costSummaryByMessageId,
 }: ChatBodyProps) {
   const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = React.useRef(true);
@@ -819,6 +836,7 @@ export function ChatBody({
                     toolTimings={toolTimings}
                     onOpenSubagentChat={onOpenSubagentChat}
                     onOpenSubagentReport={onOpenSubagentReport}
+                    costSummaryByMessageId={costSummaryByMessageId}
                   />
                 )}
 

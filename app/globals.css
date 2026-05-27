@@ -77,6 +77,21 @@ html {
     color: transparent;
     animation: ai-text-shine 2.1s linear infinite;
   }
+
+  .muted-text-shine {
+    background-image: linear-gradient(110deg,
+        hsl(var(--muted-foreground)) 0%,
+        hsl(var(--muted-foreground)) 35%,
+        hsl(var(--foreground)) 50%,
+        hsl(var(--muted-foreground)) 65%,
+        hsl(var(--muted-foreground)) 100%);
+    background-size: 220% 100%;
+    background-position: 200% 0;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: ai-text-shine 2.1s linear infinite;
+  }
 }
 
 /*

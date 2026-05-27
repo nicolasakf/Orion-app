@@ -49,7 +49,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ModelSettingsPopover } from "./model-settings-popover";
-import type { EditingState, InteractionMode, LLM, ModelSettings } from "./types";
+import type { EditingState, InteractionMode, LLM, ModelSettings, QueuedMessage } from "./types";
 import { SLASH_COMMANDS, type SlashCommand } from "./slash-commands";
 import { ContextUsagePill } from "./context-usage-pill";
 import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
@@ -163,6 +163,10 @@ export interface ChatTextboxProps {
   onReferenceSearch?: (query: string, tab: ReferenceTab) => void;
   /** Reference tabs that are visible but unavailable for the current editor context. */
   disabledReferenceTabs?: ReferenceTab[];
+  /** Messages queued while the agent is running; shown in a card behind the composer. */
+  queuedMessages?: QueuedMessage[];
+  /** Removes a queued message before it is sent. */
+  onRemoveQueuedMessage?: (id: string) => void;
 }
 
 const REFERENCE_TYPE_ICONS: Record<ChatReferenceType, React.ComponentType<{ className?: string }>> = {
@@ -293,6 +297,8 @@ export function ChatTextbox({
   onReferencePickerOpen,
   onReferenceSearch,
   disabledReferenceTabs = [],
+  queuedMessages = [],
+  onRemoveQueuedMessage,
 }: ChatTextboxProps) {
   const [isModelComboboxOpen, setIsModelComboboxOpen] = useState(false);
   const [isModePopoverOpen, setIsModePopoverOpen] = useState(false);
@@ -652,7 +658,9 @@ export function ChatTextbox({
     ? "Edit your message..."
     : readOnly
       ? readOnlyPlaceholder
-      : "Type a message · / for commands · @ for mentions";
+      : isLoading
+        ? "Queue a message · Enter to add"
+        : "Type a message · / for commands · @ for mentions";
 
   React.useEffect(() => {
     if (!isModelComboboxOpen) {
@@ -788,8 +796,50 @@ export function ChatTextbox({
 
   return (
     <div className="px-1.5 mb-2">
+      {queuedMessages.length > 0 && (
+        <div className="relative z-0 mx-3 mb-[-10px]">
+          <Card className="border-border/50 bg-muted/50 px-2.5 pb-3 pt-2 shadow-none">
+            <div className="flex flex-col gap-1.5">
+              {queuedMessages.map((queued, index) => (
+                <div
+                  key={queued.id}
+                  className={cn(
+                    "flex items-start gap-2 rounded-md px-1 py-0.5",
+                    index > 0 && "border-t border-border/40 pt-1.5"
+                  )}
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-inherit text-xs text-muted-foreground">
+                      {queued.text}
+                    </p>
+                    {queued.references.length > 0 && (
+                      <p className="mt-0.5 text-[10px] text-muted-foreground/70">
+                        {queued.references.length} reference
+                        {queued.references.length === 1 ? "" : "s"}
+                      </p>
+                    )}
+                  </div>
+                  {onRemoveQueuedMessage && (
+                    <button
+                      type="button"
+                      aria-label="Remove queued message"
+                      onClick={() => onRemoveQueuedMessage(queued.id)}
+                      className="shrink-0 rounded-sm p-0.5 text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Card>
+        </div>
+      )}
       <Card
-        className="p-1 flex flex-col gap-2 text-inherit"
+        className={cn(
+          "relative z-10 p-1 flex flex-col gap-2 text-inherit",
+          queuedMessages.length > 0 && "shadow-md"
+        )}
         style={
           isCardFocused
             ? {
@@ -1032,7 +1082,7 @@ export function ChatTextbox({
                       }
                     }}
                     rows={2}
-                    disabled={readOnly || isLoading}
+                    disabled={readOnly}
                   />
                 </div>
               </div>
@@ -1303,7 +1353,7 @@ export function ChatTextbox({
                 <PopoverTrigger asChild>
                   <Button
                     variant="ghost"
-                    disabled={readOnly || isLoading}
+                    disabled={readOnly}
                     className="h-7 px-2 text-inherit bg-muted hover:bg-accent gap-1 [&_svg]:!size-3"
                     style={chatBoxFont}
                   >
@@ -1393,7 +1443,7 @@ export function ChatTextbox({
                   <Button
                     variant="ghost"
                     role="combobox"
-                    disabled={readOnly || isLoading}
+                    disabled={readOnly}
                     className="w-auto h-7 text-inherit justify-center p-1 text-muted-foreground gap-1 hover:bg-transparent [&_svg]:!size-3"
                     style={chatBoxFont}
                   >
@@ -1594,9 +1644,11 @@ export function ChatTextbox({
                   title={
                     isOverContextBudget
                       ? "Compaction required before sending"
-                      : undefined
+                      : isLoading
+                        ? "Add to queue"
+                        : undefined
                   }
-                  aria-label="Send message"
+                  aria-label={isLoading ? "Queue message" : "Send message"}
                 >
                   <SendHorizontal className="h-3 w-3" />
                 </Button>
