@@ -46,7 +46,7 @@ describe("CLI Python runtime", () => {
       version: [3, 11, 8] as [number, number, number],
       support: "preferred" as const,
     };
-    const packageSet = getManagedPackageSet(runtime.support, "0.6.1");
+    const packageSet = getManagedPackageSet(runtime.support, "0.6.2");
 
     expect(buildCreateVenvCommand(runtime, "/tmp/orion/venv")).toEqual({
       command: "python3",
@@ -57,18 +57,18 @@ describe("CLI Python runtime", () => {
       args: ["-m", "pip", "install", "--upgrade", "pip", ...packageSet.packages],
     });
     expect(packageSet.packages.join(" ")).not.toContain("uv");
-    expect(packageSet.packages).toContain("orion-ui==0.6.1");
+    expect(packageSet.packages).toContain("orion-ui==0.6.2");
   });
 
   it("uses legacy Jupyter pins for Python 3.8", () => {
-    expect(getManagedPackageSet("legacy", "0.6.1").packages).toContain(
+    expect(getManagedPackageSet("legacy", "0.6.2").packages).toContain(
       "jupyter_server>=1.24,<2"
     );
-    expect(getManagedPackageSet("legacy", "0.6.1").packages).toContain("orion-ui==0.6.1");
+    expect(getManagedPackageSet("legacy", "0.6.2").packages).toContain("orion-ui==0.6.2");
   });
 
   it("uses preferred Jupyter pins for Python 3.9+", () => {
-    expect(getManagedPackageSet("preferred", "0.6.1").packages).toContain(
+    expect(getManagedPackageSet("preferred", "0.6.2").packages).toContain(
       "jupyter_server>=2,<3"
     );
   });

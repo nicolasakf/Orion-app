@@ -2,7 +2,7 @@ import type { ModelMessage } from "@ai-sdk/provider-utils";
 
 type MessageContentPart = Record<string, unknown>;
 
-const BASE64_DATA_URL_RE = /^data:([^;,]+)?(?:;[^,]*)*;base64,(.*)$/is;
+const BASE64_DATA_URL_RE = /^data:([^;,]+)?(?:;[^,]*)*;base64,([\s\S]*)$/i;
 
 /** Extracts raw base64 payloads from browser FileReader data URLs. */
 function parseBase64DataUrl(value: string): { mediaType?: string; base64: string } | null {

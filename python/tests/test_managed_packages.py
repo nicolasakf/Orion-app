@@ -10,12 +10,12 @@ def test_get_python_support():
 
 
 def test_managed_runtime_packages_include_orion_ui():
-    packages = managed_runtime_packages("0.6.1", "preferred")
-    assert "orion-ui==0.6.1" in packages
+    packages = managed_runtime_packages("0.6.2", "preferred")
+    assert "orion-ui==0.6.2" in packages
     assert "jupyter_server>=2,<3" in packages
 
 
 def test_managed_runtime_packages_legacy_jupyter():
-    packages = managed_runtime_packages("0.6.1", "legacy")
+    packages = managed_runtime_packages("0.6.2", "legacy")
     assert "jupyter_server>=1.24,<2" in packages
-    assert "orion-ui==0.6.1" in packages
+    assert "orion-ui==0.6.2" in packages

@@ -4,6 +4,29 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.2] - 2026-05-27
+
+### Added
+
+- Agent: read/edit tools prefer Orion's unsaved editor buffer over disk for the active file or notebook
+- Chat: composer file attachments with image input for capable models and external-file references
+- Chat: transcript export, session cost summary (`/cost`), and chat options menu
+- Chat: improved collapsible tool-activity rows with duration timing and cost summary refresh/dismiss
+- CLI: `--version` flag on Node and Python launchers
+- Notebook: Orion UI DateTimePicker, date presets, and expanded calendar controls
+- Notebook: expanded Orion UI primitives and schema-only App View
+- UI: in-app help links to docs.orion-agent.ai
+
+### Changed
+
+- Chat: slash-command chips can open skill and subagent definition files
+
+### Fixed
+
+- Chat: normalize inline data URL file parts before provider API calls
+
+[0.6.2]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.6.2
+
 ## [0.6.1] - 2026-05-26
 
 ### Added
