@@ -80,6 +80,69 @@ describe("ChatTextbox attachments", () => {
     expect(onAttachFiles.mock.calls[0]?.[0]?.[0]).toBe(file);
   });
 
+  it("passes dropped files to the parent", () => {
+    const onAttachFiles = vi.fn();
+    const { container } = renderTextbox({ onAttachFiles });
+    const form = container.querySelector("form") as HTMLFormElement;
+    const file = new File(["hello"], "dropped.txt", { type: "text/plain" });
+    const dataTransfer = {
+      dropEffect: "none",
+      files: [file],
+      types: ["Files"],
+    };
+
+    fireEvent.dragEnter(form, { dataTransfer });
+    expect(screen.getByText("Drop files to attach")).toBeInTheDocument();
+
+    fireEvent.drop(form, { dataTransfer });
+
+    expect(onAttachFiles).toHaveBeenCalledOnce();
+    expect(onAttachFiles.mock.calls[0]?.[0]?.[0]).toBe(file);
+    expect(screen.queryByText("Drop files to attach")).not.toBeInTheDocument();
+  });
+
+  it("passes pasted images to the parent without changing text paste", () => {
+    const onAttachFiles = vi.fn();
+    renderTextbox({ onAttachFiles });
+    const textarea = screen.getByRole("textbox");
+    const image = new File(["image"], "clipboard.png", { type: "image/png" });
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => image,
+          },
+        ],
+      },
+    });
+
+    expect(onAttachFiles).toHaveBeenCalledOnce();
+    expect(onAttachFiles.mock.calls[0]?.[0]?.[0]).toBe(image);
+  });
+
+  it("does not intercept plain text paste", () => {
+    const onAttachFiles = vi.fn();
+    renderTextbox({ onAttachFiles });
+    const textarea = screen.getByRole("textbox");
+
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        items: [
+          {
+            kind: "string",
+            type: "text/plain",
+            getAsFile: () => null,
+          },
+        ],
+      },
+    });
+
+    expect(onAttachFiles).not.toHaveBeenCalled();
+  });
+
   it("renders and removes attachment chips", () => {
     const attachment: ChatDraftAttachment = {
       id: "attachment-1",

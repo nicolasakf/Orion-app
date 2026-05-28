@@ -71,6 +71,7 @@ import {
 } from "@/lib/chat/chat-references";
 
 export type ReferenceTab = "all" | "files" | "cells" | "variables" | "terminal";
+type AttachableFiles = FileList | readonly File[];
 
 const REFERENCE_TABS: Array<{
   value: ReferenceTab;
@@ -170,8 +171,8 @@ export interface ChatTextboxProps {
   attachments?: ChatDraftAttachment[];
   /** Called when composer attachment chips change. */
   onAttachmentsChange?: (attachments: ChatDraftAttachment[]) => void;
-  /** Called when the user picks external files from the composer. */
-  onAttachFiles?: (files: FileList) => void;
+  /** Called when the user adds external files from the composer. */
+  onAttachFiles?: (files: AttachableFiles) => void;
   /** Called when the @ picker opens, so the parent can refresh live candidates. */
   onReferencePickerOpen?: () => void;
   /** Called as the user searches references, scoped by the selected picker tab. */
@@ -198,6 +199,22 @@ function formatAttachmentSize(size: number): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
   return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+/** Returns true when a drag payload contains operating-system files. */
+function hasDraggedFiles(dataTransfer: DataTransfer): boolean {
+  return Array.from(dataTransfer.types).includes("Files");
+}
+
+/** Extracts image files from a clipboard paste without disturbing plain text paste. */
+function getClipboardImageFiles(dataTransfer: DataTransfer): File[] {
+  const itemFiles = Array.from(dataTransfer.items)
+    .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null);
+  if (itemFiles.length > 0) return itemFiles;
+
+  return Array.from(dataTransfer.files ?? []).filter((file) => file.type.startsWith("image/"));
 }
 
 /** Normalizes mention search text so `@cell#3` can match the `Cell #3` option label. */
@@ -394,8 +411,10 @@ export function ChatTextbox({
   const [highlightedModeIndex, setHighlightedModeIndex] = useState(0);
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [isFileDragActive, setIsFileDragActive] = useState(false);
   const [isCardFocused, setIsCardFocused] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const fileDragDepthRef = React.useRef(0);
   const { theme } = useTheme();
   const { effectiveSettings } = useOrionSettings();
   const chatFontSize = effectiveSettings.chat.fontSize;
@@ -745,6 +764,74 @@ export function ChatTextbox({
     fileInputRef.current?.click();
   }, [readOnly]);
 
+  /** Handles pasted screenshots/images while leaving normal text paste alone. */
+  const handleTextareaPaste = React.useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (readOnly || !onAttachFiles) return;
+
+      const imageFiles = getClipboardImageFiles(e.clipboardData);
+      if (imageFiles.length === 0) return;
+
+      e.preventDefault();
+      onAttachFiles(imageFiles);
+    },
+    [onAttachFiles, readOnly]
+  );
+
+  /** Shows the drop affordance only for real external file drags. */
+  const handleFileDragEnter = React.useCallback(
+    (e: React.DragEvent) => {
+      if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      fileDragDepthRef.current += 1;
+      setIsFileDragActive(true);
+    },
+    [onAttachFiles, readOnly]
+  );
+
+  /** Keeps the browser from opening dropped files while the composer is the target. */
+  const handleFileDragOver = React.useCallback(
+    (e: React.DragEvent) => {
+      if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "copy";
+      setIsFileDragActive(true);
+    },
+    [onAttachFiles, readOnly]
+  );
+
+  /** Clears drop state once the external file drag leaves the composer. */
+  const handleFileDragLeave = React.useCallback(
+    (e: React.DragEvent) => {
+      if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      fileDragDepthRef.current = Math.max(0, fileDragDepthRef.current - 1);
+      if (fileDragDepthRef.current === 0) {
+        setIsFileDragActive(false);
+      }
+    },
+    [onAttachFiles, readOnly]
+  );
+
+  /** Adds dropped files through the same attachment pipeline as the file picker. */
+  const handleFileDrop = React.useCallback(
+    (e: React.DragEvent) => {
+      if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      fileDragDepthRef.current = 0;
+      setIsFileDragActive(false);
+
+      if (e.dataTransfer.files.length > 0) {
+        onAttachFiles(e.dataTransfer.files);
+      }
+    },
+    [onAttachFiles, readOnly]
+  );
+
   /**
    * Clears the in-progress `/command` token so the slash typeahead closes.
    * Radix Popover listens for Escape on document (capture); this must run from PopoverContent’s
@@ -945,7 +1032,8 @@ export function ChatTextbox({
       )}
       <Card
         className={cn(
-          "relative z-10 p-1 flex flex-col gap-2 text-inherit",
+          "relative z-10 p-1 flex flex-col gap-2 text-inherit transition-colors",
+          isFileDragActive && "border-primary/70 bg-primary/5",
           queuedMessages.length > 0 && "shadow-md"
         )}
         style={
@@ -961,7 +1049,16 @@ export function ChatTextbox({
         }
         onFocus={() => setIsCardFocused(true)}
         onBlur={() => setIsCardFocused(false)}
+        onDragEnter={handleFileDragEnter}
+        onDragOver={handleFileDragOver}
+        onDragLeave={handleFileDragLeave}
+        onDrop={handleFileDrop}
       >
+        {isFileDragActive && (
+          <div className="pointer-events-none absolute inset-1 z-20 flex items-center justify-center rounded-md border border-dashed border-primary/70 bg-background/80 text-inherit font-medium text-primary shadow-sm backdrop-blur-sm">
+            Drop files to attach
+          </div>
+        )}
         {editingState && (
           <div className="corner-squircle px-2 py-1 bg-muted rounded-md text-inherit text-muted-foreground">
             Editing message - Esc to cancel
@@ -1083,6 +1180,7 @@ export function ChatTextbox({
                       updateComposerText(e.target.value);
                       resizeTextarea();
                     }}
+                    onPaste={handleTextareaPaste}
                     placeholder={placeholder}
                     className="orion-chat-composer-mobile w-full min-h-0 !rounded-none bg-transparent border-none px-0 py-0 focus-visible:ring-0 focus-visible:ring-offset-0 text-inherit md:text-inherit placeholder:text-muted-foreground/50 resize-none [corner-shape:inherit]"
                     onKeyDown={(e) => {
