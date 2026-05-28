@@ -3286,7 +3286,7 @@ export function NotebookEditor({
                     </div>
                   ) : (
                     <div
-                      className="space-y-3 p-3 notebook-editor-content-area"
+                      className="jp-Notebook space-y-3 p-3 notebook-editor-content-area"
                       data-notebook-export-root="notebook"
                       tabIndex={-1}
                     >
@@ -3434,6 +3434,7 @@ export function NotebookEditor({
                               cellRefs.current.set(cellId, el);
                             }}
                             className={cn(
+                              "jp-Cell",
                               cellCursorIndex === index &&
                               !isAnyCellEditing &&
                               "cell-cursor-active",

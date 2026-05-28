@@ -2318,7 +2318,7 @@ function NotebookCellComponent({
                       {isEditingMode ? (
                         <div
                           ref={editorRef}
-                          className="min-w-0 max-w-full overflow-x-hidden border-t border-muted bg-transparent"
+                          className="jp-InputArea-editor min-w-0 max-w-full overflow-x-hidden border-t border-muted bg-transparent"
                         >
                           <MarkdownFormattingToolbar
                             onFormat={applyMarkdownSyntax}
@@ -2372,7 +2372,7 @@ function NotebookCellComponent({
                             }
                           }}
                           tabIndex={0}
-                          className="cursor-text ml-4 p-2"
+                          className="jp-RenderedHTMLCommon cursor-text ml-4 p-2"
                         >
                           <MarkdownRenderer source={localSource} />
                         </div>
@@ -2393,7 +2393,7 @@ function NotebookCellComponent({
                     <div
                       ref={contentRef}
                       className={cn(
-                        "border-t border-muted relative dark:bg-[#1E1E1E] bg-[#F7F7F7]", // TODO: Get the background color from the theme dynamically
+                        "jp-InputArea-editor border-t border-muted relative dark:bg-[#1E1E1E] bg-[#F7F7F7]", // TODO: Get the background color from the theme dynamically
                         isInputCollapsed &&
                           contentScrollHeight >
                             COLLAPSED_CONTENT_HEIGHT_DEFAULT &&
@@ -2467,6 +2467,7 @@ function NotebookCellComponent({
                               {idx > 0 && <Separator />}
                               <div
                                 id={`output-${cellIndex}-${idx}`}
+                                className="jp-OutputArea-output"
                                 onMouseEnter={() => handleOutputMouseEnter(idx)}
                                 onMouseLeave={handleOutputMouseLeave}
                               >

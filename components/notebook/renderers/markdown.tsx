@@ -12,7 +12,7 @@ export function MarkdownOutputRenderer({
   value,
 }: NotebookMimeRendererProps): JSX.Element {
   return (
-    <div className="p-3">
+    <div className="jp-OutputArea-output p-3">
       <MarkdownRenderer source={toJoinedString(value)} />
     </div>
   );

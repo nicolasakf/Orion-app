@@ -39,13 +39,24 @@ Legacy note:
 
 - `subagent.autoDiscover` is legacy and should not be written.
 
+Unsupported note:
+
+- `metadata.orion.css` and `metadata.orion.appView.css` are not supported. If notebook content needs custom styling, put that styling in the cell source/output itself rather than notebook metadata.
+
+Notebook View also exposes JupyterLab-compatible class hooks for portable styling:
+
+- `.jp-Notebook`: rendered notebook content root
+- `.jp-Cell`: rendered notebook cell wrapper
+- `.jp-MarkdownOutput` and `.jp-RenderedHTMLCommon`: rendered markdown
+- `.jp-InputArea-editor`: code or markdown editor/input area
+- `.jp-OutputArea-output`: rendered output wrapper
+
 ### `appView` (object)
 
-Controls notebook App View layout. Orion renders the declarative schema at `appView.schema` plus optional scoped CSS at `appView.css`.
+Controls notebook App View layout. Orion renders the declarative schema at `appView.schema`.
 
 App View metadata is a composition layer, not the source of truth for runtime behavior. Prefer `orion_ui` code-cell outputs for sliders, selects, forms, action buttons, and other interactive controls, then reference those outputs from App View.
 
-- `appView.css`: optional scoped CSS string applied only to App View content
 - `appView.schema.version`: literal `1`
 - `appView.schema.primitiveRegistry.source`: literal `"builtin"` only
 - `appView.schema.root`: recursive node object
@@ -58,7 +69,7 @@ Common declarative props:
 - Layout props: `gap`, `padding`, `columns`, `align`, `title`, `description`, `label`, `value`
 - Notebook references: `cellId`, `outputIndex`
 - Static/local controls: `stateKey`, `defaultValue`, `placeholder`, `options`, `min`, `max`, `step`, `variant`, `size`
-- Styling hooks: `className` maps to App View CSS selectors; avoid arbitrary Tailwind runtime strings.
+- Styling hooks: prefer styling in cell source/output code; do not write notebook metadata CSS.
 
 Declarative schema v1 limitations:
 

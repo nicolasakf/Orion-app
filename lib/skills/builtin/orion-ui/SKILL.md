@@ -107,7 +107,7 @@ Display:
 - `ui.markdown_cell(cell_id=None, text=None)`
 - `ui.output(cell_id, output_index=0)`
 
-All component helpers accept optional `class_name="..."`. Use semantic class hooks such as `"metric-card"`; define the actual CSS in notebook App View metadata at `metadata.orion.appView.css`.
+All component helpers accept optional `class_name="..."` for semantic hooks inside generated UI. Do not write CSS into notebook metadata. If a notebook needs custom styling, include it in the relevant cell source/output; Orion also exposes JupyterLab-compatible selectors such as `.jp-Notebook`, `.jp-Cell`, `.jp-MarkdownOutput`, `.jp-RenderedHTMLCommon`, `.jp-InputArea-editor`, and `.jp-OutputArea-output` for cell-authored styles.
 
 State:
 

@@ -20,7 +20,7 @@ export function HtmlOutputRenderer({
   if (tableData.headers.length > 0 && tableData.rows.length > 0) {
     return (
       <div
-        className="orion-rendered-html overflow-x-auto"
+        className="jp-RenderedHTMLCommon orion-rendered-html overflow-x-auto"
         dangerouslySetInnerHTML={{ __html: sanitize(html) }}
       />
     );
@@ -39,7 +39,7 @@ export function HtmlOutputRenderer({
 
   return (
     <div
-      className="orion-rendered-html overflow-x-auto"
+      className="jp-RenderedHTMLCommon orion-rendered-html overflow-x-auto"
       dangerouslySetInnerHTML={{ __html: sanitize(html) }}
     />
   );

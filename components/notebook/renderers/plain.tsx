@@ -13,7 +13,7 @@ export function PlainTextOutputRenderer({
 }: NotebookMimeRendererProps): JSX.Element {
   return (
     <pre
-      className="whitespace-pre-wrap text-sm p-3 rounded-md"
+      className="jp-OutputArea-output whitespace-pre-wrap text-sm p-3 rounded-md"
       dangerouslySetInnerHTML={{
         __html: ansiConverter.toHtml(toJoinedString(value)),
       }}

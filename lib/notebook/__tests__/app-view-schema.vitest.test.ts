@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   addNotebookAppViewReference,
   createDefaultNotebookAppViewSchema,
-  getNotebookAppViewCss,
   isNotebookAppViewReferenceInMetadata,
   parseNotebookAppViewSchema,
   removeNotebookAppViewReference,
@@ -52,18 +51,6 @@ describe("parseNotebookAppViewSchema", () => {
     expect(result.schema.root.type).toBe("Page");
     expect(result.schema.root.children[0].type).toBe("MarkdownCell");
     expect(result.schema.root.children[0].children).toEqual([]);
-  });
-
-  it("reads App View CSS from notebook metadata", () => {
-    expect(
-      getNotebookAppViewCss({
-        orion: {
-          appView: {
-            css: ".metric-card { border-color: red; }",
-          },
-        },
-      }),
-    ).toBe(".metric-card { border-color: red; }");
   });
 
   it("rejects unknown primitive names", () => {
@@ -128,7 +115,6 @@ describe("parseNotebookAppViewSchema", () => {
     const result = parseNotebookAppViewSchema({
       orion: {
         appView: {
-          css: ".hero-card { border-color: red; }",
           schema: {
             version: 1,
             primitiveRegistry: { source: "builtin" },

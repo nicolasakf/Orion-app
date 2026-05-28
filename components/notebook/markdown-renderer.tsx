@@ -32,7 +32,7 @@ export function MarkdownRenderer({
   style,
 }: MarkdownRendererProps) {
   return (
-    <div className="prose prose-sm max-w-none font-sans dark:prose-invert">
+    <div className="jp-MarkdownOutput jp-RenderedHTMLCommon prose prose-sm max-w-none font-sans dark:prose-invert">
       <MarkdownPreview
         source={normalizeMarkdownMathSource(source)}
         remarkPlugins={[remarkMath, remarkMathJaxDelimiters]}

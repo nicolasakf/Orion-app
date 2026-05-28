@@ -109,16 +109,35 @@ export const NotebookOrionMetadataSchema = z
         schema: AppViewSchemaSchema.optional().describe(
           "Declarative app-view schema rendered through Orion's built-in primitive registry.",
         ),
-        css: z
-          .string()
-          .optional()
-          .describe("Scoped CSS applied to declarative App View content."),
       })
       .passthrough()
       .optional()
       .describe("Notebook app-view layout metadata."),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((metadata, ctx) => {
+    if ("css" in metadata) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["css"],
+        message:
+          "metadata.orion.css is not supported; style cells in their source code instead",
+      });
+    }
+
+    if (
+      metadata.appView &&
+      typeof metadata.appView === "object" &&
+      "css" in metadata.appView
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["appView", "css"],
+        message:
+          "metadata.orion.appView.css is not supported; style cells in their source code instead",
+      });
+    }
+  });
 
 const ExecutionStatisticsSchema = z
   .object({

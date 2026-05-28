@@ -55,7 +55,7 @@ V1 App View schema is inline notebook metadata:
 ```
 
 Only use the built-in registry in v1. Do not write custom primitive paths or inline `style`.
-Use `props.className` only as a semantic hook for CSS defined in `metadata.orion.appView.css`; do not rely on arbitrary Tailwind runtime class strings.
+Use `props.className` only as a semantic hook for CSS authored in cell source/output code. Do not write CSS into notebook metadata. Do not rely on arbitrary Tailwind runtime class strings.
 Legacy `appView.grid`, `appView.layout`, and `cell.metadata.orion.app` metadata are ignored by the renderer and should not be authored.
 
 ## Built-in primitives
@@ -95,7 +95,7 @@ Constrained styling props:
 - `padding`: `none`, `sm`, `md`, `lg`
 - `align`: `start`, `center`, `end`, `stretch`
 - `variant` and `size`: only use values supported by the primitive.
-- `className`: optional semantic CSS hook; define matching selectors in `appView.css`.
+- `className`: optional semantic CSS hook for cell-authored styles.
 
 ## Authoring patterns
 
@@ -144,8 +144,9 @@ Example:
 
 ## Metadata editing guidance
 
-- Prefer one notebook-level merge at path `["appView"]`, `["appView", "schema"]`, or `["appView", "css"]`.
-- Ignore legacy `appView.grid`, `appView.layout`, and `cell.metadata.orion.app`; App View renders `appView.schema` plus optional scoped `appView.css`.
+- Prefer one notebook-level merge at path `["appView"]` or `["appView", "schema"]`.
+- Ignore legacy `appView.grid`, `appView.layout`, and `cell.metadata.orion.app`; App View renders `appView.schema`.
+- Do not write `metadata.orion.css` or `metadata.orion.appView.css`; style content in cell source/output code instead.
 - Do not edit `cells[i].metadata.orion.id`.
 - Do not write App View inclusion metadata under `cell.metadata.orion.app`; declarative schema references do not require `app.enabled`.
 - If a requested feature needs cell execution, parameter binding, or runtime interactivity, implement it in a Python code cell with `orion_ui` and reference that output from App View.
@@ -161,5 +162,5 @@ Example:
 - All `cellId` references exist in `cells[i].metadata.orion.id`.
 - Every `Output.outputIndex` exists on the referenced code cell.
 - No node uses inline `style`, custom imports, or action/run-cell props.
-- Any `className` values are semantic hooks with matching CSS in `metadata.orion.appView.css`.
+- Any `className` values are semantic hooks for styles authored in cell source/output code.
 - Interactive controls are implemented in `orion_ui` code cells, not authored directly in App View metadata.

@@ -48,7 +48,7 @@ model = ui.get("model")
 temperature = ui.get("temperature")
 ```
 
-`class_name` adds semantic CSS hooks for Orion App View. Define the matching CSS in notebook metadata at `metadata.orion.appView.css`; do not rely on arbitrary Tailwind classes generated at runtime.
+`class_name` adds semantic CSS hooks for Orion UI in Notebook View and App View. Do not write CSS into notebook metadata; if a notebook needs custom styling, include it in the relevant cell source/output. Orion also exposes JupyterLab-compatible selectors such as `.jp-Notebook`, `.jp-Cell`, `.jp-MarkdownOutput`, `.jp-RenderedHTMLCommon`, `.jp-InputArea-editor`, and `.jp-OutputArea-output` for cell-authored styles. Do not rely on arbitrary Tailwind classes generated at runtime.
 
 ## Requirements
 

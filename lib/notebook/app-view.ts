@@ -196,15 +196,6 @@ function getRawAppViewSchema(
   return appView.schema;
 }
 
-/** Reads App View scoped CSS from notebook metadata when present. */
-export function getNotebookAppViewCss(
-  metadata: NotebookType["metadata"] | undefined,
-): string | undefined {
-  const orion = isRecord(metadata?.orion) ? metadata.orion : {};
-  const appView = isRecord(orion.appView) ? orion.appView : {};
-  return typeof appView.css === "string" ? appView.css : undefined;
-}
-
 /**
  * Parses notebook-level declarative App View schema metadata.
  */

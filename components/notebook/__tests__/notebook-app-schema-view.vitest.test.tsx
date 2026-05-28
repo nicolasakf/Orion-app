@@ -118,42 +118,27 @@ describe("NotebookAppSchemaView", () => {
     expect(screen.getByRole("button", { name: "Preview" })).toBeInTheDocument();
   });
 
-  it("injects scoped App View CSS and renders primitive class hooks", () => {
-    renderSchema(
-      {
-        version: 1,
-        primitiveRegistry: { source: "builtin" },
-        root: {
-          type: "Page",
-          props: { className: "dashboard-page" },
-          children: [
-            {
-              type: "Card",
-              props: { title: "Controls", className: "metric-card" },
-              children: [],
-            },
-          ],
-        },
-      },
-      {
-        ...makeNotebook(),
-        metadata: {
-          orion: {
-            appView: {
-              css: ".metric-card { border-color: red; }",
-            },
+  it("renders primitive class hooks without metadata CSS injection", () => {
+    renderSchema({
+      version: 1,
+      primitiveRegistry: { source: "builtin" },
+      root: {
+        type: "Page",
+        props: { className: "dashboard-page" },
+        children: [
+          {
+            type: "Card",
+            props: { title: "Controls", className: "metric-card" },
+            children: [],
           },
-        },
+        ],
       },
-    );
+    });
 
     expect(document.querySelector(".orion-app-view")).toBeInTheDocument();
     expect(document.querySelector(".dashboard-page")).toBeInTheDocument();
     expect(document.querySelector(".metric-card")).toBeInTheDocument();
-    const style = document.querySelector("style[data-orion-app-view-css]");
-    expect(style).toHaveTextContent(
-      ".orion-app-view .metric-card{ border-color: red; }",
-    );
+    expect(document.querySelector("style[data-orion-app-view-css]")).toBeNull();
   });
 
   it("keeps basic control state local to the renderer", () => {
