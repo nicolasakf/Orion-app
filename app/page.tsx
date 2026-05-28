@@ -593,7 +593,7 @@ export default function Page() {
   const recentFilesSelectionPathRef = useRef("");
   const recentFilesCommandInputRef = useRef<HTMLInputElement>(null);
   const recentFilesShortcutActiveRef = useRef(false);
-  /** Cmd/Ctrl+D taps in the current hold cycle; commit on release only when > 1. */
+  /** Cmd/Ctrl+P taps in the current hold cycle; commit on release only when > 1. */
   const recentFilesShortcutPressCountRef = useRef(0);
   const [isFileIconHovered, setIsFileIconHovered] = useState(false);
   const leftPanelRef = useRef<any>(null);
@@ -1011,7 +1011,7 @@ export default function Page() {
       return;
     }
 
-    // Single Cmd/Ctrl+D leaves the combobox open for arrow keys / search.
+    // Single Cmd/Ctrl+P leaves the combobox open for arrow keys / search.
     if (shortcutPressCount <= 1) {
       setRecentFilesTooltipOpen(false);
       window.requestAnimationFrame(() => {
@@ -1046,7 +1046,7 @@ export default function Page() {
   ]);
 
   /**
-   * Cycles recent files with Cmd/Ctrl+D. One press opens the combobox for
+   * Cycles recent files with Cmd/Ctrl+P. One press opens the combobox for
    * keyboard search; two or more presses in the same hold open the highlight on release.
    */
   useEffect(() => {
@@ -1055,7 +1055,7 @@ export default function Page() {
         (!event.metaKey && event.ctrlKey)) &&
       !event.altKey &&
       !event.shiftKey &&
-      event.code === "KeyD";
+      event.code === "KeyP";
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!isRecentFilesShortcut(event)) return;
@@ -2689,7 +2689,7 @@ export default function Page() {
                                             </p>
                                             <kbd className="pointer-events-none ml-2 inline-flex shrink-0 flex-nowrap h-5 min-h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[12px] font-medium text-muted-foreground opacity-100">
                                               <CmdOrCtrl className="h-3 w-3" />
-                                              D
+                                              P
                                             </kbd>
                                           </div>
                                         </TooltipContent>
