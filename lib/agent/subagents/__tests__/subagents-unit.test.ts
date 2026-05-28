@@ -764,6 +764,38 @@ disable-model-invocation: true
     assert(String(results.get("call-1")).includes("[BLOCKED]"), "delegate should be blocked");
   });
 
+  await runTest("subagent tool execution reports timing lifecycle callbacks", async () => {
+    const events: string[] = [];
+    const results = await executeSubagentToolCallPartsForTest(
+      [
+        {
+          type: "tool-read_file",
+          toolCallId: "call-read",
+          state: "input-available",
+          input: { path: "notes.md" },
+        },
+      ],
+      {
+        subagentType: "analyst",
+        availableSubagents: [subagentDefinition()],
+        description: "test",
+        modelId: "claude-sonnet-4-5",
+        providerId: "anthropic",
+        subagentDevLogInstance: 1,
+        executeToolCall: async () => "contents",
+        onToolStart: (toolCallId) => events.push(`start:${toolCallId}`),
+        onToolEnd: (toolCallId) => events.push(`end:${toolCallId}`),
+        createTmpNotebookCopy: async () => ".agents/subagents/tmp/analyst/run.ipynb",
+      }
+    );
+
+    assert(results.get("call-read") === "contents", "tool result should be preserved");
+    assert(
+      events.join(",") === "start:call-read,end:call-read",
+      `unexpected timing events: ${events.join(",")}`
+    );
+  });
+
   await runTest("runSubagent reports transcript snapshots through completion", async () => {
     const originalFetch = globalThis.fetch;
     const snapshots: UIMessage[][] = [];

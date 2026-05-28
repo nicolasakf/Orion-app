@@ -10,6 +10,11 @@ export type AssistantPartWithIndex = {
   partIndex: number;
 };
 
+export type AssistantActivityMessagePart = AssistantPartWithIndex & {
+  message: UIMessage;
+  messageIndex: number;
+};
+
 export type AssistantRenderBlock =
   | {
       type: "activityGroup";
@@ -23,10 +28,128 @@ export type AssistantRenderBlock =
       };
     };
 
+export type AssistantActivityMessageBlock =
+  | {
+      type: "message";
+      message: UIMessage;
+      messageIndex: number;
+    }
+  | {
+      type: "activityRun";
+      items: AssistantActivityMessagePart[];
+      firstMessageIndex: number;
+      lastMessageIndex: number;
+      hasFollowingText: boolean;
+    };
+
 /** True when a message part renders inside the compact activity group. */
 export function isAssistantActivityPart(part: UIMessage["parts"][number]): boolean {
   if (isToolUIPart(part)) return true;
   return part.type === "reasoning" && "text" in part && Boolean(part.text);
+}
+
+/** True when a part is assistant text that should render as final content. */
+function isRenderableAssistantText(part: UIMessage["parts"][number]): boolean {
+  return part.type === "text" && "text" in part && Boolean(part.text);
+}
+
+/** True when an assistant message contains activity and no renderable text. */
+export function isAssistantActivityOnlyMessage(message: UIMessage): boolean {
+  if (message.role !== "assistant") return false;
+
+  let hasActivity = false;
+  for (const part of message.parts) {
+    if (isAssistantActivityPart(part)) {
+      hasActivity = true;
+      continue;
+    }
+    if (isRenderableAssistantText(part)) return false;
+  }
+
+  return hasActivity;
+}
+
+/** Check whether later assistant messages in this turn include final text. */
+function hasFollowingAssistantText(messages: UIMessage[], startIndex: number): boolean {
+  for (let index = startIndex; index < messages.length; index++) {
+    const message = messages[index];
+    if (!message) continue;
+    if (message.role === "user") return false;
+    if (message.role === "assistant" && message.parts.some(isRenderableAssistantText)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Build message-level rows, optionally merging adjacent assistant messages that
+ * contain only reasoning/tool activity. Subagent transcripts produce one such
+ * message per model step, so this gives the UI one coherent work group.
+ */
+export function buildAssistantActivityMessageBlocks(
+  messages: UIMessage[],
+  options?: { groupConsecutiveActivityOnlyMessages?: boolean }
+): AssistantActivityMessageBlock[] {
+  if (!options?.groupConsecutiveActivityOnlyMessages) {
+    return messages.map((message, messageIndex) => ({
+      type: "message",
+      message,
+      messageIndex,
+    }));
+  }
+
+  const blocks: AssistantActivityMessageBlock[] = [];
+  let pendingRun: AssistantActivityMessagePart[] = [];
+  let pendingFirstMessageIndex: number | undefined;
+  let pendingLastMessageIndex: number | undefined;
+
+  /** Flush a pending cross-message activity run at a message boundary. */
+  const flushRun = () => {
+    if (
+      pendingRun.length === 0 ||
+      pendingFirstMessageIndex === undefined ||
+      pendingLastMessageIndex === undefined
+    ) {
+      pendingRun = [];
+      pendingFirstMessageIndex = undefined;
+      pendingLastMessageIndex = undefined;
+      return;
+    }
+
+    blocks.push({
+      type: "activityRun",
+      items: pendingRun,
+      firstMessageIndex: pendingFirstMessageIndex,
+      lastMessageIndex: pendingLastMessageIndex,
+      hasFollowingText: hasFollowingAssistantText(messages, pendingLastMessageIndex + 1),
+    });
+    pendingRun = [];
+    pendingFirstMessageIndex = undefined;
+    pendingLastMessageIndex = undefined;
+  };
+
+  messages.forEach((message, messageIndex) => {
+    if (isAssistantActivityOnlyMessage(message)) {
+      if (pendingFirstMessageIndex === undefined) {
+        pendingFirstMessageIndex = messageIndex;
+      }
+      pendingLastMessageIndex = messageIndex;
+      message.parts.forEach((part, partIndex) => {
+        if (!isAssistantActivityPart(part)) return;
+        pendingRun.push({ part, partIndex, message, messageIndex });
+      });
+      return;
+    }
+
+    flushRun();
+    blocks.push({ type: "message", message, messageIndex });
+  });
+
+  flushRun();
+
+  return blocks;
 }
 
 /** Build render blocks that group contiguous reasoning/tool activity. */
@@ -36,9 +159,7 @@ export function buildAssistantRenderBlocks(parts: UIMessage["parts"]): Assistant
 
   /** Check whether later parts contain assistant text that can finalize the activity. */
   const hasTextAfter = (startIndex: number): boolean =>
-    parts
-      .slice(startIndex)
-      .some((part) => part.type === "text" && "text" in part && Boolean(part.text));
+    parts.slice(startIndex).some(isRenderableAssistantText);
 
   /** Flush pending activity parts into the block list at a text/trailing boundary. */
   const flushActivity = (nextIndex: number) => {

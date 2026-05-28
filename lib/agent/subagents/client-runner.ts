@@ -152,6 +152,7 @@ export async function executeSubagentToolCallPartsForTest(
 
   for (const part of toolCallParts) {
     const toolName = extractToolName(part.type) as OrionToolName;
+    options.onToolStart?.(part.toolCallId);
 
     // Hard block: sub-agents cannot spawn other sub-agents recursively
     if (toolName === "delegate") {
@@ -159,6 +160,7 @@ export async function executeSubagentToolCallPartsForTest(
         part.toolCallId,
         "[BLOCKED] Sub-agents cannot call the `delegate` tool. Recursive sub-agent spawning is not supported."
       );
+      options.onToolEnd?.(part.toolCallId);
       continue;
     }
 
@@ -171,6 +173,8 @@ export async function executeSubagentToolCallPartsForTest(
         part.toolCallId,
         `[ERROR] Tool "${toolName}" threw an exception: ${message}`
       );
+    } finally {
+      options.onToolEnd?.(part.toolCallId);
     }
   }
 

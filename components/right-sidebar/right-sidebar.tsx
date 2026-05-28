@@ -1362,7 +1362,7 @@ export function RightSidebar({
   }, []);
 
   /** Converts selected external files into session-only composer attachments. */
-  const handleAttachFiles = useCallback(async (files: FileList) => {
+  const handleAttachFiles = useCallback(async (files: FileList | readonly File[]) => {
     const selectedFiles = Array.from(files);
     if (selectedFiles.length === 0) return;
 
@@ -2312,6 +2312,8 @@ export function RightSidebar({
                 reconnectTmpNotebookPath: reconnectTmpNotebookPath || undefined,
                 reconnectMessages: reconnectSourceSession?.messages,
                 executeToolCall: assistant.executeToolCall,
+                onToolStart: markToolStarted,
+                onToolEnd: markToolEnded,
                 createTmpNotebookCopy: assistant.createTmpSubagentNotebookCopy,
                 abortSignal: abortController.signal,
                 userCredential: effectiveUserCredential,
@@ -2442,6 +2444,7 @@ export function RightSidebar({
       modelsWithAccess,
       refreshCredentialForProviderIfNeeded,
       addTimedToolOutput,
+      markToolStarted,
       markToolEnded,
       setChats,
     ]
@@ -3607,6 +3610,8 @@ export function RightSidebar({
             error={undefined}
             isLoading={activeSubagentSession.status === "running"}
             isAgentTurnActive={activeSubagentSession.status === "running"}
+            groupConsecutiveAssistantActivity
+            toolTimings={toolTimings}
             onUserMessageClick={() => { }}
             editingState={null}
           />

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { UIMessage } from "ai";
 
 import {
+  buildAssistantActivityMessageBlocks,
   buildAssistantRenderBlocks,
   finalizeCompletedToolTimings,
   getActivityDurationMs,
@@ -111,6 +112,82 @@ describe("buildAssistantRenderBlocks", () => {
   it("only forces expansion for activity needing approval", () => {
     expect(shouldForceExpandActivityGroup(true)).toBe(true);
     expect(shouldForceExpandActivityGroup(false)).toBe(false);
+  });
+});
+
+describe("buildAssistantActivityMessageBlocks", () => {
+  it("groups consecutive assistant activity-only messages before final text", () => {
+    const messages = [
+      {
+        id: "user-1",
+        role: "user" as const,
+        parts: [textPart("go")],
+      },
+      {
+        id: "assistant-1",
+        role: "assistant" as const,
+        parts: [toolPart("use_notebook", "call-1", "output-available")],
+      },
+      {
+        id: "assistant-2",
+        role: "assistant" as const,
+        parts: [toolPart("read_notebook", "call-2", "output-available")],
+      },
+      {
+        id: "assistant-3",
+        role: "assistant" as const,
+        parts: [textPart("done")],
+      },
+    ] satisfies UIMessage[];
+
+    const blocks = buildAssistantActivityMessageBlocks(messages, {
+      groupConsecutiveActivityOnlyMessages: true,
+    });
+
+    expect(blocks.map((block) => block.type)).toEqual([
+      "message",
+      "activityRun",
+      "message",
+    ]);
+    expect(blocks[1]).toMatchObject({
+      type: "activityRun",
+      firstMessageIndex: 1,
+      lastMessageIndex: 2,
+      hasFollowingText: true,
+      items: [
+        { messageIndex: 1, partIndex: 0, part: { toolCallId: "call-1" } },
+        { messageIndex: 2, partIndex: 0, part: { toolCallId: "call-2" } },
+      ],
+    });
+  });
+
+  it("does not treat assistant text after a user boundary as final text for an activity run", () => {
+    const messages = [
+      {
+        id: "assistant-1",
+        role: "assistant" as const,
+        parts: [toolPart("bash", "call-1", "output-available")],
+      },
+      {
+        id: "user-1",
+        role: "user" as const,
+        parts: [textPart("next")],
+      },
+      {
+        id: "assistant-2",
+        role: "assistant" as const,
+        parts: [textPart("answer")],
+      },
+    ] satisfies UIMessage[];
+
+    const blocks = buildAssistantActivityMessageBlocks(messages, {
+      groupConsecutiveActivityOnlyMessages: true,
+    });
+
+    expect(blocks[0]).toMatchObject({
+      type: "activityRun",
+      hasFollowingText: false,
+    });
   });
 });
 

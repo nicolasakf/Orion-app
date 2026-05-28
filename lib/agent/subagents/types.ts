@@ -110,6 +110,12 @@ export interface RunSubagentOptions {
    */
   executeToolCall: (toolName: OrionToolName, params: unknown) => Promise<unknown>;
 
+  /** Called immediately before a nested sub-agent tool starts executing. */
+  onToolStart?: (toolCallId: string) => void;
+
+  /** Called after a nested sub-agent tool reaches a terminal result or error. */
+  onToolEnd?: (toolCallId: string) => void;
+
   /** Copy the selected source notebook to a tmp run notebook. */
   createTmpNotebookCopy: (subagent: SubagentDefinition, runId: string) => Promise<string>;
 

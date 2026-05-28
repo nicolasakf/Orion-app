@@ -15,11 +15,13 @@ import { NoKernelPrompt } from "../common/no-kernel-prompt";
 import { ThinkingBlock } from "./thinking-block";
 import { CostSummaryCard, type CostSummaryMessageData } from "./cost-summary-card";
 import {
+  buildAssistantActivityMessageBlocks,
   buildAssistantRenderBlocks,
   getActivityDurationMs,
   isActivityGroupWaitingForFinalResponse,
   shouldAutoCollapseActivityGroup,
   shouldForceExpandActivityGroup,
+  type AssistantActivityMessagePart,
   type AssistantPartWithIndex,
   type ToolTiming,
 } from "./assistant-activity-grouping";
@@ -51,6 +53,8 @@ export interface ChatBodyProps {
   subagentReportPaths?: Map<string, string>;
   /** Tool execution timings for the active browser session, keyed by toolCallId. */
   toolTimings?: Map<string, ToolTiming>;
+  /** Group adjacent assistant activity-only messages into one compact work row. */
+  groupConsecutiveAssistantActivity?: boolean;
   onOpenSubagentChat?: (toolCallId: string) => void;
   onOpenSubagentReport?: (path: string) => void;
   /** Ephemeral `/cost` slash-command rows keyed by assistant message id. */
@@ -87,6 +91,13 @@ interface ChatMessageRowProps {
 
 type ChatRenderItem =
   | { type: "message"; message: UIMessage; messageIndex: number }
+  | {
+      type: "activityRun";
+      items: AssistantActivityMessagePart[];
+      firstMessageIndex: number;
+      lastMessageIndex: number;
+      hasFollowingText: boolean;
+    }
   | { type: "kernelPrompt" }
   | { type: "loading" }
   | { type: "error"; message: string | undefined };
@@ -441,6 +452,188 @@ function getActivityStatus(
   return "complete";
 }
 
+interface ActivityItemRenderOptions {
+  item: AssistantActivityMessagePart;
+  isLoading: boolean;
+  isLastMessage: boolean;
+  messageHasFollowingText: boolean;
+  pendingApprovalIds?: Set<string>;
+  onApprove?: (toolCallId: string) => void;
+  onReject?: (toolCallId: string) => void;
+  toolApprovalMode?: ToolApprovalMode;
+  onToolApprovalModeChange?: (mode: ToolApprovalMode) => void;
+  subagentProgress?: Map<string, string>;
+  subagentReportPaths?: Map<string, string>;
+  onOpenSubagentChat?: (toolCallId: string) => void;
+  onOpenSubagentReport?: (path: string) => void;
+}
+
+/** Render one activity part using its original message reference metadata. */
+function renderAssistantActivityItem({
+  item,
+  isLoading,
+  isLastMessage,
+  messageHasFollowingText,
+  pendingApprovalIds,
+  onApprove,
+  onReject,
+  toolApprovalMode,
+  onToolApprovalModeChange,
+  subagentProgress,
+  subagentReportPaths,
+  onOpenSubagentChat,
+  onOpenSubagentReport,
+}: ActivityItemRenderOptions) {
+  const { part, partIndex, message, messageIndex } = item;
+  if (isToolUIPart(part)) {
+    const inv = part;
+    const toolName = inv.type.slice(5) as OrionToolName;
+    const invArgs =
+      ("input" in inv && inv.input != null) ? (inv.input as Record<string, unknown>) : {};
+    const invResult = "output" in inv ? inv.output : undefined;
+
+    if (toolName === "delegate") {
+      return (
+        <DelegateInvocationCard
+          key={inv.toolCallId}
+          subagentType={(invArgs.subagent as string | undefined) ?? ""}
+          progressDescription={subagentProgress?.get(inv.toolCallId)}
+          result={invResult}
+          state={inv.state}
+          reportPath={subagentReportPaths?.get(inv.toolCallId)}
+          onShowReport={onOpenSubagentReport}
+          onOpenSubchat={
+            onOpenSubagentChat
+              ? () => onOpenSubagentChat(inv.toolCallId)
+              : undefined
+          }
+          conversationReference={{
+            messageId: message.id,
+            messageIndex,
+            partIndex,
+            toolCallId: inv.toolCallId,
+          }}
+        />
+      );
+    }
+
+    return (
+      <ToolInvocationCard
+        key={inv.toolCallId}
+        toolName={toolName}
+        args={invArgs}
+        result={invResult}
+        state={inv.state}
+        pendingApproval={pendingApprovalIds?.has(inv.toolCallId)}
+        onApprove={onApprove ? () => onApprove(inv.toolCallId) : undefined}
+        onReject={onReject ? () => onReject(inv.toolCallId) : undefined}
+        toolApprovalMode={toolApprovalMode}
+        onToolApprovalModeChange={onToolApprovalModeChange}
+        conversationReference={{
+          messageId: message.id,
+          messageIndex,
+          partIndex,
+          toolCallId: inv.toolCallId,
+        }}
+      />
+    );
+  }
+
+  if (part.type === "reasoning" && part.text) {
+    const isActivelyThinking =
+      isLoading && isLastMessage && !messageHasFollowingText;
+
+    return (
+      <ThinkingBlock
+        key={`${message.id}-reasoning-${partIndex}`}
+        reasoning={part.text}
+        isStreaming={isActivelyThinking}
+      />
+    );
+  }
+
+  return null;
+}
+
+interface AssistantActivityRunRowProps {
+  item: Extract<ChatRenderItem, { type: "activityRun" }>;
+  isLastMessage: boolean;
+  isLoading: boolean;
+  isAgentTurnActive?: boolean;
+  pendingApprovalIds?: Set<string>;
+  onApprove?: (toolCallId: string) => void;
+  onReject?: (toolCallId: string) => void;
+  toolApprovalMode?: ToolApprovalMode;
+  onToolApprovalModeChange?: (mode: ToolApprovalMode) => void;
+  subagentProgress?: Map<string, string>;
+  subagentReportPaths?: Map<string, string>;
+  toolTimings?: Map<string, ToolTiming>;
+  onOpenSubagentChat?: (toolCallId: string) => void;
+  onOpenSubagentReport?: (path: string) => void;
+}
+
+/** Render a compact group spanning consecutive assistant activity-only messages. */
+function AssistantActivityRunRow({
+  item,
+  isLastMessage,
+  isLoading,
+  isAgentTurnActive = false,
+  pendingApprovalIds,
+  onApprove,
+  onReject,
+  toolApprovalMode,
+  onToolApprovalModeChange,
+  subagentProgress,
+  subagentReportPaths,
+  toolTimings,
+  onOpenSubagentChat,
+  onOpenSubagentReport,
+}: AssistantActivityRunRowProps) {
+  const status = getActivityStatus(item.items, pendingApprovalIds);
+  const hasPendingApproval = status === "approval";
+  const toolCount = item.items.filter((activityItem) => isToolUIPart(activityItem.part)).length;
+  const isWaitingForFinalResponse = isActivityGroupWaitingForFinalResponse({
+    hasFollowingText: item.hasFollowingText,
+    isLastMessage,
+    activityStatus: status,
+    isTurnActive: isAgentTurnActive,
+  });
+
+  return (
+    <div className="flex min-w-0 w-full justify-start">
+      <div className="w-full min-w-0">
+        <AssistantActivityGroup
+          toolCount={toolCount}
+          durationMs={getActivityDurationMs(item.items, toolTimings, {
+            isActivityComplete: !isWaitingForFinalResponse,
+          })}
+          isWaitingForFinalResponse={isWaitingForFinalResponse}
+          autoCollapse={shouldAutoCollapseActivityGroup(item.hasFollowingText, hasPendingApproval)}
+          forceExpanded={shouldForceExpandActivityGroup(hasPendingApproval)}
+        >
+          {item.items.map((activityItem) =>
+            renderAssistantActivityItem({
+              item: activityItem,
+              isLoading,
+              isLastMessage,
+              messageHasFollowingText: item.hasFollowingText,
+              pendingApprovalIds,
+              onApprove,
+              onReject,
+              toolApprovalMode,
+              onToolApprovalModeChange,
+              subagentProgress,
+              subagentReportPaths,
+              onOpenSubagentChat,
+              onOpenSubagentReport,
+            })
+          )}
+        </AssistantActivityGroup>
+      </div>
+    </div>
+  );
+}
+
 /**
  * Render one chat row. Historical rows are memoized because AI SDK streaming
  * can clone message objects on every chunk.
@@ -477,77 +670,42 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   /** Render one grouped reasoning/tool part using the existing detailed components. */
   const renderActivityItem = (item: AssistantPartWithIndex) => {
     const { part, partIndex } = item;
-    if (isToolUIPart(part)) {
-      const inv = part;
-      const toolName = inv.type.slice(5) as OrionToolName;
-      const invArgs =
-        ("input" in inv && inv.input != null) ? (inv.input as Record<string, unknown>) : {};
-      const invResult = "output" in inv ? inv.output : undefined;
-
-      if (toolName === "delegate") {
-        return (
-          <DelegateInvocationCard
-            key={inv.toolCallId}
-            subagentType={(invArgs.subagent as string | undefined) ?? ""}
-            progressDescription={subagentProgress?.get(inv.toolCallId)}
-            result={invResult}
-            state={inv.state}
-            reportPath={subagentReportPaths?.get(inv.toolCallId)}
-            onShowReport={onOpenSubagentReport}
-            onOpenSubchat={
-              onOpenSubagentChat
-                ? () => onOpenSubagentChat(inv.toolCallId)
-                : undefined
-            }
-            conversationReference={{
-              messageId: message.id,
-              messageIndex: index,
-              partIndex,
-              toolCallId: inv.toolCallId,
-            }}
-          />
-        );
-      }
-
-      return (
-        <ToolInvocationCard
-          key={inv.toolCallId}
-          toolName={toolName}
-          args={invArgs}
-          result={invResult}
-          state={inv.state}
-          pendingApproval={pendingApprovalIds?.has(inv.toolCallId)}
-          onApprove={onApprove ? () => onApprove(inv.toolCallId) : undefined}
-          onReject={onReject ? () => onReject(inv.toolCallId) : undefined}
-          toolApprovalMode={toolApprovalMode}
-          onToolApprovalModeChange={onToolApprovalModeChange}
-          conversationReference={{
-            messageId: message.id,
-            messageIndex: index,
-            partIndex,
-            toolCallId: inv.toolCallId,
-          }}
-        />
-      );
-    }
-
     if (part.type === "reasoning" && part.text) {
       const hasTextAfter = message.parts
         .slice(partIndex + 1)
         .some((p) => p.type === "text" && "text" in p && p.text);
-      const isActivelyThinking =
-        isLoading && isLastMessage && !hasTextAfter;
-
-      return (
-        <ThinkingBlock
-          key={`${message.id}-reasoning-${partIndex}`}
-          reasoning={part.text}
-          isStreaming={isActivelyThinking}
-        />
-      );
+      return renderAssistantActivityItem({
+        item: { ...item, message, messageIndex: index },
+        isLoading,
+        isLastMessage,
+        messageHasFollowingText: hasTextAfter,
+        pendingApprovalIds,
+        onApprove,
+        onReject,
+        toolApprovalMode,
+        onToolApprovalModeChange,
+        subagentProgress,
+        subagentReportPaths,
+        onOpenSubagentChat,
+        onOpenSubagentReport,
+      });
     }
 
-    return null;
+    return renderAssistantActivityItem({
+      item: { ...item, message, messageIndex: index },
+      isLoading,
+      isLastMessage,
+      messageHasFollowingText: false,
+      pendingApprovalIds,
+      onApprove,
+      onReject,
+      toolApprovalMode,
+      onToolApprovalModeChange,
+      subagentProgress,
+      subagentReportPaths,
+      onOpenSubagentChat,
+      onOpenSubagentReport,
+    });
   };
 
   const renderBlocks = message.role === "assistant"
@@ -680,6 +838,7 @@ export function ChatBody({
   subagentProgress,
   subagentReportPaths,
   toolTimings,
+  groupConsecutiveAssistantActivity = false,
   onOpenSubagentChat,
   onOpenSubagentReport,
   costSummaryByMessageId,
@@ -706,11 +865,9 @@ export function ChatBody({
   }
 
   const rowItems = React.useMemo<ChatRenderItem[]>(() => {
-    const rows: ChatRenderItem[] = messages.map((message, index) => ({
-      type: "message",
-      message,
-      messageIndex: index,
-    }));
+    const rows: ChatRenderItem[] = buildAssistantActivityMessageBlocks(messages, {
+      groupConsecutiveActivityOnlyMessages: groupConsecutiveAssistantActivity,
+    });
 
     if (showKernelPrompt) {
       rows.push({ type: "kernelPrompt" });
@@ -723,17 +880,32 @@ export function ChatBody({
     }
 
     return rows;
-  }, [messages, showKernelPrompt, isLoading, showError, errorMessage]);
+  }, [
+    messages,
+    groupConsecutiveAssistantActivity,
+    showKernelPrompt,
+    isLoading,
+    showError,
+    errorMessage,
+  ]);
 
   const rowVirtualizer = useVirtualizer({
     count: rowItems.length,
     getScrollElement: () => scrollParentRef.current,
-    estimateSize: (index) => (rowItems[index]?.type === "message" ? 180 : 80),
+    estimateSize: (index) =>
+      rowItems[index]?.type === "message" || rowItems[index]?.type === "activityRun"
+        ? 180
+        : 80,
     getItemKey: (index) => {
       const item = rowItems[index];
       if (!item) return `${viewKey}:missing:${index}`;
       if (item.type === "message") {
         return `${viewKey}:${item.message.id || "message"}:${item.messageIndex}`;
+      }
+      if (item.type === "activityRun") {
+        const first = item.items[0]?.message.id ?? "activity";
+        const last = item.items.at(-1)?.message.id ?? first;
+        return `${viewKey}:activity-run:${first}:${last}:${item.firstMessageIndex}-${item.lastMessageIndex}`;
       }
       return `${viewKey}:${item.type}`;
     },
@@ -857,6 +1029,27 @@ export function ChatBody({
                     onDismissCostSummary={onDismissCostSummary}
                     onRefreshCostSummary={onRefreshCostSummary}
                     isRefreshingCostSummary={isRefreshingCostSummary}
+                  />
+                )}
+
+                {item.type === "activityRun" && (
+                  <AssistantActivityRunRow
+                    item={item}
+                    isLastMessage={item.lastMessageIndex === messages.length - 1}
+                    isLoading={isLoading && item.lastMessageIndex === messages.length - 1}
+                    isAgentTurnActive={
+                      isAgentTurnActive && item.lastMessageIndex === messages.length - 1
+                    }
+                    pendingApprovalIds={pendingApprovalIds}
+                    onApprove={onApprove}
+                    onReject={onReject}
+                    toolApprovalMode={toolApprovalMode}
+                    onToolApprovalModeChange={onToolApprovalModeChange}
+                    subagentProgress={subagentProgress}
+                    subagentReportPaths={subagentReportPaths}
+                    toolTimings={toolTimings}
+                    onOpenSubagentChat={onOpenSubagentChat}
+                    onOpenSubagentReport={onOpenSubagentReport}
                   />
                 )}
 
