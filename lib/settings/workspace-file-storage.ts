@@ -14,6 +14,11 @@ function joinJupyterPath(...segments: string[]): string {
     .join("/");
 }
 
+/** Returns whether the selected workspace is the Jupyter server root. */
+export function isJupyterRootWorkspace(workspaceDirectory: string): boolean {
+  return joinJupyterPath(workspaceDirectory) === "";
+}
+
 /** Returns the Jupyter-relative path for a workspace settings file. */
 export function getWorkspaceSettingsPath(workspaceDirectory: string): string {
   return joinJupyterPath(workspaceDirectory, WORKSPACE_SETTINGS_RELATIVE_PATH);
@@ -52,6 +57,10 @@ export async function loadWorkspaceSettingsDocument(
   contentsManager: ContentsManager,
   workspaceDirectory: string
 ): Promise<WorkspaceSettingsDocument> {
+  if (isJupyterRootWorkspace(workspaceDirectory)) {
+    return createDefaultWorkspaceSettingsDocument();
+  }
+
   const settingsPath = getWorkspaceSettingsPath(workspaceDirectory);
 
   try {

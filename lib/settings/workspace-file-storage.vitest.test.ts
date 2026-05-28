@@ -5,13 +5,18 @@ import { DEFAULT_SETTINGS } from "@/lib/settings/defaults";
 import { mergeSettings } from "@/lib/settings/merge";
 import {
   getWorkspaceSettingsPath,
+  isJupyterRootWorkspace,
   loadWorkspaceSettingsDocument,
 } from "@/lib/settings/workspace-file-storage";
 
 /** Creates a minimal ContentsManager test double for workspace settings reads. */
-function createContentsManager(files: Record<string, string>): ContentsManager {
+function createContentsManager(
+  files: Record<string, string>,
+  onGet?: (path: string) => void
+): ContentsManager {
   return {
     get: async (path: string) => {
+      onGet?.(path);
       if (!(path in files)) {
         throw new Error("404: Not Found");
       }
@@ -27,6 +32,35 @@ describe("workspace file settings storage", () => {
   it("builds workspace settings paths relative to the Jupyter workspace", () => {
     expect(getWorkspaceSettingsPath("project")).toBe("project/.orion/settings.json");
     expect(getWorkspaceSettingsPath("")).toBe(".orion/settings.json");
+  });
+
+  it("detects the Jupyter server root workspace", () => {
+    expect(isJupyterRootWorkspace("")).toBe(true);
+    expect(isJupyterRootWorkspace("/")).toBe(true);
+    expect(isJupyterRootWorkspace("project")).toBe(false);
+  });
+
+  it("does not load workspace overrides for the Jupyter server root workspace", async () => {
+    const requestedPaths: string[] = [];
+    const contentsManager = createContentsManager(
+      {
+        ".orion/settings.json": JSON.stringify({
+          version: 1,
+          overrides: {
+            chat: {
+              fontSize: 18,
+            },
+          },
+        }),
+      },
+      (path) => requestedPaths.push(path)
+    );
+
+    await expect(loadWorkspaceSettingsDocument(contentsManager, "")).resolves.toEqual({
+      version: 1,
+      overrides: {},
+    });
+    expect(requestedPaths).toEqual([]);
   });
 
   it("loads overrides from <workspace>/.orion/settings.json", async () => {
@@ -51,7 +85,7 @@ describe("workspace file settings storage", () => {
 
   it("accepts full settings-shaped workspace files as overrides", async () => {
     const contentsManager = createContentsManager({
-      ".orion/settings.json": JSON.stringify({
+      "project/.orion/settings.json": JSON.stringify({
         version: 1,
         settings: {
           ...DEFAULT_SETTINGS,
@@ -63,7 +97,10 @@ describe("workspace file settings storage", () => {
       }),
     });
 
-    const document = await loadWorkspaceSettingsDocument(contentsManager, "");
+    const document = await loadWorkspaceSettingsDocument(
+      contentsManager,
+      "project"
+    );
 
     expect(document.overrides.editor?.fontSize).toBe(18);
   });
