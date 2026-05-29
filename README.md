@@ -32,7 +32,7 @@ Orion closes that gap. Built around a modern notebook IDE, it feeds the right co
 
 ## Quick start
 
-**Prerequisites:** Node.js 20+ and Python 3.8+ (for notebooks)
+**Prerequisites:** The install script can bootstrap Orion with npm, pip, or uv. Python 3.8+ is still needed for notebook execution, but Orion can create a managed runtime for you.
 
 Running `orion` starts Jupyter, launches Orion locally, opens your browser, and auto-connects to the Jupyter server. All managed files live under `~/.orion` (Windows: `%USERPROFILE%\.orion`).
 
@@ -42,7 +42,7 @@ Running `orion` starts Jupyter, launches Orion locally, opens your browser, and 
 curl -fsSL https://www.orion-agent.ai/install.sh | bash
 ```
 
-The script installs `orion-notebook` via npm when Node.js 20+ is available, otherwise via pip. Pin a version with `ORION_VERSION=0.5.1` or force a method with `ORION_INSTALL_METHOD=npm|pip`.
+The script installs `orion-notebook` via npm when Node.js 20+ is available, otherwise via pip. If neither path is available, it installs uv and uses uv-managed Python 3.12 for the launcher. Pin a version with `ORION_VERSION=0.5.1` or force a method with `ORION_INSTALL_METHOD=npm|pip|uv`.
 
 ### Install via npm (recommended)
 
@@ -108,6 +108,8 @@ Then remove the package:
 pip uninstall orion-notebook
 # or
 npm uninstall -g orion-notebook
+# or
+uv tool uninstall orion-notebook
 ```
 
 ### Adding yourAPI Keys

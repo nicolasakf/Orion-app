@@ -264,6 +264,7 @@ async function runUninstallCommand(argv: string[]): Promise<void> {
   console.log("To remove the installed package, run:");
   console.log("  npm uninstall -g orion-notebook");
   console.log("  pip uninstall orion-notebook");
+  console.log("  uv tool uninstall orion-notebook");
 }
 
 /** Boots the local Orion app and optionally Jupyter services. */

@@ -11,6 +11,8 @@ pip install orion-notebook
 orion
 ```
 
+The website one-liner may also install this package with `uv tool install` when npm and pip are unavailable.
+
 ## What happens on first run
 
 The PyPI wheel is intentionally small. When you run `orion` for the first time, the CLI may:
@@ -31,7 +33,7 @@ After the first successful setup, later runs start Jupyter, launch Orion, and op
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.8+ for direct `pip install`; the website installer can use uv-managed Python when needed
 - Node.js 20+ (downloaded automatically into `~/.orion/runtime/node` when missing)
 
 ## Flags
@@ -50,6 +52,8 @@ orion uninstall --all --yes  # remove entire ~/.orion directory
 ```bash
 orion uninstall --yes
 pip uninstall orion-notebook
+# or, if installed by the website uv fallback:
+uv tool uninstall orion-notebook
 ```
 
 To remove all Orion-managed data (Jupyter venv, portable Node, every cached app version):

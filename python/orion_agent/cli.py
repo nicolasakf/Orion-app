@@ -427,11 +427,12 @@ def run_uninstall(assume_yes: bool, remove_all: bool) -> None:
 
 
 def print_package_uninstall_hint() -> None:
-    """Print how to remove the installed npm or pip package."""
+    """Print how to remove the installed npm, pip, or uv package."""
     print("")
     print("To remove the installed package, run:")
     print("  npm uninstall -g orion-notebook")
     print("  pip uninstall orion-notebook")
+    print("  uv tool uninstall orion-notebook")
 
 
 def uninstall_main(argv: list[str]) -> None:
