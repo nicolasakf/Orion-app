@@ -16,6 +16,10 @@ import type {
   OpenDocumentSnapshotProvider,
   OpenDocumentSnapshotSource,
 } from "../open-document-snapshots";
+import type {
+  EditCheckpointContext,
+  EditCheckpointRecorder,
+} from "../edit-checkpoint-recorder";
 import {
   guardToolText,
   TOOL_OUTPUT_TEXT_CHAR_BUDGET,
@@ -36,6 +40,8 @@ export abstract class BaseTool {
   protected kernelService: KernelService;
   protected sidecar: KernelSidecar | null;
   protected snapshotProvider: OpenDocumentSnapshotProvider | null;
+  protected checkpointRecorder: EditCheckpointRecorder | null;
+  protected checkpointContext: EditCheckpointContext | null = null;
 
   /** Safety backstop: max characters returned to the LLM per tool call */
   private static readonly MAX_OUTPUT_CHARS = TOOL_OUTPUT_TEXT_CHAR_BUDGET;
@@ -45,11 +51,18 @@ export abstract class BaseTool {
   constructor(
     kernelService: KernelService,
     sidecar?: KernelSidecar | null,
-    snapshotProvider?: OpenDocumentSnapshotProvider | null
+    snapshotProvider?: OpenDocumentSnapshotProvider | null,
+    checkpointRecorder?: EditCheckpointRecorder | null
   ) {
     this.kernelService = kernelService;
     this.sidecar = sidecar ?? null;
     this.snapshotProvider = snapshotProvider ?? null;
+    this.checkpointRecorder = checkpointRecorder ?? null;
+  }
+
+  /** Set the request/tool context used for the next mutation checkpoint write. */
+  setCheckpointContext(context: EditCheckpointContext | null): void {
+    this.checkpointContext = context;
   }
 
   /**
@@ -182,6 +195,39 @@ export abstract class BaseTool {
     return source;
   }
 
+  /** Create a stable Orion cell id for notebook mutation tools. */
+  protected createOrionCellId(): string {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+      return crypto.randomUUID();
+    }
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  /** Returns the stable Orion cell id when present. */
+  protected getCellOrionId(cell: NotebookCell | undefined): string | null {
+    const id = cell?.metadata?.orion?.id;
+    return typeof id === "string" && id.length > 0 ? id : null;
+  }
+
+  /** Ensure every notebook cell has a stable Orion id before mutation saves. */
+  protected ensureNotebookCellIds(notebook: NotebookDocument): void {
+    const seen = new Set<string>();
+    for (const cell of notebook.cells) {
+      let id = this.getCellOrionId(cell);
+      if (!id || seen.has(id)) {
+        id = this.createOrionCellId();
+        cell.metadata = {
+          ...(cell.metadata ?? {}),
+          orion: {
+            ...(cell.metadata?.orion ?? {}),
+            id,
+          },
+        };
+      }
+      seen.add(id);
+    }
+  }
+
   /**
    * Create a new code cell matching nbformat v4.
    */
@@ -189,7 +235,7 @@ export abstract class BaseTool {
     return {
       cell_type: CellType.CODE,
       source: [source],
-      metadata: {},
+      metadata: { orion: { id: this.createOrionCellId() } },
       execution_count: null,
       outputs: [],
     };
@@ -202,7 +248,7 @@ export abstract class BaseTool {
     return {
       cell_type: CellType.MARKDOWN,
       source: [source],
-      metadata: {},
+      metadata: { orion: { id: this.createOrionCellId() } },
     };
   }
 

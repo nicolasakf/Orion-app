@@ -7,9 +7,11 @@
  */
 
 import { BaseTool } from "./base-tool";
+import { hashCheckpointPayload } from "@/lib/agent/edit-checkpoints";
 import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type { EditCheckpointRecorder } from "../edit-checkpoint-recorder";
 import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { DeleteCellParams, NotebookCell } from "./types";
 
@@ -20,9 +22,10 @@ export class DeleteCellTool extends BaseTool {
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
     notebookManager: NotebookManager,
-    snapshotProvider?: OpenDocumentSnapshotProvider | null
+    snapshotProvider?: OpenDocumentSnapshotProvider | null,
+    checkpointRecorder?: EditCheckpointRecorder | null
   ) {
-    super(kernelService, sidecar, snapshotProvider);
+    super(kernelService, sidecar, snapshotProvider, checkpointRecorder);
     this.notebookManager = notebookManager;
   }
 
@@ -48,6 +51,7 @@ export class DeleteCellTool extends BaseTool {
 
     // Read notebook
     const notebook = await this.readNotebook(path);
+    this.ensureNotebookCellIds(notebook);
     const totalCells = notebook.cells.length;
 
     // Validate indices
@@ -66,6 +70,8 @@ export class DeleteCellTool extends BaseTool {
       index: number;
       cellType: string;
       source: string;
+      cellId: string | null;
+      cell: NotebookCell;
     }> = [];
 
     for (const idx of cellIndices) {
@@ -74,6 +80,8 @@ export class DeleteCellTool extends BaseTool {
         index: idx,
         cellType: cell.cell_type,
         source: this.normalizeCellSource(cell.source),
+        cellId: this.getCellOrionId(cell),
+        cell: JSON.parse(JSON.stringify(cell)) as NotebookCell,
       });
     }
 
@@ -85,6 +93,28 @@ export class DeleteCellTool extends BaseTool {
 
     // Write notebook back
     await this.writeNotebook(path, notebook);
+    await Promise.all(
+      deletedCells.map((deleted) => {
+        if (!deleted.cellId) return Promise.resolve();
+        return this.checkpointRecorder?.recordTarget(
+          {
+            kind: "notebook_cell",
+            operation: "delete",
+            path,
+            targetId: deleted.cellId,
+            before: {
+              index: deleted.index,
+              source: deleted.source,
+              cell: deleted.cell,
+            },
+            after: { index: deleted.index, source: "", cell: null },
+            beforeHash: hashCheckpointPayload({ source: deleted.source }),
+            afterHash: hashCheckpointPayload({ source: "" }),
+          },
+          this.checkpointContext ?? undefined
+        ) ?? Promise.resolve();
+      })
+    );
 
     // Build response
     const infoList: string[] = [];

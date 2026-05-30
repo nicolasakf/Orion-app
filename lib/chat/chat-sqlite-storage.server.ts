@@ -10,6 +10,19 @@ import {
   type ChatWire,
 } from "@/lib/chat/chat-types";
 import {
+  EditCheckpointSchema,
+  EditCheckpointStatusSchema,
+  EditCheckpointTargetSchema,
+  RecordEditCheckpointTargetRequestSchema,
+  UpdateEditCheckpointStatusRequestSchema,
+  stringifyCheckpointPayload,
+  type EditCheckpoint,
+  type EditCheckpointTarget,
+  type EditCheckpointTargetKind,
+  type RecordEditCheckpointTargetRequest,
+  type UpdateEditCheckpointStatusRequest,
+} from "@/lib/agent/edit-checkpoints";
+import {
   ensureOrionDataDirectory,
   getOrionDatabasePath,
 } from "@/lib/local/orion-paths.server";
@@ -29,6 +42,33 @@ interface ChatMessageRow {
 interface SubagentSessionRow {
   tool_call_id: string;
   session_json: string;
+}
+
+interface EditCheckpointRow {
+  id: string;
+  request_id: string;
+  local_chat_id: string | null;
+  status: string;
+  summary: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface EditCheckpointTargetRow {
+  id: string;
+  checkpoint_id: string;
+  kind: string;
+  operation: string;
+  path: string;
+  target_id: string | null;
+  before_json: string;
+  after_json: string;
+  before_hash: string | null;
+  after_hash: string | null;
+  first_tool_call_id: string | null;
+  last_tool_call_id: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export type ChatSessionStatus = "idle" | "processing" | "completed" | "error";
@@ -61,7 +101,7 @@ export interface ChatCostSummary {
   models: ChatCostSummaryModel[];
 }
 
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 
 let database: Database.Database | null = null;
 
@@ -163,6 +203,58 @@ function migrateToVersion1(db: Database.Database): void {
   migrate();
 }
 
+/** Adds request-scoped edit checkpoint tables. */
+function migrateToVersion2(db: Database.Database): void {
+  const migrate = db.transaction(() => {
+    createBaseChatSchema(db);
+    db.exec(`
+      create table if not exists edit_checkpoint (
+        id text primary key,
+        request_id text not null unique,
+        local_chat_id text,
+        status text not null default 'open'
+          check (status in ('open', 'completed', 'interrupted', 'reverted')),
+        summary text,
+        created_at text not null,
+        updated_at text not null,
+        foreign key (request_id) references model_request(id) on delete cascade
+      );
+
+      create index if not exists edit_checkpoint_local_chat_id_idx
+        on edit_checkpoint(local_chat_id) where local_chat_id is not null;
+      create index if not exists edit_checkpoint_status_idx
+        on edit_checkpoint(status);
+
+      create table if not exists edit_checkpoint_target (
+        id text primary key,
+        checkpoint_id text not null,
+        kind text not null check (kind in ('text_file', 'notebook_cell')),
+        operation text not null check (operation in ('update', 'insert', 'delete')),
+        path text not null,
+        target_id text,
+        before_json text not null,
+        after_json text not null,
+        before_hash text,
+        after_hash text,
+        first_tool_call_id text,
+        last_tool_call_id text,
+        created_at text not null,
+        updated_at text not null,
+        foreign key (checkpoint_id) references edit_checkpoint(id) on delete cascade
+      );
+
+      create unique index if not exists edit_checkpoint_target_unique_idx
+        on edit_checkpoint_target(checkpoint_id, kind, path, coalesce(target_id, ''));
+      create index if not exists edit_checkpoint_target_checkpoint_id_idx
+        on edit_checkpoint_target(checkpoint_id);
+
+      pragma user_version = 2;
+    `);
+  });
+
+  migrate();
+}
+
 /** Runs all pending local SQLite migrations in order. */
 function migrateDatabase(db: Database.Database): void {
   const version = db.pragma("user_version", { simple: true }) as number;
@@ -174,6 +266,9 @@ function migrateDatabase(db: Database.Database): void {
 
   if (version < 1) {
     migrateToVersion1(db);
+  }
+  if (version < 2) {
+    migrateToVersion2(db);
   }
 }
 
@@ -370,6 +465,391 @@ export async function updateCompactionSummary(
     new Date().toISOString(),
     chatId
   );
+}
+
+/** Converts a checkpoint target row from SQLite into the public wire shape. */
+function mapEditCheckpointTargetRow(row: EditCheckpointTargetRow): EditCheckpointTarget {
+  return EditCheckpointTargetSchema.parse({
+    id: row.id,
+    checkpointId: row.checkpoint_id,
+    kind: row.kind,
+    operation: row.operation,
+    path: row.path,
+    targetId: row.target_id,
+    beforeJson: row.before_json,
+    afterJson: row.after_json,
+    beforeHash: row.before_hash,
+    afterHash: row.after_hash,
+    firstToolCallId: row.first_tool_call_id,
+    lastToolCallId: row.last_tool_call_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+}
+
+/** Converts a checkpoint row and its targets from SQLite into the public wire shape. */
+function mapEditCheckpointRow(
+  row: EditCheckpointRow,
+  targets: EditCheckpointTarget[] = []
+): EditCheckpoint {
+  return EditCheckpointSchema.parse({
+    id: row.id,
+    requestId: row.request_id,
+    localChatId: row.local_chat_id,
+    status: row.status,
+    summary: row.summary,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    targets,
+  });
+}
+
+/** Ensures a model_request exists for direct/local checkpoint writes. */
+function ensureModelRequestRow(db: Database.Database, requestId: string): void {
+  db.prepare(
+    `
+      insert into model_request (id, chat_session_id, origin, created_at)
+      values (?, null, 'user', ?)
+      on conflict(id) do nothing
+    `
+  ).run(requestId, new Date().toISOString());
+}
+
+/** Ensures the request-scoped checkpoint row exists and returns its id. */
+function ensureEditCheckpoint(
+  db: Database.Database,
+  requestId: string,
+  localChatId?: string
+): string {
+  ensureModelRequestRow(db, requestId);
+  const now = new Date().toISOString();
+  const checkpointId = randomUUID();
+
+  db.prepare(
+    `
+      insert into edit_checkpoint
+        (id, request_id, local_chat_id, status, summary, created_at, updated_at)
+      values (@id, @requestId, @localChatId, 'open', null, @createdAt, @updatedAt)
+      on conflict(request_id) do update set
+        local_chat_id = coalesce(edit_checkpoint.local_chat_id, excluded.local_chat_id),
+        updated_at = excluded.updated_at
+    `
+  ).run({
+    id: checkpointId,
+    requestId,
+    localChatId: localChatId ?? null,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  const row = db
+    .prepare("select id from edit_checkpoint where request_id = ?")
+    .get(requestId) as { id: string } | undefined;
+  if (!row) {
+    throw new Error(`Failed to create edit checkpoint for request '${requestId}'.`);
+  }
+  return row.id;
+}
+
+/** Finds an existing target row for a coalescing key. */
+function getExistingCheckpointTarget(
+  db: Database.Database,
+  checkpointId: string,
+  kind: EditCheckpointTargetKind,
+  targetPath: string,
+  targetId: string | null
+): EditCheckpointTargetRow | undefined {
+  return db
+    .prepare(
+      `
+        select * from edit_checkpoint_target
+        where checkpoint_id = ?
+          and kind = ?
+          and path = ?
+          and coalesce(target_id, '') = coalesce(?, '')
+      `
+    )
+    .get(checkpointId, kind, targetPath, targetId) as
+    | EditCheckpointTargetRow
+    | undefined;
+}
+
+/** Records one successful edit target, coalescing repeated edits in the same request. */
+export async function recordEditCheckpointTarget(
+  input: RecordEditCheckpointTargetRequest
+): Promise<EditCheckpoint | null> {
+  const parsed = RecordEditCheckpointTargetRequestSchema.parse(input);
+  const db = await getChatDatabase();
+  const transaction = db.transaction(
+    (target: RecordEditCheckpointTargetRequest): EditCheckpoint | null => {
+      const checkpointId = ensureEditCheckpoint(
+        db,
+        target.requestId,
+        target.localChatId
+      );
+      const targetId = target.targetId ?? null;
+      const beforeJson = stringifyCheckpointPayload(target.before);
+      const afterJson = stringifyCheckpointPayload(target.after);
+      const beforeHash = target.beforeHash ?? null;
+      const afterHash = target.afterHash ?? null;
+      const existing = getExistingCheckpointTarget(
+        db,
+        checkpointId,
+        target.kind,
+        target.path,
+        targetId
+      );
+
+      if (!existing && beforeJson === afterJson) {
+        return getEditCheckpointByRequestIdSync(db, target.requestId);
+      }
+
+      const now = new Date().toISOString();
+      const toolCallId = target.toolCallId ?? null;
+
+      if (!existing) {
+        db.prepare(
+          `
+            insert into edit_checkpoint_target (
+              id, checkpoint_id, kind, operation, path, target_id,
+              before_json, after_json, before_hash, after_hash,
+              first_tool_call_id, last_tool_call_id, created_at, updated_at
+            ) values (
+              @id, @checkpointId, @kind, @operation, @path, @targetId,
+              @beforeJson, @afterJson, @beforeHash, @afterHash,
+              @firstToolCallId, @lastToolCallId, @createdAt, @updatedAt
+            )
+          `
+        ).run({
+          id: randomUUID(),
+          checkpointId,
+          kind: target.kind,
+          operation: target.operation,
+          path: target.path,
+          targetId,
+          beforeJson,
+          afterJson,
+          beforeHash,
+          afterHash,
+          firstToolCallId: toolCallId,
+          lastToolCallId: toolCallId,
+          createdAt: now,
+          updatedAt: now,
+        });
+        return getEditCheckpointByRequestIdSync(db, target.requestId);
+      }
+
+      const coalesced = coalesceEditCheckpointTarget(existing, {
+        operation: target.operation,
+        beforeJson,
+        afterJson,
+        beforeHash,
+        afterHash,
+      });
+
+      if (coalesced === null) {
+        db.prepare("delete from edit_checkpoint_target where id = ?").run(existing.id);
+        return getEditCheckpointByRequestIdSync(db, target.requestId);
+      }
+
+      if (coalesced.beforeJson === coalesced.afterJson) {
+        db.prepare("delete from edit_checkpoint_target where id = ?").run(existing.id);
+        return getEditCheckpointByRequestIdSync(db, target.requestId);
+      }
+
+      db.prepare(
+        `
+          update edit_checkpoint_target
+          set operation = @operation,
+            before_json = @beforeJson,
+            after_json = @afterJson,
+            before_hash = @beforeHash,
+            after_hash = @afterHash,
+            last_tool_call_id = @lastToolCallId,
+            updated_at = @updatedAt
+          where id = @id
+        `
+      ).run({
+        id: existing.id,
+        operation: coalesced.operation,
+        beforeJson: coalesced.beforeJson,
+        afterJson: coalesced.afterJson,
+        beforeHash: coalesced.beforeHash,
+        afterHash: coalesced.afterHash,
+        lastToolCallId: toolCallId ?? existing.last_tool_call_id,
+        updatedAt: now,
+      });
+
+      db.prepare(
+        "update edit_checkpoint set updated_at = ? where id = ?"
+      ).run(now, checkpointId);
+
+      return getEditCheckpointByRequestIdSync(db, target.requestId);
+    }
+  );
+
+  return transaction(parsed);
+}
+
+interface CoalescingInput {
+  operation: "update" | "insert" | "delete";
+  beforeJson: string;
+  afterJson: string;
+  beforeHash: string | null;
+  afterHash: string | null;
+}
+
+/** Applies checkpoint target coalescing rules for repeated edits in one request. */
+function coalesceEditCheckpointTarget(
+  existing: EditCheckpointTargetRow,
+  next: CoalescingInput
+): CoalescingInput | null {
+  if (existing.operation === "insert") {
+    if (next.operation === "delete") return null;
+    return {
+      operation: "insert",
+      beforeJson: existing.before_json,
+      afterJson: next.afterJson,
+      beforeHash: existing.before_hash,
+      afterHash: next.afterHash,
+    };
+  }
+
+  if (existing.operation === "delete") {
+    if (next.operation === "delete") {
+      return {
+        operation: "delete",
+        beforeJson: existing.before_json,
+        afterJson: next.afterJson,
+        beforeHash: existing.before_hash,
+        afterHash: next.afterHash,
+      };
+    }
+    if (existing.before_json === next.afterJson) return null;
+    return {
+      operation: "update",
+      beforeJson: existing.before_json,
+      afterJson: next.afterJson,
+      beforeHash: existing.before_hash,
+      afterHash: next.afterHash,
+    };
+  }
+
+  if (next.operation === "delete") {
+    return {
+      operation: "delete",
+      beforeJson: existing.before_json,
+      afterJson: next.afterJson,
+      beforeHash: existing.before_hash,
+      afterHash: next.afterHash,
+    };
+  }
+
+  return {
+    operation: "update",
+    beforeJson: existing.before_json,
+    afterJson: next.afterJson,
+    beforeHash: existing.before_hash,
+    afterHash: next.afterHash,
+  };
+}
+
+/** Synchronous checkpoint lookup used inside SQLite transactions. */
+function getEditCheckpointByRequestIdSync(
+  db: Database.Database,
+  requestId: string
+): EditCheckpoint | null {
+  const row = db
+    .prepare("select * from edit_checkpoint where request_id = ?")
+    .get(requestId) as EditCheckpointRow | undefined;
+  if (!row) return null;
+  const targets = db
+    .prepare(
+      "select * from edit_checkpoint_target where checkpoint_id = ? order by created_at asc"
+    )
+    .all(row.id) as EditCheckpointTargetRow[];
+  return mapEditCheckpointRow(row, targets.map(mapEditCheckpointTargetRow));
+}
+
+/** Returns one edit checkpoint by model request id. */
+export async function getEditCheckpointByRequestId(
+  requestId: string
+): Promise<EditCheckpoint | null> {
+  const db = await getChatDatabase();
+  return getEditCheckpointByRequestIdSync(db, requestId);
+}
+
+/** Lists edit checkpoints for a chat, newest first. */
+export async function getEditCheckpointsForChat(
+  localChatId: string
+): Promise<EditCheckpoint[]> {
+  const db = await getChatDatabase();
+  const rows = db
+    .prepare(
+      `
+        select * from edit_checkpoint
+        where local_chat_id = ?
+        order by updated_at desc
+      `
+    )
+    .all(localChatId) as EditCheckpointRow[];
+
+  return rows.map((row) => {
+    const targets = db
+      .prepare(
+        "select * from edit_checkpoint_target where checkpoint_id = ? order by created_at asc"
+      )
+      .all(row.id) as EditCheckpointTargetRow[];
+    return mapEditCheckpointRow(row, targets.map(mapEditCheckpointTargetRow));
+  });
+}
+
+/** Updates one edit checkpoint status. */
+export async function updateEditCheckpointStatus(
+  requestId: string,
+  input: UpdateEditCheckpointStatusRequest
+): Promise<EditCheckpoint | null> {
+  const parsed = UpdateEditCheckpointStatusRequestSchema.parse(input);
+  const db = await getChatDatabase();
+  const status = EditCheckpointStatusSchema.parse(parsed.status);
+  db.prepare(
+    `
+      update edit_checkpoint
+      set status = ?, summary = coalesce(?, summary), updated_at = ?
+      where request_id = ?
+    `
+  ).run(status, parsed.summary ?? null, new Date().toISOString(), requestId);
+  return getEditCheckpointByRequestIdSync(db, requestId);
+}
+
+/** Marks stale open checkpoints as interrupted after abandoned/crashed runs. */
+export async function interruptOpenEditCheckpoints(options: {
+  olderThanMs?: number;
+  localChatId?: string;
+} = {}): Promise<number> {
+  const db = await getChatDatabase();
+  const olderThanMs = options.olderThanMs ?? 0;
+  const cutoff = new Date(Date.now() - olderThanMs).toISOString();
+  const result = options.localChatId
+    ? db
+        .prepare(
+          `
+            update edit_checkpoint
+            set status = 'interrupted', updated_at = ?
+            where status = 'open' and updated_at <= ? and local_chat_id = ?
+          `
+        )
+        .run(new Date().toISOString(), cutoff, options.localChatId)
+    : db
+        .prepare(
+          `
+            update edit_checkpoint
+            set status = 'interrupted', updated_at = ?
+            where status = 'open' and updated_at <= ?
+          `
+        )
+        .run(new Date().toISOString(), cutoff);
+  return result.changes;
 }
 
 /** Resolves or creates a local chat session row for usage tracking. */

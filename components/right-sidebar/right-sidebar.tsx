@@ -50,6 +50,8 @@ import { useAssistantChatOptional } from "@/lib/agent";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import { NO_DEPENDENCY_TOOLS, SERVER_ONLY_TOOLS } from "@/lib/agent/tool-schemas";
 import { isReadOnlyBashBlocked } from "@/lib/agent/read-only-bash-guard";
+import { restoreEditCheckpoint } from "@/lib/agent/edit-checkpoint-restore";
+import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
 import { needsApproval } from "@/lib/agent/tool-approval";
 import type { ProviderCredential, ToolApprovalMode } from "@/lib/settings/schema";
 import { DEFAULT_TITLE_GENERATION_MODEL_ID } from "@/lib/settings/defaults";
@@ -532,6 +534,8 @@ export function RightSidebar({
   const toolApprovalMode = effectiveSettings.chat.toolApprovalMode;
   const [modelSettingsMap, setModelSettingsMap] = useState<ModelSettingsMap>({});
   const [isCompacting, setIsCompacting] = useState(false);
+  const [checkpointStatuses, setCheckpointStatuses] = useState<Map<string, EditCheckpointStatus>>(new Map());
+  const [checkpointRequestByMessageId, setCheckpointRequestByMessageId] = useState<Map<string, string>>(new Map());
   const [ephemeralCostMessage, setEphemeralCostMessage] = useState<{
     chatId: string;
     message: UIMessage;
@@ -937,6 +941,54 @@ export function RightSidebar({
     return paths;
   }, [currentChat?.subagentSessions]);
   const modelInfo = getModel(selectedModel);
+
+  /** Refresh persisted, non-empty edit checkpoints and their current undo/redo state. */
+  const refreshCheckpointStatuses = useCallback(async (): Promise<void> => {
+    if (!effectiveChatId) {
+      setCheckpointStatuses(new Map());
+      return;
+    }
+
+    try {
+      const response = await fetch(
+        `/api/chats/${encodeURIComponent(effectiveChatId)}/checkpoints`
+      );
+      if (!response.ok) {
+        throw new Error(`Checkpoint list failed with ${response.status}`);
+      }
+      const data = (await response.json()) as {
+        checkpoints?: Array<{
+          requestId?: unknown;
+          status?: unknown;
+          targets?: unknown[];
+        }>;
+      };
+      const nextStatuses = new Map<string, EditCheckpointStatus>();
+      for (const checkpoint of data.checkpoints ?? []) {
+        if (
+          typeof checkpoint.requestId === "string" &&
+          (
+            checkpoint.status === "open" ||
+            checkpoint.status === "completed" ||
+            checkpoint.status === "interrupted" ||
+            checkpoint.status === "reverted"
+          ) &&
+          Array.isArray(checkpoint.targets) &&
+          checkpoint.targets.length > 0
+        ) {
+          nextStatuses.set(checkpoint.requestId, checkpoint.status);
+        }
+      }
+      setCheckpointStatuses(nextStatuses);
+    } catch (error) {
+      console.warn("Failed to refresh edit checkpoints:", error);
+      setCheckpointStatuses(new Map());
+    }
+  }, [effectiveChatId]);
+
+  useEffect(() => {
+    void refreshCheckpointStatuses();
+  }, [refreshCheckpointStatuses]);
 
   const handleOpenSubagentReport = useCallback(
     (path: string) => {
@@ -1817,13 +1869,18 @@ export function RightSidebar({
     // markdown/tool rendering does not monopolize the main thread.
     experimental_throttle: 50,
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
-    onFinish: () => {
-      const finalMessages = messagesRef.current;
+    onFinish: ({ messages: finalMessages }) => {
       const persistId = effectiveChatIdRef.current;
       if (!persistId) return;
 
       const chatForPersist = chats.find((c) => c.id === persistId);
-      const newChatMessages: ChatMessage[] = finalMessages.map((m) => {
+      const checkpointRequestId = modelRequestIdRef.current;
+      const checkpointUserMessageIndex = checkpointRequestId
+        ? finalMessages.findLastIndex((candidate) => candidate.role === "user")
+        : -1;
+      const checkpointUserMessageId =
+        checkpointUserMessageIndex >= 0 ? finalMessages[checkpointUserMessageIndex]?.id : undefined;
+      const newChatMessages: ChatMessage[] = finalMessages.map((m, messageIndex) => {
         const messageForStorage = stripSessionOnlyFileParts(m);
         const existing = chatForPersist?.messages.find((msg) => msg.id === m.id);
         const references = parseChatMessageReferences(m.metadata);
@@ -1832,7 +1889,9 @@ export function RightSidebar({
           metadata: references.length > 0 ? { references } : undefined,
           timestamp: existing?.timestamp || new Date(),
           modelUsed: selectedModel,
-          checkpointId: existing?.checkpointId,
+          checkpointId:
+            existing?.checkpointId ??
+            (messageIndex === checkpointUserMessageIndex ? checkpointRequestId : undefined),
         };
       });
 
@@ -1854,6 +1913,13 @@ export function RightSidebar({
           return chat;
         })
       );
+      if (checkpointRequestId && checkpointUserMessageId) {
+        setCheckpointRequestByMessageId((current) => {
+          const next = new Map(current);
+          next.set(checkpointUserMessageId, checkpointRequestId);
+          return next;
+        });
+      }
 
       setEditingState(null);
     },
@@ -2089,11 +2155,11 @@ export function RightSidebar({
     () =>
       ephemeralCostMessage?.chatId === effectiveChatId
         ? {
-            [ephemeralCostMessage.message.id]: {
-              summary: ephemeralCostMessage.summary,
-              modelLabels: ephemeralCostMessage.modelLabels,
-            },
-          }
+          [ephemeralCostMessage.message.id]: {
+            summary: ephemeralCostMessage.summary,
+            modelLabels: ephemeralCostMessage.modelLabels,
+          },
+        }
         : undefined,
     [effectiveChatId, ephemeralCostMessage]
   );
@@ -2112,6 +2178,77 @@ export function RightSidebar({
       addToolOutputRef.current(payload);
     },
     [markToolEnded]
+  );
+
+  /** Persist the final state of the edit checkpoint for the active user turn. */
+  const markCurrentEditCheckpointStatus = useCallback(
+    async (statusValue: "completed" | "interrupted"): Promise<void> => {
+      const requestId = modelRequestIdRef.current;
+      if (!requestId) return;
+
+      try {
+        await fetch(`/api/checkpoints/${encodeURIComponent(requestId)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: statusValue }),
+        });
+        await refreshCheckpointStatuses();
+      } catch (error) {
+        console.warn("Failed to update edit checkpoint status:", error);
+      }
+    },
+    [refreshCheckpointStatuses]
+  );
+
+  /** Restore or redo all clean targets recorded for a user-turn checkpoint. */
+  const handleRestoreCheckpoint = useCallback(
+    async (checkpointId: string, action: "restore" | "redo"): Promise<void> => {
+      if (!kernelService) {
+        toast.error(
+          `Connect to a Jupyter server before ${action === "redo" ? "redoing" : "restoring"} a checkpoint.`
+        );
+        return;
+      }
+
+      try {
+        const result = await restoreEditCheckpoint({
+          kernelService,
+          requestId: checkpointId,
+          direction: action === "redo" ? "redo" : "undo",
+        });
+
+        if (activeNotebookPath?.endsWith(".ipynb")) {
+          window.dispatchEvent(new CustomEvent("agentNotebookModified"));
+        } else if (activeNotebookPath) {
+          window.dispatchEvent(
+            new CustomEvent("orion:agent-file-modified", {
+              detail: { path: activeNotebookPath },
+            })
+          );
+        }
+
+        await refreshCheckpointStatuses();
+
+        if (result.conflicts.length > 0) {
+          toast.warning(
+            `${action === "redo" ? "Redid" : "Restored"} ${result.restoredCount} item${result.restoredCount === 1 ? "" : "s"}; ${result.conflicts.length} conflict${result.conflicts.length === 1 ? "" : "s"} skipped.`
+          );
+          return;
+        }
+
+        toast.success(
+          `${action === "redo" ? "Redid" : "Restored"} ${result.restoredCount} checkpoint item${result.restoredCount === 1 ? "" : "s"}.`
+        );
+      } catch (error) {
+        console.error(`Failed to ${action} checkpoint:`, error);
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : `Failed to ${action === "redo" ? "redo" : "restore"} checkpoint.`
+        );
+      }
+    },
+    [activeNotebookPath, kernelService, refreshCheckpointStatuses]
   );
 
   const enqueueToolExecution = useCallback(
@@ -2311,7 +2448,12 @@ export function RightSidebar({
                 subagentDevLogInstance: nextSubagentInstance,
                 reconnectTmpNotebookPath: reconnectTmpNotebookPath || undefined,
                 reconnectMessages: reconnectSourceSession?.messages,
-                executeToolCall: assistant.executeToolCall,
+                executeToolCall: (name, input) =>
+                  assistant.executeToolCall(name, input, {
+                    modelRequestId: modelRequestIdRef.current,
+                    chatId: effectiveChatIdRef.current,
+                    toolCallId,
+                  }),
                 onToolStart: markToolStarted,
                 onToolEnd: markToolEnded,
                 createTmpNotebookCopy: assistant.createTmpSubagentNotebookCopy,
@@ -2404,7 +2546,11 @@ export function RightSidebar({
 
           // ---- all other tools: delegate to AssistantProvider -------------
           try {
-            const result = await assistant.executeToolCall(toolName, args);
+            const result = await assistant.executeToolCall(toolName, args, {
+              modelRequestId: modelRequestIdRef.current,
+              chatId: effectiveChatIdRef.current,
+              toolCallId,
+            });
             trackedToolCallsRef.current.set(toolCallId, { status: "completed", result });
             if (stopRequestedRef.current) {
               return;
@@ -2575,7 +2721,11 @@ export function RightSidebar({
               }
               if (!assistant) return;
               try {
-                const toolResult = await assistant.executeToolCall(toolNameTyped, inv.input);
+                const toolResult = await assistant.executeToolCall(toolNameTyped, inv.input, {
+                  modelRequestId: modelRequestIdRef.current,
+                  chatId: effectiveChatIdRef.current,
+                  toolCallId: inv.toolCallId,
+                });
                 trackedToolCallsRef.current.set(inv.toolCallId, { status: "completed", result: toolResult });
                 if (!stopRequestedRef.current) {
                   addTimedToolOutput({ tool: toolNameTyped, toolCallId: inv.toolCallId, output: toolResult });
@@ -2689,10 +2839,19 @@ export function RightSidebar({
     const isRealChatSwitch = currentChatId !== prevChatIdRef.current;
     prevChatIdRef.current = currentChatId;
 
+    const nextCheckpointRequestByMessageId = new Map<string, string>();
+    for (const message of currentChat?.messages ?? []) {
+      if (message.checkpointId) {
+        nextCheckpointRequestByMessageId.set(message.id, message.checkpointId);
+      }
+    }
+    setCheckpointRequestByMessageId(nextCheckpointRequestByMessageId);
+
     const messagesToLoad = (currentChat?.messages ?? []).map((message) => {
+      const { checkpointId: _checkpointId, ...messageWithoutCheckpoint } = message;
       const references = parseChatMessageReferences(message.metadata);
       return {
-        ...message,
+        ...messageWithoutCheckpoint,
         metadata: references.length > 0 ? { references } : undefined,
       };
     });
@@ -3355,7 +3514,13 @@ export function RightSidebar({
         }
 
         setMessages((finalMessages) => {
-          const newChatMessages: ChatMessage[] = finalMessages.map((m) => {
+          const checkpointRequestId = modelRequestIdRef.current;
+          const checkpointUserMessageIndex = checkpointRequestId
+            ? finalMessages.findLastIndex((candidate) => candidate.role === "user")
+            : -1;
+          const checkpointUserMessageId =
+            checkpointUserMessageIndex >= 0 ? finalMessages[checkpointUserMessageIndex]?.id : undefined;
+          const newChatMessages: ChatMessage[] = finalMessages.map((m, messageIndex) => {
             const messageForStorage = stripSessionOnlyFileParts(m);
             const existing = currentChat?.messages.find((msg) => msg.id === m.id);
             const references = parseChatMessageReferences(m.metadata);
@@ -3364,7 +3529,9 @@ export function RightSidebar({
               metadata: references.length > 0 ? { references } : undefined,
               timestamp: existing?.timestamp || new Date(),
               modelUsed: selectedModel,
-              checkpointId: existing?.checkpointId,
+              checkpointId:
+                existing?.checkpointId ??
+                (messageIndex === checkpointUserMessageIndex ? checkpointRequestId : undefined),
             };
           });
 
@@ -3376,6 +3543,13 @@ export function RightSidebar({
               return chat;
             })
           );
+          if (checkpointRequestId && checkpointUserMessageId) {
+            setCheckpointRequestByMessageId((current) => {
+              const next = new Map(current);
+              next.set(checkpointUserMessageId, checkpointRequestId);
+              return next;
+            });
+          }
 
           return finalMessages;
         });
@@ -3396,8 +3570,17 @@ export function RightSidebar({
     prevAgentTurnActiveRef.current = isAgentTurnActive;
 
     if (!wasActive || isAgentTurnActive || messageQueue.length === 0 || queueProcessingRef.current) {
+      if (wasActive && !isAgentTurnActive) {
+        void markCurrentEditCheckpointStatus(
+          stopRequestedRef.current ? "interrupted" : "completed"
+        );
+      }
       return;
     }
+
+    void markCurrentEditCheckpointStatus(
+      stopRequestedRef.current ? "interrupted" : "completed"
+    );
 
     const [next, ...rest] = messageQueue;
     queueProcessingRef.current = true;
@@ -3409,12 +3592,12 @@ export function RightSidebar({
     };
 
     void customHandleSubmitRef
-      .current({ preventDefault: () => {} } as React.FormEvent<HTMLFormElement>)
+      .current({ preventDefault: () => { } } as React.FormEvent<HTMLFormElement>)
       .finally(() => {
         pendingSubmitRef.current = null;
         queueProcessingRef.current = false;
       });
-  }, [isAgentTurnActive, messageQueue]);
+  }, [isAgentTurnActive, markCurrentEditCheckpointStatus, messageQueue]);
 
   const handleStopGeneration = useCallback(() => {
     stopRequestedRef.current = true;
@@ -3690,6 +3873,9 @@ export function RightSidebar({
             onDismissCostSummary={dismissCostSummary}
             onRefreshCostSummary={refreshCostSummary}
             isRefreshingCostSummary={isRefreshingCostSummary}
+            checkpointStatuses={checkpointStatuses}
+            checkpointRequestByMessageId={checkpointRequestByMessageId}
+            onRestoreCheckpoint={handleRestoreCheckpoint}
           />
 
           <ChatTextbox

@@ -16,7 +16,6 @@ import {
   GripVertical,
   Bot,
   MessageCircle,
-  MessagesSquare,
   PenLine,
   Pencil,
   Boxes,
@@ -66,9 +65,9 @@ import type { TokenEstimate } from "@/lib/agent/token-budget";
 import {
   getReferenceTypeLabel,
   type ChatReferenceOption,
-  type ChatReferenceType,
   type ResolvedChatReference,
 } from "@/lib/chat/chat-references";
+import { CHAT_REFERENCE_TYPE_ICONS } from "@/lib/chat/chat-reference-icons";
 
 export type ReferenceTab = "all" | "files" | "cells" | "variables" | "terminal";
 type AttachableFiles = FileList | readonly File[];
@@ -184,16 +183,6 @@ export interface ChatTextboxProps {
   /** Removes a queued message before it is sent. */
   onRemoveQueuedMessage?: (id: string) => void;
 }
-
-const REFERENCE_TYPE_ICONS: Record<ChatReferenceType, React.ComponentType<{ className?: string }>> = {
-  file: FileText,
-  folder: Folder,
-  cell: StretchHorizontal,
-  variable: Boxes,
-  terminal: Terminal,
-  conversation: MessagesSquare,
-  "external-file": FileText,
-};
 
 function formatAttachmentSize(size: number): string {
   if (size < 1024) return `${size} B`;
@@ -1115,7 +1104,7 @@ export function ChatTextbox({
                 {references.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1 px-3 pt-2 pb-0">
                     {references.map((reference) => {
-                      const Icon = REFERENCE_TYPE_ICONS[reference.type];
+                      const Icon = CHAT_REFERENCE_TYPE_ICONS[reference.type];
                       return (
                         <span
                           key={reference.id}
@@ -1437,7 +1426,7 @@ export function ChatTextbox({
                     </TooltipProvider>
                     <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain">
                       {hasReferenceMatches ? orderedReferenceMatches.map((option, i) => {
-                        const Icon = REFERENCE_TYPE_ICONS[option.type];
+                        const Icon = CHAT_REFERENCE_TYPE_ICONS[option.type];
                         return (
                           <button
                             key={option.id}

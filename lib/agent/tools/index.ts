@@ -39,6 +39,7 @@
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
 import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
+import type { EditCheckpointRecorder } from "../edit-checkpoint-recorder";
 import type { TerminalPool } from "@/lib/shell/terminal-pool";
 
 // Foundation
@@ -154,6 +155,7 @@ export interface JupyterToolSet {
  * @param getWorkspaceDirectory  - Optional getter for the current workspace directory (reserved for future workspace tools)
  * @param getTerminalShell       - Optional getter for the Jupyter terminal shell family used by BashTool
  * @param snapshotProvider       - Optional provider for active in-memory editor content
+ * @param checkpointRecorder     - Optional recorder for request-scoped edit checkpoints
  * @returns Complete JupyterToolSet with all tools and shared NotebookManager
  */
 export function createJupyterTools(
@@ -163,7 +165,8 @@ export function createJupyterTools(
   getChatId?: (() => string | null) | null,
   getWorkspaceDirectory?: (() => string | undefined) | null,
   getTerminalShell?: (() => TerminalShell) | null,
-  snapshotProvider?: OpenDocumentSnapshotProvider | null
+  snapshotProvider?: OpenDocumentSnapshotProvider | null,
+  checkpointRecorder?: EditCheckpointRecorder | null
 ): JupyterToolSet {
   const notebookManager = new NotebookManager();
   const sc = sidecar ?? null;
@@ -207,19 +210,22 @@ export function createJupyterTools(
         kernelService,
         sc,
         notebookManager,
-        snapshotProvider
+        snapshotProvider,
+        checkpointRecorder
       ),
       deleteCell: new DeleteCellTool(
         kernelService,
         sc,
         notebookManager,
-        snapshotProvider
+        snapshotProvider,
+        checkpointRecorder
       ),
       overwriteCellSource: new OverwriteCellSourceTool(
         kernelService,
         sc,
         notebookManager,
-        snapshotProvider
+        snapshotProvider,
+        checkpointRecorder
       ),
       editOrionMetadata: new EditOrionMetadataTool(
         kernelService,
@@ -241,7 +247,12 @@ export function createJupyterTools(
 
       // File Operations
       readFile: new ReadFileTool(kernelService, sc, snapshotProvider),
-      editFile: new EditFileTool(kernelService, sc, snapshotProvider),
+      editFile: new EditFileTool(
+        kernelService,
+        sc,
+        snapshotProvider,
+        checkpointRecorder
+      ),
 
       // Cell Output Inspection
       readCellOutput: new ReadCellOutputTool(

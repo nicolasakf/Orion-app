@@ -12,6 +12,7 @@
 import { BaseTool } from "./base-tool";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type { EditCheckpointRecorder } from "../edit-checkpoint-recorder";
 import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { EditFileParams } from "./types";
 
@@ -19,9 +20,10 @@ export class EditFileTool extends BaseTool {
   constructor(
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
-    snapshotProvider?: OpenDocumentSnapshotProvider | null
+    snapshotProvider?: OpenDocumentSnapshotProvider | null,
+    checkpointRecorder?: EditCheckpointRecorder | null
   ) {
-    super(kernelService, sidecar, snapshotProvider);
+    super(kernelService, sidecar, snapshotProvider, checkpointRecorder);
   }
 
   /**
@@ -62,12 +64,24 @@ export class EditFileTool extends BaseTool {
     filePath: string,
     newContent: string
   ): Promise<string> {
+    const beforeContent = await this.readCurrentTextContent(contents, filePath);
     try {
       await contents.save(filePath, {
         type: "file",
         format: "text",
         content: newContent,
       });
+
+      await this.checkpointRecorder?.recordTarget(
+        {
+          kind: "text_file",
+          operation: beforeContent === null ? "insert" : "update",
+          path: filePath,
+          before: { content: beforeContent ?? "" },
+          after: { content: newContent },
+        },
+        this.checkpointContext ?? undefined
+      );
 
       const lineCount = newContent.split("\n").length;
       return `Successfully wrote ${filePath} (${lineCount} lines).`;
@@ -134,6 +148,16 @@ export class EditFileTool extends BaseTool {
         format: "text",
         content: updatedContent,
       });
+      await this.checkpointRecorder?.recordTarget(
+        {
+          kind: "text_file",
+          operation: "update",
+          path: filePath,
+          before: { content: currentContent },
+          after: { content: updatedContent },
+        },
+        this.checkpointContext ?? undefined
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return `[ERROR] Could not write file '${filePath}': ${message}`;
@@ -156,5 +180,24 @@ export class EditFileTool extends BaseTool {
       pos += needle.length;
     }
     return count;
+  }
+
+  /** Read existing text content for checkpointing, returning null for new files. */
+  private async readCurrentTextContent(
+    contents: ReturnType<KernelService["getContentsManager"]>,
+    filePath: string
+  ): Promise<string | null> {
+    const snapshot = this.snapshotProvider?.getTextSnapshot(filePath);
+    if (snapshot) return snapshot.content;
+
+    try {
+      const model = await contents.get(filePath, {
+        content: true,
+        format: "text",
+      });
+      return typeof model.content === "string" ? model.content : null;
+    } catch {
+      return null;
+    }
   }
 }

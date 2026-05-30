@@ -7,9 +7,11 @@
  */
 
 import { BaseTool } from "./base-tool";
+import { hashCheckpointPayload } from "@/lib/agent/edit-checkpoints";
 import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type { EditCheckpointRecorder } from "../edit-checkpoint-recorder";
 import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { OverwriteCellSourceParams } from "./types";
 
@@ -20,9 +22,10 @@ export class OverwriteCellSourceTool extends BaseTool {
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
     notebookManager: NotebookManager,
-    snapshotProvider?: OpenDocumentSnapshotProvider | null
+    snapshotProvider?: OpenDocumentSnapshotProvider | null,
+    checkpointRecorder?: EditCheckpointRecorder | null
   ) {
-    super(kernelService, sidecar, snapshotProvider);
+    super(kernelService, sidecar, snapshotProvider, checkpointRecorder);
     this.notebookManager = notebookManager;
   }
 
@@ -45,6 +48,7 @@ export class OverwriteCellSourceTool extends BaseTool {
     }
 
     const notebook = await this.readNotebook(path);
+    this.ensureNotebookCellIds(notebook);
     const totalCells = notebook.cells.length;
 
     for (const { cellIndex } of cells) {
@@ -54,10 +58,20 @@ export class OverwriteCellSourceTool extends BaseTool {
     }
 
     const messages: string[] = [];
+    const checkpointEntries: Array<{
+      cellIndex: number;
+      cellId: string;
+      oldSource: string;
+      newSource: string;
+      beforeCell: unknown;
+      afterCell: unknown;
+    }> = [];
 
     for (const { cellIndex, newSource } of cells) {
       const cell = notebook.cells[cellIndex];
+      const cellId = this.getCellOrionId(cell);
       const oldSource = this.normalizeCellSource(cell.source);
+      const beforeCell = JSON.parse(JSON.stringify(cell));
 
       cell.source = [newSource];
 
@@ -67,6 +81,16 @@ export class OverwriteCellSourceTool extends BaseTool {
       }
 
       const diff = this.generateUnifiedDiff(oldSource, newSource);
+      if (cellId) {
+        checkpointEntries.push({
+          cellIndex,
+          cellId,
+          oldSource,
+          newSource,
+          beforeCell,
+          afterCell: JSON.parse(JSON.stringify(cell)),
+        });
+      }
 
       if (!diff.trim() || diff === "no changes detected") {
         messages.push(`Cell ${cellIndex} overwritten successfully - no changes detected`);
@@ -78,6 +102,31 @@ export class OverwriteCellSourceTool extends BaseTool {
     }
 
     await this.writeNotebook(path, notebook);
+    await Promise.all(
+      checkpointEntries.map((entry) =>
+        this.checkpointRecorder?.recordTarget(
+          {
+            kind: "notebook_cell",
+            operation: "update",
+            path,
+            targetId: entry.cellId,
+            before: {
+              index: entry.cellIndex,
+              source: entry.oldSource,
+              cell: entry.beforeCell,
+            },
+            after: {
+              index: entry.cellIndex,
+              source: entry.newSource,
+              cell: entry.afterCell,
+            },
+            beforeHash: hashCheckpointPayload({ source: entry.oldSource }),
+            afterHash: hashCheckpointPayload({ source: entry.newSource }),
+          },
+          this.checkpointContext ?? undefined
+        ) ?? Promise.resolve()
+      )
+    );
 
     return messages.join("\n\n---\n\n");
   }

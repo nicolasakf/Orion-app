@@ -29,6 +29,9 @@ import { Button } from "@/components/ui/button";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
 import type { EditingState } from "./types";
+import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
+
+type CheckpointMessageAction = "restore" | "redo";
 
 export interface ChatBodyProps {
   viewKey?: string;
@@ -62,6 +65,9 @@ export interface ChatBodyProps {
   onDismissCostSummary?: () => void;
   onRefreshCostSummary?: () => void;
   isRefreshingCostSummary?: boolean;
+  checkpointStatuses?: Map<string, EditCheckpointStatus>;
+  checkpointRequestByMessageId?: Map<string, string>;
+  onRestoreCheckpoint?: (checkpointId: string, action: CheckpointMessageAction) => void;
 }
 
 interface ChatMessageRowProps {
@@ -87,6 +93,9 @@ interface ChatMessageRowProps {
   onDismissCostSummary?: () => void;
   onRefreshCostSummary?: () => void;
   isRefreshingCostSummary?: boolean;
+  checkpointStatuses?: Map<string, EditCheckpointStatus>;
+  checkpointRequestByMessageId?: Map<string, string>;
+  onRestoreCheckpoint?: (checkpointId: string, action: CheckpointMessageAction) => void;
 }
 
 type ChatRenderItem =
@@ -660,12 +669,26 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   onDismissCostSummary,
   onRefreshCostSummary,
   isRefreshingCostSummary,
+  checkpointStatuses,
+  checkpointRequestByMessageId,
+  onRestoreCheckpoint,
 }: ChatMessageRowProps) {
   const handleUserClick = React.useCallback(() => {
     onUserMessageClick(message, index);
   }, [index, message, onUserMessageClick]);
 
   const costSummary = costSummaryByMessageId?.[message.id];
+  const messageCheckpointId = checkpointRequestByMessageId?.get(message.id);
+  const checkpointStatus = messageCheckpointId
+    ? checkpointStatuses?.get(messageCheckpointId)
+    : undefined;
+  const checkpointAction: CheckpointMessageAction | undefined =
+    checkpointStatus === "reverted"
+      ? "redo"
+      : checkpointStatus
+        ? "restore"
+        : undefined;
+  const actionableCheckpointId = checkpointAction ? messageCheckpointId : undefined;
 
   /** Render one grouped reasoning/tool part using the existing detailed components. */
   const renderActivityItem = (item: AssistantPartWithIndex) => {
@@ -722,6 +745,9 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
           message={message}
           onClick={handleUserClick}
           isClickable={true}
+          checkpointId={actionableCheckpointId}
+          checkpointAction={checkpointAction}
+          onRestoreCheckpoint={onRestoreCheckpoint}
         />
       ) : costSummary ? (
         <CostSummaryCard
@@ -815,6 +841,16 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
     return false;
   }
   if (prev.isRefreshingCostSummary !== next.isRefreshingCostSummary) return false;
+  const prevCheckpointId = prev.checkpointRequestByMessageId?.get(prev.message.id);
+  const nextCheckpointId = next.checkpointRequestByMessageId?.get(next.message.id);
+  if (prevCheckpointId !== nextCheckpointId) return false;
+  if (
+    prevCheckpointId &&
+    prev.checkpointStatuses?.get(prevCheckpointId) !== next.checkpointStatuses?.get(prevCheckpointId)
+  ) {
+    return false;
+  }
+  if (prev.onRestoreCheckpoint !== next.onRestoreCheckpoint) return false;
 
   return true;
 });
@@ -845,6 +881,9 @@ export function ChatBody({
   onDismissCostSummary,
   onRefreshCostSummary,
   isRefreshingCostSummary,
+  checkpointStatuses,
+  checkpointRequestByMessageId,
+  onRestoreCheckpoint,
 }: ChatBodyProps) {
   const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = React.useRef(true);
@@ -1029,6 +1068,9 @@ export function ChatBody({
                     onDismissCostSummary={onDismissCostSummary}
                     onRefreshCostSummary={onRefreshCostSummary}
                     isRefreshingCostSummary={isRefreshingCostSummary}
+                    checkpointStatuses={checkpointStatuses}
+                    checkpointRequestByMessageId={checkpointRequestByMessageId}
+                    onRestoreCheckpoint={onRestoreCheckpoint}
                   />
                 )}
 

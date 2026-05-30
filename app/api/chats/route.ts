@@ -8,6 +8,7 @@ import {
   clearChats,
   getChatMetas,
   getChats,
+  interruptOpenEditCheckpoints,
   saveChat,
   saveChats,
 } from "@/lib/chat/chat-sqlite-storage.server";
@@ -21,6 +22,7 @@ export async function GET(req: Request): Promise<Response> {
   try {
     const url = new URL(req.url);
     const metadataOnly = url.searchParams.get("metadataOnly") === "true";
+    await interruptOpenEditCheckpoints({ olderThanMs: 5 * 60 * 1000 });
     const chats = metadataOnly ? await getChatMetas() : await getChats();
     return NextResponse.json({ chats });
   } catch (error) {

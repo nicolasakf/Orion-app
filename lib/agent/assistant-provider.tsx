@@ -34,6 +34,10 @@ import {
   type OpenDocumentSnapshotProvider,
 } from "./open-document-snapshots";
 import {
+  ApiEditCheckpointRecorder,
+  type EditCheckpointContext,
+} from "./edit-checkpoint-recorder";
+import {
   logToolDispatch,
   logToolResult,
   logToolError,
@@ -140,7 +144,11 @@ export interface AssistantContextValue {
    * Execute a named tool with the given parameters.
    * Used by the chat UI to execute agent tool calls client-side.
    */
-  executeToolCall: (toolName: OrionToolName, params: unknown) => Promise<unknown>;
+  executeToolCall: (
+    toolName: OrionToolName,
+    params: unknown,
+    checkpointContext?: EditCheckpointContext
+  ) => Promise<unknown>;
 
   /** Create a writable tmp copy of a subagent source notebook for one delegate run. */
   createTmpSubagentNotebookCopy: (subagent: SubagentDefinition, runId: string) => Promise<string>;
@@ -205,6 +213,7 @@ export function AssistantProvider({
   const terminalPoolRef = useRef<TerminalPool | null>(null);
   const skillRegistryRef = useRef<SkillRegistry>(new SkillRegistry());
   const subagentRegistryRef = useRef<SubagentRegistry>(new SubagentRegistry());
+  const checkpointRecorderRef = useRef(new ApiEditCheckpointRecorder());
 
   // State
   const [isReady, setIsReady] = useState(false);
@@ -306,7 +315,8 @@ export function AssistantProvider({
         saveOpenDocumentIfDirty: (path, kind) =>
           openDocumentSnapshotsRef.current?.saveOpenDocumentIfDirty(path, kind) ??
           Promise.resolve({ status: "not-open" }),
-      }
+      },
+      checkpointRecorderRef.current
     );
     setToolsReady(true);
 
@@ -646,7 +656,11 @@ export function AssistantProvider({
    * Tool results are serialized to strings (JSON when needed).
    */
   const executeToolCall = useCallback(
-    async (toolName: OrionToolName, params: unknown): Promise<unknown> => {
+    async (
+      toolName: OrionToolName,
+      params: unknown,
+      checkpointContext?: EditCheckpointContext
+    ): Promise<unknown> => {
       // Handle kernel-free tools before checking for the Jupyter tool set
       if (toolName === "load_skill") {
         const { name } = (sanitizeToolParams(params) ?? {}) as { name?: string };
@@ -737,6 +751,20 @@ export function AssistantProvider({
           return finalResult;
         }
 
+        const executeWithCheckpointContext = async <
+          TTool extends { setCheckpointContext: (context: EditCheckpointContext | null) => void; execute: (params: any) => Promise<string | string[]> },
+        >(
+          tool: TTool,
+          toolParams: unknown
+        ): Promise<string | string[]> => {
+          tool.setCheckpointContext(checkpointContext ?? null);
+          try {
+            return await tool.execute(toolParams as any);
+          } finally {
+            tool.setCheckpointContext(null);
+          }
+        };
+
         let result: string | string[];
 
         switch (toolName) {
@@ -765,13 +793,13 @@ export function AssistantProvider({
             result = await toolSet.tools.readCell.execute(sanitizedParams as any);
             break;
           case "insert_cell":
-            result = await toolSet.tools.insertCell.execute(sanitizedParams as any);
+            result = await executeWithCheckpointContext(toolSet.tools.insertCell, sanitizedParams);
             break;
           case "delete_cell":
-            result = await toolSet.tools.deleteCell.execute(sanitizedParams as any);
+            result = await executeWithCheckpointContext(toolSet.tools.deleteCell, sanitizedParams);
             break;
           case "overwrite_cell_source":
-            result = await toolSet.tools.overwriteCellSource.execute(sanitizedParams as any);
+            result = await executeWithCheckpointContext(toolSet.tools.overwriteCellSource, sanitizedParams);
             break;
           case "edit_orion_metadata":
             result = await toolSet.tools.editOrionMetadata.execute(sanitizedParams as any);
@@ -792,7 +820,7 @@ export function AssistantProvider({
             result = await toolSet.tools.readFile.execute(sanitizedParams as any);
             break;
           case "edit_file":
-            result = await toolSet.tools.editFile.execute(sanitizedParams as any);
+            result = await executeWithCheckpointContext(toolSet.tools.editFile, sanitizedParams);
             break;
           case "read_cell_output": {
             // May return a MultimodalToolResult object (for image outputs) instead of a plain string.

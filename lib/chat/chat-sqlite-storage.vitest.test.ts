@@ -17,10 +17,15 @@ import {
   getChatDatabase,
   getChatMetas,
   getChats,
+  getEditCheckpointByRequestId,
+  getEditCheckpointsForChat,
   insertModelUsage,
+  interruptOpenEditCheckpoints,
+  recordEditCheckpointTarget,
   resolveOrCreateChatSession,
   resolveOrCreateModelRequest,
   saveChat,
+  updateEditCheckpointStatus,
   updateChatSessionStatus,
   updateCompactionSummary,
 } from "@/lib/chat/chat-sqlite-storage.server";
@@ -130,7 +135,7 @@ describe("SQLite chat storage", () => {
 
     const migratedDb = await getChatDatabase();
 
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(1);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(2);
     await expect(getChat("chat-1")).resolves.toMatchObject({
       id: "chat-1",
       messages: [{ id: "message-1" }],
@@ -139,19 +144,23 @@ describe("SQLite chat storage", () => {
     expect(tableExists(migratedDb, "chat_session")).toBe(true);
     expect(tableExists(migratedDb, "model_request")).toBe(true);
     expect(tableExists(migratedDb, "model_usage")).toBe(true);
+    expect(tableExists(migratedDb, "edit_checkpoint")).toBe(true);
+    expect(tableExists(migratedDb, "edit_checkpoint_target")).toBe(true);
     expect(indexExists(migratedDb, "model_usage_request_id_idx")).toBe(true);
   });
 
   it("creates the full schema on a fresh database", async () => {
     const db = await getChatDatabase();
 
-    expect(db.pragma("user_version", { simple: true })).toBe(1);
+    expect(db.pragma("user_version", { simple: true })).toBe(2);
     expect(tableExists(db, "chats")).toBe(true);
     expect(tableExists(db, "chat_messages")).toBe(true);
     expect(tableExists(db, "subagent_sessions")).toBe(true);
     expect(tableExists(db, "chat_session")).toBe(true);
     expect(tableExists(db, "model_request")).toBe(true);
     expect(tableExists(db, "model_usage")).toBe(true);
+    expect(tableExists(db, "edit_checkpoint")).toBe(true);
+    expect(tableExists(db, "edit_checkpoint_target")).toBe(true);
   });
 
   it("saves, lists, loads, deletes, and clears chats", async () => {
@@ -389,6 +398,148 @@ describe("SQLite chat storage", () => {
           unknownCostRequestCount: 1,
         },
       ],
+    });
+  });
+
+  it("records and coalesces repeated text file edits for one request", async () => {
+    await recordEditCheckpointTarget({
+      requestId: "request-1",
+      localChatId: "chat-1",
+      toolCallId: "tool-1",
+      kind: "text_file",
+      operation: "update",
+      path: "script.py",
+      before: { content: "a = 1\n" },
+      after: { content: "a = 2\n" },
+    });
+    await recordEditCheckpointTarget({
+      requestId: "request-1",
+      localChatId: "chat-1",
+      toolCallId: "tool-2",
+      kind: "text_file",
+      operation: "update",
+      path: "script.py",
+      before: { content: "a = 2\n" },
+      after: { content: "a = 3\n" },
+    });
+
+    const checkpoint = await getEditCheckpointByRequestId("request-1");
+
+    expect(checkpoint).toMatchObject({
+      requestId: "request-1",
+      localChatId: "chat-1",
+      status: "open",
+    });
+    expect(checkpoint?.targets).toHaveLength(1);
+    expect(checkpoint?.targets[0]).toMatchObject({
+      operation: "update",
+      path: "script.py",
+      firstToolCallId: "tool-1",
+      lastToolCallId: "tool-2",
+    });
+    expect(JSON.parse(checkpoint?.targets[0]?.beforeJson ?? "{}")).toEqual({
+      content: "a = 1\n",
+    });
+    expect(JSON.parse(checkpoint?.targets[0]?.afterJson ?? "{}")).toEqual({
+      content: "a = 3\n",
+    });
+  });
+
+  it("coalesces notebook insert-delete as a net no-op", async () => {
+    await recordEditCheckpointTarget({
+      requestId: "request-1",
+      localChatId: "chat-1",
+      toolCallId: "tool-1",
+      kind: "notebook_cell",
+      operation: "insert",
+      path: "analysis.ipynb",
+      targetId: "cell-1",
+      before: { index: 0, source: "", cell: null },
+      after: { index: 0, source: "x = 1", cell: { metadata: { orion: { id: "cell-1" } } } },
+    });
+    await recordEditCheckpointTarget({
+      requestId: "request-1",
+      localChatId: "chat-1",
+      toolCallId: "tool-2",
+      kind: "notebook_cell",
+      operation: "delete",
+      path: "analysis.ipynb",
+      targetId: "cell-1",
+      before: { index: 0, source: "x = 1", cell: { metadata: { orion: { id: "cell-1" } } } },
+      after: { index: 0, source: "", cell: null },
+    });
+
+    const checkpoint = await getEditCheckpointByRequestId("request-1");
+
+    expect(checkpoint?.targets).toEqual([]);
+  });
+
+  it("collapses existing cell edit then delete into one delete target", async () => {
+    await recordEditCheckpointTarget({
+      requestId: "request-1",
+      localChatId: "chat-1",
+      toolCallId: "tool-1",
+      kind: "notebook_cell",
+      operation: "update",
+      path: "analysis.ipynb",
+      targetId: "cell-1",
+      before: { index: 0, source: "x = 1", cell: { source: ["x = 1"] } },
+      after: { index: 0, source: "x = 2", cell: { source: ["x = 2"] } },
+    });
+    await recordEditCheckpointTarget({
+      requestId: "request-1",
+      localChatId: "chat-1",
+      toolCallId: "tool-2",
+      kind: "notebook_cell",
+      operation: "delete",
+      path: "analysis.ipynb",
+      targetId: "cell-1",
+      before: { index: 0, source: "x = 2", cell: { source: ["x = 2"] } },
+      after: { index: 0, source: "", cell: null },
+    });
+
+    const target = (await getEditCheckpointByRequestId("request-1"))?.targets[0];
+
+    expect(target).toMatchObject({
+      operation: "delete",
+      firstToolCallId: "tool-1",
+      lastToolCallId: "tool-2",
+    });
+    expect(JSON.parse(target?.beforeJson ?? "{}")).toEqual({
+      index: 0,
+      source: "x = 1",
+      cell: { source: ["x = 1"] },
+    });
+  });
+
+  it("updates checkpoint status and interrupts stale open checkpoints", async () => {
+    await recordEditCheckpointTarget({
+      requestId: "request-1",
+      localChatId: "chat-1",
+      kind: "text_file",
+      operation: "update",
+      path: "script.py",
+      before: { content: "a = 1\n" },
+      after: { content: "a = 2\n" },
+    });
+
+    await updateEditCheckpointStatus("request-1", { status: "completed" });
+    await expect(getEditCheckpointsForChat("chat-1")).resolves.toMatchObject([
+      { requestId: "request-1", status: "completed" },
+    ]);
+
+    await recordEditCheckpointTarget({
+      requestId: "request-2",
+      localChatId: "chat-1",
+      kind: "text_file",
+      operation: "update",
+      path: "other.py",
+      before: { content: "b = 1\n" },
+      after: { content: "b = 2\n" },
+    });
+    await expect(interruptOpenEditCheckpoints()).resolves.toBeGreaterThanOrEqual(1);
+    await expect(getEditCheckpointByRequestId("request-2")).resolves.toMatchObject({
+      status: "interrupted",
     });
   });
 });

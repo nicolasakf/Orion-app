@@ -7,9 +7,11 @@
  */
 
 import { BaseTool } from "./base-tool";
+import { hashCheckpointPayload } from "@/lib/agent/edit-checkpoints";
 import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
+import type { EditCheckpointRecorder } from "../edit-checkpoint-recorder";
 import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { InsertCellParams } from "./types";
 
@@ -20,9 +22,10 @@ export class InsertCellTool extends BaseTool {
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
     notebookManager: NotebookManager,
-    snapshotProvider?: OpenDocumentSnapshotProvider | null
+    snapshotProvider?: OpenDocumentSnapshotProvider | null,
+    checkpointRecorder?: EditCheckpointRecorder | null
   ) {
-    super(kernelService, sidecar, snapshotProvider);
+    super(kernelService, sidecar, snapshotProvider, checkpointRecorder);
     this.notebookManager = notebookManager;
   }
 
@@ -44,6 +47,7 @@ export class InsertCellTool extends BaseTool {
 
     // Read notebook
     const notebook = await this.readNotebook(path);
+    this.ensureNotebookCellIds(notebook);
     const totalCells = notebook.cells.length;
 
     // Validate and normalize index
@@ -61,6 +65,32 @@ export class InsertCellTool extends BaseTool {
 
     // Write notebook back
     await this.writeNotebook(path, notebook);
+
+    await Promise.all(
+      newCells.map((cell, offset) => {
+        const cellId = this.getCellOrionId(cell);
+        if (!cellId) return Promise.resolve();
+        return this.checkpointRecorder?.recordTarget(
+          {
+            kind: "notebook_cell",
+            operation: "insert",
+            path,
+            targetId: cellId,
+            before: { index: actualIndex + offset, source: "", cell: null },
+            after: {
+              index: actualIndex + offset,
+              source: this.normalizeCellSource(cell.source),
+              cell,
+            },
+            beforeHash: hashCheckpointPayload({ source: "" }),
+            afterHash: hashCheckpointPayload({
+              source: this.normalizeCellSource(cell.source),
+            }),
+          },
+          this.checkpointContext ?? undefined
+        ) ?? Promise.resolve();
+      })
+    );
 
     const newTotalCells = notebook.cells.length;
 

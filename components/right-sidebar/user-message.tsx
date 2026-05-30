@@ -2,17 +2,7 @@
 
 import { type UIMessage } from "ai";
 import { useState, useRef, useEffect } from "react";
-import {
-  Copy,
-  Undo2,
-  Check,
-  FileText,
-  Folder,
-  Hash,
-  Braces,
-  Terminal,
-  MessagesSquare,
-} from "lucide-react";
+import { Copy, Redo2, Undo2, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Tooltip,
@@ -24,30 +14,26 @@ import { getTextContent } from "@/lib/chat/chat-storage";
 import {
   getReferenceTypeLabel,
   parseChatMessageReferences,
-  type ChatReferenceType,
 } from "@/lib/chat/chat-references";
+import { CHAT_REFERENCE_TYPE_ICONS } from "@/lib/chat/chat-reference-icons";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
-
-const REFERENCE_TYPE_ICONS: Record<ChatReferenceType, React.ComponentType<{ className?: string }>> = {
-  file: FileText,
-  folder: Folder,
-  cell: Hash,
-  variable: Braces,
-  terminal: Terminal,
-  conversation: MessagesSquare,
-  "external-file": FileText,
-};
 
 interface UserMessageProps {
   message: UIMessage;
   onClick?: () => void;
   isClickable?: boolean;
+  checkpointId?: string;
+  checkpointAction?: "restore" | "redo";
+  onRestoreCheckpoint?: (checkpointId: string, action: "restore" | "redo") => void;
 }
 
 export function UserMessage({
   message,
   onClick,
   isClickable = false,
+  checkpointId,
+  checkpointAction,
+  onRestoreCheckpoint,
 }: UserMessageProps) {
   const { effectiveSettings } = useOrionSettings();
   const chatFontSize = effectiveSettings.chat.fontSize;
@@ -82,56 +68,18 @@ export function UserMessage({
 
   const handleRestoreCheckpoint = (e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent triggering the message click
-    // TODO: Implement restore checkpoint functionality
-    console.log("Restore checkpoint for message:", message.id);
+    if (checkpointId && checkpointAction) {
+      onRestoreCheckpoint?.(checkpointId, checkpointAction);
+    }
   };
+  const canRestoreCheckpoint = Boolean(checkpointId && checkpointAction && onRestoreCheckpoint);
+  const CheckpointIcon = checkpointAction === "redo" ? Redo2 : Undo2;
 
   return (
     <div
-      className={`flex items-center gap-3 max-w-full min-w-0 group ${isClickable ? "cursor-pointer" : ""
+      className={`flex max-w-full min-w-0 flex-col items-end ${isClickable ? "cursor-pointer" : ""
         }`}
     >
-      {/* Action buttons */}
-      <TooltipProvider delayDuration={300}>
-        <div className="flex items-center gap-3 opacity-0 group-hover:opacity-100 transition-opacity">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleRestoreCheckpoint}
-                className="h-3 w-3 p-0 text-muted-foreground hover:text-foreground"
-              >
-                <Undo2 className="h-1 w-1" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>Restore checkpoint</p>
-            </TooltipContent>
-          </Tooltip>
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleCopy}
-                className="h-3 w-3 p-0 text-muted-foreground hover:text-foreground"
-              >
-                {isCopied ? (
-                  <Check className="h-1 w-1" />
-                ) : (
-                  <Copy className="h-1 w-1" />
-                )}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>{isCopied ? "Copied!" : "Copy message"}</p>
-            </TooltipContent>
-          </Tooltip>
-        </div>
-      </TooltipProvider>
-
       {/* Message content — max height with gradient fade when truncated */}
       <div
         ref={contentRef}
@@ -142,7 +90,7 @@ export function UserMessage({
         {references.length > 0 && (
           <div className="mb-1 flex flex-wrap gap-1">
             {references.map((reference) => {
-              const Icon = REFERENCE_TYPE_ICONS[reference.type];
+              const Icon = CHAT_REFERENCE_TYPE_ICONS[reference.type];
               return (
                 <span
                   key={reference.id}
@@ -167,6 +115,46 @@ export function UserMessage({
           />
         )}
       </div>
+
+      {/* Action buttons */}
+      <TooltipProvider delayDuration={300}>
+        <div className="mt-0.5 flex items-center gap-0.5">
+          {canRestoreCheckpoint && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleRestoreCheckpoint}
+                  aria-label={checkpointAction === "redo" ? "Redo Changes" : "Undo Changes"}
+                  className="h-6 w-6 shrink-0 text-muted-foreground hover:bg-transparent hover:text-foreground [&_svg]:size-3"
+                >
+                  <CheckpointIcon />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>{checkpointAction === "redo" ? "Redo Changes" : "Undo Changes"}</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleCopy}
+                className="h-6 w-6 shrink-0 text-muted-foreground hover:bg-transparent hover:text-foreground [&_svg]:size-3"
+              >
+                {isCopied ? <Check /> : <Copy />}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              <p>{isCopied ? "Copied!" : "Copy message"}</p>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      </TooltipProvider>
     </div>
   );
 }
