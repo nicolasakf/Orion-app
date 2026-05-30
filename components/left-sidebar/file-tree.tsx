@@ -522,10 +522,9 @@ function FileTreeNode({
         <ContextMenuTrigger asChild>
           <div
             className={cn(
-              "corner-squircle group/tree-node flex items-center gap-2 rounded-md px-2 py-1",
+              "corner-squircle group/tree-node relative flex items-center gap-2 rounded-md py-1 pr-2 pl-6",
               "hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
               "outline-none focus-visible:outline-none focus-visible:ring-0",
-              item.type === "file" ? "pl-6" : "",
               "cursor-pointer"
             )}
             onClick={() => void handleClick()}
@@ -538,9 +537,12 @@ function FileTreeNode({
               setIsRenaming(true);
             }}
           >
-            {/* Chevron: always shown for folders */}
+            {/* Chevron sits left of the icon column so folder icons align with file icons */}
             {isFolder ? (
-              <div className="flex h-4 w-4 shrink-0 items-center justify-center">
+              <div
+                className="absolute left-0 top-1/2 flex h-4 w-4 -translate-y-1/2 items-center justify-center"
+                aria-hidden
+              >
                 {isLoadingChildren ? (
                   <Orbit className="h-3 w-3 animate-spin text-muted-foreground" />
                 ) : isExpanded ? (
