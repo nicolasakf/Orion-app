@@ -28,19 +28,15 @@
 - **Units**: $ per 1M tokens
 - **Context**: 2M for grok-4 models, 256000 for grok-4, 131072 for grok-3-mini
 
-## Migration naming
+## Catalog conventions
 
-| Scenario | Pattern | Example |
-|----------|---------|---------|
-| Add only | `YYYYMMDD000000_add_<model_names>.sql` | `add_gpt53_and_opus46` |
-| Update only | `YYYYMMDD000000_update_<model_names>.sql` | `update_gpt4o_mini_pricing` |
-| Mixed | `YYYYMMDD000000_add_and_update_<descriptive>.sql` | `add_and_update_openai_models` |
-
-## Upsert behavior
-
-- **Add new model**: Use `on conflict (model_id) do nothing` for idempotent inserts.
-- **Update existing model**: Use `on conflict (model_id) do update set ...` to refresh pricing, label, context, etc.
-- **Add or update (flexible)**: Use `do update set` when the migration might run on both fresh and existing databases.
+| Scenario | Action |
+|----------|--------|
+| Add new model | Append (or insert in provider group) to `MODEL_CATALOG` in `lib/agent/model-catalog.ts` |
+| Update pricing/metadata | Edit the existing entry in place by `model_id` |
+| Hide from UI | Set `client_avail: false` |
+| Show in default pinned set | Set `pinned_by_default: true` |
+| Agent runtime config | Add/update `MODEL_DEFAULTS` in `lib/agent/model-gateway.ts` |
 
 ## Model ID conventions
 
@@ -48,7 +44,17 @@
 - **Google**: `gemini-2.5-flash`, `gemini-3-flash-preview`, `gemini-3.5-flash`, `gemma-3-27b-it`
 - **Anthropic**: `claude-opus-4-6`, `claude-sonnet-4-5`, `claude-haiku-4-5` (API uses hyphenated IDs)
 - **xAI**: `grok-4-1-fast-reasoning`, `grok-3-mini`, `grok-4`
+- **Local**: Fixed IDs `ollama-local`, `lmstudio-local`, `mlx-local`, `custom-local` — do not add new local placeholder entries
 
 ## Free models
 
 For free-tier models (e.g. Gemma, some Gemini free tiers): set `input_price_per_1m` and `output_price_per_1m` to `0`.
+
+## Derived client catalog
+
+`CLIENT_MODEL_CATALOG` is built at module load time:
+
+- Filters to entries where `client_avail === true`
+- Adds `supports_image_input` (defaults to `true` for hosted providers, `false` for local)
+
+No separate client-side list to maintain — edit `MODEL_CATALOG` only.
