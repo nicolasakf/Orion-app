@@ -1,16 +1,48 @@
 import * as React from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NotebookAppView } from "@/components/notebook/notebook-app-view";
-import { CellType, type NotebookType } from "@/lib/types";
+import { CellType, OutputType, type NotebookType } from "@/lib/types";
 
-vi.mock("@/components/notebook/notebook-app-schema-view", () => ({
-  NotebookAppSchemaView: () => <div data-testid="schema-view" />,
+const outputRendererMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@/components/notebook/markdown-renderer", () => ({
+  MarkdownRenderer: ({ source }: { source: string }) => (
+    <div data-testid="markdown">{source}</div>
+  ),
+}));
+
+vi.mock("@/components/notebook/output-renderer", () => ({
+  OutputRenderer: (props: {
+    cellIndex: number;
+    outputIndex: number;
+    onOrionUiStateChange?: (
+      key: string,
+      value: string | number | boolean,
+      outputId?: string,
+    ) => void;
+    onOrionUiAction?: (action: unknown) => void;
+  }) => {
+    outputRendererMock(props);
+    return (
+      <button
+        type="button"
+        data-testid="output"
+        onClick={() => {
+          props.onOrionUiStateChange?.("region", "west", "ui-output");
+          props.onOrionUiAction?.({ type: "submit" });
+        }}
+      >
+        output {props.cellIndex}:{props.outputIndex}
+      </button>
+    );
+  },
 }));
 
 afterEach(() => {
   cleanup();
+  outputRendererMock.mockClear();
 });
 
 function makeNotebook(metadata: NotebookType["metadata"] = {}): NotebookType {
@@ -21,6 +53,34 @@ function makeNotebook(metadata: NotebookType["metadata"] = {}): NotebookType {
         source: ["# Intro"],
         metadata: { orion: { id: "intro", app: { enabled: true } } },
       },
+      {
+        cell_type: CellType.CODE,
+        source: ["1 + 1"],
+        metadata: {
+          orion: {
+            id: "result",
+            app: { outputs: { "0": { enabled: true } } },
+          },
+        },
+        execution_count: 1,
+        outputs: [
+          {
+            output_type: OutputType.DISPLAY_DATA,
+            data: { "text/plain": ["2"] },
+            metadata: {},
+          },
+          {
+            output_type: OutputType.DISPLAY_DATA,
+            data: { "text/plain": ["unselected"] },
+            metadata: {},
+          },
+        ],
+      },
+      {
+        cell_type: CellType.MARKDOWN,
+        source: ["# Hidden"],
+        metadata: { orion: { id: "hidden" } },
+      },
     ],
     metadata,
     nbformat: 4,
@@ -29,74 +89,87 @@ function makeNotebook(metadata: NotebookType["metadata"] = {}): NotebookType {
 }
 
 describe("NotebookAppView", () => {
-  it("renders the declarative schema when present", () => {
+  it("renders selected markdown and outputs in notebook order", () => {
+    render(<NotebookAppView notebook={makeNotebook()} />);
+
+    expect(screen.getByTestId("markdown")).toHaveTextContent("# Intro");
+    expect(screen.getByTestId("output")).toHaveTextContent("output 1:0");
+    expect(screen.queryByText("# Hidden")).not.toBeInTheDocument();
+    expect(outputRendererMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cellIndex: 1, outputIndex: 0 }),
+    );
+  });
+
+  it("shows the empty state when no cells or outputs are selected", () => {
     render(
       <NotebookAppView
-        notebook={makeNotebook({
-          orion: {
-            appView: {
-              schema: {
-                version: 1,
-                primitiveRegistry: { source: "builtin" },
-                root: {
-                  type: "Page",
-                  props: {},
-                  children: [],
+        notebook={{
+          ...makeNotebook(),
+          cells: makeNotebook().cells.map((cell) => ({
+            ...cell,
+            metadata: { orion: { id: cell.metadata?.orion?.id } },
+          })),
+        }}
+      />,
+    );
+
+    expect(screen.getByText("No cells in App View")).toBeInTheDocument();
+  });
+
+  it("ignores notebook-level appView schema metadata", () => {
+    render(
+      <NotebookAppView
+        notebook={{
+          ...makeNotebook({
+            orion: {
+              appView: {
+                schema: {
+                  version: 1,
+                  primitiveRegistry: { source: "builtin" },
+                  root: {
+                    type: "Page",
+                    props: {},
+                    children: [
+                      { type: "MarkdownCell", props: { cellId: "intro" } },
+                    ],
+                  },
                 },
               },
             },
-          },
-        })}
-      />,
-    );
-
-    expect(screen.getByTestId("schema-view")).toBeInTheDocument();
-  });
-
-  it("shows the empty state when no schema exists", () => {
-    render(<NotebookAppView notebook={makeNotebook()} />);
-
-    expect(screen.getByText("No cells in App View")).toBeInTheDocument();
-  });
-
-  it("ignores legacy-only App View metadata", () => {
-    render(
-      <NotebookAppView
-        notebook={makeNotebook({
-          orion: {
-            appView: {
-              grid: { cols: 8 },
-              layout: { intro: { x: 0, y: 0, w: 2, h: 2 } },
+          }),
+          cells: [
+            {
+              cell_type: CellType.MARKDOWN,
+              source: ["# Intro"],
+              metadata: { orion: { id: "intro" } },
             },
-          },
-        })}
+          ],
+        }}
       />,
     );
 
     expect(screen.getByText("No cells in App View")).toBeInTheDocument();
-    expect(screen.queryByTestId("schema-view")).not.toBeInTheDocument();
+    expect(screen.queryByText("# Intro")).not.toBeInTheDocument();
   });
 
-  it("shows an error panel when the schema is invalid", () => {
+  it("passes Orion UI callbacks through selected outputs", () => {
+    const onOrionUiStateChange = vi.fn();
+    const onOrionUiAction = vi.fn();
     render(
       <NotebookAppView
-        notebook={makeNotebook({
-          orion: {
-            appView: {
-              schema: {
-                version: 1,
-                primitiveRegistry: { source: "builtin" },
-                root: { type: "Hero", props: {} },
-              },
-            },
-          },
-        })}
+        notebook={makeNotebook()}
+        onOrionUiStateChange={onOrionUiStateChange}
+        onOrionUiAction={onOrionUiAction}
       />,
     );
 
-    expect(
-      screen.getByText("App View schema could not be rendered"),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/unknown primitive 'Hero'/)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("output"));
+
+    expect(onOrionUiStateChange).toHaveBeenCalledWith(
+      "region",
+      "west",
+      "ui-output",
+    );
+    expect(onOrionUiAction).toHaveBeenCalledWith({ type: "submit" });
   });
 });

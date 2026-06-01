@@ -16,7 +16,7 @@ Runtime interactivity belongs in notebook cells. App View metadata should arrang
 This is different from App View metadata authoring:
 
 - Use `orion-ui` when writing Python code that imports `orion_ui as ui` and emits a UI output from a code cell.
-- Use `create-app` when editing `metadata.orion.appView.schema` directly to arrange cells and outputs.
+- Use `create-app` when marking cells or outputs with `metadata.orion.app` so they appear in App View.
 - Use both when a notebook should generate an Orion UI output and then include that output in App View.
 
 ## Core workflow

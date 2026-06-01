@@ -1,6 +1,6 @@
 ---
 name: create-app
-description: Creates or edits Orion notebook App View layouts using notebook metadata. Use when the user asks to make a notebook app, dashboard, report UI, or declarative app layout from notebook cells and outputs.
+description: Creates or edits Orion notebook App View selections from notebook cells and outputs. Use when the user asks to make a notebook app, dashboard, report UI, or app view from notebook content.
 ---
 
 # Creating Orion notebook apps
@@ -15,152 +15,68 @@ https://docs.orion-agent.ai/notebooks/app-view
 
 Use this skill when the deliverable is an Orion App View inside a notebook, not a separate web app.
 
-App View metadata is the layout and composition layer. It should arrange notebook cells and outputs into a polished interface, add headings/sections/tabs/labels, and control high-level presentation. It should not be the source of truth for interactive runtime behavior.
+App View is a filtered presentation of notebook content. It shows markdown cells and code outputs that are explicitly marked for App View, in notebook order. Rich cards, layouts, controls, forms, charts, and runtime behavior should be authored inside notebook cells, usually with `orion_ui`, and then included as selected outputs.
 
-For sliders, selects, forms, action buttons, interactive tables, and other runtime controls, prefer writing a Python code cell with `orion_ui` and then reference that cell output from App View. Load or consult the `orion-ui` skill for those controls.
+For sliders, selects, forms, action buttons, interactive tables, and other runtime controls, prefer writing a Python code cell with `orion_ui` and marking that output for App View. Load or consult the `orion-ui` skill for those controls.
 
 ## Core workflow
 
 1. Inspect the active notebook with Orion metadata included.
-2. Identify stable cell ids from `cells[i].metadata.orion.id`; never invent or edit them.
-3. Decide which notebook content should appear in App View:
-   - Markdown cells render through `MarkdownCell`.
-   - Code outputs render through `Output` with `cellId` and zero-based `outputIndex`.
-   - Interactive UI should usually be an `orion_ui` output produced by a code cell, then included with `Output`.
-4. Write notebook-level `metadata.orion.appView.schema` with `edit_orion_metadata`.
+2. Decide which notebook content should appear in App View:
+   - Markdown cells render when `cells[i].metadata.orion.app.enabled` is `true`.
+   - Code outputs render when `cells[i].metadata.orion.app.outputs["<outputIndex>"].enabled` is `true`.
+   - Interactive UI should usually be an `orion_ui` output produced by a code cell.
+3. If richer layout or cards are needed, edit the markdown/code cell content or add an `orion_ui` output rather than authoring App View layout metadata.
+4. Write cell-level `metadata.orion.app` with `edit_orion_metadata`.
 5. Preserve unrelated `metadata.orion` siblings and existing cell metadata.
-6. If editing an existing app, make the smallest schema change that satisfies the request.
 
 Before writing metadata, load or consult `orion-metadata` for the current supported field shapes. That skill is the source of truth for `metadata.orion`.
 
-## App schema shape
+## Inclusion metadata
 
-V1 App View schema is inline notebook metadata:
+Markdown cell included in App View:
 
 ```json
 {
-  "appView": {
-    "css": ".metric-card { border-color: hsl(var(--primary)); }",
-    "schema": {
-      "version": 1,
-      "primitiveRegistry": { "source": "builtin" },
-      "root": {
-        "type": "Page",
-        "props": { "gap": "md", "padding": "md" },
-        "children": []
-      }
+  "app": {
+    "enabled": true
+  }
+}
+```
+
+Code-cell output included in App View:
+
+```json
+{
+  "app": {
+    "outputs": {
+      "0": { "enabled": true }
     }
   }
 }
 ```
 
-Only use the built-in registry in v1. Do not write custom primitive paths or inline `style`.
-Use `props.className` only as a semantic hook for CSS authored in cell source/output code. Do not write CSS into notebook metadata. Do not rely on arbitrary Tailwind runtime class strings.
-Legacy `appView.grid`, `appView.layout`, and `cell.metadata.orion.app` metadata are ignored by the renderer and should not be authored.
-
-## Built-in primitives
-
-Layout and containers:
-
-- `Page`: top-level container. Useful props: `gap`, `padding`.
-- `Stack`: vertical layout. Useful props: `gap`, `align`.
-- `Grid`: responsive grid. Useful props: `columns` (`1`-`4`), `gap`.
-- `Section`: titled grouping. Useful props: `title`, `description`, `gap`, `padding`.
-- `Card`: framed grouping. Useful props: `title`, `description`, `gap`.
-- `Tabs`: tabbed grouping. Children become tab panels; child props may include `label`, `title`, or `value`.
-- `Accordion`: expandable grouping. Children become items; child props may include `label`, `title`, or `value`. Useful props: `defaultValue`, `multiple`.
-- `Collapsible`: single expandable section. Useful props: `label`, `title`, `defaultOpen`.
-- `Carousel`: slide container. Children become slides. Useful props: `orientation`, `showControls`.
-- `Separator`: horizontal separator.
-
-Notebook display:
-
-- `MarkdownCell`: render markdown from `cellId`, or inline `source`/`text`.
-- `Output`: render a code output with `cellId` and `outputIndex`.
-
-Static/local UI primitives:
-
-- `Input`, `Textarea`, `Select`, `Slider`, `Checkbox`, `Switch`, `RadioGroup`, `Toggle`, `ToggleGroup`, `Calendar`, `DatePicker`, `Button`, `Label`, `Badge`, `Alert`, `Progress`, `Avatar`.
-- Overlay/display helpers: `Popover`, `HoverCard`, `Tooltip`.
-- Controls in App View metadata are static/local-only compatibility primitives. Do not use them for real notebook behavior.
-- Controls may use `stateKey` and `defaultValue`; this state is renderer-local only and is not Python runtime state.
-- `Select`, `RadioGroup`, and `ToggleGroup` `options` may be strings or `{ "label": "...", "value": "..." }` objects.
-- `Calendar` and `DatePicker` store ISO-like `YYYY-MM-DD` strings.
-- `Button` is display-only in v1; do not imply it runs notebook code.
-- `Popover`, `HoverCard`, and `Tooltip` use `label`, `trigger`, or `text` for the trigger and children or `content`/`description` for body text.
-
-Constrained styling props:
-
-- `gap`: `none`, `xs`, `sm`, `md`, `lg`
-- `padding`: `none`, `sm`, `md`, `lg`
-- `align`: `start`, `center`, `end`, `stretch`
-- `variant` and `size`: only use values supported by the primitive.
-- `className`: optional semantic CSS hook for cell-authored styles.
+When including all outputs for a code cell, mark each existing output index individually. Do not mark a code cell with `app.enabled` unless the cell itself is markdown.
 
 ## Authoring patterns
 
-Prefer simple, readable trees. A good dashboard starts with:
-
-- `Page`
-- one or more `Section` blocks
-- `Grid` for comparable cards
-- `Card` around dense outputs or `orion_ui` control outputs
-- direct `MarkdownCell` for narrative text
-
-Example:
-
-```json
-{
-  "version": 1,
-  "primitiveRegistry": { "source": "builtin" },
-  "root": {
-    "type": "Page",
-    "props": { "gap": "lg", "padding": "md" },
-    "children": [
-      {
-        "type": "Section",
-        "props": { "title": "Overview", "gap": "md" },
-        "children": [
-          { "type": "MarkdownCell", "props": { "cellId": "intro" } },
-          {
-            "type": "Grid",
-            "props": { "columns": 2, "gap": "md" },
-            "children": [
-              {
-                "type": "Card",
-                "props": { "title": "Chart" },
-                "children": [
-                  { "type": "Output", "props": { "cellId": "plot-cell", "outputIndex": 0 } }
-                ]
-              }
-            ]
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+- Use markdown cells for headings, descriptions, section labels, and narrative.
+- Use code-cell outputs for charts, tables, images, widgets, and generated UI.
+- Use `orion_ui` for app-like cards, grids, tabs, controls, and forms.
+- Keep App View metadata limited to selection. App View does not own layout, styling, or runtime behavior.
 
 ## Metadata editing guidance
 
-- Prefer one notebook-level merge at path `["appView"]` or `["appView", "schema"]`.
-- Ignore legacy `appView.grid`, `appView.layout`, and `cell.metadata.orion.app`; App View renders `appView.schema`.
+- Prefer cell-level edits at path `["app"]` or `["app", "outputs", "<index>"]`.
+- Do not write notebook-level `metadata.orion.appView.schema`, `appView.grid`, or `appView.layout`; App View ignores those fields.
 - Do not write `metadata.orion.css` or `metadata.orion.appView.css`; style content in cell source/output code instead.
 - Do not edit `cells[i].metadata.orion.id`.
-- Do not write App View inclusion metadata under `cell.metadata.orion.app`; declarative schema references do not require `app.enabled`.
-- If a requested feature needs cell execution, parameter binding, or runtime interactivity, implement it in a Python code cell with `orion_ui` and reference that output from App View.
-- If a requested layout needs custom React, inline `style`, arbitrary Tailwind runtime classes, or custom primitive imports, explain that v1 App View metadata intentionally does not support those escape hatches yet.
+- If a requested feature needs cell execution, parameter binding, or runtime interactivity, implement it in a Python code cell with `orion_ui` and mark that output for App View.
 
 ## Validation checklist
 
-- Schema has `version: 1`.
-- `primitiveRegistry.source` is `"builtin"`.
-- Every node has a supported `type`.
-- `props` is an object when present.
-- `children` is an array when present.
-- All `cellId` references exist in `cells[i].metadata.orion.id`.
-- Every `Output.outputIndex` exists on the referenced code cell.
-- No node uses inline `style`, custom imports, or action/run-cell props.
-- Any `className` values are semantic hooks for styles authored in cell source/output code.
-- Interactive controls are implemented in `orion_ui` code cells, not authored directly in App View metadata.
+- Selected markdown cells have `app.enabled: true`.
+- Selected code outputs have `app.outputs["<outputIndex>"].enabled: true`.
+- Every selected output index exists on the referenced code cell.
+- Complex layouts and controls are implemented in notebook content, usually through `orion_ui`.
+- No notebook-level App View schema, grid, layout, or CSS metadata is authored.

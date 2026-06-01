@@ -84,7 +84,7 @@ import {
 } from "@/lib/notebook/notebook-export";
 import {
   addNotebookAppViewReference,
-  isNotebookAppViewReferenceInMetadata,
+  isNotebookAppViewReferenceInNotebook,
   removeNotebookAppViewReference,
   type NotebookAppViewReference,
 } from "@/lib/notebook/app-view";
@@ -2354,13 +2354,13 @@ export function NotebookEditor({
             const references: NotebookAppViewReference[] = isCodeCell
               ? currentCell.outputs!.map((_, outputIndex) => ({
                   kind: "output",
-                  cellId: actionCellId,
+                  cellIndex: cellIndexFromAction,
                   outputIndex,
                 }))
-              : [{ kind: "markdown", cellId: actionCellId }];
+              : [{ kind: "markdown", cellIndex: cellIndexFromAction }];
             const allReferencesPresent = references.every((reference) =>
-              isNotebookAppViewReferenceInMetadata(
-                notebookWithChanges.metadata,
+              isNotebookAppViewReferenceInNotebook(
+                notebookWithChanges,
                 reference,
               ),
             );
@@ -2431,11 +2431,11 @@ export function NotebookEditor({
 
               const reference: NotebookAppViewReference = {
                 kind: "output",
-                cellId: actionCellId,
+                cellIndex: cellIndexFromAction,
                 outputIndex,
               };
-              return isNotebookAppViewReferenceInMetadata(
-                notebookWithChanges.metadata,
+              return isNotebookAppViewReferenceInNotebook(
+                notebookWithChanges,
                 reference,
               )
                 ? removeNotebookAppViewReference(notebookWithChanges, reference)

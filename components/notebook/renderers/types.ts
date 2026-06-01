@@ -27,6 +27,10 @@ export interface NotebookOutputActionHandlers {
   ) => void;
   onOrionUiAction?: (action: unknown) => void;
   isInAppView?: boolean;
+  /** Opens the output in a full-screen dialog (provided by OutputRenderer). */
+  onOpenFullScreen?: () => void;
+  /** When true, the renderer is displayed inside the full-screen dialog. */
+  isFullScreen?: boolean;
   /** When set, the output context menu includes a Presentation submenu. */
   presentationMenu?: NotebookOutputPresentationMenu | null;
 }

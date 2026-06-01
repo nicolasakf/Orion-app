@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, type JSX } from "react";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import type { JSX } from "react";
 import { OutputContextMenu } from "@/components/notebook/output-context-menu";
 import type { NotebookMimeRendererProps } from "./types";
 import { toJoinedString } from "./types";
@@ -20,7 +19,6 @@ function ImageOutputWrapper({
   alt,
   actions,
 }: ImageOutputWrapperProps): JSX.Element {
-  const [isFullScreenOpen, setIsFullScreenOpen] = useState(false);
   const {
     cellIndex,
     outputIndex,
@@ -29,6 +27,8 @@ function ImageOutputWrapper({
     onHideOutput,
     onToggleOutputAppView,
     isInAppView,
+    onOpenFullScreen,
+    isFullScreen,
   } = actions;
 
   const canShowContextMenu = !!(onClearOutput && onCopyOutput && onHideOutput);
@@ -36,43 +36,37 @@ function ImageOutputWrapper({
     <img
       src={src}
       alt={alt}
-      className="max-w-full cursor-pointer"
-      onDoubleClick={() => setIsFullScreenOpen(true)}
+      className={
+        isFullScreen
+          ? "max-w-[95vw] max-h-[95vh] w-auto h-auto object-contain"
+          : "max-w-full cursor-pointer"
+      }
+      onDoubleClick={
+        isFullScreen || !onOpenFullScreen
+          ? undefined
+          : () => onOpenFullScreen()
+      }
     />
   );
 
+  if (!canShowContextMenu || isFullScreen) {
+    return imageNode;
+  }
+
   return (
-    <>
-      {canShowContextMenu ? (
-        <OutputContextMenu
-          cellIndex={cellIndex}
-          outputIndex={outputIndex}
-          onClearOutput={onClearOutput!}
-          onCopyOutput={onCopyOutput!}
-          onHideOutput={onHideOutput!}
-          onToggleAppView={onToggleOutputAppView}
-          isInAppView={!!isInAppView}
-          onOpenFullScreen={() => setIsFullScreenOpen(true)}
-          presentationMenu={actions.presentationMenu ?? undefined}
-        >
-          {imageNode}
-        </OutputContextMenu>
-      ) : (
-        imageNode
-      )}
-      <Dialog open={isFullScreenOpen} onOpenChange={setIsFullScreenOpen}>
-        <DialogContent
-          hideCloseButton
-          className="max-w-[98vw] max-h-[98vh] w-fit p-2 overflow-auto border-0"
-        >
-          <img
-            src={src}
-            alt={alt}
-            className="max-w-[95vw] max-h-[95vh] w-auto h-auto object-contain"
-          />
-        </DialogContent>
-      </Dialog>
-    </>
+    <OutputContextMenu
+      cellIndex={cellIndex}
+      outputIndex={outputIndex}
+      onClearOutput={onClearOutput!}
+      onCopyOutput={onCopyOutput!}
+      onHideOutput={onHideOutput!}
+      onToggleAppView={onToggleOutputAppView}
+      isInAppView={!!isInAppView}
+      onOpenFullScreen={onOpenFullScreen}
+      presentationMenu={actions.presentationMenu ?? undefined}
+    >
+      {imageNode}
+    </OutputContextMenu>
   );
 }
 

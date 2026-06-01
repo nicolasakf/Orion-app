@@ -34,7 +34,7 @@ interface OutputContextMenuProps {
   onHideOutput: (cellIndex: number, outputIndex: number) => void;
   onToggleAppView?: (cellIndex: number, outputIndex: number) => void;
   isInAppView?: boolean;
-  /** When provided, shows "Open in full screen" option (for image outputs) */
+  /** When provided, shows "Open in full screen" option */
   onOpenFullScreen?: () => void;
   /** When provided, shows a collapse/expand toggle option (for text outputs) */
   onToggleCollapse?: () => void;
@@ -68,15 +68,6 @@ export function OutputContextMenu({
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent className="w-48">
-        {onOpenFullScreen && (
-          <>
-            <ContextMenuItem onClick={onOpenFullScreen}>
-              <Maximize2 className="mr-2 h-4 w-4" />
-              Open in full screen
-            </ContextMenuItem>
-            <ContextMenuSeparator />
-          </>
-        )}
         {showPresentationSubmenu && (
           <>
             <ContextMenuSub>
@@ -84,7 +75,7 @@ export function OutputContextMenu({
                 <LayoutTemplate className="mr-2 h-4 w-4" />
                 Presentation
               </ContextMenuSubTrigger>
-              <ContextMenuSubContent className="min-w-56">
+              <ContextMenuSubContent className="w-max">
                 <ContextMenuRadioGroup
                   value={presentationMenu.value}
                   onValueChange={presentationMenu.onValueChange}
@@ -94,7 +85,7 @@ export function OutputContextMenu({
                       key={opt.mimeType}
                       value={opt.mimeType}
                     >
-                      <span className="truncate" title={opt.mimeType}>
+                      <span className="whitespace-nowrap" title={opt.mimeType}>
                         {opt.label}
                       </span>
                     </ContextMenuRadioItem>
@@ -105,21 +96,29 @@ export function OutputContextMenu({
             <ContextMenuSeparator />
           </>
         )}
-        {onToggleCollapse && (
+        {(onOpenFullScreen || onToggleCollapse) && (
           <>
-            <ContextMenuItem onClick={onToggleCollapse}>
-              {isCollapsed ? (
-                <>
-                  <ChevronsUpDown className="mr-2 h-4 w-4" />
-                  Expand Output
-                </>
-              ) : (
-                <>
-                  <ChevronsDownUp className="mr-2 h-4 w-4" />
-                  Collapse Output
-                </>
-              )}
-            </ContextMenuItem>
+            {onOpenFullScreen && (
+              <ContextMenuItem onClick={onOpenFullScreen}>
+                <Maximize2 className="mr-2 h-4 w-4" />
+                Open in full screen
+              </ContextMenuItem>
+            )}
+            {onToggleCollapse && (
+              <ContextMenuItem onClick={onToggleCollapse}>
+                {isCollapsed ? (
+                  <>
+                    <ChevronsUpDown className="mr-2 h-4 w-4" />
+                    Expand Output
+                  </>
+                ) : (
+                  <>
+                    <ChevronsDownUp className="mr-2 h-4 w-4" />
+                    Collapse Output
+                  </>
+                )}
+              </ContextMenuItem>
+            )}
             <ContextMenuSeparator />
           </>
         )}

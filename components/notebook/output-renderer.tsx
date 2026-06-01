@@ -5,6 +5,7 @@ import ansiToHtml from "ansi-to-html";
 import { useTheme } from "next-themes";
 import { useMemo, useState, useRef, useCallback, useEffect } from "react";
 import { OutputContextMenu } from "./output-context-menu";
+import { OutputFullScreenDialog } from "./output-full-screen-dialog";
 import { cn } from "@/lib/utils";
 import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import {
@@ -296,6 +297,8 @@ export function OutputRenderer({
 }: OutputRendererProps) {
   const { theme } = useTheme();
   const [isOutputCollapsible, setIsOutputCollapsible] = useState(false);
+  const [isFullScreenOpen, setIsFullScreenOpen] = useState(false);
+  const openFullScreen = useCallback(() => setIsFullScreenOpen(true), []);
   const mimeRegistry = useMemo(() => getDefaultMimeRegistry(), []);
 
   // Create theme-aware ANSI converter
@@ -409,6 +412,7 @@ export function OutputRenderer({
             onHideOutput={onHideOutput}
             onToggleAppView={onToggleOutputAppView}
             isInAppView={!!isInAppView}
+            onOpenFullScreen={openFullScreen}
             isCollapsed={isCollapsed}
             onToggleCollapse={
               collapsible && isOutputCollapsible ? onToggleCollapse : undefined
@@ -426,16 +430,124 @@ export function OutputRenderer({
       onCopyOutput,
       onHideOutput,
       onToggleOutputAppView,
-      onOrionUiStateChange,
-      onOrionUiAction,
       isInAppView,
       cellIndex,
       outputIndex,
+      openFullScreen,
       isCollapsed,
       onToggleCollapse,
       isOutputCollapsible,
       sharedPresentationMenu,
     ],
+  );
+
+  const sharedActions = useMemo(
+    () => ({
+      cellIndex,
+      outputIndex,
+      onClearOutput,
+      onCopyOutput,
+      onHideOutput,
+      onToggleOutputAppView,
+      onOrionUiStateChange,
+      onOrionUiAction,
+      isInAppView: !!isInAppView,
+      onOpenFullScreen: openFullScreen,
+      presentationMenu: sharedPresentationMenu,
+    }),
+    [
+      cellIndex,
+      outputIndex,
+      onClearOutput,
+      onCopyOutput,
+      onHideOutput,
+      onToggleOutputAppView,
+      onOrionUiStateChange,
+      onOrionUiAction,
+      isInAppView,
+      openFullScreen,
+      sharedPresentationMenu,
+    ],
+  );
+
+  /**
+   * Renders the resolved MIME output body, optionally for the full-screen dialog.
+   */
+  const renderMimeBody = useCallback(
+    (opts?: { fullScreen?: boolean }) => {
+      if (!effectiveResolved) {
+        return null;
+      }
+
+      const Renderer = MIME_RENDERERS[effectiveResolved.mimeType];
+      if (!Renderer) {
+        return null;
+      }
+
+      let body: React.ReactNode = (
+        <Renderer
+          output={output}
+          notebookMetadata={notebookMetadata}
+          mimeType={effectiveResolved.mimeType}
+          value={effectiveResolved.value}
+          theme={theme === "light" ? "light" : "dark"}
+          trusted={trusted}
+          ansiConverter={ansiConverter}
+          sanitize={sanitize}
+          actions={{
+            ...sharedActions,
+            isFullScreen: opts?.fullScreen,
+          }}
+        />
+      );
+
+      if (
+        effectiveResolved.factory.collapsible &&
+        !opts?.fullScreen &&
+        onToggleCollapse
+      ) {
+        body = (
+          <CollapsibleOutputWrapper
+            isCollapsed={!!isCollapsed}
+            onToggleCollapse={onToggleCollapse}
+            onCollapsibleChange={setIsOutputCollapsible}
+            scrollToEndWhenCollapsed={!!scrollCollapsedToEnd}
+          >
+            {body}
+          </CollapsibleOutputWrapper>
+        );
+      }
+
+      return body;
+    },
+    [
+      effectiveResolved,
+      output,
+      notebookMetadata,
+      theme,
+      trusted,
+      ansiConverter,
+      sanitize,
+      sharedActions,
+      onToggleCollapse,
+      isCollapsed,
+      scrollCollapsedToEnd,
+    ],
+  );
+
+  const wrapWithFullScreenDialog = useCallback(
+    (content: React.ReactNode) => (
+      <>
+        {content}
+        <OutputFullScreenDialog
+          open={isFullScreenOpen}
+          onOpenChange={setIsFullScreenOpen}
+        >
+          {renderMimeBody({ fullScreen: true })}
+        </OutputFullScreenDialog>
+      </>
+    ),
+    [isFullScreenOpen, renderMimeBody],
   );
 
   // Check if output is hidden
@@ -447,9 +559,7 @@ export function OutputRenderer({
       <div
         className="text-xs text-muted-foreground p-2 cursor-pointer hover:bg-accent rounded"
         onClick={() => {
-          // Show the output when clicked by removing the hidden flag
           if (onHideOutput) {
-            // We'll need to implement unhide functionality
             onHideOutput(cellIndex, outputIndex);
           }
         }}
@@ -458,23 +568,6 @@ export function OutputRenderer({
       </div>
     );
   }
-
-  /**
-   * Wraps text-based content with a collapsible container when a toggle callback is provided.
-   */
-  const wrapCollapsible = (content: React.ReactNode) => {
-    if (!onToggleCollapse) return content;
-    return (
-      <CollapsibleOutputWrapper
-        isCollapsed={!!isCollapsed}
-        onToggleCollapse={onToggleCollapse}
-        onCollapsibleChange={setIsOutputCollapsible}
-        scrollToEndWhenCollapsed={!!scrollCollapsedToEnd}
-      >
-        {content}
-      </CollapsibleOutputWrapper>
-    );
-  };
 
   if (!effectiveResolved) {
     const unsupportedMimes = Object.keys(output.data || {});
@@ -500,34 +593,7 @@ export function OutputRenderer({
     );
   }
 
-  let content: React.ReactNode = (
-    <Renderer
-      output={output}
-      notebookMetadata={notebookMetadata}
-      mimeType={effectiveResolved.mimeType}
-      value={effectiveResolved.value}
-      theme={theme === "light" ? "light" : "dark"}
-      trusted={trusted}
-      ansiConverter={ansiConverter}
-      sanitize={sanitize}
-      actions={{
-        cellIndex,
-        outputIndex,
-        onClearOutput,
-        onCopyOutput,
-        onHideOutput,
-        onToggleOutputAppView,
-        onOrionUiStateChange,
-        onOrionUiAction,
-        isInAppView: !!isInAppView,
-        presentationMenu: sharedPresentationMenu,
-      }}
-    />
-  );
-
-  if (effectiveResolved.factory.collapsible) {
-    content = wrapCollapsible(content);
-  }
+  let content: React.ReactNode = renderMimeBody();
 
   if (!effectiveResolved.factory.disableContextMenu) {
     content = wrapWithContextMenu(
@@ -536,5 +602,5 @@ export function OutputRenderer({
     );
   }
 
-  return content;
+  return wrapWithFullScreenDialog(content);
 }

@@ -475,6 +475,8 @@ export function PlotlyJsonOutputRenderer({
     onHideOutput,
     onToggleOutputAppView,
     isInAppView,
+    onOpenFullScreen,
+    isFullScreen,
   } = actions;
   const canShowContextMenu = !!(onClearOutput && onCopyOutput && onHideOutput);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -487,13 +489,19 @@ export function PlotlyJsonOutputRenderer({
   const hasRenderedRef = useRef(false);
   const figure = useMemo(() => parsePlotlyFigure(value), [value]);
   const [renderError, setRenderError] = useState<string | null>(null);
-  const frameHeight = useMemo(
-    () =>
-      resolvePlotHeight(
-        (figure.layout as Record<string, unknown> | undefined)?.height,
-      ),
-    [figure.layout],
-  );
+  const frameHeight = useMemo(() => {
+    if (isFullScreen) {
+      return Math.max(
+        resolvePlotHeight(
+          (figure.layout as Record<string, unknown> | undefined)?.height,
+        ),
+        720,
+      );
+    }
+    return resolvePlotHeight(
+      (figure.layout as Record<string, unknown> | undefined)?.height,
+    );
+  }, [figure.layout, isFullScreen]);
 
   /**
    * Execute a guarded resize pass for the current plot node.
@@ -746,7 +754,7 @@ export function PlotlyJsonOutputRenderer({
     </div>
   );
 
-  if (!canShowContextMenu) {
+  if (!canShowContextMenu || isFullScreen) {
     return plotHost;
   }
 
@@ -759,6 +767,7 @@ export function PlotlyJsonOutputRenderer({
       onHideOutput={onHideOutput!}
       onToggleAppView={onToggleOutputAppView}
       isInAppView={!!isInAppView}
+      onOpenFullScreen={onOpenFullScreen}
       presentationMenu={actions.presentationMenu ?? undefined}
     >
       {plotHost}

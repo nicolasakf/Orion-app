@@ -7,11 +7,6 @@
 
 import { z } from "zod";
 
-import {
-  BUILTIN_APP_VIEW_PRIMITIVES,
-  NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
-} from "@/lib/notebook/app-view";
-
 const JsonObjectSchema = z.record(z.string(), z.unknown());
 const PositiveIntegerSchema = z.number().int().positive();
 const NonNegativeIntegerSchema = z.number().int().nonnegative();
@@ -29,48 +24,6 @@ const AppLayoutItemSchema = z
 const GridTupleSchema = z
   .tuple([NonNegativeIntegerSchema, NonNegativeIntegerSchema])
   .describe("Two non-negative integer values: [x, y].");
-
-interface AppViewSchemaNodeInput {
-  type: string;
-  props?: Record<string, unknown>;
-  children?: AppViewSchemaNodeInput[];
-}
-
-const AppViewSchemaPropsSchema = z
-  .record(z.string(), z.unknown())
-  .superRefine((props, ctx) => {
-    if ("className" in props && typeof props.className !== "string") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["className"],
-        message: "className must be a string when present",
-      });
-    }
-
-    if ("style" in props) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["style"],
-        message: "style is not supported in app-view schema v1",
-      });
-    }
-  });
-
-const AppViewSchemaNodeSchema: z.ZodType<AppViewSchemaNodeInput> = z.lazy(() =>
-  z.object({
-    type: z.enum(BUILTIN_APP_VIEW_PRIMITIVES),
-    props: AppViewSchemaPropsSchema.optional(),
-    children: z.array(AppViewSchemaNodeSchema).optional(),
-  }),
-);
-
-const AppViewSchemaSchema = z.object({
-  version: z.literal(NOTEBOOK_APP_VIEW_SCHEMA_VERSION),
-  primitiveRegistry: z.object({
-    source: z.literal("builtin"),
-  }),
-  root: AppViewSchemaNodeSchema,
-});
 
 export const NotebookOrionMetadataSchema = z
   .object({
@@ -101,18 +54,19 @@ export const NotebookOrionMetadataSchema = z
           })
           .passthrough()
           .optional()
-          .describe("App-view grid configuration."),
+          .describe("Deprecated app-view grid metadata. App View ignores this field."),
         layout: z
           .record(AppLayoutItemSchema)
           .optional()
-          .describe("App-view layout keyed by cell id or output app item id."),
-        schema: AppViewSchemaSchema.optional().describe(
-          "Declarative app-view schema rendered through Orion's built-in primitive registry.",
-        ),
+          .describe("Deprecated app-view layout metadata. App View ignores this field."),
+        schema: z
+          .unknown()
+          .optional()
+          .describe("Deprecated declarative app-view schema. App View ignores this field."),
       })
       .passthrough()
       .optional()
-      .describe("Notebook app-view layout metadata."),
+      .describe("Deprecated notebook app-view metadata preserved for compatibility."),
   })
   .passthrough()
   .superRefine((metadata, ctx) => {

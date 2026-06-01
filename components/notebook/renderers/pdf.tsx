@@ -9,12 +9,17 @@ import { toJoinedString } from "./types";
  */
 export function PdfOutputRenderer({
   value,
+  actions,
 }: NotebookMimeRendererProps): JSX.Element {
   const data = toJoinedString(value).replace(/\s/g, "");
 
   return (
     <iframe
-      className="w-full min-h-[480px] rounded-md border"
+      className={
+        actions.isFullScreen
+          ? "w-full min-h-[85vh] rounded-md border"
+          : "w-full min-h-[480px] rounded-md border"
+      }
       src={`data:application/pdf;base64,${data}`}
       title="PDF output"
     />

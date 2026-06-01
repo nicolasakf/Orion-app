@@ -42,25 +42,15 @@ export const BUILTIN_APP_VIEW_PRIMITIVES = [
 export type BuiltinAppViewPrimitive =
   (typeof BUILTIN_APP_VIEW_PRIMITIVES)[number];
 
-export interface NotebookAppViewSchemaPrimitiveRegistry {
-  source: "builtin";
-}
-
 export interface NotebookAppViewSchemaNode {
   type: BuiltinAppViewPrimitive;
   props: Record<string, unknown>;
   children: NotebookAppViewSchemaNode[];
 }
 
-export interface NotebookAppViewSchema {
-  version: typeof NOTEBOOK_APP_VIEW_SCHEMA_VERSION;
-  primitiveRegistry: NotebookAppViewSchemaPrimitiveRegistry;
-  root: NotebookAppViewSchemaNode;
-}
-
 export type NotebookAppViewReference =
-  | { kind: "markdown"; cellId: string }
-  | { kind: "output"; cellId: string; outputIndex: number };
+  | { kind: "markdown"; cellIndex: number }
+  | { kind: "output"; cellIndex: number; outputIndex: number };
 
 export type OrionUiMimeStateValue = string | number | boolean;
 
@@ -72,11 +62,6 @@ export interface OrionUiMimePayload {
   bindings: Record<string, unknown>;
 }
 
-export type NotebookAppViewSchemaParseResult =
-  | { status: "missing" }
-  | { status: "valid"; schema: NotebookAppViewSchema }
-  | { status: "invalid"; errors: string[] };
-
 export type OrionUiMimePayloadParseResult =
   | { status: "valid"; payload: OrionUiMimePayload }
   | { status: "invalid"; errors: string[] };
@@ -85,7 +70,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-/** Checks whether a schema node type is available in the built-in registry. */
+/** Checks whether a primitive node type is available in the built-in registry. */
 function isBuiltinAppViewPrimitive(
   value: unknown,
 ): value is BuiltinAppViewPrimitive {
@@ -104,7 +89,7 @@ function appendSchemaError(
   errors.push(`${path}: ${message}`);
 }
 
-/** Normalizes schema props and rejects unsupported styling escape hatches. */
+/** Normalizes primitive props and rejects unsupported styling escape hatches. */
 function normalizeSchemaProps(
   value: unknown,
   path: string,
@@ -131,14 +116,14 @@ function normalizeSchemaProps(
     appendSchemaError(
       errors,
       `${path}.style`,
-      "style is not supported in app-view schema v1",
+      "style is not supported in Orion UI primitive payload v1",
     );
   }
 
   return value;
 }
 
-/** Normalizes a recursive schema node into the renderer's internal shape. */
+/** Normalizes a recursive primitive node into the renderer's internal shape. */
 function normalizeSchemaNode(
   value: unknown,
   path: string,
@@ -187,337 +172,144 @@ function normalizeSchemaNode(
   };
 }
 
-/** Reads the raw declarative schema object from notebook metadata. */
-function getRawAppViewSchema(
-  metadata: NotebookType["metadata"] | undefined,
-): unknown {
-  const orion = isRecord(metadata?.orion) ? metadata.orion : {};
-  const appView = isRecord(orion.appView) ? orion.appView : {};
-  return appView.schema;
+/** Checks whether a markdown cell is included in App View. */
+export function isNotebookCellInAppView(cell: NotebookCellType): boolean {
+  return cell.metadata?.orion?.app?.enabled === true;
 }
 
-/**
- * Parses notebook-level declarative App View schema metadata.
- */
-export function parseNotebookAppViewSchema(
-  metadata: NotebookType["metadata"] | undefined,
-): NotebookAppViewSchemaParseResult {
-  const rawSchema = getRawAppViewSchema(metadata);
-  if (rawSchema === undefined) {
-    return { status: "missing" };
-  }
-
-  const errors: string[] = [];
-  if (!isRecord(rawSchema)) {
-    return {
-      status: "invalid",
-      errors: ["metadata.orion.appView.schema: schema must be an object"],
-    };
-  }
-
-  if (rawSchema.version !== NOTEBOOK_APP_VIEW_SCHEMA_VERSION) {
-    appendSchemaError(
-      errors,
-      "metadata.orion.appView.schema.version",
-      `version must be ${NOTEBOOK_APP_VIEW_SCHEMA_VERSION}`,
-    );
-  }
-
-  const primitiveRegistry = isRecord(rawSchema.primitiveRegistry)
-    ? rawSchema.primitiveRegistry
-    : {};
-  if (primitiveRegistry.source !== "builtin") {
-    appendSchemaError(
-      errors,
-      "metadata.orion.appView.schema.primitiveRegistry.source",
-      "only 'builtin' is supported",
-    );
-  }
-
-  if (rawSchema.root === undefined) {
-    appendSchemaError(
-      errors,
-      "metadata.orion.appView.schema.root",
-      "root is required",
-    );
-  }
-
-  const root =
-    rawSchema.root === undefined
-      ? null
-      : normalizeSchemaNode(
-        rawSchema.root,
-        "metadata.orion.appView.schema.root",
-        errors,
-      );
-
-  if (errors.length > 0 || !root) {
-    return { status: "invalid", errors };
-  }
-
-  return {
-    status: "valid",
-    schema: {
-      version: NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
-      primitiveRegistry: { source: "builtin" },
-      root,
-    },
-  };
-}
-
-/** Creates the default schema used by manual App View additions. */
-export function createDefaultNotebookAppViewSchema(): NotebookAppViewSchema {
-  return {
-    version: NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
-    primitiveRegistry: { source: "builtin" },
-    root: {
-      type: "Page",
-      props: { gap: "lg", padding: "md" },
-      children: [],
-    },
-  };
-}
-
-/** Returns the stable Orion-managed id for a notebook cell. */
-export function getNotebookCellId(cell: NotebookCellType): string | null {
-  const id = cell.metadata?.orion?.id;
-  return typeof id === "string" && id.length > 0 ? id : null;
-}
-
-function getEditableAppViewSchema(
-  metadata: NotebookType["metadata"] | undefined,
-): NotebookAppViewSchema | null {
-  const result = parseNotebookAppViewSchema(metadata);
-  if (result.status === "valid") {
-    return result.schema;
-  }
-  if (result.status === "missing") {
-    return createDefaultNotebookAppViewSchema();
-  }
-  return null;
-}
-
-function cloneSchemaNode(
-  node: NotebookAppViewSchemaNode,
-): NotebookAppViewSchemaNode {
-  return {
-    type: node.type,
-    props: { ...node.props },
-    children: node.children.map(cloneSchemaNode),
-  };
-}
-
-function cloneSchema(schema: NotebookAppViewSchema): NotebookAppViewSchema {
-  return {
-    version: NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
-    primitiveRegistry: { source: "builtin" },
-    root: cloneSchemaNode(schema.root),
-  };
-}
-
-function numberProp(
-  props: Record<string, unknown>,
-  key: string,
-): number | undefined {
-  const value = props[key];
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
-}
-
-function stringProp(
-  props: Record<string, unknown>,
-  key: string,
-): string | undefined {
-  const value = props[key];
-  return typeof value === "string" ? value : undefined;
-}
-
-function referenceMatchesNode(
-  node: NotebookAppViewSchemaNode,
-  reference: NotebookAppViewReference,
+/** Checks whether a code-cell output is included in App View. */
+export function isNotebookOutputInAppView(
+  cell: NotebookCellType,
+  outputIndex: number,
 ): boolean {
-  if (reference.kind === "markdown") {
-    return (
-      node.type === "MarkdownCell" &&
-      stringProp(node.props, "cellId") === reference.cellId
-    );
+  const outputs = cell.metadata?.orion?.app?.outputs;
+  if (!isRecord(outputs)) {
+    return false;
   }
 
-  return (
-    node.type === "Output" &&
-    stringProp(node.props, "cellId") === reference.cellId &&
-    Math.max(0, Math.floor(numberProp(node.props, "outputIndex") ?? 0)) ===
-    reference.outputIndex
-  );
+  const outputMetadata = outputs[String(outputIndex)];
+  return isRecord(outputMetadata) && outputMetadata.enabled === true;
 }
 
-function schemaNodeHasReference(
-  node: NotebookAppViewSchemaNode,
-  reference: NotebookAppViewReference,
-): boolean {
-  return (
-    referenceMatchesNode(node, reference) ||
-    node.children.some((child) => schemaNodeHasReference(child, reference))
-  );
-}
-
-/** Checks whether a declarative App View schema references a cell or output. */
-export function isNotebookAppViewReferenceInSchema(
-  schema: NotebookAppViewSchema,
-  reference: NotebookAppViewReference,
-): boolean {
-  return schemaNodeHasReference(schema.root, reference);
-}
-
-/** Checks whether notebook metadata has a valid schema reference for a cell or output. */
-export function isNotebookAppViewReferenceInMetadata(
-  metadata: NotebookType["metadata"] | undefined,
-  reference: NotebookAppViewReference,
-): boolean {
-  const result = parseNotebookAppViewSchema(metadata);
-  return (
-    result.status === "valid" &&
-    isNotebookAppViewReferenceInSchema(result.schema, reference)
-  );
-}
-
-function createReferenceNode(
-  reference: NotebookAppViewReference,
-): NotebookAppViewSchemaNode {
-  if (reference.kind === "markdown") {
-    return {
-      type: "MarkdownCell",
-      props: { cellId: reference.cellId },
-      children: [],
-    };
-  }
-
-  return {
-    type: "Output",
-    props: { cellId: reference.cellId, outputIndex: reference.outputIndex },
-    children: [],
-  };
-}
-
-function withRootPage(schema: NotebookAppViewSchema): NotebookAppViewSchema {
-  const cloned = cloneSchema(schema);
-  if (cloned.root.type === "Page") {
-    return cloned;
-  }
-
-  return {
-    ...cloned,
-    root: {
-      type: "Page",
-      props: { gap: "lg", padding: "md" },
-      children: [cloned.root],
-    },
-  };
-}
-
-/** Adds a cell/output reference to the root Page unless it already exists. */
-export function addNotebookAppViewReferenceToSchema(
-  schema: NotebookAppViewSchema,
-  reference: NotebookAppViewReference,
-): NotebookAppViewSchema {
-  if (isNotebookAppViewReferenceInSchema(schema, reference)) {
-    return cloneSchema(schema);
-  }
-
-  const nextSchema = withRootPage(schema);
-  nextSchema.root.children = [
-    ...nextSchema.root.children,
-    createReferenceNode(reference),
-  ];
-  return nextSchema;
-}
-
-function removeReferenceFromNode(
-  node: NotebookAppViewSchemaNode,
-  reference: NotebookAppViewReference,
-): NotebookAppViewSchemaNode | null {
-  if (referenceMatchesNode(node, reference)) {
-    return null;
-  }
-
-  return {
-    type: node.type,
-    props: { ...node.props },
-    children: node.children.flatMap((child) => {
-      const nextChild = removeReferenceFromNode(child, reference);
-      return nextChild ? [nextChild] : [];
-    }),
-  };
-}
-
-/** Removes all matching cell/output references from a schema. */
-export function removeNotebookAppViewReferenceFromSchema(
-  schema: NotebookAppViewSchema,
-  reference: NotebookAppViewReference,
-): NotebookAppViewSchema {
-  const nextRoot = removeReferenceFromNode(schema.root, reference);
-  return {
-    version: NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
-    primitiveRegistry: { source: "builtin" },
-    root: nextRoot ?? createDefaultNotebookAppViewSchema().root,
-  };
-}
-
-/** Writes the declarative App View schema into notebook metadata. */
-export function withNotebookAppViewSchema(
+/** Checks whether the selected cell or output is included in App View. */
+export function isNotebookAppViewReferenceInNotebook(
   notebook: NotebookType,
-  schema: NotebookAppViewSchema,
+  reference: NotebookAppViewReference,
+): boolean {
+  const cell = notebook.cells[reference.cellIndex];
+  if (!cell) {
+    return false;
+  }
+
+  return reference.kind === "markdown"
+    ? isNotebookCellInAppView(cell)
+    : isNotebookOutputInAppView(cell, reference.outputIndex);
+}
+
+function withoutUndefinedRecordEntries(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entry]) => entry !== undefined),
+  );
+}
+
+function isEmptyRecord(value: Record<string, unknown>): boolean {
+  return Object.keys(value).length === 0;
+}
+
+function updateNotebookCellAppMetadata(
+  notebook: NotebookType,
+  cellIndex: number,
+  updater: (app: Record<string, unknown>) => Record<string, unknown>,
 ): NotebookType {
-  const metadata = notebook.metadata ?? {};
-  const orion = isRecord(metadata.orion) ? metadata.orion : {};
-  const appView = isRecord(orion.appView) ? orion.appView : {};
+  const cell = notebook.cells[cellIndex];
+  if (!cell) {
+    return notebook;
+  }
+
+  const metadata = isRecord(cell.metadata) ? { ...cell.metadata } : {};
+  const orion = isRecord(metadata.orion) ? { ...metadata.orion } : {};
+  const app = isRecord(orion.app) ? { ...orion.app } : {};
+  const nextApp = withoutUndefinedRecordEntries(updater(app));
+
+  if (isEmptyRecord(nextApp)) {
+    delete orion.app;
+  } else {
+    orion.app = nextApp;
+  }
+
+  if (isEmptyRecord(orion)) {
+    delete metadata.orion;
+  } else {
+    metadata.orion = orion;
+  }
+
+  const cells = notebook.cells.slice();
+  cells[cellIndex] = {
+    ...cell,
+    metadata,
+  };
 
   return {
     ...notebook,
-    metadata: {
-      ...metadata,
-      orion: {
-        ...orion,
-        appView: {
-          ...appView,
-          schema,
-        },
-      },
-    },
+    cells,
   };
 }
 
-/** Adds a cell/output reference to notebook-level App View schema metadata. */
+/** Adds a cell or output to App View cell-level metadata. */
 export function addNotebookAppViewReference(
   notebook: NotebookType,
   reference: NotebookAppViewReference,
 ): NotebookType {
-  const schema = getEditableAppViewSchema(notebook.metadata);
-  if (!schema) {
-    return notebook;
-  }
+  return updateNotebookCellAppMetadata(notebook, reference.cellIndex, (app) => {
+    if (reference.kind === "markdown") {
+      return { ...app, enabled: true };
+    }
 
-  return withNotebookAppViewSchema(
-    notebook,
-    addNotebookAppViewReferenceToSchema(schema, reference),
-  );
+    const outputs = isRecord(app.outputs) ? { ...app.outputs } : {};
+    const outputKey = String(reference.outputIndex);
+    const outputMetadata = isRecord(outputs[outputKey])
+      ? { ...outputs[outputKey] }
+      : {};
+
+    return {
+      ...app,
+      outputs: {
+        ...outputs,
+        [outputKey]: {
+          ...outputMetadata,
+          enabled: true,
+        },
+      },
+    };
+  });
 }
 
-/** Removes a cell/output reference from notebook-level App View schema metadata. */
+/** Removes a cell or output from App View cell-level metadata. */
 export function removeNotebookAppViewReference(
   notebook: NotebookType,
   reference: NotebookAppViewReference,
 ): NotebookType {
-  const result = parseNotebookAppViewSchema(notebook.metadata);
-  if (result.status !== "valid") {
-    return notebook;
-  }
+  return updateNotebookCellAppMetadata(notebook, reference.cellIndex, (app) => {
+    if (reference.kind === "markdown") {
+      const nextApp = { ...app };
+      delete nextApp.enabled;
+      return nextApp;
+    }
 
-  return withNotebookAppViewSchema(
-    notebook,
-    removeNotebookAppViewReferenceFromSchema(result.schema, reference),
-  );
+    const outputs = isRecord(app.outputs) ? { ...app.outputs } : {};
+    delete outputs[String(reference.outputIndex)];
+    const nextApp = { ...app };
+
+    if (isEmptyRecord(outputs)) {
+      delete nextApp.outputs;
+    } else {
+      nextApp.outputs = outputs;
+    }
+
+    return nextApp;
+  });
 }
 
 /** Parses an Orion UI MIME payload into the shared primitive tree shape. */

@@ -1,15 +1,23 @@
 "use client";
 
 import React, { useMemo } from "react";
-import { AlertTriangle, LayoutTemplate } from "lucide-react";
+import { LayoutTemplate } from "lucide-react";
 
-import { NotebookAppSchemaView } from "@/components/notebook/notebook-app-schema-view";
+import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
+import { OutputRenderer } from "@/components/notebook/output-renderer";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { parseNotebookAppViewSchema } from "@/lib/notebook/app-view";
+import {
+  isNotebookCellInAppView,
+  isNotebookOutputInAppView,
+} from "@/lib/notebook/app-view";
 import { cn } from "@/lib/utils";
-import { type NotebookType } from "@/lib/types";
+import {
+  CellType,
+  type NotebookCellType,
+  type NotebookOutputType,
+  type NotebookType,
+} from "@/lib/types";
 
 interface NotebookAppViewProps {
   notebook: NotebookType;
@@ -22,51 +30,56 @@ interface NotebookAppViewProps {
   onOrionUiAction?: (action: unknown) => void;
 }
 
-function AppViewSchemaError({
-  errors,
-  onNotebookViewRequest,
-}: {
-  errors: string[];
-  onNotebookViewRequest?: () => void;
-}): React.JSX.Element {
-  return (
-    <div
-      className="flex min-h-[60vh] items-center justify-center p-6"
-      data-notebook-export-root="app"
-    >
-      <Card className="max-w-xl p-5">
-        <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-destructive/10 text-destructive">
-            <AlertTriangle className="h-4 w-4" />
-          </div>
-          <div className="min-w-0">
-            <h3 className="text-sm font-medium text-foreground">
-              App View schema could not be rendered
-            </h3>
-            <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-              {errors.map((error, index) => (
-                <li key={`${error}-${index}`}>{error}</li>
-              ))}
-            </ul>
-            {onNotebookViewRequest ? (
-              <Button
-                type="button"
-                variant="link"
-                className="mt-4 h-auto p-0 text-sm"
-                onClick={onNotebookViewRequest}
-              >
-                Back to Notebook View
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      </Card>
-    </div>
-  );
+type NotebookAppViewItem =
+  | {
+      kind: "markdown";
+      cell: NotebookCellType;
+      cellIndex: number;
+    }
+  | {
+      kind: "output";
+      output: NotebookOutputType;
+      cellIndex: number;
+      outputIndex: number;
+    };
+
+/** Extracts notebook cell source as a single markdown string. */
+function sourceToString(source: string[] | undefined): string {
+  return Array.isArray(source) ? source.join("") : "";
+}
+
+/** Collects App View items in notebook source order. */
+function getNotebookAppViewItems(
+  notebook: NotebookType,
+): NotebookAppViewItem[] {
+  return notebook.cells.flatMap<NotebookAppViewItem>((cell, cellIndex) => {
+    if (cell.cell_type === CellType.MARKDOWN) {
+      return isNotebookCellInAppView(cell)
+        ? [{ kind: "markdown" as const, cell, cellIndex }]
+        : [];
+    }
+
+    if (cell.cell_type !== CellType.CODE || !cell.outputs?.length) {
+      return [];
+    }
+
+    return cell.outputs.flatMap((output, outputIndex) =>
+      isNotebookOutputInAppView(cell, outputIndex)
+        ? [
+            {
+              kind: "output" as const,
+              output,
+              cellIndex,
+              outputIndex,
+            },
+          ]
+        : [],
+    );
+  });
 }
 
 /**
- * Renders the declarative notebook App View schema.
+ * Renders notebook cells and outputs explicitly marked for App View.
  */
 export function NotebookAppView({
   notebook,
@@ -74,28 +87,46 @@ export function NotebookAppView({
   onOrionUiStateChange,
   onOrionUiAction,
 }: NotebookAppViewProps): React.JSX.Element {
-  const schemaResult = useMemo(
-    () => parseNotebookAppViewSchema(notebook.metadata),
-    [notebook.metadata],
+  const appViewItems = useMemo(
+    () => getNotebookAppViewItems(notebook),
+    [notebook],
   );
 
-  if (schemaResult.status === "valid") {
+  if (appViewItems.length > 0) {
     return (
-      <NotebookAppSchemaView
-        notebook={notebook}
-        schema={schemaResult.schema}
-        onOrionUiStateChange={onOrionUiStateChange}
-        onOrionUiAction={onOrionUiAction}
-      />
-    );
-  }
-
-  if (schemaResult.status === "invalid") {
-    return (
-      <AppViewSchemaError
-        errors={schemaResult.errors}
-        onNotebookViewRequest={onNotebookViewRequest}
-      />
+      <div
+        className="orion-app-view min-h-0 flex-1 overflow-y-auto bg-sidebar"
+        data-notebook-export-root="app"
+      >
+        <main className="mx-auto flex min-h-full w-full max-w-7xl flex-col gap-6 p-4">
+          {appViewItems.map((item) =>
+            item.kind === "markdown" ? (
+              <div
+                key={`markdown-${item.cellIndex}`}
+                className="jp-Cell jp-MarkdownCell"
+              >
+                <MarkdownRenderer source={sourceToString(item.cell.source)} />
+              </div>
+            ) : (
+              <div
+                key={`output-${item.cellIndex}-${item.outputIndex}`}
+                className="jp-Cell jp-CodeCell"
+              >
+                <OutputRenderer
+                  output={item.output}
+                  notebookMetadata={notebook.metadata}
+                  cellIndex={item.cellIndex}
+                  outputIndex={item.outputIndex}
+                  onOrionUiStateChange={(key, value, outputId) =>
+                    onOrionUiStateChange?.(key, value, outputId)
+                  }
+                  onOrionUiAction={onOrionUiAction}
+                />
+              </div>
+            ),
+          )}
+        </main>
+      </div>
     );
   }
 

@@ -25,14 +25,18 @@ export function PlotlyHtmlOutputRenderer({
 
   const frame = (
     <iframe
-      className="w-full min-h-[420px] border-0 plotly-html-container"
+      className={
+        actions.isFullScreen
+          ? "w-full min-h-[85vh] border-0 plotly-html-container"
+          : "w-full min-h-[420px] border-0 plotly-html-container"
+      }
       sandbox="allow-scripts allow-same-origin"
       srcDoc={toJoinedString(value)}
       title="Plotly HTML output"
     />
   );
 
-  if (!canShowContextMenu) {
+  if (!canShowContextMenu || actions.isFullScreen) {
     return frame;
   }
 
@@ -45,6 +49,7 @@ export function PlotlyHtmlOutputRenderer({
       onHideOutput={onHideOutput!}
       onToggleAppView={onToggleOutputAppView}
       isInAppView={!!isInAppView}
+      onOpenFullScreen={actions.onOpenFullScreen}
       presentationMenu={actions.presentationMenu ?? undefined}
     >
       {frame}

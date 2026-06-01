@@ -106,8 +106,8 @@ import {
 import type { MimeClipboardPayload } from "@/lib/notebook/mime-registry";
 import { getDefaultMimeRegistry } from "@/lib/notebook/mime-registry";
 import {
-  getNotebookCellId,
-  isNotebookAppViewReferenceInMetadata,
+  isNotebookCellInAppView,
+  isNotebookOutputInAppView,
 } from "@/lib/notebook/app-view";
 import { getRelativeTime } from "@/lib/utils";
 
@@ -1230,25 +1230,15 @@ function NotebookCellComponent({
 
   const hasCodeOutputs =
     cell.cell_type === CellType.CODE && !!cell.outputs?.length;
-  const appViewCellId = getNotebookCellId(cell);
   const allCodeOutputsInAppView =
     hasCodeOutputs &&
-    !!appViewCellId &&
     cell.outputs!.every((_, outputIndex) =>
-      isNotebookAppViewReferenceInMetadata(notebookMetadata, {
-        kind: "output",
-        cellId: appViewCellId,
-        outputIndex,
-      }),
+      isNotebookOutputInAppView(cell, outputIndex),
     );
   const isInAppView =
     cell.cell_type === CellType.CODE
       ? allCodeOutputsInAppView
-      : !!appViewCellId &&
-        isNotebookAppViewReferenceInMetadata(notebookMetadata, {
-          kind: "markdown",
-          cellId: appViewCellId,
-        });
+      : isNotebookCellInAppView(cell);
 
   // Action button definitions (App View control is omitted for code cells with no outputs)
   const actionButtons = useMemo<ActionButtonDefinition[]>(() => {
@@ -2485,15 +2475,7 @@ function NotebookCellComponent({
                                   onOrionUiStateChange={onOrionUiStateChange}
                                   onOrionUiAction={onOrionUiAction}
                                   isInAppView={
-                                    !!appViewCellId &&
-                                    isNotebookAppViewReferenceInMetadata(
-                                      notebookMetadata,
-                                      {
-                                        kind: "output",
-                                        cellId: appViewCellId,
-                                        outputIndex: idx,
-                                      },
-                                    )
+                                    isNotebookOutputInAppView(cell, idx)
                                   }
                                   isCollapsed={isOutputCollapsedAtIndex(idx)}
                                   onToggleCollapse={() =>
