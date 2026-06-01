@@ -20,6 +20,14 @@ npm run dev
 
 The dev server runs on port 3001 by default. For a production-like local run, use `npm run build` and `npm run start` instead (see [README](./README.md#quick-start)).
 
+To develop notebook execution with the same Jupyter bootstrap as the Orion CLI (managed venv, handoff file, auto-connect in the UI):
+
+```bash
+npm run dev:notebook
+```
+
+Useful flags: `--here` (Jupyter root = current directory), `--pick-python` (interactive Python selection). Setup prompts are auto-approved by default; set `ORION_DEV_YES=0` to require interactive consent.
+
 Configure model credentials inside the app under **Settings → Providers**.
 
 ## CLI Development

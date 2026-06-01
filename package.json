@@ -19,6 +19,7 @@
   },
   "scripts": {
     "dev": "next dev -p 3001 --turbopack",
+    "dev:notebook": "tsx scripts/dev-with-jupyter.ts",
     "build": "next build",
     "start": "next start -p 3001",
     "lint": "next lint",
