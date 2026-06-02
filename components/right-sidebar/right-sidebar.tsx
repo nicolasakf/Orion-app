@@ -31,6 +31,11 @@ import {
   type ChatReferenceType,
   type ResolvedChatReference,
 } from "@/lib/chat/chat-references";
+import {
+  getInsertChatSkillDetail,
+  INSERT_CHAT_SKILL_EVENT,
+  insertSkillIntoComposerInput,
+} from "@/lib/chat/chat-composer-events";
 import { compactConversation } from "@/lib/agent/context-manager";
 import { buildWirePayload } from "@/lib/agent/context-optimizer";
 import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
@@ -2048,6 +2053,33 @@ export function RightSidebar({
     () => detectActiveSlashCommand(input, [...subagentSlashCommands, ...skillSlashCommands]),
     [input, subagentSlashCommands, skillSlashCommands]
   );
+
+  useEffect(() => {
+    const handleInsertChatSkill = (event: Event) => {
+      if (isInputLocked) return;
+
+      const detail = getInsertChatSkillDetail(event);
+      if (!detail) return;
+
+      const skillAvailable = (assistant?.availableSkills ?? []).some(
+        (skill) => skill.name === detail.skillName,
+      );
+      if (!skillAvailable) return;
+
+      setInput((current) =>
+        insertSkillIntoComposerInput(current, detail.skillName, detail.message),
+      );
+      const focusComposer = () => textareaRef.current?.focus();
+      focusComposer();
+      window.setTimeout(focusComposer, 0);
+      window.setTimeout(focusComposer, 120);
+    };
+
+    window.addEventListener(INSERT_CHAT_SKILL_EVENT, handleInsertChatSkill);
+    return () => {
+      window.removeEventListener(INSERT_CHAT_SKILL_EVENT, handleInsertChatSkill);
+    };
+  }, [assistant?.availableSkills, isInputLocked, textareaRef]);
 
   /** Clears queued messages when switching chats. */
   useEffect(() => {

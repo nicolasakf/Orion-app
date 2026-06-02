@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useMemo } from "react";
-import { LayoutTemplate } from "lucide-react";
+import { LayoutTemplate, Sparkles } from "lucide-react";
 
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
@@ -11,6 +11,7 @@ import {
   isNotebookCellInAppView,
   isNotebookOutputInAppView,
 } from "@/lib/notebook/app-view";
+import { dispatchInsertChatSkill } from "@/lib/chat/chat-composer-events";
 import { cn } from "@/lib/utils";
 import {
   CellType,
@@ -32,16 +33,16 @@ interface NotebookAppViewProps {
 
 type NotebookAppViewItem =
   | {
-      kind: "markdown";
-      cell: NotebookCellType;
-      cellIndex: number;
-    }
+    kind: "markdown";
+    cell: NotebookCellType;
+    cellIndex: number;
+  }
   | {
-      kind: "output";
-      output: NotebookOutputType;
-      cellIndex: number;
-      outputIndex: number;
-    };
+    kind: "output";
+    output: NotebookOutputType;
+    cellIndex: number;
+    outputIndex: number;
+  };
 
 /** Extracts notebook cell source as a single markdown string. */
 function sourceToString(source: string[] | undefined): string {
@@ -66,13 +67,13 @@ function getNotebookAppViewItems(
     return cell.outputs.flatMap((output, outputIndex) =>
       isNotebookOutputInAppView(cell, outputIndex)
         ? [
-            {
-              kind: "output" as const,
-              output,
-              cellIndex,
-              outputIndex,
-            },
-          ]
+          {
+            kind: "output" as const,
+            output,
+            cellIndex,
+            outputIndex,
+          },
+        ]
         : [],
     );
   });
@@ -140,10 +141,28 @@ export function NotebookAppView({
           <LayoutTemplate className="h-5 w-5" />
         </div>
         <h3 className="text-sm font-medium text-foreground mt-2">
-          No cells in App View
+          No cells in App View yet
         </h3>
-        <p className="mt-2 text-sm text-muted-foreground">
-          From Notebook view, right-click a cell or output and choose
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-4"
+          onClick={() => dispatchInsertChatSkill("create-app")}
+        >
+          <Sparkles className="mr-2 h-4 w-4" />
+          Use Create App skill
+        </Button>
+        <div
+          className="my-4 flex items-center gap-3 text-xs uppercase tracking-wide text-muted-foreground"
+          aria-hidden
+        >
+          <div className="h-px flex-1 bg-border" />
+          <span>Or</span>
+          <div className="h-px flex-1 bg-border" />
+        </div>
+        <p className="text-sm text-muted-foreground">
+          In Notebook view, right-click a cell or output, then choose
         </p>
         <div
           className={cn(
@@ -166,7 +185,7 @@ export function NotebookAppView({
           <Button
             type="button"
             variant="link"
-            className="mt-2 h-auto p-0 text-sm"
+            className="mt-3 h-auto p-0 text-sm"
             onClick={onNotebookViewRequest}
           >
             Back to Notebook View

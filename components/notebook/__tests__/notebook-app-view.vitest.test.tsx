@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NotebookAppView } from "@/components/notebook/notebook-app-view";
+import { INSERT_CHAT_SKILL_EVENT } from "@/lib/chat/chat-composer-events";
 import { CellType, OutputType, type NotebookType } from "@/lib/types";
 
 const outputRendererMock = vi.hoisted(() => vi.fn());
@@ -113,7 +114,34 @@ describe("NotebookAppView", () => {
       />,
     );
 
-    expect(screen.getByText("No cells in App View")).toBeInTheDocument();
+    expect(screen.getByText("No cells in App View yet")).toBeInTheDocument();
+  });
+
+  it("offers the create-app skill shortcut in the empty state", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+
+    render(
+      <NotebookAppView
+        notebook={{
+          ...makeNotebook(),
+          cells: makeNotebook().cells.map((cell) => ({
+            ...cell,
+            metadata: { orion: { id: cell.metadata?.orion?.id } },
+          })),
+        }}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Use Create App skill" }),
+    );
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: INSERT_CHAT_SKILL_EVENT,
+        detail: { skillName: "create-app" },
+      }),
+    );
   });
 
   it("ignores notebook-level appView schema metadata", () => {
@@ -148,7 +176,7 @@ describe("NotebookAppView", () => {
       />,
     );
 
-    expect(screen.getByText("No cells in App View")).toBeInTheDocument();
+    expect(screen.getByText("No cells in App View yet")).toBeInTheDocument();
     expect(screen.queryByText("# Intro")).not.toBeInTheDocument();
   });
 

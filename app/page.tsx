@@ -110,6 +110,7 @@ import type {
   OpenDocumentSaveResult,
   OpenDocumentSnapshotProvider,
 } from "@/lib/agent/open-document-snapshots";
+import { OPEN_CHAT_SIDEBAR_EVENT } from "@/lib/chat/chat-composer-events";
 
 type ActiveFile = {
   name: string;
@@ -2188,6 +2189,22 @@ export default function Page() {
     setRightSidebarCollapsed(false);
     persistPanelVisibilityState({ rightCollapsed: false });
   }, [persistPanelVisibilityState]);
+
+  /** Expands the chat sidebar when another surface requests composer focus. */
+  useEffect(() => {
+    const handleOpenChatSidebar = () => {
+      if (!rightSidebarCollapsed) {
+        return;
+      }
+      handleRightExpand();
+      rightPanelRef.current?.expand();
+    };
+
+    window.addEventListener(OPEN_CHAT_SIDEBAR_EVENT, handleOpenChatSidebar);
+    return () => {
+      window.removeEventListener(OPEN_CHAT_SIDEBAR_EVENT, handleOpenChatSidebar);
+    };
+  }, [handleRightExpand, rightSidebarCollapsed]);
 
   const handleBottomCollapse = React.useCallback(() => {
     setBottomSidebarCollapsed(true);
