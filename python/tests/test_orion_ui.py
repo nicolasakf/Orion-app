@@ -1,7 +1,13 @@
 import unittest
+from types import ModuleType
+from unittest.mock import patch
 
 import orion_ui as ui
 from orion_ui import _runtime
+
+
+class PlotlyTemplateRegistry(dict):
+    """Dict-like stand-in for Plotly's template registry."""
 
 
 class OrionUiTests(unittest.TestCase):
@@ -128,6 +134,35 @@ class OrionUiTests(unittest.TestCase):
     def test_class_name_must_be_a_string(self):
         with self.assertRaises(TypeError):
             ui.card(class_name=123)
+
+    def test_plotly_theme_styles_table_traces_like_chat_tables(self):
+        plotly_module = ModuleType("plotly")
+        plotly_io_module = ModuleType("plotly.io")
+        plotly_io_module.templates = PlotlyTemplateRegistry()
+        plotly_module.io = plotly_io_module
+
+        with patch.dict(
+            "sys.modules",
+            {"plotly": plotly_module, "plotly.io": plotly_io_module},
+        ):
+            template = ui.theme.plotly(name="orion-test", set_default=True)
+
+        table_trace = template["data"]["table"][0]
+        header = table_trace["header"]
+        cells = table_trace["cells"]
+
+        self.assertIs(plotly_io_module.templates["orion-test"], template)
+        self.assertEqual(plotly_io_module.templates.default, "orion-test")
+        self.assertEqual(header["fill"]["color"], "#e4e4e7")
+        self.assertEqual(cells["fill"]["color"], "#f4f4f5")
+        self.assertEqual(header["line"], {"color": "#e4e4e7", "width": 1})
+        self.assertEqual(cells["line"], {"color": "#e4e4e7", "width": 1})
+        self.assertEqual(header["align"], "left")
+        self.assertEqual(cells["align"], "left")
+        self.assertEqual(header["height"], 28)
+        self.assertEqual(cells["height"], 28)
+        self.assertEqual(header["font"]["weight"], 600)
+        self.assertEqual(cells["font"]["size"], 12)
 
 
 if __name__ == "__main__":

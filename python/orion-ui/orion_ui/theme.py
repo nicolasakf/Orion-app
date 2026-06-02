@@ -34,13 +34,19 @@ def plotly(name: str = "orion", set_default: bool = True) -> Dict[str, Any]:
             "ui.theme.plotly() requires Plotly. Install plotly to use this helper."
         ) from exc
 
+    font_family = "Saira, ui-sans-serif, system-ui, sans-serif"
+    foreground = "#18181b"
+    border = "#e4e4e7"
+    muted = "#e4e4e7"
+    sidebar = "#f4f4f5"
+
     template: Dict[str, Any] = {
         "layout": {
             "paper_bgcolor": "rgba(0,0,0,0)",
             "plot_bgcolor": "rgba(0,0,0,0)",
             "font": {
-                "family": "Saira, ui-sans-serif, system-ui, sans-serif",
-                "color": "#18181b",
+                "family": font_family,
+                "color": foreground,
             },
             "colorway": [
                 "#2563eb",
@@ -76,14 +82,43 @@ def plotly(name: str = "orion", set_default: bool = True) -> Dict[str, Any]:
             "barcornerradius": "10%",
             "hoverlabel": {
                 "bgcolor": "hsl(0, 0%, 99%)",
-                "bordercolor": "hsl(0, 0%, 89.8%)",
+                "bordercolor": border,
                 "font": {
-                    "family": "Saira, ui-sans-serif, system-ui, sans-serif",
+                    "family": font_family,
                     "size": 13,
                     "color": "hsl(0, 0%, 3.9%)",
                 },
             },
-        }
+        },
+        "data": {
+            "table": [
+                {
+                    "header": {
+                        "align": "left",
+                        "fill": {"color": muted},
+                        "font": {
+                            "family": font_family,
+                            "size": 12,
+                            "color": foreground,
+                            "weight": 600,
+                        },
+                        "height": 28,
+                        "line": {"color": border, "width": 1},
+                    },
+                    "cells": {
+                        "align": "left",
+                        "fill": {"color": sidebar},
+                        "font": {
+                            "family": font_family,
+                            "size": 12,
+                            "color": foreground,
+                        },
+                        "height": 28,
+                        "line": {"color": border, "width": 1},
+                    },
+                }
+            ]
+        },
     }
 
     pio.templates[name] = template
