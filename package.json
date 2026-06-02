@@ -1,6 +1,6 @@
 {
   "name": "orion-notebook",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Local Orion CLI launcher for notebooks and Jupyter",
   "license": "Apache-2.0",
   "private": false,

@@ -4,6 +4,27 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.4] - 2026-06-02
+
+### Added
+
+- Chat: edit checkpoints with undo/redo on user messages
+- Chat: drag-drop and paste image attachments in the composer
+- Chat: grouped subagent activity rows with tool timings
+- Chat: cross-surface composer events; App View empty state launches the create-app skill
+- CLI: `dev:notebook` script with shared Jupyter bootstrap
+- Notebook: JupyterLab class hooks; reject metadata CSS
+- Notebook: App View driven from Orion UI output MIME only
+- Orion UI: Plotly table traces styled like chat tables
+
+### Fixed
+
+- UI: align folder icons with file icons in the file tree
+- UI: bind recent files shortcut to Cmd/Ctrl+P
+- Settings: ignore workspace overrides at the Jupyter server root
+
+[0.6.4]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.6.4
+
 ## [0.6.3] - 2026-05-27
 
 ### Added
