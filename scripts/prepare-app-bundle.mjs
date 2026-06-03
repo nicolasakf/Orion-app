@@ -36,6 +36,22 @@ async function main() {
   await copyRequiredDirectory(publicDir, join(bundleDir, "public"), "Public assets");
   await rm(join(bundleDir, "logs"), { recursive: true, force: true });
 
+  const ensureNativeModulesScript = join(
+    root,
+    "dist",
+    "cli",
+    "cli",
+    "ensure-native-modules.js"
+  );
+  try {
+    await stat(ensureNativeModulesScript);
+    await cp(ensureNativeModulesScript, join(bundleDir, "ensure-native-modules.js"));
+  } catch {
+    console.warn(
+      "Skipping ensure-native-modules.js copy; run \"npm run build:cli\" before preparing the app bundle."
+    );
+  }
+
   console.log(`Orion app bundle prepared at ${bundleDir}`);
 }
 

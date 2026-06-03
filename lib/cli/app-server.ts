@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "child_process";
 import { existsSync } from "fs";
 import { join, resolve } from "path";
 
+import { ensureBundledNativeModules } from "./ensure-native-modules";
 import { findFreePort } from "./jupyter";
 
 export interface StartedOrionApp {
@@ -70,6 +71,8 @@ export async function startOrionAppServer(
       `Orion app bundle was not found at ${serverPath}. Run the Orion packaging step before publishing the CLI.`
     );
   }
+
+  ensureBundledNativeModules(appDirectory);
 
   let port = requestedPort;
   if (await isServerReady(`http://127.0.0.1:${port}`)) {

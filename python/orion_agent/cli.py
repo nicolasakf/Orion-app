@@ -345,8 +345,19 @@ def write_handoff(
     )
 
 
+def ensure_native_modules(node: str, app: Path) -> None:
+    """Rebuild bundled native modules when the app bundle was built on another OS."""
+    script = app / "ensure-native-modules.js"
+    if not script.exists():
+        return
+
+    print("Checking platform-native dependencies...")
+    subprocess.run([node, str(script)], cwd=app, check=True)
+
+
 def start_orion_app(node: str, app: Path) -> tuple[subprocess.Popen[bytes], str]:
     """Start the local Orion Next server."""
+    ensure_native_modules(node, app)
     port = int(os.environ.get("ORION_PORT", "3001"))
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         if sock.connect_ex(("127.0.0.1", port)) == 0:

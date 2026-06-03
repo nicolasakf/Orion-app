@@ -10,6 +10,7 @@
   "files": [
     "dist/cli",
     "dist/orion-app",
+    "scripts/postinstall.mjs",
     "README.md",
     "LICENSE",
     "NOTICE"
@@ -30,6 +31,7 @@
     "prepare:app-bundle": "node scripts/prepare-app-bundle.mjs",
     "archive:app-bundle": "node scripts/archive-app-bundle.mjs",
     "prepack": "npm run build && npm run build:cli && npm run prepare:app-bundle && npm run archive:app-bundle",
+    "postinstall": "node scripts/postinstall.mjs",
     "package:npm": "npm pack --dry-run"
   },
   "dependencies": {
