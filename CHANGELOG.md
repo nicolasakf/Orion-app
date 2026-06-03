@@ -4,6 +4,14 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.5] - 2026-06-03
+
+### Fixed
+
+- CLI: rebuild bundled `better-sqlite3` when the native module fails to load (app server start, Python launcher, and npm postinstall) so cross-platform app bundles work after install
+
+[0.6.5]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.6.5
+
 ## [0.6.4] - 2026-06-02
 
 ### Added
