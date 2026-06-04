@@ -1,5 +1,7 @@
 // @vitest-environment node
 
+import { mkdirSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 
@@ -29,6 +31,21 @@ describe("ensure-native-modules", () => {
   });
 
   it("falls back to npm on PATH when sibling npm is absent", () => {
-    expect(resolveNpmExecutable("/usr/local/bin/node")).toBe("npm");
+    expect(resolveNpmExecutable("/tmp/orion-vitest-no-sibling-npm/node")).toBe(
+      "npm"
+    );
+  });
+
+  it("prefers npm next to the Node binary when present", () => {
+    const dir = join(tmpdir(), `orion-npm-resolve-${process.pid}`);
+    mkdirSync(dir, { recursive: true });
+    const nodePath = join(dir, "node");
+    const npmPath = join(dir, process.platform === "win32" ? "npm.cmd" : "npm");
+    writeFileSync(npmPath, "");
+    try {
+      expect(resolveNpmExecutable(nodePath)).toBe(npmPath);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
