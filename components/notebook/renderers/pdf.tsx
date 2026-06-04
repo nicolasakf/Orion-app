@@ -17,7 +17,7 @@ export function PdfOutputRenderer({
     <iframe
       className={
         actions.isFullScreen
-          ? "w-full min-h-[85vh] rounded-md border"
+          ? "w-[95vw] max-w-[95vw] min-h-[85vh] rounded-md border"
           : "w-full min-h-[480px] rounded-md border"
       }
       src={`data:application/pdf;base64,${data}`}

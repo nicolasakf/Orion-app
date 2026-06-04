@@ -213,6 +213,28 @@ html {
   margin-bottom: 1em;
 }
 
+/*
+ * Full-screen output dialog: grow to the table's natural width (capped by the
+ * dialog), instead of shrinking the table to the inline output column width.
+ */
+.orion-rendered-html--fullscreen {
+  width: max-content;
+  max-width: 98vw;
+  overflow: visible;
+}
+
+.orion-rendered-html--fullscreen table {
+  max-width: none;
+  width: max-content;
+}
+
+.orion-rendered-html--fullscreen>div {
+  width: max-content;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+}
+
 .orion-rendered-html thead {
   border-bottom: 1px solid hsl(var(--border));
   vertical-align: bottom;

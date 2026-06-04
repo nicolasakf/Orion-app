@@ -2,8 +2,16 @@
 
 import type { JSX } from "react";
 import { extractTableFromHTML, isEmptyDataframeHtmlTable } from "@/lib/notebook/table-extractor";
+import { cn } from "@/lib/utils";
 import type { NotebookMimeRendererProps } from "./types";
 import { toJoinedString } from "./types";
+
+function htmlOutputShellClassName(isFullScreen?: boolean): string {
+  return cn(
+    "jp-RenderedHTMLCommon orion-rendered-html",
+    isFullScreen ? "orion-rendered-html--fullscreen" : "overflow-x-auto",
+  );
+}
 
 /**
  * Render HTML outputs, preserving table HTML and handling empty DataFrame shells.
@@ -13,6 +21,7 @@ export function HtmlOutputRenderer({
   value,
   sanitize,
   ansiConverter,
+  actions,
 }: NotebookMimeRendererProps): JSX.Element {
   const html = toJoinedString(value);
   const tableData = extractTableFromHTML(html);
@@ -20,7 +29,7 @@ export function HtmlOutputRenderer({
   if (tableData.headers.length > 0 && tableData.rows.length > 0) {
     return (
       <div
-        className="jp-RenderedHTMLCommon orion-rendered-html overflow-x-auto"
+        className={htmlOutputShellClassName(actions.isFullScreen)}
         dangerouslySetInnerHTML={{ __html: sanitize(html) }}
       />
     );
@@ -39,7 +48,7 @@ export function HtmlOutputRenderer({
 
   return (
     <div
-      className="jp-RenderedHTMLCommon orion-rendered-html overflow-x-auto"
+      className={htmlOutputShellClassName(actions.isFullScreen)}
       dangerouslySetInnerHTML={{ __html: sanitize(html) }}
     />
   );

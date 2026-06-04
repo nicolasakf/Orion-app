@@ -460,6 +460,28 @@ function resolvePlotHeight(layoutHeight: unknown): number {
 }
 
 /**
+ * Resolve a numeric plot width from arbitrary layout.width values.
+ */
+function resolvePlotWidth(layoutWidth: unknown): number | null {
+  if (
+    typeof layoutWidth === "number" &&
+    Number.isFinite(layoutWidth) &&
+    layoutWidth > 0
+  ) {
+    return layoutWidth;
+  }
+
+  if (typeof layoutWidth === "string") {
+    const parsedWidth = Number(layoutWidth);
+    if (Number.isFinite(parsedWidth) && parsedWidth > 0) {
+      return parsedWidth;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Render a Plotly JSON MIME bundle using imperative plotly.js lifecycle hooks.
  */
 export function PlotlyJsonOutputRenderer({
@@ -489,19 +511,29 @@ export function PlotlyJsonOutputRenderer({
   const hasRenderedRef = useRef(false);
   const figure = useMemo(() => parsePlotlyFigure(value), [value]);
   const [renderError, setRenderError] = useState<string | null>(null);
+  const figureLayout = figure.layout as Record<string, unknown> | undefined;
   const frameHeight = useMemo(() => {
     if (isFullScreen) {
       return Math.max(
-        resolvePlotHeight(
-          (figure.layout as Record<string, unknown> | undefined)?.height,
-        ),
+        resolvePlotHeight(figureLayout?.height),
         720,
       );
     }
-    return resolvePlotHeight(
-      (figure.layout as Record<string, unknown> | undefined)?.height,
-    );
-  }, [figure.layout, isFullScreen]);
+    return resolvePlotHeight(figureLayout?.height);
+  }, [figureLayout?.height, isFullScreen]);
+  const frameWidth = useMemo(() => {
+    if (!isFullScreen) {
+      return null;
+    }
+    const resolved = resolvePlotWidth(figureLayout?.width);
+    if (resolved === null) {
+      return null;
+    }
+    if (typeof window === "undefined") {
+      return resolved;
+    }
+    return Math.min(resolved, window.innerWidth * 0.95);
+  }, [figureLayout?.width, isFullScreen]);
 
   /**
    * Execute a guarded resize pass for the current plot node.
@@ -743,8 +775,17 @@ export function PlotlyJsonOutputRenderer({
   const plotHost = (
     <div
       ref={containerRef}
-      className="w-full"
-      style={{ minHeight: `${frameHeight}px` }}
+      className={
+        isFullScreen
+          ? frameWidth !== null
+            ? "w-fit max-w-[95vw]"
+            : "w-[95vw] max-w-[95vw]"
+          : "w-full"
+      }
+      style={{
+        minHeight: `${frameHeight}px`,
+        ...(frameWidth !== null ? { width: frameWidth } : {}),
+      }}
     >
       <div
         ref={plotNodeRef}

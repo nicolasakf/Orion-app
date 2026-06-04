@@ -74,6 +74,7 @@ function formatCell(value: unknown): string {
  */
 export function DataResourceOutputRenderer({
   value,
+  actions,
 }: NotebookMimeRendererProps): JSX.Element {
   const payload = (asRecord(value) ?? {}) as DataResourcePayload;
   const rows = rowsFromPayload(payload);
@@ -81,7 +82,11 @@ export function DataResourceOutputRenderer({
   const title = payload.title ?? payload.name ?? "Data resource";
 
   return (
-    <div className="rounded-md border">
+    <div
+      className={
+        actions.isFullScreen ? "w-max max-w-[98vw] rounded-md border" : "rounded-md border"
+      }
+    >
       <div className="border-b bg-muted/30 p-3">
         <div className="font-medium">{title}</div>
         {payload.description && (
@@ -89,8 +94,18 @@ export function DataResourceOutputRenderer({
         )}
       </div>
       {fields.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
+        <div
+          className={
+            actions.isFullScreen ? "w-max max-w-[98vw] overflow-visible" : "overflow-x-auto"
+          }
+        >
+          <table
+            className={
+              actions.isFullScreen
+                ? "w-max border-collapse text-sm"
+                : "w-full border-collapse text-sm"
+            }
+          >
             <thead>
               <tr className="border-b bg-muted/20">
                 {fields.map((field, index) => (

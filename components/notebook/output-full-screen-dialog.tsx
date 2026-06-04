@@ -21,11 +21,9 @@ export function OutputFullScreenDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         hideCloseButton
-        className="max-w-[98vw] max-h-[98vh] w-full p-4 overflow-auto border-0"
+        className="max-h-[98vh] max-w-[98vw] w-fit overflow-auto border-0 p-2"
       >
-        <div className="w-full min-h-0 max-h-[95vh] overflow-auto">
-          {children}
-        </div>
+        {children}
       </DialogContent>
     </Dialog>
   );

@@ -10,10 +10,15 @@ import { toJoinedString } from "./types";
 export function SvgOutputRenderer({
   value,
   sanitize,
+  actions,
 }: NotebookMimeRendererProps): JSX.Element {
   return (
     <div
-      className="max-w-full overflow-x-auto"
+      className={
+        actions.isFullScreen
+          ? "max-w-[95vw] max-h-[95vh] w-fit overflow-auto"
+          : "max-w-full overflow-x-auto"
+      }
       dangerouslySetInnerHTML={{ __html: sanitize(toJoinedString(value)) }}
     />
   );

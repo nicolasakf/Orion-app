@@ -27,7 +27,7 @@ export function PlotlyHtmlOutputRenderer({
     <iframe
       className={
         actions.isFullScreen
-          ? "w-full min-h-[85vh] border-0 plotly-html-container"
+          ? "w-[95vw] max-w-[95vw] min-h-[85vh] border-0 plotly-html-container"
           : "w-full min-h-[420px] border-0 plotly-html-container"
       }
       sandbox="allow-scripts allow-same-origin"

@@ -601,15 +601,15 @@ function createMarkdownEditPlan(
     },
     link: selectedText
       ? {
-          text: `[${selectedText}](url)`,
-          selectionStartOffset: selectedText.length + 3,
-          selectionEndOffset: selectedText.length + 6,
-        }
+        text: `[${selectedText}](url)`,
+        selectionStartOffset: selectedText.length + 3,
+        selectionEndOffset: selectedText.length + 6,
+      }
       : {
-          text: "[text](url)",
-          selectionStartOffset: 1,
-          selectionEndOffset: 5,
-        },
+        text: "[text](url)",
+        selectionStartOffset: 1,
+        selectionEndOffset: 5,
+      },
     "text-color": {
       text: `<span style="color: #2563eb">${selectedText || "text"}</span>`,
       selectionStartOffset: '<span style="color: '.length,
@@ -971,7 +971,7 @@ function NotebookCellComponent({
   // Create a ref object that exposes getSource and focusSource methods
   const cellRef = useRef({
     getSource: () => localSource,
-    focusSource: () => {},
+    focusSource: () => { },
   });
 
   // Update the ref whenever localSource changes
@@ -1023,10 +1023,10 @@ function NotebookCellComponent({
         const selection = editor.getSelection();
         const hasSelection = Boolean(
           notebookPath &&
-            model &&
-            selection &&
-            !selection.isEmpty() &&
-            model.getValueInRange(selection).trim(),
+          model &&
+          selection &&
+          !selection.isEmpty() &&
+          model.getValueInRange(selection).trim(),
         );
         setSelectionVisible(hasSelection);
       };
@@ -2385,19 +2385,19 @@ function NotebookCellComponent({
                       className={cn(
                         "jp-InputArea-editor border-t border-muted relative dark:bg-[#1E1E1E] bg-[#F7F7F7]", // TODO: Get the background color from the theme dynamically
                         isInputCollapsed &&
-                          contentScrollHeight >
-                            COLLAPSED_CONTENT_HEIGHT_DEFAULT &&
-                          "p-2 h-48 overflow-y-auto shadow-inner",
+                        contentScrollHeight >
+                        COLLAPSED_CONTENT_HEIGHT_DEFAULT &&
+                        "p-2 h-48 overflow-y-auto shadow-inner",
                       )}
                       style={
                         isInputCollapsed &&
-                        contentScrollHeight > COLLAPSED_CONTENT_HEIGHT_DEFAULT
+                          contentScrollHeight > COLLAPSED_CONTENT_HEIGHT_DEFAULT
                           ? {
-                              boxShadow:
-                                theme === "dark"
-                                  ? "inset 0 0 8px rgba(0, 0, 0, 0.6)"
-                                  : "inset 0 0 8px rgba(0, 0, 0, 0.3)",
-                            }
+                            boxShadow:
+                              theme === "dark"
+                                ? "inset 0 0 8px rgba(0, 0, 0, 0.6)"
+                                : "inset 0 0 8px rgba(0, 0, 0, 0.3)",
+                          }
                           : {}
                       }
                     >
@@ -2449,7 +2449,7 @@ function NotebookCellComponent({
                           className={cn(
                             "relative",
                             shouldClampCollapsedOutputViewport &&
-                              "p-2 max-h-48 overflow-y-auto",
+                            "p-2 max-h-48 overflow-y-auto",
                           )}
                         >
                           {cell.outputs.map((output, idx) => (
@@ -2484,7 +2484,7 @@ function NotebookCellComponent({
                                   scrollCollapsedToEnd={
                                     output.output_type === OutputType.ERROR &&
                                     getOutputTextLength(output) >
-                                      TEXT_OUTPUT_AUTO_COLLAPSE_THRESHOLD &&
+                                    TEXT_OUTPUT_AUTO_COLLAPSE_THRESHOLD &&
                                     isOutputCollapsedAtIndex(idx)
                                   }
                                 />
