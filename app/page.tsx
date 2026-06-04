@@ -5,7 +5,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { LeftSidebar } from "@/components/left-sidebar/left-sidebar";
 import { RightSidebar } from "@/components/right-sidebar/right-sidebar";
 import { SettingsMenu } from "@/components/settings-menu";
-import { Separator } from "@/components/ui/separator";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -2580,10 +2579,6 @@ export default function Page() {
                               >
                                 <PanelLeft className="h-4 w-4" />
                               </ToolbarButton>
-                              <Separator
-                                orientation="vertical"
-                                className="bg-toolbar-separator-foreground h-6"
-                              />
                               {/* Recent Files Combobox — shown when a file is open or when there are recents (empty editor) */}
                               {(currentFile.name || recentFiles.length > 0) && (
                                 <Popover
@@ -2886,10 +2881,6 @@ export default function Page() {
                                   </span>
                                 </Button>
                               )}
-                              <Separator
-                                orientation="vertical"
-                                className="h-6 bg-toolbar-separator-foreground"
-                              />
                               <ToolbarButton
                                 onClick={toggleFocusMode}
                                 aria-pressed={isFocusMode}
