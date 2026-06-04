@@ -1,4 +1,3 @@
-import "server-only";
 
 import { mkdir } from "fs/promises";
 import os from "os";

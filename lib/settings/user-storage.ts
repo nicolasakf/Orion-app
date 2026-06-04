@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { createDefaultUserSettingsDocument } from "@/lib/settings/defaults";
+import { migrateUserSettingsDocument } from "@/lib/settings/migrations";
 import type { UserSettingsDocument } from "@/lib/settings/schema";
 import { UserSettingsDocumentSchema } from "@/lib/settings/schema";
 
@@ -167,9 +168,15 @@ export async function loadUserSettingsDocumentFromApi(): Promise<UserSettingsLoa
       throw new Error("Settings API returned an invalid document.");
     }
 
+    const document = migrateUserSettingsDocument(parsed.data.document);
+    const validated = UserSettingsDocumentSchema.safeParse(document);
+    if (!validated.success) {
+      throw new Error("Settings API returned an invalid document.");
+    }
+
     return {
       status: parsed.data.status,
-      document: mergeProviderCredentials(parsed.data.document),
+      document: mergeProviderCredentials(validated.data),
     };
   } catch (error) {
     console.warn("Failed to load user settings from local API:", error);

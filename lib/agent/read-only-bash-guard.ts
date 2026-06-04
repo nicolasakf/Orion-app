@@ -5,7 +5,7 @@
  * commands from running in read-only contexts.
  */
 
-const BLOCKED_COMMAND_PATTERNS: ReadonlyArray<RegExp> = [
+const BLOCKED_COMMAND_PATTERNS_INTERNAL: ReadonlyArray<RegExp> = [
   /\brm\b/,
   /\bmv\b/,
   /\bcp\b/,
@@ -27,10 +27,19 @@ const BLOCKED_COMMAND_PATTERNS: ReadonlyArray<RegExp> = [
   /\bcurl\b.*-[Oo]/, // curl with output flag
 ];
 
+/** RegExp sources for {@link BLOCKED_COMMAND_PATTERNS}; used in user settings defaults. */
+export const BLOCKED_COMMAND_PATTERN_SOURCES: readonly string[] =
+  BLOCKED_COMMAND_PATTERNS_INTERNAL.map((pattern) => pattern.source);
+
+/** Patterns blocked in Ask-mode read-only bash. */
+export const BLOCKED_COMMAND_PATTERNS: ReadonlyArray<RegExp> =
+  BLOCKED_COMMAND_PATTERNS_INTERNAL;
+
 /**
  * Returns a block-reason string if the command matches a destructive pattern,
  * or null if the command is safe to run in a read-only context.
  */
+
 export function isReadOnlyBashBlocked(command: string): string | null {
   for (const pattern of BLOCKED_COMMAND_PATTERNS) {
     if (pattern.test(command)) {

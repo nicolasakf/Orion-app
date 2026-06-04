@@ -22,14 +22,18 @@ const SyntaxHighlighter = dynamic(
   { ssr: false }
 );
 
+import {
+  CHAT_MARKDOWN_TABLE_MAX_HEIGHT_CLASS,
+  CODE_BLOCK_INLINE_MAX_HEIGHT_CLASS,
+} from "@/lib/right-sidebar/code-block-constants";
+
+export {
+  CHAT_MARKDOWN_TABLE_MAX_HEIGHT_CLASS,
+  CODE_BLOCK_INLINE_MAX_HEIGHT_CLASS,
+} from "@/lib/right-sidebar/code-block-constants";
+
 const MAX_HIGHLIGHT_CHARS = 15_000;
 const MAX_INLINE_LINES = 24;
-
-/** Max scroll height for long inlined fenced chat code (beyond {@link MAX_INLINE_LINES} lines). */
-export const CODE_BLOCK_INLINE_MAX_HEIGHT_CLASS = "max-h-40";
-
-/** Markdown chat tables use twice {@link CODE_BLOCK_INLINE_MAX_HEIGHT_CLASS}. */
-export const CHAT_MARKDOWN_TABLE_MAX_HEIGHT_CLASS = "max-h-80";
 
 interface CodeBlockProps {
   /** The code content to display. */

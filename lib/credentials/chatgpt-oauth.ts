@@ -1,4 +1,3 @@
-import "server-only";
 
 /**
  * ChatGPT OAuth helpers for Orion — Device Authorization Flow.

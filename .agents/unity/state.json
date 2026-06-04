@@ -61,7 +61,7 @@
       "rules": {
         "CLAUDE.md": {
           "targetPath": "/Users/nicolasfonteyne/Github_nicolasakf/Orion-app/CLAUDE.md",
-          "hash": "7cc3b406c256bce74abbdbfa4b1ddd6eb0383410b128d1eb7191a0037630e9ca"
+          "hash": "534bf4a70358e757c16f492e3a2023e0b179ba9ce3133a9d56fa1997f29ebedb"
         }
       }
     },
@@ -130,7 +130,7 @@
       "rules": {
         "CLAUDE.md": {
           "targetPath": "/Users/nicolasfonteyne/Github_nicolasakf/Orion-app/AGENTS.md",
-          "hash": "7cc3b406c256bce74abbdbfa4b1ddd6eb0383410b128d1eb7191a0037630e9ca"
+          "hash": "534bf4a70358e757c16f492e3a2023e0b179ba9ce3133a9d56fa1997f29ebedb"
         }
       }
     }

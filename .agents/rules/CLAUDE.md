@@ -19,9 +19,10 @@
 - **Error Handling**: Use try/catch for async operations only where exceptions are expected and can be meaningfully handled
 - **Performance**: Minimize unnecessary renders with memo(), useCallback() and useEffect() dependency arrays
 
-## Server-only modules
+## Shared modules (client and server)
 
-- For modules that are sensitive or must be enforced server-side only (secrets, billing, Stripe, privileged DB access, etc.), add `import "server-only"` at the top of the file so Next.js fails the build if client code imports them.
+- Do not use `import "server-only"` or `"use client"` unless a file truly needs them (e.g. React hooks). Prefer plain `.ts` modules for constants, types, and utilities shared by API routes and the UI.
+- Keep secrets and filesystem access in API routes or `*.server.ts` modules; avoid pulling Node-only libraries (e.g. `jsdom`, `node:dns`) into settings defaults or other shared entry points.
 
 ## Documentation & Type Annotations
 

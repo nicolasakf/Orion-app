@@ -1,5 +1,3 @@
-"use client";
-
 /**
  * DevLoggerClient - Browser-side verbose logger for development mode
  *

@@ -1,5 +1,3 @@
-"use client";
-
 export const WORKSPACE_FILES_CHANGED_EVENT = "workspaceFilesChanged";
 
 export interface WorkspaceFilesChangedDetail {

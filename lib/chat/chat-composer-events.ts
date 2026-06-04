@@ -1,5 +1,3 @@
-"use client";
-
 export const OPEN_CHAT_SIDEBAR_EVENT = "orion:open-chat-sidebar";
 
 export const INSERT_CHAT_SKILL_EVENT = "orion:insert-chat-skill";

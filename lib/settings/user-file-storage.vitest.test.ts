@@ -5,8 +5,6 @@ import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("server-only", () => ({}));
-
 import {
   clearUserSettingsFile,
   loadUserSettingsDocument,
@@ -45,15 +43,22 @@ describe("user file settings storage", () => {
 
     await saveUserSettingsDocument(createDefaultUserSettingsDocument());
 
+    const raw = await readFile(path.join(tempDirectory, "settings.json"), "utf8");
+    expect(JSON.parse(raw)).toEqual({
+      version: 1,
+      settings: {},
+    });
+
     await expect(loadUserSettingsDocumentWithStatus()).resolves.toEqual({
       status: "loaded",
       document: createDefaultUserSettingsDocument(),
     });
   });
 
-  it("saves settings atomically and strips provider credentials", async () => {
+  it("saves settings atomically, strips secrets, and omits default-equal keys", async () => {
     const document = structuredClone(createDefaultUserSettingsDocument());
     document.settings.appearance.theme = "dark";
+    document.settings.agent.context.compactionRetentionTurns = 8;
     document.settings.providers.credentials.openai = {
       type: "api_key",
       apiKey: "sk-test",
@@ -63,9 +68,16 @@ describe("user file settings storage", () => {
     const raw = await readFile(path.join(tempDirectory, "settings.json"), "utf8");
     const persisted = JSON.parse(raw) as typeof saved;
 
-    expect(saved.settings.appearance.theme).toBe("dark");
-    expect(saved.settings.providers.credentials).toEqual({});
-    expect(persisted.settings.providers.credentials).toEqual({});
+    expect(saved.settings).toEqual({
+      appearance: { theme: "dark" },
+      agent: {
+        context: {
+          compactionRetentionTurns: 8,
+        },
+      },
+    });
+    expect(persisted.settings).toEqual(saved.settings);
+    expect(persisted.settings.providers).toBeUndefined();
   });
 
   it("rejects malformed settings JSON", async () => {

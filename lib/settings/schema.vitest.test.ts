@@ -1,8 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_TITLE_GENERATION_MODEL_ID } from "@/lib/settings/defaults";
+import {
+  createDefaultUserSettingsDocument,
+  DEFAULT_SETTINGS,
+  DEFAULT_TITLE_GENERATION_MODEL_ID,
+} from "@/lib/settings/defaults";
+import { mergeSettings } from "@/lib/settings/merge";
 import { parseUserSettingsDocumentFromJson } from "@/lib/settings/migrations";
-import { ToolApprovalModeSchema } from "@/lib/settings/schema";
+import {
+  ToolApprovalModeSchema,
+  UserSettingsDocumentSchema,
+} from "@/lib/settings/schema";
 
 describe("ToolApprovalModeSchema", () => {
   it.each([
@@ -14,6 +22,23 @@ describe("ToolApprovalModeSchema", () => {
     ["Autorun", "auto_run"],
   ])("normalizes %s to %s", (input, expected) => {
     expect(ToolApprovalModeSchema.parse(input)).toBe(expected);
+  });
+});
+
+describe("UserSettingsDocumentSchema", () => {
+  it("parses the built-in default user document", () => {
+    const doc = createDefaultUserSettingsDocument();
+    expect(() => UserSettingsDocumentSchema.parse(doc)).not.toThrow();
+    expect(doc.settings.agent.context.compactionAutoThreshold).toBe(0.92);
+    expect(doc.settings.shell.panelLayout.horizontal).toEqual([15, 50, 20]);
+    expect(doc.settings.notebook.output.chartColors).toHaveLength(10);
+  });
+
+  it("rejects compaction threshold above 1 on a full document", () => {
+    const doc = createDefaultUserSettingsDocument();
+    doc.settings.agent.context.compactionAutoThreshold = 1.5;
+    const result = UserSettingsDocumentSchema.safeParse(doc);
+    expect(result.success).toBe(false);
   });
 });
 
@@ -36,6 +61,9 @@ describe("settings migrations", () => {
     expect(migrated.settings.chat.titleGenerationModelId).toBe(
       DEFAULT_TITLE_GENERATION_MODEL_ID
     );
+    expect(migrated.settings.agent.context.compactionAutoThreshold).toBe(0.92);
+    expect(migrated.settings.agent.toolOutput.textCharBudget).toBe(40_000);
+    expect(migrated.settings.shell.mobileBreakpointPx).toBe(768);
   });
 
   it("migrates chatGenerationModelId to titleGenerationModelId", () => {
@@ -73,5 +101,24 @@ describe("settings migrations", () => {
     expect(
       "chatGenerationModelId" in migrated.settings.chat
     ).toBe(false);
+    expect(migrated.settings.agent.search.maxMatches).toBe(100);
+  });
+});
+
+describe("mergeSettings", () => {
+  it("applies workspace partial overrides while preserving other agent defaults", () => {
+    const merged = mergeSettings(DEFAULT_SETTINGS, DEFAULT_SETTINGS, {
+      agent: {
+        search: {
+          maxMatches: 250,
+        },
+      },
+    });
+
+    expect(merged.agent.search.maxMatches).toBe(250);
+    expect(merged.agent.search.maxLineLength).toBe(
+      DEFAULT_SETTINGS.agent.search.maxLineLength
+    );
+    expect(merged.agent.context.compactionRetentionTurns).toBe(4);
   });
 });

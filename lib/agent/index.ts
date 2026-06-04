@@ -8,9 +8,8 @@
  * - RuntimeContextStore: Caches runtime state and events
  * - AssistantProvider: React context for UI integration
  *
- * Server-only: import `getModelGateway` and related symbols from
- * `@/lib/agent/model-gateway` (not re-exported here — avoids pulling
- * `server-only` into client bundles via this barrel).
+ * Model gateway: import `getModelGateway` from `@/lib/agent/model-gateway`
+ * (not re-exported here to keep this barrel client-safe).
  * - Jupyter Tools: Native notebook manipulation tools (cell ops, file listing, etc.)
  */
 

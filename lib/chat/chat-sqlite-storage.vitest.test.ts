@@ -6,8 +6,6 @@ import path from "path";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("server-only", () => ({}));
-
 import {
   clearChats,
   closeChatDatabase,

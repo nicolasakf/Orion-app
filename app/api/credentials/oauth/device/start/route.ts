@@ -1,4 +1,3 @@
-import "server-only";
 
 import { requestDeviceCode, DEVICE_VERIFICATION_URL } from "@/lib/credentials/chatgpt-oauth";
 

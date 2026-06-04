@@ -30,6 +30,151 @@ export const ToolApprovalModeSchema = z.preprocess((value) => {
 }, z.enum(["always_ask", "auto_run"]));
 export const WordWrapSchema = z.enum(["off", "on", "wordWrapColumn", "bounded"]);
 
+/** Left sidebar tab identifiers. */
+export const SidebarViewIdSchema = z.enum([
+  "files",
+  "search",
+  "toc",
+  "cpu",
+  "vars",
+  "dataSources",
+  "secrets",
+]);
+
+/** Notebook minimap output preview density. */
+export const NotebookMinimapPreviewModeSchema = z.enum(["miniature", "compact"]);
+
+export const AgentContextSettingsSchema = z.object({
+  /** Fraction of context cap at which auto-compaction triggers (0–1). */
+  compactionAutoThreshold: z.number().min(0).max(1),
+  /** User-turn pairs kept verbatim after compaction. */
+  compactionRetentionTurns: z.number().int().min(1),
+  /** User-turn pairs kept verbatim in the wire optimizer. */
+  optimizerRetentionTurns: z.number().int().min(1),
+});
+
+export const AgentToolOutputSettingsSchema = z.object({
+  textCharBudget: z.number().int().positive(),
+  imageBase64CharBudget: z.number().int().positive(),
+  maxOmittedRatio: z.number().min(0).max(1),
+});
+
+export const AgentTerminalSettingsSchema = z.object({
+  pollIntervalMs: z.number().int().positive(),
+  foregroundBudgetMs: z.number().int().positive(),
+  awaitBudgetMs: z.number().int().positive(),
+  maxBlockMs: z.number().int().positive(),
+  outputSpillThresholdChars: z.number().int().positive(),
+  outputPreviewHeadChars: z.number().int().positive(),
+  outputPreviewTailChars: z.number().int().positive(),
+  executorTimeoutMs: z.number().int().positive(),
+  executorAvailabilityTimeoutMs: z.number().int().positive(),
+  executorPollIntervalMs: z.number().int().positive(),
+  poolIdleTimeoutMs: z.number().int().positive(),
+  poolSystemSize: z.number().int().min(1),
+  poolReaperIntervalMs: z.number().int().positive(),
+});
+
+export const AgentSearchSettingsSchema = z.object({
+  maxMatches: z.number().int().positive(),
+  maxLineLength: z.number().int().positive(),
+  globTerminalMaxResults: z.number().int().positive(),
+  globMaxDisplayResults: z.number().int().positive(),
+  grepTimeoutMs: z.number().int().positive(),
+  whichTimeoutMs: z.number().int().positive(),
+});
+
+export const AgentFilesystemSettingsSchema = z.object({
+  ignoreDirs: z.array(z.string().min(1)),
+  binaryExtensions: z.array(z.string().min(1)),
+  /** RegExp source strings for Ask-mode read-only bash guard. */
+  blockedBashCommandPatterns: z.array(z.string().min(1)),
+});
+
+export const AgentWebSettingsSchema = z.object({
+  toolTimeoutMs: z.number().int().positive(),
+  fetchMaxResponseBytes: z.number().int().positive(),
+  fetchMaxRedirects: z.number().int().min(0),
+  searchDefaultNumResults: z.number().int().min(1),
+  exaMcpUrl: z.string().url(),
+});
+
+export const AgentSettingsSchema = z.object({
+  context: AgentContextSettingsSchema,
+  toolOutput: AgentToolOutputSettingsSchema,
+  terminal: AgentTerminalSettingsSchema,
+  search: AgentSearchSettingsSchema,
+  filesystem: AgentFilesystemSettingsSchema,
+  web: AgentWebSettingsSchema,
+});
+
+export const NotebookOutputSettingsSchema = z.object({
+  textOutputAutoCollapseThreshold: z.number().int().positive(),
+  collapsedHeightDefaultPx: z.number().int().positive(),
+  collapsedHeightMinPx: z.number().int().positive(),
+  defaultPlotHeightPx: z.number().int().positive(),
+  plotMinResizeWidthPx: z.number().int().positive(),
+  plotMinResizeHeightPx: z.number().int().positive(),
+  plotlyHoverCornerRatio: z.number().min(0).max(1),
+  minimapOutputPreviewMaxLines: z.number().int().min(1),
+  minimapHeadingNavigateDelayMs: z.number().int().positive(),
+  chartColors: z.array(z.string().min(1)).min(1),
+});
+
+export const NotebookExportSettingsSchema = z.object({
+  sansFontFamily: z.string().min(1),
+});
+
+export const NotebookEditorSettingsSchema = z.object({
+  doublePressTimeoutMs: z.number().int().positive(),
+});
+
+const panelSizeTupleRefine = (sizes: number[]) =>
+  sizes.every((n) => Number.isFinite(n) && n > 0);
+
+export const ShellPanelVisibilitySettingsSchema = z.object({
+  leftCollapsed: z.boolean(),
+  rightCollapsed: z.boolean(),
+  bottomCollapsed: z.boolean(),
+  isFocusMode: z.boolean(),
+});
+
+export const ShellPanelLayoutSettingsSchema = z.object({
+  horizontal: z
+    .tuple([z.number(), z.number(), z.number()])
+    .refine(panelSizeTupleRefine, "horizontal panel sizes must be positive"),
+  vertical: z
+    .tuple([z.number(), z.number()])
+    .refine(panelSizeTupleRefine, "vertical panel sizes must be positive"),
+});
+
+export const ShellSidebarSettingsSchema = z.object({
+  activeViews: z.array(SidebarViewIdSchema),
+  openAccordionItems: z.array(SidebarViewIdSchema),
+  showHiddenFiles: z.boolean(),
+  showMinimapOutputs: z.boolean(),
+  minimapPreviewMode: NotebookMinimapPreviewModeSchema,
+  isSearchCaseSensitive: z.boolean(),
+});
+
+export const ShellChatSettingsSchema = z.object({
+  maxHighlightChars: z.number().int().positive(),
+  maxInlineLines: z.number().int().positive(),
+  codeBlockInlineMaxHeightClass: z.string().min(1),
+  markdownTableMaxHeightClass: z.string().min(1),
+  awaitCommandCountdownSeconds: z.number().int().positive(),
+});
+
+export const ShellSettingsSchema = z.object({
+  panelVisibility: ShellPanelVisibilitySettingsSchema,
+  panelLayout: ShellPanelLayoutSettingsSchema,
+  sidebar: ShellSidebarSettingsSchema,
+  chat: ShellChatSettingsSchema,
+  mobileBreakpointPx: z.number().int().positive(),
+  minRefreshSpinMs: z.number().int().positive(),
+  toastLimit: z.number().int().min(1),
+});
+
 const LocalEndpointModelSchema = z.object({
   /** Runtime-specific model ID returned by the local OpenAI-compatible server. */
   modelId: z.string().min(1),
@@ -109,6 +254,9 @@ const SettingsDataSchema = z.object({
      * Does not change notebook file metadata.
      */
     presentationHideAllCellInputs: z.boolean(),
+    output: NotebookOutputSettingsSchema,
+    export: NotebookExportSettingsSchema,
+    editor: NotebookEditorSettingsSchema,
   }),
   workspace: z.object({
     /** Jupyter-relative directory paths pinned in the workspace picker (order preserved). */
@@ -116,6 +264,8 @@ const SettingsDataSchema = z.object({
       .array(z.string().min(1))
       .max(MAX_PINNED_WORKSPACE_DIRECTORY_PATHS),
   }),
+  agent: AgentSettingsSchema,
+  shell: ShellSettingsSchema,
   providers: z
     .object({
       /**
@@ -145,7 +295,29 @@ export type InteractionModeSetting = z.infer<typeof InteractionModeSchema>;
 export type ToolApprovalMode = z.infer<typeof ToolApprovalModeSchema>;
 export type WordWrapSetting = z.infer<typeof WordWrapSchema>;
 export type AgentCommunicationStyle = z.infer<typeof AgentCommunicationStyleSchema>;
+export type SidebarViewId = z.infer<typeof SidebarViewIdSchema>;
+export type NotebookMinimapPreviewMode = z.infer<
+  typeof NotebookMinimapPreviewModeSchema
+>;
+export type AgentContextSettings = z.infer<typeof AgentContextSettingsSchema>;
+export type AgentToolOutputSettings = z.infer<typeof AgentToolOutputSettingsSchema>;
+export type AgentTerminalSettings = z.infer<typeof AgentTerminalSettingsSchema>;
+export type AgentSearchSettings = z.infer<typeof AgentSearchSettingsSchema>;
+export type AgentFilesystemSettings = z.infer<typeof AgentFilesystemSettingsSchema>;
+export type AgentWebSettings = z.infer<typeof AgentWebSettingsSchema>;
+export type AgentSettings = z.infer<typeof AgentSettingsSchema>;
+export type NotebookOutputSettings = z.infer<typeof NotebookOutputSettingsSchema>;
+export type NotebookExportSettings = z.infer<typeof NotebookExportSettingsSchema>;
+export type NotebookEditorSettings = z.infer<typeof NotebookEditorSettingsSchema>;
+export type ShellPanelVisibilitySettings = z.infer<
+  typeof ShellPanelVisibilitySettingsSchema
+>;
+export type ShellPanelLayoutSettings = z.infer<typeof ShellPanelLayoutSettingsSchema>;
+export type ShellSidebarSettings = z.infer<typeof ShellSidebarSettingsSchema>;
+export type ShellChatSettings = z.infer<typeof ShellChatSettingsSchema>;
+export type ShellSettings = z.infer<typeof ShellSettingsSchema>;
 export type SettingsData = z.infer<typeof SettingsDataSchema>;
+export type NotebookSettings = SettingsData["notebook"];
 export type UserSettingsDocument = z.infer<typeof UserSettingsDocumentSchema>;
 export type WorkspaceSettingsDocument = z.infer<typeof WorkspaceSettingsDocumentSchema>;
 export type WorkspaceSettingsOverrides = WorkspaceSettingsDocument["overrides"];

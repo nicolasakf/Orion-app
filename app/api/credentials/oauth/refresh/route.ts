@@ -1,4 +1,3 @@
-import "server-only";
 
 import { z } from "zod";
 import { refreshAccessToken, extractAccountId } from "@/lib/credentials/chatgpt-oauth";

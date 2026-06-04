@@ -1,7 +1,41 @@
 import { createDefaultUserSettingsDocument, createDefaultWorkspaceSettingsDocument, DEFAULT_SETTINGS } from "@/lib/settings/defaults";
 import { mergeSettings } from "@/lib/settings/merge";
 import type { SettingsData, UserSettingsDocument, WorkspaceSettingsDocument, WorkspaceSettingsOverrides } from "@/lib/settings/schema";
-import { SETTINGS_SCHEMA_VERSION, UserSettingsDocumentSchema, WorkspaceSettingsDocumentSchema } from "@/lib/settings/schema";
+import {
+  SETTINGS_SCHEMA_VERSION,
+  UserSettingsDocumentSchema,
+  WorkspaceSettingsDocumentSchema,
+} from "@/lib/settings/schema";
+
+/**
+ * Ensures a migrated document satisfies the current schema (fills gaps from invalid
+ * partial saves or incomplete defaults).
+ */
+function finalizeUserSettingsDocument(settings: SettingsData): UserSettingsDocument {
+  const candidate = {
+    version: SETTINGS_SCHEMA_VERSION,
+    settings: stripInvalidWorkspacePins(settings),
+  };
+  const parsed = UserSettingsDocumentSchema.safeParse(candidate);
+  if (parsed.success) {
+    return parsed.data;
+  }
+
+  const merged = mergeSettings(
+    DEFAULT_SETTINGS,
+    candidate.settings,
+    {}
+  );
+  const reparsed = UserSettingsDocumentSchema.safeParse({
+    version: SETTINGS_SCHEMA_VERSION,
+    settings: stripInvalidWorkspacePins(merged),
+  });
+  if (reparsed.success) {
+    return reparsed.data;
+  }
+
+  return createDefaultUserSettingsDocument();
+}
 
 function safeParseJson(raw: string): unknown | null {
   try {
@@ -115,10 +149,7 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
   }
   const parsed = UserSettingsDocumentSchema.safeParse(normalized);
   if (parsed.success) {
-    return {
-      version: SETTINGS_SCHEMA_VERSION,
-      settings: stripInvalidWorkspacePins(parsed.data.settings),
-    };
+    return finalizeUserSettingsDocument(parsed.data.settings);
   }
 
   const partialSettings = asObject(normalized.settings);
@@ -157,10 +188,7 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
     {}
   );
 
-  return {
-    version: SETTINGS_SCHEMA_VERSION,
-    settings: stripInvalidWorkspacePins(merged),
-  };
+  return finalizeUserSettingsDocument(merged);
 }
 
 export function migrateWorkspaceSettingsDocument(raw: unknown): WorkspaceSettingsDocument {

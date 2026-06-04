@@ -1,5 +1,10 @@
 import type { SettingsData, UserSettingsDocument, WorkspaceSettingsDocument } from "@/lib/settings/schema";
 import { SETTINGS_SCHEMA_VERSION } from "@/lib/settings/schema";
+import {
+  BUILTIN_AGENT_DEFAULTS,
+  BUILTIN_NOTEBOOK_DEFAULTS,
+  BUILTIN_SHELL_DEFAULTS,
+} from "@/lib/settings/builtin-defaults";
 
 /** Default model for generating short chat titles. */
 export const DEFAULT_TITLE_GENERATION_MODEL_ID = "gemini-3.1-flash-lite";
@@ -31,10 +36,13 @@ export const DEFAULT_SETTINGS: SettingsData = {
   notebook: {
     scrollbarVisible: true,
     presentationHideAllCellInputs: false,
+    ...BUILTIN_NOTEBOOK_DEFAULTS,
   },
   workspace: {
     pinnedDirectoryPaths: [],
   },
+  agent: BUILTIN_AGENT_DEFAULTS,
+  shell: BUILTIN_SHELL_DEFAULTS,
   providers: {
     credentials: {},
   },

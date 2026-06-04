@@ -1,4 +1,3 @@
-import "server-only";
 
 import { writeFile } from "fs/promises";
 import os from "os";

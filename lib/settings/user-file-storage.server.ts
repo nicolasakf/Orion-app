@@ -1,4 +1,3 @@
-import "server-only";
 
 import { readFile, rename, rm, writeFile } from "fs/promises";
 import path from "path";
@@ -8,6 +7,7 @@ import {
   getUserSettingsFilePath,
 } from "@/lib/local/orion-paths.server";
 import { formatHomeRelativePath } from "@/lib/local/terminal-output-storage.server";
+import { compactUserSettingsDocument } from "@/lib/settings/compact";
 import { createDefaultUserSettingsDocument } from "@/lib/settings/defaults";
 import {
   migrateUserSettingsDocument,
@@ -69,7 +69,9 @@ export async function saveUserSettingsDocument(
 ): Promise<UserSettingsDocument> {
   const directory = await ensureOrionDataDirectory();
   const filePath = getUserSettingsFilePath();
-  const sanitized = stripUserSettingsSecrets(document);
+  const sanitized = compactUserSettingsDocument(
+    stripUserSettingsSecrets(document)
+  );
   const tempPath = path.join(
     directory,
     `.settings.${process.pid}.${Date.now()}.tmp`
@@ -107,7 +109,11 @@ export async function loadUserSettingsRawFile(): Promise<UserSettingsRawFile> {
     return { path, content, exists: true };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      const content = `${JSON.stringify(createDefaultUserSettingsDocument(), null, 2)}\n`;
+      const content = `${JSON.stringify(
+        compactUserSettingsDocument(createDefaultUserSettingsDocument()),
+        null,
+        2
+      )}\n`;
       return { path, content, exists: false };
     }
     throw error;

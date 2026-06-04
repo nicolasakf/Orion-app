@@ -3,11 +3,21 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { z } from "zod";
 
-export const WEB_TOOL_TIMEOUT_MS = 30_000;
-export const WEB_FETCH_MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
-export const WEB_FETCH_MAX_REDIRECTS = 5;
-export const WEB_SEARCH_DEFAULT_NUM_RESULTS = 8;
-export const EXA_MCP_URL = "https://mcp.exa.ai/mcp";
+import {
+  EXA_MCP_URL,
+  WEB_FETCH_MAX_REDIRECTS,
+  WEB_FETCH_MAX_RESPONSE_BYTES,
+  WEB_SEARCH_DEFAULT_NUM_RESULTS,
+  WEB_TOOL_TIMEOUT_MS,
+} from "@/lib/agent/web-tools-constants";
+
+export {
+  EXA_MCP_URL,
+  WEB_FETCH_MAX_REDIRECTS,
+  WEB_FETCH_MAX_RESPONSE_BYTES,
+  WEB_SEARCH_DEFAULT_NUM_RESULTS,
+  WEB_TOOL_TIMEOUT_MS,
+};
 
 export const WebFetchRequestSchema = z.object({
   url: z.string().min(1),
