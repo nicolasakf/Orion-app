@@ -9,6 +9,7 @@ import {
   createDefaultWorkspaceSettingsDocument,
   DEFAULT_SETTINGS,
 } from "@/lib/settings/defaults";
+import { settingsValuesEqual } from "@/lib/settings/compact";
 import { mergeSettings } from "@/lib/settings/merge";
 import { parseUserSettingsDocumentFromJson } from "@/lib/settings/migrations";
 import { loadWorkspaceSettingsDocument } from "@/lib/settings/workspace-file-storage";
@@ -164,9 +165,13 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      userDocumentRef.current = result.document;
+      const normalizedDocument: UserSettingsDocument = {
+        version: result.document.version,
+        settings: mergeSettings(DEFAULT_SETTINGS, result.document.settings),
+      };
+      userDocumentRef.current = normalizedDocument;
       userSettingsWritableRef.current = true;
-      setUserDocument(result.document);
+      setUserDocument(normalizedDocument);
       setUserSettingsLoadStatus(result.status);
       setErrorMessage(null);
     } catch (error) {
@@ -229,7 +234,11 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         throw new Error(message);
       }
       const currentDocument = userDocumentRef.current;
-      const nextSettings = updater(currentDocument.settings);
+      const mergedCurrent = mergeSettings(DEFAULT_SETTINGS, currentDocument.settings);
+      const nextSettings = updater(mergedCurrent);
+      if (settingsValuesEqual(mergedCurrent, nextSettings)) {
+        return;
+      }
       const nextDocument: UserSettingsDocument = {
         ...currentDocument,
         settings: nextSettings,

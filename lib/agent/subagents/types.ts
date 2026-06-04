@@ -7,7 +7,7 @@
  */
 
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
-import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
+import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { JupyterServerInfo } from "@/lib/kernel/kernel-service";
 import type { PlatformOS } from "@/lib/utils";
 import type { NotebookType } from "@/lib/types";
@@ -88,7 +88,7 @@ export interface RunSubagentOptions {
   modelId: string;
 
   /** Parent agent's provider. */
-  providerId: SupportedProvider;
+  providerId: ProviderId;
 
   /** Provider-specific model settings (e.g. thinking budget). */
   modelSettings?: Record<string, unknown>;

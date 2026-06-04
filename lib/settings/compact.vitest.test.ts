@@ -55,6 +55,21 @@ describe("compactSettingsForPersistence", () => {
     expect("shell" in compacted.settings).toBe(false);
   });
 
+  it("keeps non-default titleGenerationModelId in chat overrides", () => {
+    const compacted = compactSettingsForPersistence({
+      ...DEFAULT_SETTINGS,
+      chat: {
+        ...DEFAULT_SETTINGS.chat,
+        titleGenerationModelId: "claude-sonnet-4-6",
+        toolApprovalMode: "auto_run",
+        pinnedModelIds: ["gpt-5.5"],
+        fontSize: 13,
+      },
+    });
+
+    expect(compacted.chat?.titleGenerationModelId).toBe("claude-sonnet-4-6");
+  });
+
   it("omits empty provider credentials matching defaults", () => {
     const document = createDefaultUserSettingsDocument();
     document.settings.appearance.theme = "light";

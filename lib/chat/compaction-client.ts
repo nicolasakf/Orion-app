@@ -4,7 +4,7 @@
  */
 
 import type { UIMessage } from "ai";
-import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
+import type { ProviderId } from "@/lib/agent/model-gateway-types";
 
 export interface CompactionApiResult {
   summaryText: string;
@@ -25,7 +25,7 @@ export async function callCompactionApi(
   previousSummaryText?: string,
   userCredential?: unknown,
   model?: string,
-  provider?: SupportedProvider,
+  provider?: ProviderId,
   chatId?: string
 ): Promise<CompactionApiResult> {
   const payload: Record<string, unknown> = {

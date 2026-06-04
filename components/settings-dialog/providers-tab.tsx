@@ -11,17 +11,31 @@ import {
   ExternalLink,
   Copy,
   CheckCheck,
-  Globe2,
   RefreshCw,
   Plus,
 } from "lucide-react";
-import { OpenAI, Anthropic, Google, XAI, Ollama, LmStudio, Apple } from "@lobehub/icons";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
+import { ProviderLogo } from "@/components/provider-logo";
 import { toast } from "sonner";
 import { useSettingsContext } from "@/components/settings/settings-provider";
 import type { ProviderCredential } from "@/lib/settings/schema";
@@ -31,14 +45,13 @@ import {
   isLocalProvider,
   normalizeLocalEndpointModels,
 } from "@/lib/agent/local-provider-models";
-import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
+import type { ProviderId } from "@/lib/agent/model-gateway-types";
 
 // ── Provider metadata ─────────────────────────────────────────────────────────
 
 interface ProviderMeta {
-  id: SupportedProvider;
+  id: ProviderId;
   name: string;
-  icon: React.ElementType;
   credentialKind: "api_key" | "local_endpoint";
   keyPlaceholder: string;
   keyHint: string;
@@ -46,6 +59,7 @@ interface ProviderMeta {
   defaultBaseUrl?: string;
   defaultModelId?: string;
   endpointHint?: string;
+  apiBaseUrl?: string;
 }
 
 interface LocalEndpointDraft {
@@ -60,7 +74,6 @@ const PROVIDERS: ProviderMeta[] = [
   {
     id: "openai",
     name: "OpenAI",
-    icon: OpenAI,
     credentialKind: "api_key",
     keyPlaceholder: "sk-...",
     keyHint: "Starts with sk-",
@@ -69,7 +82,6 @@ const PROVIDERS: ProviderMeta[] = [
   {
     id: "anthropic",
     name: "Anthropic",
-    icon: Anthropic,
     credentialKind: "api_key",
     keyPlaceholder: "sk-ant-...",
     keyHint: "Starts with sk-ant-",
@@ -78,7 +90,6 @@ const PROVIDERS: ProviderMeta[] = [
   {
     id: "google",
     name: "Google",
-    icon: Google,
     credentialKind: "api_key",
     keyPlaceholder: "AIza...",
     keyHint: "Google AI Studio API key",
@@ -87,16 +98,38 @@ const PROVIDERS: ProviderMeta[] = [
   {
     id: "xai",
     name: "xAI",
-    icon: XAI,
     credentialKind: "api_key",
     keyPlaceholder: "xai-...",
     keyHint: "Starts with xai-",
     supportsOAuth: false,
   },
   {
+    id: "groq",
+    name: "Groq",
+    credentialKind: "api_key",
+    keyPlaceholder: "gsk_...",
+    keyHint: "Groq API key",
+    supportsOAuth: false,
+  },
+  {
+    id: "cerebras",
+    name: "Cerebras",
+    credentialKind: "api_key",
+    keyPlaceholder: "csk-...",
+    keyHint: "Cerebras API key",
+    supportsOAuth: false,
+  },
+  {
+    id: "vercel",
+    name: "Vercel AI Gateway",
+    credentialKind: "api_key",
+    keyPlaceholder: "vck_...",
+    keyHint: "AI Gateway API key",
+    supportsOAuth: false,
+  },
+  {
     id: "ollama",
     name: "Ollama",
-    icon: Ollama,
     credentialKind: "local_endpoint",
     keyPlaceholder: "Optional bearer token",
     keyHint: "Optional API key",
@@ -108,7 +141,6 @@ const PROVIDERS: ProviderMeta[] = [
   {
     id: "lmstudio",
     name: "LM Studio",
-    icon: LmStudio,
     credentialKind: "local_endpoint",
     keyPlaceholder: "Optional bearer token",
     keyHint: "Optional API key",
@@ -120,7 +152,6 @@ const PROVIDERS: ProviderMeta[] = [
   {
     id: "mlx",
     name: "MLX",
-    icon: Apple,
     credentialKind: "local_endpoint",
     keyPlaceholder: "Optional bearer token",
     keyHint: "Optional API key",
@@ -132,7 +163,6 @@ const PROVIDERS: ProviderMeta[] = [
   {
     id: "custom",
     name: "Custom Endpoint",
-    icon: Globe2,
     credentialKind: "local_endpoint",
     keyPlaceholder: "Optional bearer token",
     keyHint: "Optional API key",
@@ -143,8 +173,16 @@ const PROVIDERS: ProviderMeta[] = [
   },
 ];
 
-const REMOTE_PROVIDERS = PROVIDERS.filter((p) => p.credentialKind === "api_key");
+const DEFAULT_REMOTE_PROVIDER_IDS = new Set(["openai", "anthropic", "google", "xai"]);
+const DEFAULT_REMOTE_PROVIDERS = PROVIDERS.filter((p) => DEFAULT_REMOTE_PROVIDER_IDS.has(p.id));
 const LOCAL_PROVIDERS = PROVIDERS.filter((p) => p.credentialKind === "local_endpoint");
+
+interface ProviderCatalogRow {
+  id: string;
+  label: string;
+  credentialKind: "api_key" | "local_endpoint";
+  apiBaseUrl?: string;
+}
 
 // ── Helper: mask an API key for display ──────────────────────────────────────
 
@@ -160,7 +198,7 @@ interface LocalModelDraftRow {
 }
 
 function createLocalModelDraftRow(
-  provider: SupportedProvider,
+  provider: ProviderId,
   modelId = "",
   label?: string
 ): LocalModelDraftRow {
@@ -397,27 +435,27 @@ function DeviceFlowPanel({ onCredential, onCancel }: DeviceFlowPanelProps) {
 interface ProviderRowProps {
   provider: ProviderMeta;
   credential: ProviderCredential | undefined;
-  onSaveKey: (provider: SupportedProvider, key: string) => Promise<void>;
+  onSaveKey: (provider: ProviderId, key: string, baseUrl?: string) => Promise<void>;
   onSaveLocalEndpoint: (
-    provider: SupportedProvider,
+    provider: ProviderId,
     endpoint: LocalEndpointDraft
   ) => Promise<void>;
-  onRemove: (provider: SupportedProvider) => void;
-  onSaveOAuthCredential: (provider: SupportedProvider, credential: ProviderCredential) => void;
+  onRemove: (provider: ProviderId) => void;
+  onSaveOAuthCredential: (provider: ProviderId, credential: ProviderCredential) => void;
 }
 
 interface ProviderGroupSectionProps {
   title: string;
   description?: string;
   providers: ProviderMeta[];
-  credentials: Partial<Record<SupportedProvider, ProviderCredential>>;
-  onSaveKey: (provider: SupportedProvider, key: string) => Promise<void>;
+  credentials: Partial<Record<ProviderId, ProviderCredential>>;
+  onSaveKey: (provider: ProviderId, key: string, baseUrl?: string) => Promise<void>;
   onSaveLocalEndpoint: (
-    provider: SupportedProvider,
+    provider: ProviderId,
     endpoint: LocalEndpointDraft
   ) => Promise<void>;
-  onRemove: (provider: SupportedProvider) => void;
-  onSaveOAuthCredential: (provider: SupportedProvider, credential: ProviderCredential) => void;
+  onRemove: (provider: ProviderId) => void;
+  onSaveOAuthCredential: (provider: ProviderId, credential: ProviderCredential) => void;
 }
 
 /** Renders a heading plus provider rows with separators between rows. */
@@ -479,10 +517,15 @@ function ProviderRow({
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [showDeviceFlow, setShowDeviceFlow] = useState(false);
 
-  const Icon = provider.icon;
   const hasApiKey = credential?.type === "api_key";
   const hasOAuth = credential?.type === "chatgpt_oauth";
   const hasLocalEndpoint = credential?.type === "local_endpoint";
+  const isBuiltInApiProvider = PROVIDERS.some(
+    (item) => item.id === provider.id && item.credentialKind === "api_key"
+  );
+  const needsRemoteBaseUrl = provider.credentialKind === "api_key" && !provider.apiBaseUrl && !isBuiltInApiProvider;
+  const canRemoveProviderRow =
+    provider.credentialKind === "api_key" && !DEFAULT_REMOTE_PROVIDER_IDS.has(provider.id);
 
   const handleSave = useCallback(async () => {
     if (provider.credentialKind === "local_endpoint") {
@@ -526,11 +569,17 @@ function ProviderRow({
       toast.error("Please enter an API key.");
       return;
     }
+    const baseUrl = baseUrlInput.trim();
+    if (needsRemoteBaseUrl && !baseUrl) {
+      toast.error("Please enter an OpenAI-compatible base URL for this provider.");
+      return;
+    }
     setIsSaving(true);
     try {
-      await onSaveKey(provider.id, trimmed);
+      await onSaveKey(provider.id, trimmed, baseUrl || provider.apiBaseUrl);
       setIsEditing(false);
       setKeyInput("");
+      setBaseUrlInput("");
     } finally {
       setIsSaving(false);
     }
@@ -540,6 +589,8 @@ function ProviderRow({
     modelRows,
     onSaveKey,
     onSaveLocalEndpoint,
+    needsRemoteBaseUrl,
+    provider.apiBaseUrl,
     provider.credentialKind,
     provider.id,
   ]);
@@ -658,7 +709,7 @@ function ProviderRow({
       {/* Provider header */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
-          <Icon size={20} className="shrink-0 text-foreground" />
+          <ProviderLogo providerId={provider.id} className="h-5 w-5" alt={`${provider.name} logo`} />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="font-medium text-sm">{provider.name}</span>
@@ -711,12 +762,17 @@ function ProviderRow({
         {/* Actions */}
         <div className="flex items-center gap-2 shrink-0">
           {!credential && !isEditing && !showDeviceFlow && (
+            <>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => {
                   setKeyInput("");
-                  setBaseUrlInput(provider.defaultBaseUrl ?? "");
+                  setBaseUrlInput(
+                    provider.credentialKind === "local_endpoint"
+                      ? provider.defaultBaseUrl ?? ""
+                      : provider.apiBaseUrl ?? ""
+                  );
                   const defaultModelId = provider.defaultModelId ?? "";
                   setModelRows([createLocalModelDraftRow(provider.id, defaultModelId)]);
                   setIsEditing(true);
@@ -725,6 +781,17 @@ function ProviderRow({
               >
                 {provider.credentialKind === "local_endpoint" ? "Configure" : "Add Key"}
               </Button>
+              {canRemoveProviderRow ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onRemove(provider.id)}
+                  className="text-xs text-destructive hover:text-destructive"
+                >
+                  Remove
+                </Button>
+              ) : null}
+            </>
           )}
           {(hasApiKey || hasLocalEndpoint) && !isEditing && (
             <>
@@ -736,7 +803,9 @@ function ProviderRow({
                   setBaseUrlInput(
                     hasLocalEndpoint
                       ? credential.baseUrl
-                      : provider.defaultBaseUrl ?? ""
+                      : hasApiKey
+                        ? credential.baseUrl ?? provider.apiBaseUrl ?? ""
+                        : provider.apiBaseUrl ?? ""
                   );
                   const configuredModels = hasLocalEndpoint
                     && isLocalProvider(provider.id)
@@ -745,8 +814,8 @@ function ProviderRow({
                   setModelRows(
                     configuredModels.length > 0
                       ? configuredModels.map((model) =>
-                          createLocalModelDraftRow(provider.id, model.modelId, model.label)
-                        )
+                        createLocalModelDraftRow(provider.id, model.modelId, model.label)
+                      )
                       : [createLocalModelDraftRow(provider.id, provider.defaultModelId ?? "")]
                   );
                   setIsEditing(true);
@@ -915,6 +984,19 @@ function ProviderRow({
             </div>
           ) : (
             <>
+              {needsRemoteBaseUrl ? (
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">OpenAI-compatible base URL</Label>
+                  <Input
+                    value={baseUrlInput}
+                    onChange={(e) => setBaseUrlInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="https://api.provider.com/v1"
+                    className="font-mono text-sm"
+                    autoFocus
+                  />
+                </div>
+              ) : null}
               <Label className="text-xs text-muted-foreground">{provider.keyHint}</Label>
               <div className="flex gap-2">
                 <div className="relative flex-1">
@@ -925,7 +1007,7 @@ function ProviderRow({
                     onKeyDown={handleKeyDown}
                     placeholder={provider.keyPlaceholder}
                     className="pr-9 font-mono text-sm"
-                    autoFocus
+                    autoFocus={!needsRemoteBaseUrl}
                   />
                   <button
                     type="button"
@@ -939,7 +1021,7 @@ function ProviderRow({
                 <Button
                   size="sm"
                   onClick={() => void handleSave()}
-                  disabled={isSaving || !keyInput.trim()}
+                  disabled={isSaving || !keyInput.trim() || (needsRemoteBaseUrl && !baseUrlInput.trim())}
                 >
                   {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
                 </Button>
@@ -993,17 +1075,90 @@ function ProviderRow({
 export function ProvidersTab() {
   const { effectiveSettings, setUserSettings } = useSettingsContext();
   const credentials = effectiveSettings.providers?.credentials ?? {};
+  const [addProviderOpen, setAddProviderOpen] = useState(false);
+  const [catalogProviders, setCatalogProviders] = useState<ProviderCatalogRow[]>([]);
+  const [providersLoading, setProvidersLoading] = useState(false);
+
+  React.useEffect(() => {
+    setProvidersLoading(true);
+    fetch("/api/models")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Failed to fetch providers");
+        const data = await response.json() as { providers?: ProviderCatalogRow[] };
+        setCatalogProviders(data.providers ?? []);
+      })
+      .catch(() => {
+        setCatalogProviders([]);
+      })
+      .finally(() => setProvidersLoading(false));
+  }, []);
+
+  const providerMetaById = React.useMemo(() => {
+    const map = new Map<string, ProviderMeta>();
+    for (const provider of PROVIDERS) map.set(provider.id, provider);
+    for (const provider of catalogProviders) {
+      if (provider.credentialKind !== "api_key") continue;
+      if (map.has(provider.id)) continue;
+      map.set(provider.id, {
+        id: provider.id,
+        name: provider.label,
+        credentialKind: "api_key",
+        keyPlaceholder: "Provider API key",
+        keyHint: `${provider.label} API key`,
+        supportsOAuth: false,
+        apiBaseUrl: provider.apiBaseUrl,
+      });
+    }
+    return map;
+  }, [catalogProviders]);
+
+  const remoteProviders = React.useMemo(() => {
+    const ids = new Set<string>(DEFAULT_REMOTE_PROVIDERS.map((provider) => provider.id));
+    for (const id of effectiveSettings.providers?.addedProviderIds ?? []) ids.add(id);
+    for (const [id, credential] of Object.entries(credentials)) {
+      if (credential?.type === "api_key" || credential?.type === "chatgpt_oauth") ids.add(id);
+    }
+    return Array.from(ids)
+      .map((id) => providerMetaById.get(id) ?? {
+        id,
+        name: id,
+        credentialKind: "api_key" as const,
+        keyPlaceholder: "Provider API key",
+        keyHint: `${id} API key`,
+        supportsOAuth: false,
+      })
+      .sort((a, b) => {
+        const ar = DEFAULT_REMOTE_PROVIDERS.findIndex((provider) => provider.id === a.id);
+        const br = DEFAULT_REMOTE_PROVIDERS.findIndex((provider) => provider.id === b.id);
+        if (ar !== -1 || br !== -1) return (ar === -1 ? 999 : ar) - (br === -1 ? 999 : br);
+        return a.name.localeCompare(b.name);
+      });
+  }, [credentials, effectiveSettings.providers?.addedProviderIds, providerMetaById]);
+
+  const addableProviders = React.useMemo(
+    () =>
+      catalogProviders
+        .filter((provider) => provider.credentialKind === "api_key")
+        .filter((provider) => !remoteProviders.some((visible) => visible.id === provider.id))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [catalogProviders, remoteProviders]
+  );
 
   /** Save a BYOK API key for a provider — validates the key before persisting. */
   const handleSaveKey = useCallback(
-    async (provider: SupportedProvider, apiKey: string) => {
+    async (provider: ProviderId, apiKey: string, remoteBaseUrl?: string) => {
+      const providerMeta = providerMetaById.get(provider);
+      const existingCredential = credentials[provider];
+      const baseUrl =
+        (remoteBaseUrl?.trim() || providerMeta?.apiBaseUrl) ??
+        (existingCredential?.type === "api_key" ? existingCredential.baseUrl : undefined);
       // Validate the key server-side before saving.
       let validationFailed = false;
       try {
         const res = await fetch("/api/credentials/validate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider, apiKey }),
+          body: JSON.stringify({ provider, apiKey, baseUrl }),
         });
         if (res.ok) {
           const data = await res.json() as { valid: boolean; error?: string };
@@ -1025,20 +1180,27 @@ export function ProvidersTab() {
           ...current.providers,
           credentials: {
             ...current.providers?.credentials,
-            [provider]: { type: "api_key" as const, apiKey },
+            [provider]: {
+              type: "api_key" as const,
+              apiKey,
+              ...(baseUrl && { baseUrl }),
+            },
           },
+          addedProviderIds: Array.from(
+            new Set([...(current.providers?.addedProviderIds ?? []), provider])
+          ),
         },
       }));
 
       toast.success(`${provider} API key saved.`);
     },
-    [setUserSettings]
+    [credentials, providerMetaById, setUserSettings]
   );
 
   /** Save and validate a local OpenAI-compatible provider endpoint. */
   const handleSaveLocalEndpoint = useCallback(
     async (
-      provider: SupportedProvider,
+      provider: ProviderId,
       endpoint: LocalEndpointDraft
     ) => {
       let validationFailed = false;
@@ -1100,20 +1262,33 @@ export function ProvidersTab() {
 
   /** Remove a credential for a provider. */
   const handleRemove = useCallback(
-    (provider: SupportedProvider) => {
+    (provider: ProviderId) => {
+      const removesProviderRow =
+        !DEFAULT_REMOTE_PROVIDER_IDS.has(provider) &&
+        !LOCAL_PROVIDERS.some((localProvider) => localProvider.id === provider);
       setUserSettings((current) => {
         const next = { ...current.providers?.credentials };
         delete next[provider];
-        return { ...current, providers: { ...current.providers, credentials: next } };
+        const nextAddedProviderIds = (current.providers?.addedProviderIds ?? []).filter(
+          (id) => id !== provider
+        );
+        return {
+          ...current,
+          providers: {
+            ...current.providers,
+            credentials: next,
+            addedProviderIds: nextAddedProviderIds,
+          },
+        };
       });
-      toast.success(`${provider} credential removed.`);
+      toast.success(`${provider} ${removesProviderRow ? "provider" : "credential"} removed.`);
     },
     [setUserSettings]
   );
 
   /** Save an OAuth credential returned from the device flow. */
   const handleSaveOAuthCredential = useCallback(
-    (provider: SupportedProvider, credential: ProviderCredential) => {
+    (provider: ProviderId, credential: ProviderCredential) => {
       setUserSettings((current) => ({
         ...current,
         providers: {
@@ -1128,11 +1303,37 @@ export function ProvidersTab() {
     [setUserSettings]
   );
 
+  const handleAddProvider = useCallback(
+    (providerId: string) => {
+      setUserSettings((current) => ({
+        ...current,
+        providers: {
+          ...current.providers,
+          addedProviderIds: Array.from(
+            new Set([...(current.providers?.addedProviderIds ?? []), providerId])
+          ),
+        },
+      }));
+      setAddProviderOpen(false);
+    },
+    [setUserSettings]
+  );
+
   return (
     <div className="flex flex-col gap-8 p-6">
       {/* Header */}
-      <div className="space-y-1.5">
-        <h2 className="text-lg font-semibold">Providers</h2>
+      <div className="flex items-center justify-between gap-3">
+        <div className="space-y-1.5">
+          <h2 className="text-lg font-semibold">Providers</h2>
+        </div>
+        <Button
+          size="sm"
+          className="h-8 gap-1.5"
+          onClick={() => setAddProviderOpen(true)}
+        >
+          <Plus className="h-4 w-4" />
+          Add provider
+        </Button>
       </div>
 
       {/* Remote vs local provider groups */}
@@ -1140,14 +1341,14 @@ export function ProvidersTab() {
         <ProviderGroupSection
           title="Remote"
           description="Cloud APIs and platform credentials for hosted models."
-          providers={REMOTE_PROVIDERS}
+          providers={remoteProviders}
           credentials={credentials}
           onSaveKey={handleSaveKey}
           onSaveLocalEndpoint={handleSaveLocalEndpoint}
           onRemove={handleRemove}
           onSaveOAuthCredential={handleSaveOAuthCredential}
         />
-        {REMOTE_PROVIDERS.length > 0 && LOCAL_PROVIDERS.length > 0 ? (
+        {remoteProviders.length > 0 && LOCAL_PROVIDERS.length > 0 ? (
           <Separator />
         ) : null}
         <ProviderGroupSection
@@ -1161,6 +1362,49 @@ export function ProvidersTab() {
           onSaveOAuthCredential={handleSaveOAuthCredential}
         />
       </div>
+      <Dialog open={addProviderOpen} onOpenChange={setAddProviderOpen}>
+        <DialogContent className="max-w-xl p-0 overflow-hidden">
+          <DialogHeader className="px-5 pt-5 pb-2">
+            <DialogTitle>Add Provider</DialogTitle>
+            <DialogDescription>
+              Search a provider from the list below and add it to your settings.
+              <p> Learn more about providers on <a
+                href="https://models.dev"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 hover:text-foreground hover:underline"
+              >
+                models.dev
+                <ExternalLink className="h-3 w-3" />
+              </a>.</p>
+            </DialogDescription>
+          </DialogHeader>
+          <Command className="rounded-none">
+            <CommandInput placeholder="Search providers..." />
+            <CommandList className="max-h-[360px]">
+              <CommandEmpty>
+                {providersLoading ? "Loading providers..." : "No provider found."}
+              </CommandEmpty>
+              <CommandGroup>
+                {addableProviders.map((provider) => (
+                  <CommandItem
+                    key={provider.id}
+                    value={`${provider.label} ${provider.id}`}
+                    onSelect={() => handleAddProvider(provider.id)}
+                    className="gap-3"
+                  >
+                    <ProviderLogo providerId={provider.id} className="h-5 w-5" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm">{provider.label}</div>
+                      <div className="truncate text-xs text-muted-foreground">{provider.id}</div>
+                    </div>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

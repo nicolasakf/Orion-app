@@ -1,5 +1,5 @@
 import type { NotebookType } from "@/lib/types";
-import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
+import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { ResolvedChatReference } from "@/lib/chat/chat-references";
 import type { FileUIPart } from "ai";
 
@@ -8,7 +8,7 @@ export type InteractionMode = "Agent" | "Ask" | "Edit";
 export interface LLM {
   value: string;
   label: string;
-  provider: SupportedProvider;
+  provider: ProviderId;
   inputPrice?: number;
   outputPrice?: number;
   icon?: React.ComponentType<{ className?: string }>;

@@ -12,7 +12,6 @@ import {
   Terminal,
   ChevronDown,
   X,
-  Settings,
   GripVertical,
   Bot,
   MessageCircle,
@@ -24,6 +23,7 @@ import {
 import { useTheme } from "next-themes";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import { cn } from "@/lib/utils";
+import { findModelBySelectionKey } from "@/lib/agent/model-selection-key";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -35,7 +35,6 @@ import {
   CommandItem,
   CommandInput,
   CommandList,
-  CommandSeparator,
 } from "@/components/ui/command";
 import {
   Popover,
@@ -49,6 +48,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { ProviderLogo } from "@/components/provider-logo";
 import { ModelSettingsPopover } from "./model-settings-popover";
 import type {
   ChatDraftAttachment,
@@ -60,7 +60,7 @@ import type {
 } from "./types";
 import { SLASH_COMMANDS, type SlashCommand } from "./slash-commands";
 import { ContextUsagePill } from "./context-usage-pill";
-import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
+import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { TokenEstimate } from "@/lib/agent/token-budget";
 import {
   getReferenceTypeLabel,
@@ -126,7 +126,7 @@ export interface ChatTextboxProps {
   onModelChange: (model: string) => void;
   onCancelEdit: () => void;
   models: LLM[];
-  /** Opens settings dialog on the models tab. */
+  /** Opens settings on the models tab so the user can pin models for the selector. */
   onOpenModelsSettings?: () => void;
   /** Opens settings dialog on the providers tab. */
   onOpenProvidersSettings?: () => void;
@@ -137,7 +137,7 @@ export interface ChatTextboxProps {
   /** Called when the user reorders pinned models. */
   onReorderPinned?: (newOrder: string[]) => void;
   /** Provider of the currently selected model */
-  selectedModelProvider?: SupportedProvider;
+  selectedModelProvider?: ProviderId;
   /** Per-model settings for the currently selected model */
   modelSettings: ModelSettings;
   /** Called when the user changes a model setting */
@@ -865,32 +865,21 @@ export function ChatTextbox({
     el?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [highlightedModeIndex, isModePopoverOpen]);
 
-  const getModel = (modelName: string) => {
-    return models.find((model) => model.value === modelName);
-  };
+  const getModel = (modelKey: string) => findModelBySelectionKey(models, modelKey);
+  const selectedLlm = getModel(selectedModel);
 
-  /** Pinned models first (in pin order), then unpinned. */
-  const { pinnedModels, unpinnedModels } = React.useMemo(() => {
+  /** Pinned models in user pin order (selector shows only these). */
+  const pinnedModels = React.useMemo(() => {
     const pinned: LLM[] = [];
-    const unpinned: LLM[] = [];
-    const pinnedSet = new Set(pinnedModelIds);
-    for (const m of pinnedModelIds) {
-      const model = models.find((x) => x.value === m);
+    for (const pinKey of pinnedModelIds) {
+      const model = findModelBySelectionKey(models, pinKey);
       if (model) pinned.push(model);
     }
-    for (const m of models) {
-      if (!pinnedSet.has(m.value)) unpinned.push(m);
-    }
-    return { pinnedModels: pinned, unpinnedModels: unpinned };
+    return pinned;
   }, [models, pinnedModelIds]);
 
-  /** Keep unpinned models discoverable; pinning should order favorites, not hide the rest. */
   const listMaxHeight =
-    modelSearchQuery.trim().length > 0
-      ? 300
-      : pinnedModels.length > 0 || unpinnedModels.length > 0
-        ? 300
-        : 120;
+    modelSearchQuery.trim().length > 0 || pinnedModels.length > 0 ? 300 : 120;
 
   const handlePinnedDragStart = (e: React.DragEvent, index: number) => {
     e.dataTransfer.setData("text/plain", index.toString());
@@ -1674,11 +1663,19 @@ export function ChatTextbox({
                     variant="ghost"
                     role="combobox"
                     disabled={readOnly}
-                    className="w-auto h-7 text-inherit justify-center p-1 text-muted-foreground gap-1 hover:bg-transparent [&_svg]:!size-3"
+                    className="w-auto h-7 text-inherit justify-center items-center p-1 text-muted-foreground gap-1 hover:bg-transparent [&_svg]:!size-3"
                     style={chatBoxFont}
                   >
-                    {getModel(selectedModel)?.label || "Select Model"}
-                    <ChevronDown className="h-3 w-3" />
+                    {selectedLlm && (
+                      <ProviderLogo
+                        providerId={selectedLlm.provider}
+                        className="h-3.5 w-3.5 shrink-0"
+                      />
+                    )}
+                    <span className="truncate">
+                      {selectedLlm?.label || "Select Model"}
+                    </span>
+                    <ChevronDown className="h-3 w-3 shrink-0" />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent
@@ -1714,101 +1711,34 @@ export function ChatTextbox({
                             onOpenModelsSettings();
                             setIsModelComboboxOpen(false);
                           }}
-                          aria-label="Open model settings"
+                          aria-label="Add models to selector"
+                          title="Add models"
                         >
-                          <Settings className="h-3 w-3" />
+                          <Plus className="h-3 w-3" />
                         </Button>
                       )}
                     </div>
-                    <CommandEmpty className="!text-inherit py-6 text-center">
-                      No model found.
+                    <CommandEmpty className="!text-inherit py-6 text-center text-xs">
+                      {pinnedModels.length === 0
+                        ? "No models pinned. Use + to add models."
+                        : "No model found."}
                     </CommandEmpty>
                     <CommandList
                       className="scrollbar-hide overflow-y-auto overflow-x-hidden"
                       style={{ maxHeight: listMaxHeight }}
                     >
-                      {pinnedModels.length > 0 && (
-                        <CommandGroup
-                          heading="Pinned"
-                          className="[&_[cmdk-group-heading]]:!text-inherit [&_[cmdk-group-heading]]:opacity-60"
-                        >
-                          {pinnedModels.map((model, index) => {
-                            const ProviderIcon = model.icon;
-                            const isDragOver = dragOverIndex === index;
-                            const isLocked = model.isAccessible === false;
-                            return (
-                              <CommandItem
-                                key={model.value}
-                                value={`${model.label} ${model.value}`}
-                                onSelect={() => {
-                                  if (isLocked) {
-                                    onOpenProvidersSettings?.();
-                                    return;
-                                  }
-                                  onModelChange(model.value);
-                                  setIsModelComboboxOpen(false);
-                                  focusTextareaAfterPopoverSelect();
-                                }}
-                                className={cn(
-                                  "!text-inherit",
-                                  isLocked && "opacity-50 cursor-not-allowed"
-                                )}
-                                onDragOver={
-                                  onReorderPinned && !isLocked
-                                    ? (e: React.DragEvent) => handlePinnedDragOver(e, index)
-                                    : undefined
-                                }
-                                onDragLeave={
-                                  onReorderPinned && !isLocked ? handlePinnedDragLeave : undefined
-                                }
-                                onDrop={
-                                  onReorderPinned && !isLocked
-                                    ? (e: React.DragEvent) => handlePinnedDrop(e, index)
-                                    : undefined
-                                }
-                                style={
-                                  isDragOver
-                                    ? { ...chatBoxFont, backgroundColor: "hsl(var(--accent))" }
-                                    : chatBoxFont
-                                }
-                              >
-                                {onReorderPinned && !isLocked && (
-                                  <div
-                                    draggable
-                                    onDragStart={(e) => handlePinnedDragStart(e, index)}
-                                    className="cursor-grab touch-none opacity-50 hover:opacity-70 -ml-0.5 mr-1"
-                                    onClick={(e) => e.stopPropagation()}
-                                    onPointerDown={(e) => e.stopPropagation()}
-                                    aria-hidden
-                                  >
-                                    <GripVertical className="h-3 w-3" />
-                                  </div>
-                                )}
-                                <div className="flex items-center gap-2 min-w-0 flex-1">
-                                  {ProviderIcon && (
-                                    <ProviderIcon className="h-3.5 w-3.5 shrink-0 opacity-40" />
-                                  )}
-                                  <span className="truncate flex-1">{model.label}</span>
-                                </div>
-                              </CommandItem>
-                            );
-                          })}
-                        </CommandGroup>
-                      )}
-                      {pinnedModels.length > 0 && unpinnedModels.length > 0 && (
-                        <CommandSeparator />
-                      )}
                       <CommandGroup>
-                        {unpinnedModels.map((model) => {
+                        {pinnedModels.map((model, index) => {
                           const ProviderIcon = model.icon;
+                          const isDragOver = dragOverIndex === index;
                           const isLocked = model.isAccessible === false;
                           return (
                             <CommandItem
-                              key={model.value}
-                              value={`${model.label} ${model.value}`}
+                              key={`${model.provider}:${model.value}`}
+                              value={`${model.label} ${model.value} ${model.provider}`}
                               onSelect={() => {
                                 if (isLocked) {
-                                  onConfigureProvider?.();
+                                  onOpenProvidersSettings?.();
                                   return;
                                 }
                                 onModelChange(model.value);
@@ -1819,13 +1749,42 @@ export function ChatTextbox({
                                 "!text-inherit",
                                 isLocked && "opacity-50 cursor-not-allowed"
                               )}
-                              style={chatBoxFont}
+                              onDragOver={
+                                onReorderPinned && !isLocked
+                                  ? (e: React.DragEvent) => handlePinnedDragOver(e, index)
+                                  : undefined
+                              }
+                              onDragLeave={
+                                onReorderPinned && !isLocked ? handlePinnedDragLeave : undefined
+                              }
+                              onDrop={
+                                onReorderPinned && !isLocked
+                                  ? (e: React.DragEvent) => handlePinnedDrop(e, index)
+                                  : undefined
+                              }
+                              style={
+                                isDragOver
+                                  ? { ...chatBoxFont, backgroundColor: "hsl(var(--accent))" }
+                                  : chatBoxFont
+                              }
                             >
-                              <div className="flex items-center gap-2 flex-1">
+                              {onReorderPinned && !isLocked && (
+                                <div
+                                  draggable
+                                  onDragStart={(e) => handlePinnedDragStart(e, index)}
+                                  className="cursor-grab touch-none opacity-50 hover:opacity-70 -ml-0.5 mr-1"
+                                  onClick={(e) => e.stopPropagation()}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                  aria-hidden
+                                >
+                                  <GripVertical className="h-3 w-3" />
+                                </div>
+                              )}
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
                                 {ProviderIcon && (
-                                  <ProviderIcon className="h-3.5 w-3.5 opacity-40" />
+                                  <ProviderIcon className="h-3.5 w-3.5 shrink-0 opacity-40" />
                                 )}
-                                <span className="flex-1">{model.label}</span>
+                                <span className="truncate flex-1">{model.label}</span>
                               </div>
                             </CommandItem>
                           );

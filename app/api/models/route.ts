@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 
-import { CLIENT_MODEL_CATALOG } from "@/lib/agent/model-catalog";
+import { getMergedModelCatalog, getMergedProviderCatalog } from "@/lib/agent/model-catalog.server";
 
-/** Returns the checked-in OSS model catalog. */
+/** Returns the merged model catalog and provider metadata. */
 export async function GET() {
-  return NextResponse.json({ models: CLIENT_MODEL_CATALOG });
+  return NextResponse.json({
+    models: await getMergedModelCatalog(),
+    providers: await getMergedProviderCatalog(),
+  });
 }

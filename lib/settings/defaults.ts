@@ -45,6 +45,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
   shell: BUILTIN_SHELL_DEFAULTS,
   providers: {
     credentials: {},
+    addedProviderIds: [],
   },
 };
 

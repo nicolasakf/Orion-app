@@ -9,7 +9,7 @@
 import type { UIMessage } from "ai";
 import { callCompactionApi } from "@/lib/chat/compaction-client";
 import type { CompactionSummary } from "@/lib/chat/chat-storage";
-import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
+import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import { HARD_CAP_TOKENS, COMPACTION_RETENTION_TURNS, estimateMessageTokens } from "./token-budget";
 
 export interface CompactionResult {
@@ -59,7 +59,7 @@ export async function compactConversation(
     previousSummary?: CompactionSummary;
     userCredential?: unknown;
     model: string;
-    provider: SupportedProvider;
+    provider: ProviderId;
   }
 ): Promise<CompactionResult> {
   const retentionTurns = opts.retentionTurns ?? COMPACTION_RETENTION_TURNS;

@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useState, useCallback } from "react";
-import { RefreshCw, Search, LayoutGrid, List, Pin, Globe2 } from "lucide-react";
+import { RefreshCw, Search, LayoutGrid, List, Pin } from "lucide-react";
 import {
   cn,
   scheduleAfterMinDuration,
@@ -25,11 +25,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AutoRunConfirmDialog } from "@/components/common/auto-run-confirm-dialog";
+import { ProviderLogo } from "@/components/provider-logo";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
-import { DEFAULT_TITLE_GENERATION_MODEL_ID } from "@/lib/settings/defaults";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
 import { toast } from "sonner";
-import { OpenAI, Claude, Gemini, Grok, Ollama, LmStudio, Apple } from "@lobehub/icons";
 import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
 import {
   decodeLocalModelCatalogId,
@@ -37,9 +36,11 @@ import {
   isLocalProvider,
   normalizeLocalEndpointModels,
 } from "@/lib/agent/local-provider-models";
-import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
-
-type ProviderId = SupportedProvider;
+import { getVisibleProviderIds } from "@/lib/settings/visible-providers";
+import {
+  formatModelSelectionKey,
+  normalizePinnedModelKeys,
+} from "@/lib/agent/model-selection-key";
 
 interface ModelRow {
   model_id: string;
@@ -47,29 +48,6 @@ interface ModelRow {
   provider_id: string;
   created_at: string;
   pinned_by_default: boolean;
-}
-
-function getProviderIcon(provider: ProviderId) {
-  switch (provider) {
-    case "openai":
-      return OpenAI;
-    case "anthropic":
-      return Claude;
-    case "google":
-      return Gemini;
-    case "xai":
-      return Grok;
-    case "ollama":
-      return Ollama;
-    case "lmstudio":
-      return LmStudio;
-    case "mlx":
-      return Apple;
-    case "custom":
-      return Globe2;
-    default:
-      return undefined;
-  }
 }
 
 function getProviderDisplayName(providerId: string): string {
@@ -123,7 +101,7 @@ function ModelPinButton({
   );
 }
 
-/** Models tab: search, refresh, and pin models to the top of the model selector. */
+/** Models tab: search, refresh, and pin models shown in the chat model selector. */
 export function ModelsTab() {
   const { effectiveSettings, setUserSettings } = useOrionSettings();
   const [models, setModels] = useState<ModelRow[]>([]);
@@ -135,14 +113,10 @@ export function ModelsTab() {
   );
   const [autoRunConfirmOpen, setAutoRunConfirmOpen] = useState(false);
 
-  /** When the user has no pinned models, use catalog defaults. */
-  const pinnedModelIds = React.useMemo(() => {
-    const userPinned = effectiveSettings.chat.pinnedModelIds ?? [];
-    if (userPinned.length > 0) return userPinned;
-    return models
-      .filter((m) => m.pinned_by_default)
-      .map((m) => m.model_id);
-  }, [effectiveSettings.chat.pinnedModelIds, models]);
+  const visibleProviderIds = React.useMemo(
+    () => getVisibleProviderIds(effectiveSettings.providers),
+    [effectiveSettings.providers]
+  );
 
   const configuredLocalModelRows = React.useMemo<ModelRow[]>(() => {
     const credentials = effectiveSettings.providers?.credentials ?? {};
@@ -150,12 +124,25 @@ export function ModelsTab() {
     const now = new Date().toISOString();
 
     for (const [providerId, credential] of Object.entries(credentials)) {
-      if (!isLocalProvider(providerId) || credential?.type !== "local_endpoint") continue;
+      if (credential?.type !== "local_endpoint") continue;
 
-      for (const model of normalizeLocalEndpointModels(providerId, credential)) {
+      const endpointModels = isLocalProvider(providerId)
+        ? normalizeLocalEndpointModels(providerId, credential)
+        : [
+            {
+              modelId: credential.modelId,
+              label: credential.label ?? credential.modelId,
+              enabled: true,
+            },
+            ...(credential.models ?? []),
+          ];
+
+      for (const model of endpointModels) {
         if (model.enabled === false) continue;
         rows.push({
-          model_id: encodeLocalModelCatalogId(providerId, model.modelId),
+          model_id: isLocalProvider(providerId)
+            ? encodeLocalModelCatalogId(providerId, model.modelId)
+            : model.modelId,
           label: model.label ?? getLocalModelLabel(providerId, model.modelId) ?? model.modelId,
           provider_id: providerId,
           created_at: now,
@@ -167,16 +154,33 @@ export function ModelsTab() {
     return rows;
   }, [effectiveSettings.providers?.credentials]);
 
+  const catalogModelsForVisibleProviders = React.useMemo(
+    () => models.filter((model) => visibleProviderIds.has(model.provider_id)),
+    [models, visibleProviderIds]
+  );
+
   const allModels = React.useMemo<ModelRow[]>(() => {
     const configuredLocalProviders = new Set(
       configuredLocalModelRows.map((model) => model.provider_id)
     );
-    const staticRows = models.filter(
+    const staticRows = catalogModelsForVisibleProviders.filter(
       (model) => !(isLocalProvider(model.provider_id) && configuredLocalProviders.has(model.provider_id))
     );
 
     return [...staticRows, ...configuredLocalModelRows];
-  }, [configuredLocalModelRows, models]);
+  }, [catalogModelsForVisibleProviders, configuredLocalModelRows]);
+
+  /** When the user has no pinned models, use catalog defaults from visible providers only. */
+  const pinnedModelIds = React.useMemo(() => {
+    const userPinned = effectiveSettings.chat.pinnedModelIds ?? [];
+    const base =
+      userPinned.length > 0
+        ? userPinned
+        : allModels
+            .filter((m) => m.pinned_by_default)
+            .map((m) => formatModelSelectionKey(m.provider_id, m.model_id));
+    return normalizePinnedModelKeys(base, allModels);
+  }, [allModels, effectiveSettings.chat.pinnedModelIds]);
 
   const fetchModels = useCallback(async () => {
     setIsLoading(true);
@@ -194,11 +198,6 @@ export function ModelsTab() {
         pinned_by_default: m.pinned_by_default,
       }));
       setModels(rows);
-      setExpandedProviders((prev) => {
-        const next = new Set(prev);
-        rows.forEach((r) => next.add(r.provider_id));
-        return next;
-      });
     } catch (error) {
       console.error("Failed to fetch models:", error);
       toast.error("Failed to fetch models");
@@ -213,42 +212,19 @@ export function ModelsTab() {
     void fetchModels();
   }, [fetchModels]);
 
-  /** Backfill invalid stored title models once the catalog has loaded. */
+  /** Expand provider groups for configured providers once catalog rows are available. */
   React.useEffect(() => {
-    // Cloud catalog models are unavailable until fetchModels completes; validating
-    // earlier would treat cloud IDs as invalid and fall back to the first local model.
-    if (isLoading || models.length === 0 || allModels.length === 0) return;
-
-    const currentId = effectiveSettings.chat.titleGenerationModelId;
-    if (allModels.some((model) => model.model_id === currentId)) return;
-
-    const preferred = allModels.find(
-      (model) => model.model_id === DEFAULT_TITLE_GENERATION_MODEL_ID
-    );
-    const fallbackId = preferred?.model_id ?? allModels[0]?.model_id;
-    if (!fallbackId || fallbackId === currentId) return;
-
-    void setUserSettings((current) => {
-      const latestId = current.chat.titleGenerationModelId;
-      if (allModels.some((model) => model.model_id === latestId)) {
-        return current;
+    if (models.length === 0) return;
+    setExpandedProviders((prev) => {
+      const next = new Set(prev);
+      for (const row of models) {
+        if (visibleProviderIds.has(row.provider_id)) {
+          next.add(row.provider_id);
+        }
       }
-
-      return {
-        ...current,
-        chat: {
-          ...current.chat,
-          titleGenerationModelId: fallbackId,
-        },
-      };
+      return next;
     });
-  }, [
-    allModels,
-    effectiveSettings.chat.titleGenerationModelId,
-    isLoading,
-    models.length,
-    setUserSettings,
-  ]);
+  }, [models, visibleProviderIds]);
 
   const modelsWithConfiguredLabels = React.useMemo(() => {
     const credentials = effectiveSettings.providers?.credentials ?? {};
@@ -270,7 +246,9 @@ export function ModelsTab() {
 
   const titleGenerationModels = React.useMemo(() => {
     return [...modelsWithConfiguredLabels].sort((a, b) =>
-      a.label.localeCompare(b.label)
+      formatModelSelectionKey(a.provider_id, a.model_id).localeCompare(
+        formatModelSelectionKey(b.provider_id, b.model_id)
+      )
     );
   }, [modelsWithConfiguredLabels]);
 
@@ -287,13 +265,13 @@ export function ModelsTab() {
   /** Sort: pinned first (preserving pin order), then by created_at (latest first). */
   const sortedModels = React.useMemo(() => {
     return [...filteredModels].sort((a, b) => {
-      const aPinned = pinnedModelIds.includes(a.model_id);
-      const bPinned = pinnedModelIds.includes(b.model_id);
+      const aKey = formatModelSelectionKey(a.provider_id, a.model_id);
+      const bKey = formatModelSelectionKey(b.provider_id, b.model_id);
+      const aPinned = pinnedModelIds.includes(aKey);
+      const bPinned = pinnedModelIds.includes(bKey);
       if (aPinned !== bPinned) return aPinned ? -1 : 1;
       if (aPinned) {
-        return (
-          pinnedModelIds.indexOf(a.model_id) - pinnedModelIds.indexOf(b.model_id)
-        );
+        return pinnedModelIds.indexOf(aKey) - pinnedModelIds.indexOf(bKey);
       }
       return (
         new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
@@ -311,18 +289,23 @@ export function ModelsTab() {
     return map;
   }, [sortedModels]);
 
-  const isModelPinned = (modelId: string) => pinnedModelIds.includes(modelId);
+  const isModelPinned = (providerId: string, modelId: string) =>
+    pinnedModelIds.includes(formatModelSelectionKey(providerId, modelId));
 
-  const setModelPinned = (modelId: string, pinned: boolean) => {
+  const setModelPinned = (providerId: string, modelId: string, pinned: boolean) => {
+    const pinKey = formatModelSelectionKey(providerId, modelId);
     void setUserSettings((current) => {
       const userPinned = current.chat.pinnedModelIds ?? [];
       // When user has no pins, we're using defaults—use effective list as base for the mutation
-      const basePinned = userPinned.length > 0 ? userPinned : pinnedModelIds;
+      const basePinned =
+        userPinned.length > 0
+          ? normalizePinnedModelKeys(userPinned, allModels)
+          : pinnedModelIds;
       const nextPinned = pinned
-        ? basePinned.includes(modelId)
+        ? basePinned.includes(pinKey)
           ? basePinned
-          : [...basePinned, modelId]
-        : basePinned.filter((id) => id !== modelId);
+          : [...basePinned, pinKey]
+        : basePinned.filter((id) => id !== pinKey && id !== modelId);
       return {
         ...current,
         chat: {
@@ -417,17 +400,28 @@ export function ModelsTab() {
                   ...current.chat,
                   titleGenerationModelId: modelId,
                 },
-              }));
+              })).catch((error) => {
+                console.error("Failed to save title generation model:", error);
+                toast.error(
+                  error instanceof Error
+                    ? error.message
+                    : "Failed to save title generation model."
+                );
+              });
             }}
             disabled={isLoading || titleGenerationModels.length === 0}
           >
-            <SelectTrigger className="w-[220px]">
+            <SelectTrigger className="w-[280px] font-mono text-xs">
               <SelectValue placeholder="Select model" />
             </SelectTrigger>
             <SelectContent>
               {titleGenerationModels.map((model) => (
-                <SelectItem key={model.model_id} value={model.model_id}>
-                  {model.label}
+                <SelectItem
+                  key={model.model_id}
+                  value={model.model_id}
+                  className="font-mono text-xs"
+                >
+                  {formatModelSelectionKey(model.provider_id, model.model_id)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -490,9 +484,6 @@ export function ModelsTab() {
             .sort(([a], [b]) => a.localeCompare(b))
             .map(([providerId, providerModels]) => {
               const isExpanded = expandedProviders.has(providerId);
-              const ProviderIcon = getProviderIcon(
-                providerId as ProviderId
-              );
               const displayName = getProviderDisplayName(providerId);
 
               return (
@@ -511,26 +502,24 @@ export function ModelsTab() {
                       ) : (
                         <ChevronRight className="h-4 w-4 shrink-0" />
                       )}
-                      {ProviderIcon && (
-                        <ProviderIcon className="h-4 w-4 opacity-70" />
-                      )}
+                      <ProviderLogo providerId={providerId} className="h-4 w-4 opacity-70" />
                       <span>{displayName}</span>
                     </button>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
                     <div className="pl-5 pr-2 pb-1 space-y-0.5">
                       {providerModels.map((model) => {
-                        const pinned = isModelPinned(model.model_id);
+                        const pinned = isModelPinned(model.provider_id, model.model_id);
                         return (
                           <div
-                            key={model.model_id}
+                            key={formatModelSelectionKey(model.provider_id, model.model_id)}
                             className="corner-squircle group flex items-center justify-between py-1 px-2 rounded hover:bg-accent/50 min-h-8"
                           >
                             <span className="text-sm">{model.label}</span>
                             <ModelPinButton
                               pinned={pinned}
                               onToggle={() =>
-                                setModelPinned(model.model_id, !pinned)
+                                setModelPinned(model.provider_id, model.model_id, !pinned)
                               }
                             />
                           </div>
@@ -545,22 +534,21 @@ export function ModelsTab() {
       ) : (
         <div className="flex flex-col gap-0.5">
           {sortedModels.map((model) => {
-            const pinned = isModelPinned(model.model_id);
-            const ProviderIcon = getProviderIcon(model.provider_id as ProviderId);
+            const pinned = isModelPinned(model.provider_id, model.model_id);
             return (
               <div
-                key={model.model_id}
+                key={formatModelSelectionKey(model.provider_id, model.model_id)}
                 className="corner-squircle group flex items-center justify-between py-1 px-2 rounded hover:bg-accent/50 min-h-8"
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  {ProviderIcon && (
-                    <ProviderIcon className="h-3.5 w-3.5 shrink-0 opacity-70" />
-                  )}
+                  <ProviderLogo providerId={model.provider_id} className="h-3.5 w-3.5 opacity-70" />
                   <span className="text-sm truncate">{model.label}</span>
                 </div>
                 <ModelPinButton
                   pinned={pinned}
-                  onToggle={() => setModelPinned(model.model_id, !pinned)}
+                  onToggle={() =>
+                    setModelPinned(model.provider_id, model.model_id, !pinned)
+                  }
                 />
               </div>
             );
@@ -568,9 +556,11 @@ export function ModelsTab() {
         </div>
       )}
 
-      {models.length === 0 && !isLoading && (
+      {allModels.length === 0 && !isLoading && (
         <p className="text-sm text-muted-foreground">
-          No models found. Click refresh to load models.
+          {visibleProviderIds.size === 0
+            ? "Add a provider on the Providers tab to browse and pin models."
+            : "No models found for your providers. Click refresh to reload."}
         </p>
       )}
 

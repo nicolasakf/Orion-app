@@ -38,7 +38,7 @@ export {
 } from "./runtime-store";
 
 // Model gateway types (client-safe). Implementation: `@/lib/agent/model-gateway`.
-export type { SupportedProvider } from "./model-gateway-types";
+export type { ProviderId, SupportedProvider } from "./model-gateway-types";
 
 // React Provider - UI integration
 export {

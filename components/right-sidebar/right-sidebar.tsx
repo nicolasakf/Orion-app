@@ -9,8 +9,7 @@ import {
   DefaultChatTransport,
   lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
-import { OpenAI, Claude, Gemini, Grok, Ollama, LmStudio, Apple } from "@lobehub/icons";
-import { Bot, ChevronLeft, Globe2 } from "lucide-react";
+import { Bot, ChevronLeft } from "lucide-react";
 
 import { toast } from "sonner";
 import {
@@ -67,6 +66,7 @@ import { useKernelVariables } from "@/hooks/use-kernel-variables";
 import { usePlatformOs } from "@/hooks/use-platform";
 import { useOpenSettings } from "@/contexts/open-settings-context";
 import { AutoRunConfirmDialog } from "@/components/common/auto-run-confirm-dialog";
+import { ProviderLogo } from "@/components/provider-logo";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -81,7 +81,7 @@ import { Button } from "@/components/ui/button";
 
 import { runSubagent } from "@/lib/agent/subagents/client-runner";
 import { getSubagentStepDescription } from "./tool-invocation-helpers";
-import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
+import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { ModelCatalogEntry } from "@/lib/agent/model-catalog";
 import { ChatToolbar } from "./chat-toolbar";
 import { ChatBody } from "./chat-body";
@@ -112,6 +112,12 @@ import {
   resolveSelectedModelFallback,
   saveSelectedModelToSession,
 } from "./model-selection";
+import {
+  findModelBySelectionKey,
+  formatModelSelectionKey,
+  normalizePinnedModelKeys,
+  resolveCatalogModelIdForApi,
+} from "@/lib/agent/model-selection-key";
 
 /**
  * Extract assistant text from `/api/chat` stream responses for title generation.
@@ -556,20 +562,11 @@ export function RightSidebar({
   /** Prevents concurrent compaction runs. */
   const compactionInFlightRef = useRef(false);
 
-  /** Map provider ID to its icon component */
-  const getProviderIcon = (provider: SupportedProvider) => {
-    switch (provider) {
-      case "openai": return OpenAI;
-      case "anthropic": return Claude;
-      case "google": return Gemini;
-      case "xai": return Grok;
-      case "ollama": return Ollama;
-      case "lmstudio": return LmStudio;
-      case "mlx": return Apple;
-      case "custom": return Globe2;
-      default: return undefined;
-    }
-  };
+  /** Map provider ID to the models.dev provider logo component. */
+  const getProviderIcon = (provider: ProviderId) =>
+    function Icon(props: { className?: string }) {
+      return <ProviderLogo providerId={provider} className={props.className} />;
+    };
 
   // Fetch available models from the static OSS catalog.
   useEffect(() => {
@@ -635,10 +632,13 @@ export function RightSidebar({
   /** When user has no pinned models, use models with pinned_by_default from DB. */
   const pinnedModelIds = React.useMemo(() => {
     const userPinned = effectiveSettings.chat.pinnedModelIds ?? [];
-    if (userPinned.length > 0) return userPinned;
-    return modelRows
-      .filter((m) => m.pinned_by_default)
-      .map((m) => m.model_id);
+    const base =
+      userPinned.length > 0
+        ? userPinned
+        : modelRows
+            .filter((m) => m.pinned_by_default)
+            .map((m) => formatModelSelectionKey(m.provider_id, m.model_id));
+    return normalizePinnedModelKeys(base, modelRows);
   }, [effectiveSettings.chat.pinnedModelIds, modelRows]);
 
   const configuredLocalProviderModels = React.useMemo<LLM[]>(() => {
@@ -646,12 +646,26 @@ export function RightSidebar({
     const rows: LLM[] = [];
 
     for (const [providerId, credential] of Object.entries(credentials)) {
-      if (!isLocalProvider(providerId) || credential?.type !== "local_endpoint") continue;
+      if (credential?.type !== "local_endpoint") continue;
 
-      for (const model of normalizeLocalEndpointModels(providerId, credential)) {
+      const endpointModels = isLocalProvider(providerId)
+        ? normalizeLocalEndpointModels(providerId, credential)
+        : [
+            {
+              modelId: credential.modelId,
+              label: credential.label ?? credential.modelId,
+              enabled: true,
+            },
+            ...(credential.models ?? []),
+          ];
+
+      for (const model of endpointModels) {
         if (model.enabled === false) continue;
+        const value = isLocalProvider(providerId)
+          ? encodeLocalModelCatalogId(providerId, model.modelId)
+          : model.modelId;
         rows.push({
-          value: encodeLocalModelCatalogId(providerId, model.modelId),
+          value,
           label: model.label ?? getLocalModelLabel(providerId, model.modelId) ?? model.modelId,
           provider: providerId,
           inputPrice: 0,
@@ -678,7 +692,7 @@ export function RightSidebar({
   }, [configuredLocalProviderModels, models]);
 
   const getModel = useCallback(
-    (modelName: string) => allModels.find((model) => model.value === modelName),
+    (modelKey: string) => findModelBySelectionKey(allModels, modelKey),
     [allModels]
   );
 
@@ -946,6 +960,7 @@ export function RightSidebar({
     return paths;
   }, [currentChat?.subagentSessions]);
   const modelInfo = getModel(selectedModel);
+  const apiModelId = resolveCatalogModelIdForApi(selectedModel, modelInfo);
 
   /** Refresh persisted, non-empty edit checkpoints and their current undo/redo state. */
   const refreshCheckpointStatuses = useCallback(async (): Promise<void> => {
@@ -1692,16 +1707,20 @@ export function RightSidebar({
     ): ProviderCredential | undefined => {
       if (!provider) return undefined;
       const credential = effectiveSettings.providers?.credentials?.[provider] ?? undefined;
-      if (credential?.type !== "local_endpoint" || !isLocalProvider(provider) || !modelId) {
+      if (credential?.type !== "local_endpoint" || !modelId) {
         return credential;
       }
 
-      const runtimeModelId = resolveLocalRuntimeModelId(provider, modelId, credential);
+      const runtimeModelId = isLocalProvider(provider)
+        ? resolveLocalRuntimeModelId(provider, modelId, credential)
+        : modelId;
       if (!runtimeModelId) return credential;
 
-      const configuredModel = normalizeLocalEndpointModels(provider, credential).find(
-        (model) => model.modelId === runtimeModelId
-      );
+      const configuredModel = isLocalProvider(provider)
+        ? normalizeLocalEndpointModels(provider, credential).find(
+            (model) => model.modelId === runtimeModelId
+          )
+        : credential.models?.find((model) => model.modelId === runtimeModelId);
 
       return {
         ...credential,
@@ -1783,7 +1802,7 @@ export function RightSidebar({
       const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
       return {
         provider: modelInfo?.provider,
-        model: selectedModel,
+        model: apiModelId,
         interactionMode,
         agentMode: interactionMode === "Agent",
         chatId: effectiveChatId ?? undefined,
@@ -1808,7 +1827,7 @@ export function RightSidebar({
     const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
     bodyRef.current = {
       provider: modelInfo?.provider,
-      model: selectedModel,
+      model: apiModelId,
       interactionMode,
       agentMode: interactionMode === "Agent",
       chatId: effectiveChatId ?? undefined,
@@ -1826,6 +1845,7 @@ export function RightSidebar({
       agentCommunicationStyle,
     };
   }, [
+    apiModelId,
     modelInfo?.provider,
     selectedModel,
     interactionMode,
@@ -1948,7 +1968,7 @@ export function RightSidebar({
           chatId,
           previousSummary: prevSummary,
           userCredential,
-          model: selectedModel,
+          model: apiModelId,
           provider: modelInfo.provider,
           retentionTurns: 2,
         })
@@ -2102,7 +2122,7 @@ export function RightSidebar({
         chatId: effectiveChatId,
         previousSummary: currentChat?.compactionSummary,
         userCredential,
-        model: selectedModel,
+        model: apiModelId,
         provider: modelInfo.provider,
         ...opts,
       });
@@ -2468,7 +2488,7 @@ export function RightSidebar({
                 availableSubagents: assistant.availableSubagents,
                 description,
                 modelId: modelResolution.modelId,
-                providerId: modelResolution.providerId as SupportedProvider,
+                providerId: modelResolution.providerId,
                 modelSettings: modelResolution.modelSettings,
                 workspaceDirectory: workspaceDirectory ?? undefined,
                 notebookPath,
@@ -3186,7 +3206,7 @@ export function RightSidebar({
         {
           body: {
             provider: modelInfo?.provider,
-            model: selectedModel,
+            model: apiModelId,
             interactionMode,
             agentMode: interactionMode === "Agent",
             chatId: effectiveChatId ?? undefined,
@@ -3304,7 +3324,7 @@ export function RightSidebar({
           {
             body: {
               provider: modelInfo?.provider,
-              model: selectedModel,
+              model: apiModelId,
               interactionMode,
               agentMode: interactionMode === "Agent",
               chatId: effectiveChatId ?? undefined,
@@ -3352,7 +3372,7 @@ export function RightSidebar({
           {
             body: {
               provider: modelInfo?.provider,
-              model: selectedModel,
+              model: apiModelId,
               interactionMode,
               agentMode: interactionMode === "Agent",
               chatId: effectiveChatId ?? undefined,
@@ -3431,7 +3451,7 @@ export function RightSidebar({
         const bodyPayload = {
           messages: newMessages.map((m) => ({ role: m.role, content: getTextContent(m) })),
           provider: modelInfo?.provider,
-          model: selectedModel,
+          model: apiModelId,
           interactionMode,
           agentMode: interactionMode === "Agent",
           chatId: effectiveChatId ?? undefined,

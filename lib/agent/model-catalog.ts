@@ -1,26 +1,36 @@
-import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
+import type { ProviderId } from "@/lib/agent/model-gateway-types";
+
+export type ModelCatalogSource = "snapshot" | "models_dev" | "user" | "local";
 
 export interface ModelCatalogEntry {
   model_id: string;
   label: string;
-  provider_id: SupportedProvider;
+  provider_id: ProviderId;
+  api_model_id?: string;
   input_price_per_1m: number | null;
   output_price_per_1m: number | null;
   cached_price_per_1m: number | null;
   context_window: number | null;
   max_output_tokens: number | null;
   supports_image_input?: boolean;
+  supports_tool_calling?: boolean;
+  supports_reasoning?: boolean;
   long_context_threshold: number | null;
   long_context_input_price_per_1m: number | null;
   long_context_output_price_per_1m: number | null;
   client_avail: boolean;
   pinned_by_default: boolean;
   created_at: string;
+  source: ModelCatalogSource;
 }
+
+type RawModelCatalogEntry = Omit<ModelCatalogEntry, "source"> & {
+  source?: ModelCatalogSource;
+};
 
 const CATALOG_CREATED_AT = "2026-05-17T00:00:00.000Z";
 
-export const MODEL_CATALOG: ModelCatalogEntry[] = [
+export const MODEL_CATALOG: RawModelCatalogEntry[] = [
   {
     model_id: "ollama-local",
     label: "Ollama",
@@ -78,6 +88,101 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
     cached_price_per_1m: null,
     context_window: 32768,
     max_output_tokens: null,
+    long_context_threshold: null,
+    long_context_input_price_per_1m: null,
+    long_context_output_price_per_1m: null,
+    client_avail: true,
+    pinned_by_default: false,
+    created_at: CATALOG_CREATED_AT,
+  },
+  {
+    model_id: "llama-3.3-70b-versatile",
+    label: "Llama 3.3 70B",
+    provider_id: "groq",
+    input_price_per_1m: null,
+    output_price_per_1m: null,
+    cached_price_per_1m: null,
+    context_window: 131072,
+    max_output_tokens: null,
+    supports_image_input: false,
+    supports_tool_calling: true,
+    supports_reasoning: false,
+    long_context_threshold: null,
+    long_context_input_price_per_1m: null,
+    long_context_output_price_per_1m: null,
+    client_avail: true,
+    pinned_by_default: false,
+    created_at: CATALOG_CREATED_AT,
+  },
+  {
+    model_id: "qwen/qwen3-32b",
+    label: "Qwen3 32B",
+    provider_id: "groq",
+    input_price_per_1m: null,
+    output_price_per_1m: null,
+    cached_price_per_1m: null,
+    context_window: 131072,
+    max_output_tokens: null,
+    supports_image_input: false,
+    supports_tool_calling: true,
+    supports_reasoning: true,
+    long_context_threshold: null,
+    long_context_input_price_per_1m: null,
+    long_context_output_price_per_1m: null,
+    client_avail: true,
+    pinned_by_default: false,
+    created_at: CATALOG_CREATED_AT,
+  },
+  {
+    model_id: "llama-4-scout-17b-16e-instruct",
+    label: "Llama 4 Scout",
+    provider_id: "cerebras",
+    input_price_per_1m: null,
+    output_price_per_1m: null,
+    cached_price_per_1m: null,
+    context_window: 131072,
+    max_output_tokens: null,
+    supports_image_input: false,
+    supports_tool_calling: true,
+    supports_reasoning: false,
+    long_context_threshold: null,
+    long_context_input_price_per_1m: null,
+    long_context_output_price_per_1m: null,
+    client_avail: true,
+    pinned_by_default: false,
+    created_at: CATALOG_CREATED_AT,
+  },
+  {
+    model_id: "openai/gpt-oss-120b",
+    label: "GPT-OSS 120B",
+    provider_id: "vercel",
+    input_price_per_1m: null,
+    output_price_per_1m: null,
+    cached_price_per_1m: null,
+    context_window: 131072,
+    max_output_tokens: null,
+    supports_image_input: false,
+    supports_tool_calling: true,
+    supports_reasoning: true,
+    long_context_threshold: null,
+    long_context_input_price_per_1m: null,
+    long_context_output_price_per_1m: null,
+    client_avail: true,
+    pinned_by_default: false,
+    created_at: CATALOG_CREATED_AT,
+  },
+  {
+    model_id: "moonshotai/kimi-k2.5",
+    label: "Kimi K2.5",
+    provider_id: "vercel",
+    input_price_per_1m: null,
+    output_price_per_1m: null,
+    cached_price_per_1m: null,
+    context_window: 131072,
+    max_output_tokens: null,
+    supports_image_input: false,
+    supports_tool_calling: true,
+    supports_reasoning: true,
     long_context_threshold: null,
     long_context_input_price_per_1m: null,
     long_context_output_price_per_1m: null,
@@ -728,7 +833,7 @@ export const MODEL_CATALOG: ModelCatalogEntry[] = [
 ];
 
 /** Hosted catalog models are known multimodal unless explicitly overridden. */
-function defaultSupportsImageInput(model: ModelCatalogEntry): boolean {
+function defaultSupportsImageInput(model: { provider_id: ProviderId }): boolean {
   if (
     model.provider_id === "ollama" ||
     model.provider_id === "lmstudio" ||
@@ -744,6 +849,7 @@ export const CLIENT_MODEL_CATALOG = MODEL_CATALOG.filter(
   (model) => model.client_avail
 ).map((model) => ({
   ...model,
+  source: model.source ?? "snapshot",
   supports_image_input: model.supports_image_input ?? defaultSupportsImageInput(model),
 }));
 
@@ -753,15 +859,53 @@ export function getModelCatalogEntry(
   return CLIENT_MODEL_CATALOG.find((model) => model.model_id === modelId);
 }
 
-export function isKnownProvider(provider: string): provider is SupportedProvider {
+export function isKnownProvider(provider: string): provider is ProviderId {
   return (
     provider === "openai" ||
     provider === "anthropic" ||
     provider === "google" ||
     provider === "xai" ||
+    provider === "groq" ||
+    provider === "cerebras" ||
+    provider === "vercel" ||
     provider === "ollama" ||
     provider === "lmstudio" ||
     provider === "mlx" ||
-    provider === "custom"
+    provider === "custom" ||
+    CLIENT_MODEL_CATALOG.some((model) => model.provider_id === provider)
   );
+}
+
+export interface ProviderCatalogMeta {
+  id: ProviderId;
+  label: string;
+  credentialKind: "api_key" | "local_endpoint";
+  apiBaseUrl?: string;
+  source?: "snapshot" | "models_dev" | "user";
+}
+
+const PROVIDER_LABELS: Record<string, string> = {
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  google: "Google",
+  xai: "xAI",
+  groq: "Groq",
+  cerebras: "Cerebras",
+  vercel: "Vercel AI Gateway",
+  ollama: "Ollama",
+  lmstudio: "LM Studio",
+  mlx: "MLX",
+  custom: "Custom Endpoint",
+};
+
+export function getProviderCatalogMeta(): ProviderCatalogMeta[] {
+  return Array.from(new Set(CLIENT_MODEL_CATALOG.map((model) => model.provider_id))).map((id) => ({
+    id,
+    label: PROVIDER_LABELS[id] ?? id,
+    credentialKind:
+      id === "ollama" || id === "lmstudio" || id === "mlx" || id === "custom"
+        ? "local_endpoint"
+        : "api_key",
+    source: "snapshot",
+  }));
 }

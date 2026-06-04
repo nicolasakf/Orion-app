@@ -1,12 +1,9 @@
-
 import { z } from "zod";
-import { createOpenAI } from "@ai-sdk/openai";
-import { createAnthropic } from "@ai-sdk/anthropic";
-import { createGoogleGenerativeAI } from "@ai-sdk/google";
-import { normalizeOpenAICompatibleBaseUrl } from "@/lib/agent/model-gateway";
+
+import { normalizeOpenAICompatibleBaseUrl } from "@/lib/agent/providers/utils";
 
 const RequestSchema = z.object({
-  provider: z.enum(["openai", "anthropic", "google", "xai", "ollama", "lmstudio", "mlx", "custom"]),
+  provider: z.string().min(1),
   apiKey: z.string().optional(),
   baseUrl: z.string().optional(),
   modelId: z.string().optional(),
@@ -80,12 +77,20 @@ async function validateProviderCredential(
 
   switch (provider) {
     case "openai":
-    case "xai": {
+    case "xai":
+    case "groq":
+    case "cerebras": {
       if (!apiKey) {
         throw new Error("API key is required.");
       }
-      const baseURL = provider === "xai" ? "https://api.x.ai/v1" : undefined;
-      const openai = createOpenAI({ apiKey, ...(baseURL && { baseURL }) });
+      const baseURL =
+        provider === "xai"
+          ? "https://api.x.ai/v1"
+          : provider === "groq"
+            ? "https://api.groq.com/openai/v1"
+            : provider === "cerebras"
+              ? "https://api.cerebras.ai/v1"
+              : undefined;
       // Use fetch directly to hit the models list endpoint — lightweight, no streaming.
       const url = baseURL ? `${baseURL}/models` : "https://api.openai.com/v1/models";
       const res = await fetch(url, {
@@ -96,7 +101,13 @@ async function validateProviderCredential(
         const data = await res.json().catch(() => ({})) as { error?: { message?: string } };
         throw new Error(data?.error?.message ?? `HTTP ${res.status}`);
       }
-      void openai; // used for type import side-effect only
+      return {};
+    }
+
+    case "vercel": {
+      if (!apiKey) {
+        throw new Error("API key is required.");
+      }
       return {};
     }
 
@@ -104,7 +115,6 @@ async function validateProviderCredential(
       if (!apiKey) {
         throw new Error("API key is required.");
       }
-      void createAnthropic; // ensure import is used
       const res = await fetch("https://api.anthropic.com/v1/models", {
         headers: {
           "x-api-key": apiKey,
@@ -123,7 +133,6 @@ async function validateProviderCredential(
       if (!apiKey) {
         throw new Error("API key is required.");
       }
-      void createGoogleGenerativeAI; // ensure import is used
       const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
         { signal: AbortSignal.timeout(10_000) }
@@ -148,7 +157,12 @@ async function validateProviderCredential(
     }
 
     default:
-      throw new Error(`Unknown provider: ${provider}`);
+      if (!baseUrl) {
+        throw new Error("Base URL is required for custom providers.");
+      }
+      return {
+        models: await validateOpenAICompatibleEndpoint(baseUrl, modelId, apiKey),
+      };
   }
 }
 

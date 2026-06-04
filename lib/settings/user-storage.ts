@@ -1,6 +1,7 @@
 import { z } from "zod";
 
-import { createDefaultUserSettingsDocument } from "@/lib/settings/defaults";
+import { createDefaultUserSettingsDocument, DEFAULT_SETTINGS } from "@/lib/settings/defaults";
+import { mergeSettings } from "@/lib/settings/merge";
 import { migrateUserSettingsDocument } from "@/lib/settings/migrations";
 import type { UserSettingsDocument } from "@/lib/settings/schema";
 import { UserSettingsDocumentSchema } from "@/lib/settings/schema";
@@ -206,10 +207,15 @@ export async function setUserSettingsDocument(
     options.providerCredentialWriteMode ?? "merge"
   );
 
+  const documentForApi: UserSettingsDocument = {
+    version: document.version,
+    settings: mergeSettings(DEFAULT_SETTINGS, document.settings),
+  };
+
   const response = await fetch(SETTINGS_API_PATH, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(stripProviderCredentials(document)),
+    body: JSON.stringify(stripProviderCredentials(documentForApi)),
   });
 
   if (!response.ok) {

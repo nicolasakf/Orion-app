@@ -1,6 +1,6 @@
-import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
+import type { ProviderId } from "@/lib/agent/model-gateway-types";
 
-type LocalProvider = Extract<SupportedProvider, "ollama" | "lmstudio" | "mlx" | "custom">;
+type LocalProvider = "ollama" | "lmstudio" | "mlx" | "custom";
 
 export const LOCAL_PROVIDER_MODEL_LABELS: Record<LocalProvider, Record<string, string>> = {
   ollama: {
@@ -70,7 +70,7 @@ export const LOCAL_PROVIDER_MODEL_LABELS: Record<LocalProvider, Record<string, s
 
 /** Looks up a friendly label for common local model IDs. */
 export function getLocalModelLabel(
-  provider: SupportedProvider,
+  provider: ProviderId,
   modelId: string
 ): string | undefined {
   if (

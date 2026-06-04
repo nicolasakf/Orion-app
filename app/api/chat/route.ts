@@ -6,8 +6,10 @@ import {
   getModelGateway,
   GatewayConfigError,
 } from "@/lib/agent/model-gateway";
-import type { CredentialMode, SupportedProvider } from "@/lib/agent/model-gateway-types";
+import type { CredentialMode, ProviderId } from "@/lib/agent/model-gateway-types";
 import { getModelCatalogEntry, isKnownProvider } from "@/lib/agent/model-catalog";
+import { getMergedModelCatalogEntry } from "@/lib/agent/model-catalog.server";
+import { isProviderSupported, getProviderAdapter } from "@/lib/agent/providers/registry";
 import {
   decodeLocalModelCatalogId,
   getStaticLocalModelId,
@@ -29,7 +31,7 @@ import {
 // ── Zod schema for user-provided credentials (BYOK or ChatGPT OAuth) ──────────
 // Must mirror ProviderCredentialSchema in lib/settings/schema.ts.
 const UserCredentialSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("api_key"), apiKey: z.string().min(1) }),
+  z.object({ type: z.literal("api_key"), apiKey: z.string().min(1), baseUrl: z.string().optional() }),
   z.object({
     type: z.literal("chatgpt_oauth"),
     accessToken: z.string().min(1),
@@ -90,26 +92,32 @@ function parseClientPlatformOs(raw: unknown): PlatformOS | undefined {
 }
 
 /** Allows static catalog models plus per-endpoint local runtime model IDs. */
-function isAvailableModelSelection(
-  providerId: SupportedProvider,
+async function isAvailableModelSelection(
+  providerId: ProviderId,
   modelId: string,
   credential: CredentialMode | undefined
-): boolean {
-  const catalogModel = getModelCatalogEntry(modelId);
-  if (catalogModel?.provider_id === providerId) return true;
+): Promise<boolean> {
+  if (await getMergedModelCatalogEntry(providerId, modelId)) return true;
 
-  if (!isLocalProvider(providerId) || credential?.type !== "local_endpoint") {
+  if (credential?.type !== "local_endpoint") {
     return false;
   }
 
-  const decoded = decodeLocalModelCatalogId(modelId);
-  return decoded?.provider === providerId && decoded.providerModelId === credential.modelId;
+  if (isLocalProvider(providerId)) {
+    const decoded = decodeLocalModelCatalogId(modelId);
+    return decoded?.provider === providerId && decoded.providerModelId === credential.modelId;
+  }
+
+  return (
+    credential.modelId === modelId ||
+    credential.models?.some((model) => model.enabled !== false && model.modelId === modelId) === true
+  );
 }
 
 /** Uses the static local provider row for pricing when a runtime model is dynamic. */
-function getPricingCatalogModel(providerId: SupportedProvider, modelId: string): ModelPricing {
+async function getPricingCatalogModel(providerId: ProviderId, modelId: string): Promise<ModelPricing> {
   const catalogModel =
-    getModelCatalogEntry(modelId) ??
+    (await getMergedModelCatalogEntry(providerId, modelId)) ??
     (isLocalProvider(providerId)
       ? getModelCatalogEntry(getStaticLocalModelId(providerId))
       : undefined);
@@ -249,7 +257,7 @@ export async function POST(req: Request) {
     }
     const cred = parsed.data;
     if (cred.type === "api_key") {
-      resolvedCredential = { type: "byok", apiKey: cred.apiKey };
+      resolvedCredential = { type: "byok", apiKey: cred.apiKey, baseUrl: cred.baseUrl };
     } else if (cred.type === "chatgpt_oauth") {
       resolvedCredential = {
         type: "chatgpt_oauth",
@@ -261,6 +269,8 @@ export async function POST(req: Request) {
         type: "local_endpoint",
         baseUrl: cred.baseUrl,
         modelId: cred.modelId,
+        label: cred.label,
+        models: cred.models,
         apiKey: cred.apiKey,
       };
     }
@@ -576,11 +586,16 @@ export async function POST(req: Request) {
   }): Promise<number | null> => {
     const tokensIn = safeToken(options.usage.inputTokens);
     const tokensOut = safeToken(options.usage.outputTokens);
-    const tokenBreakdown = extractTokenBreakdown(
-      options.usage,
-      options.providerMetadata,
-      providerId
-    );
+    const tokenBreakdown =
+      getProviderAdapter(providerId, resolvedCredential)?.normalizeUsage({
+        usage: options.usage,
+        providerMetadata: options.providerMetadata,
+      }) ??
+      extractTokenBreakdown(
+        options.usage,
+        options.providerMetadata,
+        providerId
+      );
     const costUsd = calculateCostUsd(options.modelPricing, tokenBreakdown);
 
     await insertModelUsage({
@@ -611,20 +626,20 @@ export async function POST(req: Request) {
       );
     }
 
-    if (!isKnownProvider(providerId)) {
+    if (!isKnownProvider(providerId) && !isProviderSupported(providerId, resolvedCredential)) {
       return new Response(
         JSON.stringify({ title: "Invalid Provider", message: "The selected provider is not supported." }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
 
-    if (!isAvailableModelSelection(providerId, modelId, resolvedCredential)) {
+    if (!(await isAvailableModelSelection(providerId, modelId, resolvedCredential))) {
       return new Response(
         JSON.stringify({ title: "Invalid Model", message: "The selected model is not available." }),
         { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
-    const catalogModel = getPricingCatalogModel(providerId, modelId);
+    const catalogModel = await getPricingCatalogModel(providerId, modelId);
 
     const chatSession = await resolveOrCreateChatSession(chatId);
     const modelRequest = await resolveOrCreateModelRequest({
@@ -731,14 +746,14 @@ export async function POST(req: Request) {
     );
   }
 
-  if (!isKnownProvider(providerId)) {
+  if (!isKnownProvider(providerId) && !isProviderSupported(providerId, resolvedCredential)) {
     return new Response(
       JSON.stringify({ title: "Invalid Provider", message: "The selected provider is not supported." }),
       { status: 400, headers: { "Content-Type": "application/json" } }
     );
   }
 
-  if (!isAvailableModelSelection(providerId, modelId, resolvedCredential)) {
+  if (!(await isAvailableModelSelection(providerId, modelId, resolvedCredential))) {
     return new Response(
       JSON.stringify({
         title: "Invalid Model",
@@ -747,7 +762,7 @@ export async function POST(req: Request) {
       { status: 400, headers: { "Content-Type": "application/json" } }
     );
   }
-  const catalogModel = getPricingCatalogModel(providerId, modelId);
+  const catalogModel = await getPricingCatalogModel(providerId, modelId);
 
   if (origin === "title_generation") {
     const chatSession = await resolveOrCreateChatSession(chatId);
@@ -762,7 +777,7 @@ export async function POST(req: Request) {
         gateway.processRequest({
           messages,
           modelId,
-          providerId: providerId as SupportedProvider,
+          providerId,
           agentSystemPrompt: undefined,
           requestId,
           modelSettings: undefined,
@@ -923,7 +938,7 @@ export async function POST(req: Request) {
     const { model, messages: processedMessages, providerOptions } = gateway.processRequest({
       messages,
       modelId,
-      providerId: providerId as SupportedProvider,
+      providerId,
       agentSystemPrompt,
       requestId,
       modelSettings,

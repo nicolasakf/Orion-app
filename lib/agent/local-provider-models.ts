@@ -1,10 +1,6 @@
-import type { SupportedProvider } from "@/lib/agent/model-gateway-types";
 import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
 
-export type LocalProvider = Extract<
-  SupportedProvider,
-  "ollama" | "lmstudio" | "mlx" | "custom"
->;
+export type LocalProvider = "ollama" | "lmstudio" | "mlx" | "custom";
 
 export interface LocalEndpointModel {
   modelId: string;

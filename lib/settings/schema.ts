@@ -190,6 +190,8 @@ const ProviderCredentialSchema = z.discriminatedUnion("type", [
     /** Browser-only credential; never written to user/workspace settings files.
      *  Sent to the Orion server only as a transient value inside /api/chat. */
     apiKey: z.string(),
+    /** Optional OpenAI-compatible base URL for dynamically added providers. */
+    baseUrl: z.string().optional(),
   }),
   z.object({
     type: z.literal("chatgpt_oauth"),
@@ -225,7 +227,7 @@ const SettingsDataSchema = z.object({
     /** Model ID used when generating short chat titles. */
     titleGenerationModelId: z.string().min(1),
     toolApprovalMode: ToolApprovalModeSchema,
-    /** Model IDs pinned to the top of the model selector. Order preserved. */
+    /** Model IDs shown in the chat model selector. Order preserved. */
     pinnedModelIds: z.array(z.string()),
     /** Font size in pixels for the chat message stream and composer. */
     fontSize: z.number().int().min(10).max(20),
@@ -276,8 +278,10 @@ const SettingsDataSchema = z.object({
        * Stored client-side only; never persisted on the server.
        */
       credentials: z.record(ProviderCredentialSchema).default({}),
+      /** Non-secret provider IDs the user explicitly added to the Providers tab. */
+      addedProviderIds: z.array(z.string()).default([]),
     })
-    .default({ credentials: {} }),
+    .default({ credentials: {}, addedProviderIds: [] }),
 });
 
 export const UserSettingsDocumentSchema = z.object({
