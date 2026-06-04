@@ -4,6 +4,23 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.6] - 2026-06-04
+
+### Added
+
+- Settings: advanced `agent`, `shell`, and notebook tuning keys in `settings.json` with sparse compaction on save
+- Settings: centralized built-in defaults and expanded `orion-settings` skill field reference
+
+### Fixed
+
+- Notebook: fullscreen output dialog sizes HTML tables, data resources, and Plotly charts to natural width
+
+### Changed
+
+- UI: remove redundant vertical separators in the editor toolbar
+
+[0.6.6]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.6.6
+
 ## [0.6.5] - 2026-06-03
 
 ### Fixed
