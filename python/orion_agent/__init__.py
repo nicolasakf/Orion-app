@@ -1,3 +1,3 @@
 """Python shim package for the Orion CLI."""
 
-__version__ = "0.6.6"
+__version__ = "0.6.7"

@@ -4,6 +4,17 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.6.7] - 2026-06-04
+
+### Added
+
+- Models: extensible provider registry with merged models.dev catalog and composite `provider/model` selection keys
+- Models: BYOK base URLs, custom OpenAI-compatible endpoints, and additional cloud providers (Groq, Cerebras, Vercel, etc.)
+- Settings: visible-providers toggle and provider logos in the providers tab and chat model picker
+- Agents: Academic Researcher and Polymarket Analyst example sub-agents
+
+[0.6.7]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.6.7
+
 ## [0.6.6] - 2026-06-04
 
 ### Added
