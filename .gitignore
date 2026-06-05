@@ -56,3 +56,9 @@ logs/
 private/
 
 Private/
+
+# local-only GitHub traffic collector (see Private/github-traffic/)
+scripts/collect-github-traffic.ts
+scripts/collect-github-traffic.sh
+scripts/install-github-traffic-schedule.sh
+lib/github-traffic/
