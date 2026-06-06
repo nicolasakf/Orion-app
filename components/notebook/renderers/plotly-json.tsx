@@ -495,12 +495,19 @@ export function PlotlyJsonOutputRenderer({
     onClearOutput,
     onCopyOutput,
     onHideOutput,
+    onMentionOutput,
     onToggleOutputAppView,
     isInAppView,
     onOpenFullScreen,
     isFullScreen,
   } = actions;
-  const canShowContextMenu = !!(onClearOutput && onCopyOutput && onHideOutput);
+  const canShowContextMenu = !!(
+    onClearOutput ||
+    onCopyOutput ||
+    onHideOutput ||
+    onMentionOutput ||
+    onToggleOutputAppView
+  );
   const containerRef = useRef<HTMLDivElement>(null);
   const plotNodeRef = useRef<HTMLDivElement>(null);
   const plotlyRef = useRef<PlotlyLike | null>(null);
@@ -803,9 +810,10 @@ export function PlotlyJsonOutputRenderer({
     <OutputContextMenu
       cellIndex={cellIndex}
       outputIndex={outputIndex}
-      onClearOutput={onClearOutput!}
-      onCopyOutput={onCopyOutput!}
-      onHideOutput={onHideOutput!}
+      onClearOutput={onClearOutput}
+      onCopyOutput={onCopyOutput}
+      onHideOutput={onHideOutput}
+      onMentionOutput={onMentionOutput}
       onToggleAppView={onToggleOutputAppView}
       isInAppView={!!isInAppView}
       onOpenFullScreen={onOpenFullScreen}

@@ -25,13 +25,20 @@ function ImageOutputWrapper({
     onClearOutput,
     onCopyOutput,
     onHideOutput,
+    onMentionOutput,
     onToggleOutputAppView,
     isInAppView,
     onOpenFullScreen,
     isFullScreen,
   } = actions;
 
-  const canShowContextMenu = !!(onClearOutput && onCopyOutput && onHideOutput);
+  const canShowContextMenu = !!(
+    onClearOutput ||
+    onCopyOutput ||
+    onHideOutput ||
+    onMentionOutput ||
+    onToggleOutputAppView
+  );
   const imageNode = (
     <img
       src={src}
@@ -57,9 +64,10 @@ function ImageOutputWrapper({
     <OutputContextMenu
       cellIndex={cellIndex}
       outputIndex={outputIndex}
-      onClearOutput={onClearOutput!}
-      onCopyOutput={onCopyOutput!}
-      onHideOutput={onHideOutput!}
+      onClearOutput={onClearOutput}
+      onCopyOutput={onCopyOutput}
+      onHideOutput={onHideOutput}
+      onMentionOutput={onMentionOutput}
       onToggleAppView={onToggleOutputAppView}
       isInAppView={!!isInAppView}
       onOpenFullScreen={onOpenFullScreen}

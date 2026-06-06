@@ -4,6 +4,7 @@ export const CHAT_REFERENCE_TYPES = [
   "file",
   "folder",
   "cell",
+  "output",
   "variable",
   "terminal",
   "conversation",
@@ -26,6 +27,12 @@ export type ChatReferenceLocator =
       cellIndices: number[];
       lineStart?: number;
       lineEnd?: number;
+    }
+  | {
+      type: "output";
+      notebookPath: string;
+      cellIndex: number;
+      outputIndex: number;
     }
   | { type: "variable"; name: string; notebookPath?: string }
   | { type: "terminal"; terminalName: string; chatId?: string }
@@ -89,6 +96,12 @@ const ChatReferenceLocatorSchema = z.discriminatedUnion("type", [
     lineEnd: z.number().int().min(1).optional(),
   }),
   z.object({
+    type: z.literal("output"),
+    notebookPath: z.string().min(1),
+    cellIndex: z.number().int().min(0),
+    outputIndex: z.number().int().min(0),
+  }),
+  z.object({
     type: z.literal("variable"),
     name: z.string().min(1),
     notebookPath: z.string().optional(),
@@ -147,6 +160,8 @@ export function getReferenceTypeLabel(type: ChatReferenceType): string {
       return "Folder";
     case "cell":
       return "Cell";
+    case "output":
+      return "Output";
     case "variable":
       return "Variable";
     case "terminal":
@@ -181,6 +196,11 @@ export function formatCellReferenceLabel(cellIndices: readonly number[]): string
   return `Cells #${cellIndices.join(", #")}`;
 }
 
+/** Short label for a specific notebook cell output reference. */
+export function formatOutputReferenceLabel(cellIndex: number, outputIndex: number): string {
+  return `Cell #${cellIndex} output #${outputIndex}`;
+}
+
 function formatLocator(reference: ResolvedChatReference): string {
   const locator = reference.locator;
   switch (locator.type) {
@@ -204,6 +224,8 @@ function formatLocator(reference: ResolvedChatReference): string {
         return `${locator.notebookPath} cells ${locator.cellIndices.join(", ")}:${range}`;
       }
       return `${locator.notebookPath} cells ${locator.cellIndices.join(", ")}`;
+    case "output":
+      return `${locator.notebookPath} cell ${locator.cellIndex} output ${locator.outputIndex}`;
     case "variable":
       return locator.notebookPath ? `${locator.name} in ${locator.notebookPath}` : locator.name;
     case "terminal":

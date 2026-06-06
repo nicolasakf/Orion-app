@@ -2,6 +2,7 @@
 
 import React from "react";
 import {
+  AtSign,
   Copy,
   EyeOff,
   LayoutTemplate,
@@ -29,9 +30,10 @@ interface OutputContextMenuProps {
   children: React.ReactNode;
   cellIndex: number;
   outputIndex: number;
-  onClearOutput: (cellIndex: number, outputIndex: number) => void;
-  onCopyOutput: (cellIndex: number, outputIndex: number) => void;
-  onHideOutput: (cellIndex: number, outputIndex: number) => void;
+  onClearOutput?: (cellIndex: number, outputIndex: number) => void;
+  onCopyOutput?: (cellIndex: number, outputIndex: number) => void;
+  onHideOutput?: (cellIndex: number, outputIndex: number) => void;
+  onMentionOutput?: (cellIndex: number, outputIndex: number) => void;
   onToggleAppView?: (cellIndex: number, outputIndex: number) => void;
   isInAppView?: boolean;
   /** When provided, shows "Open in full screen" option */
@@ -54,6 +56,7 @@ export function OutputContextMenu({
   onClearOutput,
   onCopyOutput,
   onHideOutput,
+  onMentionOutput,
   onToggleAppView,
   isInAppView = false,
   onOpenFullScreen,
@@ -122,10 +125,21 @@ export function OutputContextMenu({
             <ContextMenuSeparator />
           </>
         )}
-        <ContextMenuItem onClick={() => onCopyOutput(cellIndex, outputIndex)}>
-          <Copy className="mr-2 h-4 w-4" />
-          Copy Output
-        </ContextMenuItem>
+        {onCopyOutput ? (
+          <ContextMenuItem onClick={() => onCopyOutput(cellIndex, outputIndex)}>
+            <Copy className="mr-2 h-4 w-4" />
+            Copy Output
+          </ContextMenuItem>
+        ) : null}
+
+        {onMentionOutput ? (
+          <ContextMenuItem
+            onClick={() => onMentionOutput(cellIndex, outputIndex)}
+          >
+            <AtSign className="mr-2 h-4 w-4" />
+            Mention output in chat
+          </ContextMenuItem>
+        ) : null}
 
         {onToggleAppView ? (
           <ContextMenuItem
@@ -138,15 +152,19 @@ export function OutputContextMenu({
           </ContextMenuItem>
         ) : null}
 
-        <ContextMenuItem onClick={() => onHideOutput(cellIndex, outputIndex)}>
-          <EyeOff className="mr-2 h-4 w-4" />
-          Hide Output
-        </ContextMenuItem>
+        {onHideOutput ? (
+          <ContextMenuItem onClick={() => onHideOutput(cellIndex, outputIndex)}>
+            <EyeOff className="mr-2 h-4 w-4" />
+            Hide Output
+          </ContextMenuItem>
+        ) : null}
 
-        <ContextMenuItem onClick={() => onClearOutput(cellIndex, outputIndex)}>
-          <Trash2 className="mr-2 h-4 w-4" />
-          Clear Output
-        </ContextMenuItem>
+        {onClearOutput ? (
+          <ContextMenuItem onClick={() => onClearOutput(cellIndex, outputIndex)}>
+            <Trash2 className="mr-2 h-4 w-4" />
+            Clear Output
+          </ContextMenuItem>
+        ) : null}
       </ContextMenuContent>
     </ContextMenu>
   );

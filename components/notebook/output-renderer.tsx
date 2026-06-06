@@ -260,6 +260,7 @@ interface OutputRendererProps {
   onClearOutput?: (cellIndex: number, outputIndex: number) => void;
   onCopyOutput?: (cellIndex: number, outputIndex: number) => void;
   onHideOutput?: (cellIndex: number, outputIndex: number) => void;
+  onMentionOutput?: (cellIndex: number, outputIndex: number) => void;
   onToggleOutputAppView?: (cellIndex: number, outputIndex: number) => void;
   onOrionUiStateChange?: (
     key: string,
@@ -287,6 +288,7 @@ export function OutputRenderer({
   onClearOutput,
   onCopyOutput,
   onHideOutput,
+  onMentionOutput,
   onToggleOutputAppView,
   onOrionUiStateChange,
   onOrionUiAction,
@@ -402,7 +404,13 @@ export function OutputRenderer({
    */
   const wrapWithContextMenu = useCallback(
     (content: React.ReactNode, collapsible = false) => {
-      if (onClearOutput && onCopyOutput && onHideOutput) {
+      if (
+        onClearOutput ||
+        onCopyOutput ||
+        onHideOutput ||
+        onMentionOutput ||
+        onToggleOutputAppView
+      ) {
         return (
           <OutputContextMenu
             cellIndex={cellIndex}
@@ -410,6 +418,7 @@ export function OutputRenderer({
             onClearOutput={onClearOutput}
             onCopyOutput={onCopyOutput}
             onHideOutput={onHideOutput}
+            onMentionOutput={onMentionOutput}
             onToggleAppView={onToggleOutputAppView}
             isInAppView={!!isInAppView}
             onOpenFullScreen={openFullScreen}
@@ -429,6 +438,7 @@ export function OutputRenderer({
       onClearOutput,
       onCopyOutput,
       onHideOutput,
+      onMentionOutput,
       onToggleOutputAppView,
       isInAppView,
       cellIndex,
@@ -448,6 +458,7 @@ export function OutputRenderer({
       onClearOutput,
       onCopyOutput,
       onHideOutput,
+      onMentionOutput,
       onToggleOutputAppView,
       onOrionUiStateChange,
       onOrionUiAction,
@@ -461,6 +472,7 @@ export function OutputRenderer({
       onClearOutput,
       onCopyOutput,
       onHideOutput,
+      onMentionOutput,
       onToggleOutputAppView,
       onOrionUiStateChange,
       onOrionUiAction,

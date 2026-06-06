@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatOutputReferenceLabel,
   formatReferencesForMessage,
   parseChatMessageReferences,
   type ResolvedChatReference,
@@ -46,5 +47,47 @@ describe("external file chat references", () => {
     expect(context).toContain("External file: report.pdf");
     expect(context).toContain("pointer-only");
     expect(context).toContain("report.pdf (application/pdf, 2.0 KB)");
+  });
+});
+
+describe("notebook output chat references", () => {
+  const outputReference: ResolvedChatReference = {
+    id: "output:test",
+    type: "output",
+    label: formatOutputReferenceLabel(2, 1),
+    locator: {
+      type: "output",
+      notebookPath: "/workspace/analysis.ipynb",
+      cellIndex: 2,
+      outputIndex: 1,
+    },
+    status: "resolved",
+    preview: "Notebook cell 2, output 1.",
+    resolvedAt: "2026-05-27T00:00:00.000Z",
+    toolHint:
+      'Use use_notebook with notebookPath="/workspace/analysis.ipynb", then read_cell_output with reads=[{cellIndex:2,outputIndex:1}].',
+  };
+
+  it("parses and labels output metadata", () => {
+    const references = parseChatMessageReferences({
+      references: [outputReference],
+    });
+
+    expect(formatOutputReferenceLabel(2, 1)).toBe("Cell #2 output #1");
+    expect(references[0]?.type).toBe("output");
+    expect(references[0]?.locator).toMatchObject({
+      type: "output",
+      cellIndex: 2,
+      outputIndex: 1,
+    });
+  });
+
+  it("formats output references with read_cell_output guidance", () => {
+    const context = formatReferencesForMessage([outputReference]);
+
+    expect(context).toContain("Output: Cell #2 output #1");
+    expect(context).toContain("/workspace/analysis.ipynb cell 2 output 1");
+    expect(context).toContain("read_cell_output");
+    expect(context).not.toContain("Selected text:");
   });
 });

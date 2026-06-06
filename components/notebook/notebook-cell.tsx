@@ -1844,6 +1844,28 @@ function NotebookCellComponent({
     [onCellAction],
   );
 
+  /** Requests that the chat composer attach this specific cell output. */
+  const handleMentionOutput = useCallback(
+    (cellIdx: number, outputIdx: number) => {
+      if (!notebookPath) return;
+
+      const output = cell.outputs?.[outputIdx];
+      window.dispatchEvent(
+        new CustomEvent("orion:mention-notebook-output", {
+          detail: {
+            notebookPath,
+            cellIndex: cellIdx,
+            outputIndex: outputIdx,
+            preview: output
+              ? `Notebook cell ${cellIdx}, output ${outputIdx} (${output.output_type}).`
+              : `Notebook cell ${cellIdx}, output ${outputIdx}.`,
+          },
+        }),
+      );
+    },
+    [cell.outputs, notebookPath],
+  );
+
   const handleClearSingleOutput = (cellIdx: number, outputIdx: number) => {
     if (onCellAction) {
       onCellAction(`clear-single-output:${outputIdx}`, cellIdx);
@@ -2469,6 +2491,7 @@ function NotebookCellComponent({
                                   onClearOutput={handleClearSingleOutput}
                                   onCopyOutput={handleCopyOutput}
                                   onHideOutput={handleHideOutput}
+                                  onMentionOutput={handleMentionOutput}
                                   onToggleOutputAppView={
                                     handleToggleOutputAppView
                                   }

@@ -8,8 +8,15 @@ import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitive
 import { OutputRenderer } from "@/components/notebook/output-renderer";
 import { Button } from "@/components/ui/button";
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
   isNotebookCellInAppView,
   isNotebookOutputInAppView,
+  type NotebookAppViewReference,
 } from "@/lib/notebook/app-view";
 import { dispatchInsertChatSkill } from "@/lib/chat/chat-composer-events";
 import { cn } from "@/lib/utils";
@@ -22,7 +29,9 @@ import {
 
 interface NotebookAppViewProps {
   notebook: NotebookType;
+  notebookPath?: string;
   onNotebookViewRequest?: () => void;
+  onRemoveAppViewReference?: (reference: NotebookAppViewReference) => void;
   onOrionUiStateChange?: (
     key: string,
     value: OrionUiLocalValue,
@@ -79,18 +88,81 @@ function getNotebookAppViewItems(
   });
 }
 
+interface AppViewMarkdownContextMenuProps {
+  children: React.ReactNode;
+  onRemove?: () => void;
+}
+
+/** Context menu for markdown items rendered inside App View. */
+function AppViewMarkdownContextMenu({
+  children,
+  onRemove,
+}: AppViewMarkdownContextMenuProps): React.JSX.Element {
+  if (!onRemove) {
+    return <>{children}</>;
+  }
+
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="w-48">
+        <ContextMenuItem onClick={onRemove}>
+          <LayoutTemplate className="mr-2 h-4 w-4 !text-[#ff4800]" />
+          Remove from App View
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 /**
  * Renders notebook cells and outputs explicitly marked for App View.
  */
 export function NotebookAppView({
   notebook,
+  notebookPath,
   onNotebookViewRequest,
+  onRemoveAppViewReference,
   onOrionUiStateChange,
   onOrionUiAction,
 }: NotebookAppViewProps): React.JSX.Element {
   const appViewItems = useMemo(
     () => getNotebookAppViewItems(notebook),
     [notebook],
+  );
+
+  /** Requests that the chat composer attach the selected App View output. */
+  const handleMentionOutput = React.useCallback(
+    (cellIndex: number, outputIndex: number) => {
+      if (!notebookPath) return;
+
+      const output = notebook.cells[cellIndex]?.outputs?.[outputIndex];
+      window.dispatchEvent(
+        new CustomEvent("orion:mention-notebook-output", {
+          detail: {
+            notebookPath,
+            cellIndex,
+            outputIndex,
+            preview: output
+              ? `Notebook cell ${cellIndex}, output ${outputIndex} (${output.output_type}).`
+              : `Notebook cell ${cellIndex}, output ${outputIndex}.`,
+          },
+        }),
+      );
+    },
+    [notebook.cells, notebookPath],
+  );
+
+  /** Removes an output from App View through the editor-owned metadata path. */
+  const handleRemoveOutput = React.useCallback(
+    (cellIndex: number, outputIndex: number) => {
+      onRemoveAppViewReference?.({
+        kind: "output",
+        cellIndex,
+        outputIndex,
+      });
+    },
+    [onRemoveAppViewReference],
   );
 
   if (appViewItems.length > 0) {
@@ -102,12 +174,22 @@ export function NotebookAppView({
         <main className="mx-auto flex min-h-full w-full max-w-7xl flex-col gap-6 p-4">
           {appViewItems.map((item) =>
             item.kind === "markdown" ? (
-              <div
+              <AppViewMarkdownContextMenu
                 key={`markdown-${item.cellIndex}`}
-                className="jp-Cell jp-MarkdownCell"
+                onRemove={
+                  onRemoveAppViewReference
+                    ? () =>
+                        onRemoveAppViewReference({
+                          kind: "markdown",
+                          cellIndex: item.cellIndex,
+                        })
+                    : undefined
+                }
               >
-                <MarkdownRenderer source={sourceToString(item.cell.source)} />
-              </div>
+                <div className="jp-Cell jp-MarkdownCell">
+                  <MarkdownRenderer source={sourceToString(item.cell.source)} />
+                </div>
+              </AppViewMarkdownContextMenu>
             ) : (
               <div
                 key={`output-${item.cellIndex}-${item.outputIndex}`}
@@ -118,6 +200,13 @@ export function NotebookAppView({
                   notebookMetadata={notebook.metadata}
                   cellIndex={item.cellIndex}
                   outputIndex={item.outputIndex}
+                  onMentionOutput={
+                    notebookPath ? handleMentionOutput : undefined
+                  }
+                  onToggleOutputAppView={
+                    onRemoveAppViewReference ? handleRemoveOutput : undefined
+                  }
+                  isInAppView
                   onOrionUiStateChange={(key, value, outputId) =>
                     onOrionUiStateChange?.(key, value, outputId)
                   }

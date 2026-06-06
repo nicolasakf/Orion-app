@@ -2561,6 +2561,22 @@ export function NotebookEditor({
     [cellIdForIndex, filepath, notebook?.cells],
   );
 
+  /** Removes a markdown cell or output from App View metadata. */
+  const handleRemoveAppViewReference = useCallback(
+    (reference: NotebookAppViewReference) => {
+      capturePendingCellSources();
+      setNotebook((prevNotebook) => {
+        if (!prevNotebook) return null;
+        return removeNotebookAppViewReference(
+          applyPendingChanges(prevNotebook),
+          reference,
+        );
+      });
+      markDirty();
+    },
+    [applyPendingChanges, capturePendingCellSources, markDirty],
+  );
+
   // Effect for handling global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -3218,9 +3234,11 @@ export function NotebookEditor({
               >
                 <NotebookAppView
                   notebook={notebook}
+                  notebookPath={filepath}
                   onNotebookViewRequest={() =>
                     onActiveNotebookViewChange?.("notebook")
                   }
+                  onRemoveAppViewReference={handleRemoveAppViewReference}
                   onOrionUiStateChange={handleOrionUiStateChange}
                   onOrionUiAction={handleOrionUiAction}
                 />

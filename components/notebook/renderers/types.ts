@@ -19,6 +19,7 @@ export interface NotebookOutputActionHandlers {
   onClearOutput?: (cellIndex: number, outputIndex: number) => void;
   onCopyOutput?: (cellIndex: number, outputIndex: number) => void;
   onHideOutput?: (cellIndex: number, outputIndex: number) => void;
+  onMentionOutput?: (cellIndex: number, outputIndex: number) => void;
   onToggleOutputAppView?: (cellIndex: number, outputIndex: number) => void;
   onOrionUiStateChange?: (
     key: string,

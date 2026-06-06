@@ -18,10 +18,17 @@ export function PlotlyHtmlOutputRenderer({
     onClearOutput,
     onCopyOutput,
     onHideOutput,
+    onMentionOutput,
     onToggleOutputAppView,
     isInAppView,
   } = actions;
-  const canShowContextMenu = !!(onClearOutput && onCopyOutput && onHideOutput);
+  const canShowContextMenu = !!(
+    onClearOutput ||
+    onCopyOutput ||
+    onHideOutput ||
+    onMentionOutput ||
+    onToggleOutputAppView
+  );
 
   const frame = (
     <iframe
@@ -44,9 +51,10 @@ export function PlotlyHtmlOutputRenderer({
     <OutputContextMenu
       cellIndex={cellIndex}
       outputIndex={outputIndex}
-      onClearOutput={onClearOutput!}
-      onCopyOutput={onCopyOutput!}
-      onHideOutput={onHideOutput!}
+      onClearOutput={onClearOutput}
+      onCopyOutput={onCopyOutput}
+      onHideOutput={onHideOutput}
+      onMentionOutput={onMentionOutput}
       onToggleAppView={onToggleOutputAppView}
       isInAppView={!!isInAppView}
       onOpenFullScreen={actions.onOpenFullScreen}

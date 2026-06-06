@@ -18,6 +18,9 @@ vi.mock("@/components/notebook/output-renderer", () => ({
   OutputRenderer: (props: {
     cellIndex: number;
     outputIndex: number;
+    isInAppView?: boolean;
+    onMentionOutput?: (cellIndex: number, outputIndex: number) => void;
+    onToggleOutputAppView?: (cellIndex: number, outputIndex: number) => void;
     onOrionUiStateChange?: (
       key: string,
       value: string | number | boolean,
@@ -199,5 +202,46 @@ describe("NotebookAppView", () => {
       "ui-output",
     );
     expect(onOrionUiAction).toHaveBeenCalledWith({ type: "submit" });
+  });
+
+  it("passes output mention and App View removal handlers to selected outputs", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    const onRemoveAppViewReference = vi.fn();
+
+    render(
+      <NotebookAppView
+        notebook={makeNotebook()}
+        notebookPath="/workspace/demo.ipynb"
+        onRemoveAppViewReference={onRemoveAppViewReference}
+      />,
+    );
+
+    const outputProps = outputRendererMock.mock.calls[0]?.[0];
+    expect(outputProps).toEqual(
+      expect.objectContaining({
+        cellIndex: 1,
+        outputIndex: 0,
+        isInAppView: true,
+      }),
+    );
+
+    outputProps.onMentionOutput?.(1, 0);
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "orion:mention-notebook-output",
+        detail: expect.objectContaining({
+          notebookPath: "/workspace/demo.ipynb",
+          cellIndex: 1,
+          outputIndex: 0,
+        }),
+      }),
+    );
+
+    outputProps.onToggleOutputAppView?.(1, 0);
+    expect(onRemoveAppViewReference).toHaveBeenCalledWith({
+      kind: "output",
+      cellIndex: 1,
+      outputIndex: 0,
+    });
   });
 });
