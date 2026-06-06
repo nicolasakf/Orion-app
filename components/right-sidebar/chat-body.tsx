@@ -500,6 +500,8 @@ function renderAssistantActivityItem({
     const invArgs =
       ("input" in inv && inv.input != null) ? (inv.input as Record<string, unknown>) : {};
     const invResult = "output" in inv ? inv.output : undefined;
+    const invErrorText =
+      "errorText" in inv && typeof inv.errorText === "string" ? inv.errorText : undefined;
 
     if (toolName === "delegate") {
       return (
@@ -533,6 +535,7 @@ function renderAssistantActivityItem({
         args={invArgs}
         result={invResult}
         state={inv.state}
+        errorText={invErrorText}
         pendingApproval={pendingApprovalIds?.has(inv.toolCallId)}
         onApprove={onApprove ? () => onApprove(inv.toolCallId) : undefined}
         onReject={onReject ? () => onReject(inv.toolCallId) : undefined}

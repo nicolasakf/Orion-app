@@ -214,13 +214,13 @@ describe("isActivityGroupWaitingForFinalResponse", () => {
     ).toBe(true);
   });
 
-  it("keeps waiting while tools are still running or need approval", () => {
+  it("keeps waiting while tools are still running or need approval in an active turn", () => {
     expect(
       isActivityGroupWaitingForFinalResponse({
         hasFollowingText: false,
         isLastMessage: true,
         activityStatus: "running",
-        isTurnActive: false,
+        isTurnActive: true,
       })
     ).toBe(true);
     expect(
@@ -228,9 +228,20 @@ describe("isActivityGroupWaitingForFinalResponse", () => {
         hasFollowingText: false,
         isLastMessage: true,
         activityStatus: "approval",
-        isTurnActive: false,
+        isTurnActive: true,
       })
     ).toBe(true);
+  });
+
+  it("stops waiting for stale pending tools after the turn is stopped", () => {
+    expect(
+      isActivityGroupWaitingForFinalResponse({
+        hasFollowingText: false,
+        isLastMessage: true,
+        activityStatus: "running",
+        isTurnActive: false,
+      })
+    ).toBe(false);
   });
 
   it("treats historical activity without following text as completed", () => {
@@ -320,5 +331,21 @@ describe("getActivityDurationMs", () => {
     );
 
     expect(duration).toBeUndefined();
+  });
+
+  it("uses persisted cancelled tool duration after reload", () => {
+    const cancelledPart = {
+      ...toolPart("bash", "call-3", "output-error"),
+      output: { error: "cancelled_by_user", durationMs: 4_200 },
+      errorText: "cancelled_by_user",
+    } as unknown as Part;
+
+    const duration = getActivityDurationMs(
+      [{ part: cancelledPart, partIndex: 0 }],
+      new Map(),
+      { isActivityComplete: true }
+    );
+
+    expect(duration).toBe(4_200);
   });
 });

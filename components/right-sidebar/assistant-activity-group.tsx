@@ -18,10 +18,10 @@ interface AssistantActivityGroupProps {
 function formatDuration(durationMs: number): string {
   const seconds = Math.max(0, Math.round(durationMs / 1000));
   if (seconds < 1) return "briefly";
-  if (seconds < 60) return `for ${seconds}s`;
+  if (seconds < 60) return `for ${seconds} s`;
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
-  return remainder === 0 ? `for ${minutes}m` : `for ${minutes}m ${remainder}s`;
+  return remainder === 0 ? `for ${minutes} m` : `for ${minutes} m ${remainder} s`;
 }
 
 /** Format the number of tool calls represented by a compact activity row. */

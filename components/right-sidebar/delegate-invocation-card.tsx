@@ -12,7 +12,7 @@
 
 import * as React from "react";
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Bot, Loader2, Check, X, ChevronDown, ChevronRight, FileText } from "lucide-react";
+import { Bot, Loader2, Ban, Check, X, ChevronDown, ChevronRight, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Tooltip,
@@ -80,6 +80,12 @@ function isPendingState(
     state === "approval-requested" ||
     state === "approval-responded"
   );
+}
+
+function resultErrorCode(result: unknown): string | null {
+  if (typeof result !== "object" || result === null || Array.isArray(result)) return null;
+  const error = (result as { error?: unknown }).error;
+  return typeof error === "string" ? error : null;
 }
 
 /** Icon-only control; label exposed via tooltip and `aria-label`. */
@@ -174,7 +180,8 @@ export function DelegateInvocationCard({
   }, []);
 
   const isPending = isPendingState(state);
-  const isError = state === "output-error" || state === "output-denied";
+  const isCancelled = resultErrorCode(result) === "cancelled_by_user";
+  const isError = !isCancelled && (state === "output-error" || state === "output-denied");
   const resultText = delegateResultToDisplayText(result);
   const canExpand = !isPending && !!resultText;
   const agentLabel = resolveAgentLabel(subagentType);
@@ -230,8 +237,11 @@ export function DelegateInvocationCard({
 
         {canExpand ? (
           <>
-            {!isError && (
+            {!isCancelled && !isError && (
               <Check className="h-3 w-3 shrink-0 text-emerald-500" />
+            )}
+            {isCancelled && (
+              <Ban aria-label="Cancelled" className="h-3 w-3 shrink-0 text-muted-foreground" />
             )}
             {isError && <X className="h-3 w-3 shrink-0 text-destructive" />}
           {canShowReport && (
@@ -262,8 +272,11 @@ export function DelegateInvocationCard({
           {isPending && (
             <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
           )}
-          {!isPending && !isError && (
+          {!isPending && !isCancelled && !isError && (
             <Check className="h-3 w-3 shrink-0 text-emerald-500" />
+          )}
+          {isCancelled && (
+            <Ban aria-label="Cancelled" className="h-3 w-3 shrink-0 text-muted-foreground" />
           )}
           {isError && <X className="h-3 w-3 shrink-0 text-destructive" />}
           {canShowReport && (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback } from "react";
 import { Plus, History, Pencil, Trash2, MoreHorizontal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -31,6 +31,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { toast } from "sonner";
+import { CmdOrCtrl, Shift } from "@/components/common/keyboard-icons";
 import { ToolbarButton } from "../common/toolbar-button";
 import { getRelativeDay } from "@/lib/utils";
 import type { Chat } from "@/lib/chat/chat-storage";
@@ -108,6 +109,8 @@ export interface ChatToolbarProps {
   onTitleChange: (value: string) => void;
   onTitleSave: () => void;
   onTitleCancel: () => void;
+  isHistoryPopoverOpen: boolean;
+  onHistoryPopoverOpenChange: (open: boolean) => void;
   onNewChat: () => void;
   onHistorySelect: (chatId: string) => void;
   onRenameChat: (chatId: string) => void;
@@ -124,13 +127,14 @@ export function ChatToolbar({
   onTitleChange,
   onTitleSave,
   onTitleCancel,
+  isHistoryPopoverOpen,
+  onHistoryPopoverOpenChange,
   onNewChat,
   onHistorySelect,
   onRenameChat,
   onDeleteChat,
   onExportTranscript,
 }: ChatToolbarProps) {
-  const [isHistoryPopoverOpen, setIsHistoryPopoverOpen] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const copyClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -149,12 +153,12 @@ export function ChatToolbar({
 
   const handleHistorySelect = (chatId: string) => {
     onHistorySelect(chatId);
-    setIsHistoryPopoverOpen(false);
+    onHistoryPopoverOpenChange(false);
   };
 
   const handleRenameClick = (chatId: string) => {
     onRenameChat(chatId);
-    setIsHistoryPopoverOpen(false);
+    onHistoryPopoverOpenChange(false);
   };
 
   const handleCopyChatId = useCallback(async () => {
@@ -277,16 +281,23 @@ export function ChatToolbar({
             </DropdownMenuContent>
           </DropdownMenu>
           {/* New Chat Button */}
-          <ToolbarButton onClick={onNewChat} toolTipLabel="New Chat">
+          <ToolbarButton
+            onClick={onNewChat}
+            toolTipLabel="New Chat"
+            toolTipShortcut={[[CmdOrCtrl, Shift, "O"]]}
+          >
             <Plus className="h-4 w-4" />
           </ToolbarButton>
           {/* Chat History Popover */}
           <Popover
             open={isHistoryPopoverOpen}
-            onOpenChange={setIsHistoryPopoverOpen}
+            onOpenChange={onHistoryPopoverOpenChange}
           >
             <PopoverTrigger asChild>
-              <ToolbarButton toolTipLabel="Chat History">
+              <ToolbarButton
+                toolTipLabel="Chat History"
+                toolTipShortcut={[[CmdOrCtrl, "H"]]}
+              >
                 <History className="h-4 w-4" />
               </ToolbarButton>
             </PopoverTrigger>

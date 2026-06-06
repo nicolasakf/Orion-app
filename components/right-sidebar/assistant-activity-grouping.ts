@@ -199,6 +199,17 @@ export function isTerminalToolState(state: string): boolean {
   return state === "output-available" || state === "output-error" || state === "output-denied";
 }
 
+/** Read a duration persisted on a terminal tool output, used after reloads. */
+function getPersistedToolDurationMs(part: UIMessage["parts"][number]): number | undefined {
+  if (!isToolUIPart(part)) return undefined;
+  const output = "output" in part ? part.output : undefined;
+  if (typeof output !== "object" || output === null || Array.isArray(output)) return undefined;
+  const durationMs = (output as { durationMs?: unknown }).durationMs;
+  return typeof durationMs === "number" && Number.isFinite(durationMs)
+    ? Math.max(0, durationMs)
+    : undefined;
+}
+
 /**
  * Stamp `endedAt` on completed tools that never received a terminal timing update.
  * Returns the original map when nothing changed.
@@ -239,11 +250,25 @@ export function getActivityDurationMs(
 ): number | undefined {
   let startedAt: number | undefined;
   let endedAt: number | undefined;
+  let persistedDurationMs: number | undefined;
 
   for (const item of items) {
     if (!isToolUIPart(item.part)) continue;
     const timing = toolTimings?.get(item.part.toolCallId);
-    if (!timing?.startedAt) continue;
+    if (!timing?.startedAt) {
+      const partDurationMs = getPersistedToolDurationMs(item.part);
+      if (
+        partDurationMs !== undefined &&
+        options?.isActivityComplete &&
+        isTerminalToolState(String(item.part.state))
+      ) {
+        persistedDurationMs =
+          persistedDurationMs === undefined
+            ? partDurationMs
+            : Math.max(persistedDurationMs, partDurationMs);
+      }
+      continue;
+    }
 
     const resolvedEnd =
       timing.endedAt ??
@@ -257,8 +282,13 @@ export function getActivityDurationMs(
     endedAt = endedAt === undefined ? resolvedEnd : Math.max(endedAt, resolvedEnd);
   }
 
-  if (startedAt === undefined || endedAt === undefined) return undefined;
-  return Math.max(0, endedAt - startedAt);
+  const liveDurationMs =
+    startedAt === undefined || endedAt === undefined
+      ? undefined
+      : Math.max(0, endedAt - startedAt);
+  if (liveDurationMs === undefined) return persistedDurationMs;
+  if (persistedDurationMs === undefined) return liveDurationMs;
+  return Math.max(liveDurationMs, persistedDurationMs);
 }
 
 /**
@@ -274,7 +304,7 @@ export function isActivityGroupWaitingForFinalResponse(options: {
 }): boolean {
   const { hasFollowingText, isLastMessage, activityStatus, isTurnActive } = options;
   if (hasFollowingText || !isLastMessage) return false;
-  if (activityStatus === "running" || activityStatus === "approval") return true;
+  if (activityStatus === "running" || activityStatus === "approval") return isTurnActive;
   return isTurnActive;
 }
 

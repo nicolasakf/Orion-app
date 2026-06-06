@@ -25,6 +25,7 @@ import {
 import { downloadChatTranscriptMarkdown } from "@/lib/chat/export-chat-transcript";
 import {
   formatCellReferenceLabel,
+  formatOutputReferenceLabel,
   parseChatMessageReferences,
   type ChatReferenceOption,
   type ChatReferenceType,
@@ -37,6 +38,7 @@ import {
 } from "@/lib/chat/chat-composer-events";
 import { compactConversation } from "@/lib/agent/context-manager";
 import { buildWirePayload } from "@/lib/agent/context-optimizer";
+import { resolveModelDisplayLabel } from "@/lib/agent/model-display-label";
 import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
 import {
   decodeLocalModelCatalogId,
@@ -51,6 +53,7 @@ import {
   COMPACTION_AUTO_THRESHOLD,
 } from "@/lib/agent/token-budget";
 import { useAssistantChatOptional } from "@/lib/agent";
+import type { AgentRule } from "@/lib/agent/rules";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import { NO_DEPENDENCY_TOOLS, SERVER_ONLY_TOOLS } from "@/lib/agent/tool-schemas";
 import { isReadOnlyBashBlocked } from "@/lib/agent/read-only-bash-guard";
@@ -88,6 +91,7 @@ import { ChatBody } from "./chat-body";
 import { createCostSummaryMessageId } from "./cost-summary-card";
 import { ChatTextbox, type ReferenceTab } from "./chat-textbox";
 import { finalizeCompletedToolTimings, type ToolTiming } from "./assistant-activity-grouping";
+import { shouldContinueAfterToolCalls } from "./assistant-turn-state";
 import { useContextEstimate } from "./context-usage-pill";
 import {
   ORION_GITHUB_ISSUES_URL,
@@ -116,6 +120,7 @@ import {
   findModelBySelectionKey,
   formatModelSelectionKey,
   normalizePinnedModelKeys,
+  parseModelSelectionKey,
   resolveCatalogModelIdForApi,
 } from "@/lib/agent/model-selection-key";
 
@@ -331,6 +336,86 @@ function stripSessionOnlyFileParts(message: UIMessage): UIMessage {
   };
 }
 
+type CancelledToolOutput = {
+  error: "cancelled_by_user";
+  durationMs?: number;
+};
+
+const PENDING_TOOL_STATES = new Set([
+  "input-available",
+  "input-streaming",
+  "approval-requested",
+  "approval-responded",
+]);
+
+const TERMINAL_TOOL_STATES = new Set([
+  "output-available",
+  "output-error",
+  "output-denied",
+]);
+
+/** True when a tool part is still awaiting execution, approval, or output. */
+function isPendingToolPart(part: UIMessage["parts"][number]): part is UIMessage["parts"][number] & {
+  toolCallId: string;
+  state: string;
+} {
+  return (
+    part.type.startsWith("tool-") &&
+    "toolCallId" in part &&
+    typeof part.toolCallId === "string" &&
+    "state" in part &&
+    typeof part.state === "string" &&
+    PENDING_TOOL_STATES.has(part.state)
+  );
+}
+
+/** Convert pending tool parts to a durable cancelled terminal state. */
+function cancelPendingToolParts<T extends UIMessage>(
+  messages: T[],
+  options: {
+    getCancelledOutput: (toolCallId: string) => CancelledToolOutput;
+    onCancelledToolCall?: (toolCallId: string, result: CancelledToolOutput) => void;
+  }
+): { messages: T[]; changed: boolean } {
+  let changed = false;
+  const nextMessages = messages.map((msg) => {
+    let messageChanged = false;
+    const nextParts = msg.parts.map((part) => {
+      if (!isPendingToolPart(part)) return part;
+
+      messageChanged = true;
+      changed = true;
+      const cancelledOutput = options.getCancelledOutput(part.toolCallId);
+      options.onCancelledToolCall?.(part.toolCallId, cancelledOutput);
+      return {
+        ...part,
+        state: "output-error" as const,
+        output: cancelledOutput,
+        errorText: "cancelled_by_user",
+      };
+    });
+
+    return messageChanged ? ({ ...msg, parts: nextParts } as T) : msg;
+  });
+
+  return { messages: nextMessages, changed };
+}
+
+/** Repair persisted chats whose browser session ended with pending tool calls. */
+function cancelStalePendingToolsInChat(chat: Chat): { chat: Chat; changed: boolean } {
+  const result = cancelPendingToolParts(chat.messages, {
+    getCancelledOutput: () => ({ error: "cancelled_by_user" }),
+  });
+  if (!result.changed) return { chat, changed: false };
+  return {
+    chat: {
+      ...chat,
+      messages: result.messages,
+    },
+    changed: true,
+  };
+}
+
 type ReferenceWorkspaceEntry = {
   name: string;
   path: string;
@@ -353,6 +438,8 @@ type SerializedSkill = {
   description: string;
   disableModelInvocation?: boolean;
 };
+
+type SerializedAgentRule = AgentRule;
 
 /** Pulls selected skill slash tokens out of a user message while preserving message text. */
 function extractSkillSlashCommands(
@@ -393,6 +480,13 @@ function formatApplySkillsRequest(skillNames: string[]): string {
 type NotebookCellMentionEventDetail = {
   notebookPath?: unknown;
   cellIndex?: unknown;
+  preview?: unknown;
+};
+
+type NotebookOutputMentionEventDetail = {
+  notebookPath?: unknown;
+  cellIndex?: unknown;
+  outputIndex?: unknown;
   preview?: unknown;
 };
 
@@ -449,6 +543,19 @@ function serializeAvailableSubagents(
   }));
 }
 
+function serializeAgentRules(rules: AgentRule[]): SerializedAgentRule[] {
+  return rules.map((rule) => ({
+    path: rule.path,
+    filename: rule.filename,
+    scope: rule.scope,
+    content: rule.content,
+  }));
+}
+
+function formatRuleDisplayName(rule: AgentRule): string {
+  return rule.scope === "workspace" ? rule.filename : `${rule.filename} (${rule.scope})`;
+}
+
 interface DelegateToolOutput {
   summary: string;
   tmpNotebookPath: string;
@@ -482,6 +589,22 @@ function saveCurrentChatIdToSession(chatId: string | null): void {
   } catch {
     // Losing the selected chat is harmless; the chat list falls back to newest.
   }
+}
+
+/** Returns true when a document keydown event belongs to the right sidebar panel. */
+function isRightSidebarKeyboardScope(
+  event: KeyboardEvent,
+  sidebarRoot: HTMLElement | null,
+): boolean {
+  if (!sidebarRoot) return false;
+
+  const target = event.target;
+  const activeElement = document.activeElement;
+
+  return (
+    (target instanceof Node && sidebarRoot.contains(target)) ||
+    (activeElement instanceof Node && sidebarRoot.contains(activeElement))
+  );
 }
 
 // ============================================================================
@@ -524,6 +647,7 @@ export function RightSidebar({
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState("");
+  const [isHistoryPopoverOpen, setIsHistoryPopoverOpen] = useState(false);
   const SESSION_MODE_KEY = "orion:interactionMode";
   const [interactionMode, setInteractionMode] = useState<InteractionMode>(() => {
     if (typeof window !== "undefined") {
@@ -535,6 +659,7 @@ export function RightSidebar({
   const [selectedModel, setSelectedModel] = useState(loadSelectedModelFromSession);
   const [editingState, setEditingState] = useState<EditingState | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sidebarRootRef = useRef<HTMLDivElement>(null);
   const [models, setModels] = useState<LLM[]>([]);
   const [modelRows, setModelRows] = useState<ModelCatalogEntry[]>([]);
   const [modelsCatalogLoaded, setModelsCatalogLoaded] = useState(false);
@@ -702,6 +827,7 @@ export function RightSidebar({
    */
   const modelsWithAccess = React.useMemo<LLM[]>(() => {
     const credentials = effectiveSettings.providers?.credentials ?? {};
+    const modelLabels = effectiveSettings.chat.modelLabels ?? {};
     const hasByokForProvider = (providerId: string) => !!credentials[providerId];
 
     return allModels.map((m) => {
@@ -710,16 +836,30 @@ export function RightSidebar({
         credential?.type === "local_endpoint" && isLocalProvider(m.provider)
           ? credential.label ?? getLocalModelLabel(m.provider, credential.modelId) ?? credential.modelId
           : undefined;
+      const baseLabel =
+        localLabel && isStaticLocalModelValue(m.value) ? localLabel : m.label;
 
       return {
         ...m,
-        ...(localLabel && isStaticLocalModelValue(m.value) && { label: localLabel }),
+        label: resolveModelDisplayLabel(m.provider, m.value, baseLabel, modelLabels),
         isAccessible: hasByokForProvider(m.provider),
       };
     });
-  }, [allModels, effectiveSettings.providers?.credentials]);
+  }, [allModels, effectiveSettings.chat.modelLabels, effectiveSettings.providers?.credentials]);
 
   useEffect(() => {
+    const pinnedSelectionForStoredModel =
+      parseModelSelectionKey(selectedModel) === null
+        ? pinnedModelIds.find(
+            (pinKey) => parseModelSelectionKey(pinKey)?.modelId === selectedModel
+          )
+        : undefined;
+    if (pinnedSelectionForStoredModel) {
+      setSelectedModel(pinnedSelectionForStoredModel);
+      saveSelectedModelToSession(pinnedSelectionForStoredModel);
+      return;
+    }
+
     const fallbackModel = resolveSelectedModelFallback({
       selectedModel,
       models: allModels,
@@ -730,7 +870,14 @@ export function RightSidebar({
 
     setSelectedModel(fallbackModel);
     saveSelectedModelToSession(fallbackModel);
-  }, [allModels, modelsCatalogLoaded, selectedModel, settingsHydrated, userSettingsLoadStatus]);
+  }, [
+    allModels,
+    modelsCatalogLoaded,
+    pinnedModelIds,
+    selectedModel,
+    settingsHydrated,
+    userSettingsLoadStatus,
+  ]);
 
   const handleInteractionModeChange = useCallback(
     (nextMode: InteractionMode) => {
@@ -1345,6 +1492,7 @@ export function RightSidebar({
   >([]);
   const toolExecutionChainRef = useRef<Promise<void>>(Promise.resolve());
   const stopRequestedRef = useRef(false);
+  const [stopRequestActive, setStopRequestActive] = useState(false);
   const lastStopRequestedAtRef = useRef<number>(0);
 
   /** Pending confirmation action when user tries to switch/create chat while processing */
@@ -1370,31 +1518,31 @@ export function RightSidebar({
   /** Live progress descriptions for running sub-agent tool calls, keyed by toolCallId. */
   const [subagentProgress, setSubagentProgress] = useState<Map<string, string>>(new Map());
   const [toolTimings, setToolTimings] = useState<Map<string, ToolTiming>>(new Map());
+  const toolTimingsRef = useRef<Map<string, ToolTiming>>(new Map());
 
   /** Record the first moment a tool call entered the client execution loop. */
   const markToolStarted = useCallback((toolCallId: string) => {
     const startedAt = Date.now();
-    setToolTimings((prev) => {
-      if (prev.get(toolCallId)?.startedAt) return prev;
-      const next = new Map(prev);
-      next.set(toolCallId, { startedAt });
-      return next;
-    });
+    const current = toolTimingsRef.current.get(toolCallId);
+    if (current?.startedAt) return;
+    const next = new Map(toolTimingsRef.current);
+    next.set(toolCallId, { startedAt });
+    toolTimingsRef.current = next;
+    setToolTimings(next);
   }, []);
 
   /** Record a terminal tool timestamp without extending completed durations on resubmits. */
   const markToolEnded = useCallback((toolCallId: string) => {
     const endedAt = Date.now();
-    setToolTimings((prev) => {
-      const current = prev.get(toolCallId);
-      if (current?.endedAt) return prev;
-      const next = new Map(prev);
-      next.set(toolCallId, {
-        startedAt: current?.startedAt ?? endedAt,
-        endedAt,
-      });
-      return next;
+    const current = toolTimingsRef.current.get(toolCallId);
+    if (current?.endedAt) return;
+    const next = new Map(toolTimingsRef.current);
+    next.set(toolCallId, {
+      startedAt: current?.startedAt ?? endedAt,
+      endedAt,
     });
+    toolTimingsRef.current = next;
+    setToolTimings(next);
   }, []);
 
   /**
@@ -1417,6 +1565,11 @@ export function RightSidebar({
   } | null>(null);
   const queueProcessingRef = useRef(false);
   const prevAgentTurnActiveRef = useRef(false);
+  /** Starts a fresh model turn and clears UI-level cancellation state. */
+  const beginAgentTurn = useCallback(() => {
+    stopRequestedRef.current = false;
+    setStopRequestActive(false);
+  }, []);
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) => setInput(e.target.value),
     []
@@ -1523,6 +1676,46 @@ export function RightSidebar({
     window.addEventListener("orion:mention-notebook-cell", handleMentionNotebookCell);
     return () => {
       window.removeEventListener("orion:mention-notebook-cell", handleMentionNotebookCell);
+    };
+  }, [addDraftReference]);
+
+  useEffect(() => {
+    /** Converts output mention events from notebook surfaces into composer chips. */
+    const handleMentionNotebookOutput = (event: Event) => {
+      const detail = (event as CustomEvent<NotebookOutputMentionEventDetail>).detail;
+      if (
+        typeof detail?.notebookPath !== "string" ||
+        typeof detail.cellIndex !== "number" ||
+        typeof detail.outputIndex !== "number" ||
+        !Number.isInteger(detail.cellIndex) ||
+        !Number.isInteger(detail.outputIndex) ||
+        detail.cellIndex < 0 ||
+        detail.outputIndex < 0
+      ) {
+        return;
+      }
+
+      addDraftReference(
+        makeReference(
+          "output",
+          formatOutputReferenceLabel(detail.cellIndex, detail.outputIndex),
+          {
+            type: "output",
+            notebookPath: detail.notebookPath,
+            cellIndex: detail.cellIndex,
+            outputIndex: detail.outputIndex,
+          },
+          typeof detail.preview === "string"
+            ? detail.preview
+            : `Notebook cell ${detail.cellIndex}, output ${detail.outputIndex} in ${detail.notebookPath}.`,
+          `Use use_notebook with notebookPath="${detail.notebookPath}", then read_cell_output with reads=[{cellIndex:${detail.cellIndex},outputIndex:${detail.outputIndex}}].`
+        )
+      );
+    };
+
+    window.addEventListener("orion:mention-notebook-output", handleMentionNotebookOutput);
+    return () => {
+      window.removeEventListener("orion:mention-notebook-output", handleMentionNotebookOutput);
     };
   }, [addDraftReference]);
 
@@ -1733,7 +1926,7 @@ export function RightSidebar({
 
   // User credential for the currently selected provider (BYOK, OAuth, or local endpoint).
   // Local endpoint credentials are resolved to the selected runtime model.
-  const userCredential = getCredentialForModel(modelInfo?.provider, selectedModel);
+  const userCredential = getCredentialForModel(modelInfo?.provider, apiModelId);
 
   /**
    * Refresh a provider's ChatGPT OAuth access token if needed. BYOK credentials
@@ -1813,6 +2006,7 @@ export function RightSidebar({
         workspaceDirectory: workspaceDirectory ?? undefined,
         availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
         availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
+        agentRules: serializeAgentRules(assistant?.availableRules ?? []),
         serverInfo: assistant?.serverInfo ?? undefined,
         jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
         clientPlatformOs,
@@ -1838,6 +2032,7 @@ export function RightSidebar({
       workspaceDirectory: workspaceDirectory ?? undefined,
       availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
       availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
+      agentRules: serializeAgentRules(assistant?.availableRules ?? []),
       serverInfo: assistant?.serverInfo ?? undefined,
       jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
       clientPlatformOs,
@@ -1855,6 +2050,7 @@ export function RightSidebar({
     workspaceDirectory,
     assistant?.availableSkills,
     assistant?.availableSubagents,
+    assistant?.availableRules,
     assistant?.serverInfo,
     assistant?.jupyterServerIsLocal,
     clientPlatformOs,
@@ -2036,11 +2232,12 @@ export function RightSidebar({
    * briefly "ready" but the assistant has not finished responding yet).
    */
   const isAgentTurnActive = React.useMemo(() => {
+    if (stopRequestActive) return false;
     if (status === "streaming" || status === "submitted") return true;
     if (hasPendingToolCalls) return true;
     if (pendingApprovalIds.size > 0) return true;
-    return lastAssistantMessageIsCompleteWithToolCalls({ messages });
-  }, [status, hasPendingToolCalls, pendingApprovalIds, messages]);
+    return shouldContinueAfterToolCalls(messages);
+  }, [stopRequestActive, status, hasPendingToolCalls, pendingApprovalIds, messages]);
 
   const isInputLocked = isAgentTurnActive;
 
@@ -2053,7 +2250,11 @@ export function RightSidebar({
     if (!wasActive || isAgentTurnActive) return;
 
     const endedAt = Date.now();
-    setToolTimings((prev) => finalizeCompletedToolTimings(messages, prev, endedAt));
+    setToolTimings((prev) => {
+      const next = finalizeCompletedToolTimings(messages, prev, endedAt);
+      toolTimingsRef.current = next;
+      return next;
+    });
   }, [isAgentTurnActive, messages]);
 
   /** Skill slash commands built from the currently available skills. */
@@ -2109,6 +2310,14 @@ export function RightSidebar({
   const handleRemoveQueuedMessage = useCallback((id: string) => {
     setMessageQueue((current) => current.filter((message) => message.id !== id));
   }, []);
+
+  /** Opens the selected active rule file in Orion's main editor. */
+  const handleOpenRule = useCallback(
+    (rule: AgentRule) => {
+      onOpenFile?.({ name: formatRuleDisplayName(rule), path: rule.path });
+    },
+    [onOpenFile]
+  );
 
   /** Run compaction and update state + persisted chat. Returns the new summary on success, null on failure. */
   const runCompaction = useCallback(async (opts?: { retentionTurns?: number }): Promise<CompactionSummary | null> => {
@@ -2486,6 +2695,7 @@ export function RightSidebar({
               const subagentResult = await runSubagent({
                 subagentType,
                 availableSubagents: assistant.availableSubagents,
+                agentRules: assistant.availableRules,
                 description,
                 modelId: modelResolution.modelId,
                 providerId: modelResolution.providerId,
@@ -2855,7 +3065,16 @@ export function RightSidebar({
       try {
         await chatStorage.migrateFromSessionStorage();
         const storedChats = await chatStorage.getChats();
-        setChats(storedChats);
+        let repairedAnyChat = false;
+        const repairedChats = storedChats.map((chat) => {
+          const result = cancelStalePendingToolsInChat(chat);
+          repairedAnyChat ||= result.changed;
+          return result.chat;
+        });
+        if (repairedAnyChat) {
+          await chatStorage.saveChats(repairedChats);
+        }
+        setChats(repairedChats);
         setIsChatsLoaded(true);
       } catch (error) {
         console.error("Failed to load chats:", error);
@@ -2917,9 +3136,10 @@ export function RightSidebar({
       for (const part of msg.parts) {
         if (part.type.startsWith("tool-") && "toolCallId" in part && "state" in part) {
           const inv = part as { toolCallId: string; state: string; output?: unknown };
+          const isTerminalState = TERMINAL_TOOL_STATES.has(inv.state);
           existingTrackedToolCalls.set(inv.toolCallId, {
-            status: inv.state === "output-available" ? "completed" : "running",
-            result: inv.state === "output-available" ? inv.output : undefined,
+            status: isTerminalState ? "completed" : "running",
+            result: isTerminalState ? inv.output : undefined,
           });
         }
       }
@@ -2967,7 +3187,7 @@ export function RightSidebar({
 
   const createNewChat = () => {
     // If currently processing, show confirmation dialog instead
-    if (isInputLocked) {
+    if (isInputLocked && !stopRequestedRef.current) {
       setStopConfirmAction({ type: "new-chat" });
       return;
     }
@@ -3006,6 +3226,46 @@ export function RightSidebar({
     setDraftAttachments([]);
     setMessageQueue([]);
   };
+
+  const createNewChatRef = useRef(createNewChat);
+  createNewChatRef.current = createNewChat;
+
+  const setHistoryPopoverOpenRef = useRef(setIsHistoryPopoverOpen);
+  setHistoryPopoverOpenRef.current = setIsHistoryPopoverOpen;
+
+  /**
+   * Cmd/Ctrl+H opens history; Cmd/Ctrl+Shift+O creates a new chat when the right
+   * sidebar is focused. Bare Cmd/Ctrl+N is reserved by Chrome.
+   */
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.defaultPrevented) return;
+      if (isSubagentChatView) return;
+
+      const hasModKey =
+        (event.metaKey && !event.ctrlKey) || (!event.metaKey && event.ctrlKey);
+      if (!hasModKey || event.altKey) return;
+
+      const shortcutKey = event.key.toLowerCase();
+      const isNewChatShortcut = event.shiftKey && shortcutKey === "o";
+      const isHistoryShortcut = !event.shiftKey && shortcutKey === "h";
+      if (!isNewChatShortcut && !isHistoryShortcut) return;
+      if (!isRightSidebarKeyboardScope(event, sidebarRootRef.current)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (isNewChatShortcut) {
+        createNewChatRef.current();
+      } else {
+        setHistoryPopoverOpenRef.current(true);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", handleKeyDown, { capture: true });
+  }, [isSubagentChatView]);
 
   const saveTitle = () => {
     if (!currentChatId || !editedTitle.trim()) {
@@ -3061,7 +3321,7 @@ export function RightSidebar({
 
   const handleHistorySelect = (chatId: string) => {
     // If currently processing, show confirmation dialog instead
-    if (isInputLocked) {
+    if (isInputLocked && !stopRequestedRef.current) {
       setStopConfirmAction({ type: "switch-chat", targetChatId: chatId });
       return;
     }
@@ -3153,15 +3413,10 @@ export function RightSidebar({
         return;
       }
 
-      const msSinceStop = Date.now() - lastStopRequestedAtRef.current;
-      if (!pendingSubmit && lastStopRequestedAtRef.current > 0 && msSinceStop < 500) {
-        return;
-      }
-
       if (!messageText.trim() && imageFileParts.length === 0) return;
       const modelRequestId = crypto.randomUUID();
       modelRequestIdRef.current = modelRequestId;
-      stopRequestedRef.current = false;
+      beginAgentTurn();
       forcedSubagentForCurrentTurnRef.current = null;
       if (!pendingSubmit) {
         setInput("");
@@ -3171,7 +3426,10 @@ export function RightSidebar({
       setEphemeralCostMessage(null);
 
       // Refresh OAuth token if needed before sending
-      const freshCredential = await refreshCredentialForProviderIfNeeded(modelInfo?.provider, selectedModel);
+      const freshCredential = await refreshCredentialForProviderIfNeeded(
+        modelInfo?.provider,
+        apiModelId
+      );
 
       // Pre-send context budget check: auto-compact if the estimated wire payload
       // exceeds COMPACTION_AUTO_THRESHOLD × cap before sending.
@@ -3217,6 +3475,7 @@ export function RightSidebar({
             workspaceDirectory: workspaceDirectory ?? undefined,
             availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
             availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
+            agentRules: serializeAgentRules(assistant?.availableRules ?? []),
             serverInfo: assistant?.serverInfo ?? undefined,
             jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
             clientPlatformOs,
@@ -3232,6 +3491,7 @@ export function RightSidebar({
       draftAttachments,
       sendMessage,
       modelInfo,
+      apiModelId,
       selectedModel,
       interactionMode,
       effectiveChatId,
@@ -3241,6 +3501,7 @@ export function RightSidebar({
       workspaceDirectory,
       assistant?.availableSkills,
       assistant?.availableSubagents,
+      assistant?.availableRules,
       assistant?.serverInfo,
       assistant?.jupyterServerIsLocal,
       clientPlatformOs,
@@ -3249,6 +3510,7 @@ export function RightSidebar({
       refreshCredentialForProviderIfNeeded,
       runCompaction,
       getModel,
+      beginAgentTurn,
     ]
   );
 
@@ -3308,7 +3570,7 @@ export function RightSidebar({
 
       const subagent = assistant?.availableSubagents.find((s) => s.name === subagentName);
       if (subagent && !isInputLocked) {
-        stopRequestedRef.current = false;
+        beginAgentTurn();
         const modelRequestId = crypto.randomUUID();
         modelRequestIdRef.current = modelRequestId;
         const plainUserText = userMessage || `Run the ${subagent.name} sub-agent.`;
@@ -3335,6 +3597,7 @@ export function RightSidebar({
               workspaceDirectory: workspaceDirectory ?? undefined,
               availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
               availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
+              agentRules: serializeAgentRules(assistant?.availableRules ?? []),
               forcedSubagentName: subagent.name,
               serverInfo: assistant?.serverInfo ?? undefined,
               jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
@@ -3355,7 +3618,7 @@ export function RightSidebar({
         assistant?.availableSkills.some((skill) => skill.name === skillName)
       );
       if (allSelectedSkillsAvailable && !isInputLocked) {
-        stopRequestedRef.current = false;
+        beginAgentTurn();
         const modelRequestId = crypto.randomUUID();
         modelRequestIdRef.current = modelRequestId;
         const plainUserText =
@@ -3383,6 +3646,7 @@ export function RightSidebar({
               workspaceDirectory: workspaceDirectory ?? undefined,
               availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
               availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
+              agentRules: serializeAgentRules(assistant?.availableRules ?? []),
               forcedSkillNames: selectedSkills.skillNames,
               serverInfo: assistant?.serverInfo ?? undefined,
               jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
@@ -3413,13 +3677,8 @@ export function RightSidebar({
       return;
     }
 
-    const msSinceStop = Date.now() - lastStopRequestedAtRef.current;
-    if (!fromQueue && lastStopRequestedAtRef.current > 0 && msSinceStop < 500) {
-      return;
-    }
-
     if (editingState && currentChatId) {
-      stopRequestedRef.current = false;
+      beginAgentTurn();
       const modelRequestId = crypto.randomUUID();
       modelRequestIdRef.current = modelRequestId;
       const currentMessages = messages;
@@ -3460,7 +3719,14 @@ export function RightSidebar({
           notebookPath,
           activeFilePath,
           workspaceDirectory: workspaceDirectory ?? undefined,
+          availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
+          availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
+          agentRules: serializeAgentRules(assistant?.availableRules ?? []),
+          serverInfo: assistant?.serverInfo ?? undefined,
+          jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
+          clientPlatformOs,
           userCredential,
+          agentCommunicationStyle,
         };
 
         const response = await fetch("/api/chat", {
@@ -3652,65 +3918,117 @@ export function RightSidebar({
   }, [isAgentTurnActive, markCurrentEditCheckpointStatus, messageQueue]);
 
   const handleStopGeneration = useCallback(() => {
+    const cancelledAt = Date.now();
+    const getCancelledOutput = (toolCallId: string): CancelledToolOutput => {
+      const startedAt = toolTimingsRef.current.get(toolCallId)?.startedAt;
+      return {
+        error: "cancelled_by_user",
+        ...(startedAt !== undefined
+          ? { durationMs: Math.max(0, cancelledAt - startedAt) }
+          : {}),
+      };
+    };
+    const onCancelledToolCall = (toolCallId: string, result: CancelledToolOutput) => {
+      trackedToolCallsRef.current.set(toolCallId, {
+        status: "completed",
+        result,
+      });
+      markToolEnded(toolCallId);
+    };
+    const buildCancelledChatForStorage = (chat: Chat): Chat | null => {
+      let sessionChanged = false;
+      let nextSubagentSessions = chat.subagentSessions;
+      if (cancellingSubagentToolCallIds.size > 0 && chat.subagentSessions) {
+        const timestamp = new Date(cancelledAt);
+        const sessionsCopy = { ...chat.subagentSessions };
+        for (const toolCallId of cancellingSubagentToolCallIds) {
+          const session = sessionsCopy[toolCallId];
+          if (!session || session.status !== "running") continue;
+          sessionChanged = true;
+          sessionsCopy[toolCallId] = {
+            ...session,
+            status: "cancelled",
+            errorText: "cancelled_by_user",
+            updatedAt: timestamp,
+          };
+        }
+        if (sessionChanged) nextSubagentSessions = sessionsCopy;
+      }
+
+      const sourceMessages =
+        messagesRef.current.length > 0 ? messagesRef.current : chat.messages;
+      let result = cancelPendingToolParts(sourceMessages, {
+        getCancelledOutput,
+        onCancelledToolCall,
+      });
+      if (!result.changed && sourceMessages !== chat.messages) {
+        result = cancelPendingToolParts(chat.messages, {
+          getCancelledOutput,
+          onCancelledToolCall,
+        });
+      }
+
+      if (!result.changed && !sessionChanged) return null;
+
+      const messagesForStorage: ChatMessage[] = result.changed
+        ? result.messages.map((message) => {
+          const messageForStorage = stripSessionOnlyFileParts(message);
+          const existing = chat.messages.find((candidate) => candidate.id === message.id);
+          const references = parseChatMessageReferences(message.metadata);
+          return {
+            ...messageForStorage,
+            metadata: references.length > 0 ? { references } : undefined,
+            timestamp: existing?.timestamp ?? new Date(cancelledAt),
+            modelUsed: existing?.modelUsed ?? selectedModel,
+            checkpointId: existing?.checkpointId,
+          };
+        })
+        : chat.messages;
+
+      return {
+        ...chat,
+        messages: messagesForStorage,
+        subagentSessions: nextSubagentSessions,
+        updatedAt: new Date(cancelledAt),
+      };
+    };
+
     stopRequestedRef.current = true;
-    lastStopRequestedAtRef.current = Date.now();
+    setStopRequestActive(true);
+    lastStopRequestedAtRef.current = cancelledAt;
     setMessageQueue([]);
     pendingSubmitRef.current = null;
     queueProcessingRef.current = false;
     const cancellingSubagentToolCallIds = new Set(activeSubagentRunToolCallsRef.current);
     const cancellingChatId = effectiveChatIdRef.current;
 
-    if (cancellingChatId && cancellingSubagentToolCallIds.size > 0) {
-      const timestamp = new Date();
+    setMessages((prev) => {
+      const result = cancelPendingToolParts(prev, {
+        getCancelledOutput,
+        onCancelledToolCall,
+      });
+      return result.changed ? result.messages : prev;
+    });
+
+    if (cancellingChatId) {
+      const cancelledChatForStorage = chats
+        .find((chat) => chat.id === cancellingChatId);
+      const nextCancelledChat = cancelledChatForStorage
+        ? buildCancelledChatForStorage(cancelledChatForStorage)
+        : null;
+
       setChats((prev) =>
         prev.map((chat) => {
-          if (chat.id !== cancellingChatId || !chat.subagentSessions) return chat;
-          const nextSessions = { ...chat.subagentSessions };
-          for (const toolCallId of cancellingSubagentToolCallIds) {
-            const session = nextSessions[toolCallId];
-            if (!session || session.status !== "running") continue;
-            nextSessions[toolCallId] = {
-              ...session,
-              status: "cancelled",
-              errorText: "cancelled_by_user",
-              updatedAt: timestamp,
-            };
-          }
-          return { ...chat, subagentSessions: nextSessions, updatedAt: timestamp };
+          if (chat.id !== cancellingChatId) return chat;
+          return nextCancelledChat ?? buildCancelledChatForStorage(chat) ?? chat;
         })
       );
-    }
-
-    setMessages((prev) => {
-      return prev.map((msg) => {
-        let changed = false;
-        const nextParts = msg.parts.map((part) => {
-          if (
-            part.type.startsWith("tool-") &&
-            "toolCallId" in part &&
-            "state" in part &&
-            (part as { state: string }).state === "input-available"
-          ) {
-            changed = true;
-            const inv = part as { toolCallId: string };
-            trackedToolCallsRef.current.set(inv.toolCallId, {
-              status: "completed",
-              result: CANCELLED_TOOL_RESULT,
-            });
-            markToolEnded(inv.toolCallId);
-            return {
-              ...part,
-              state: "output-error" as const,
-              errorText: "cancelled_by_user",
-            };
-          }
-          return part;
+      if (nextCancelledChat) {
+        void chatStorage.saveChat(nextCancelledChat).catch((error) => {
+          console.error("Failed to persist stopped chat:", error);
         });
-
-        if (!changed) return msg;
-        return { ...msg, parts: nextParts } as UIMessage;
-      });
-    });
+      }
+    }
 
     pendingKernelToolCallsRef.current = [];
     pendingServerToolCallsRef.current = [];
@@ -3724,7 +4042,7 @@ export function RightSidebar({
     setPendingApprovalIds(new Set());
 
     stop();
-  }, [markToolEnded, setChats, setMessages, stop]);
+  }, [chats, markToolEnded, selectedModel, setChats, setMessages, stop]);
 
   /** Handles confirmation from the stop-and-switch dialog */
   const handleStopConfirm = useCallback(() => {
@@ -3789,6 +4107,7 @@ export function RightSidebar({
   if (!isChatsLoaded) {
     return (
       <div
+        ref={sidebarRootRef}
         className={`flex w-full min-w-0 flex-col h-full overflow-hidden bg-sidebar ${className || ""}`}
         {...props}
       >
@@ -3804,6 +4123,7 @@ export function RightSidebar({
 
   return (
     <div
+      ref={sidebarRootRef}
       className={`flex w-full min-w-0 flex-col h-full overflow-hidden bg-sidebar ${className || ""}`}
       {...props}
     >
@@ -3879,6 +4199,8 @@ export function RightSidebar({
             readOnly
             readOnlyPlaceholder="Sub-agent chat is read-only"
             onOpenSlashDefinition={handleOpenSlashDefinition}
+            activeRules={assistant?.availableRules ?? []}
+            onOpenRule={handleOpenRule}
           />
         </>
       ) : (
@@ -3889,6 +4211,8 @@ export function RightSidebar({
             editedTitle={editedTitle}
             chats={chats}
             currentChatId={currentChatId}
+            isHistoryPopoverOpen={isHistoryPopoverOpen}
+            onHistoryPopoverOpenChange={setIsHistoryPopoverOpen}
             onTitleChange={setEditedTitle}
             onTitleSave={saveTitle}
             onTitleCancel={() => setIsEditingTitle(false)}
@@ -3971,6 +4295,8 @@ export function RightSidebar({
             disabledReferenceTabs={disabledReferenceTabs}
             queuedMessages={messageQueue}
             onRemoveQueuedMessage={handleRemoveQueuedMessage}
+            activeRules={assistant?.availableRules ?? []}
+            onOpenRule={handleOpenRule}
           />
         </>
       )}

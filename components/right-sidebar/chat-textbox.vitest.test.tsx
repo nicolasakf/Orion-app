@@ -2,6 +2,8 @@ import * as React from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { AgentRule } from "@/lib/agent/rules";
+
 import { ChatTextbox } from "./chat-textbox";
 import type { ChatDraftAttachment, LLM } from "./types";
 
@@ -26,30 +28,34 @@ const models: LLM[] = [
   },
 ];
 
+function createTextboxProps(
+  props: Partial<React.ComponentProps<typeof ChatTextbox>> = {}
+): React.ComponentProps<typeof ChatTextbox> {
+  const textareaRef = React.createRef<HTMLTextAreaElement>();
+  return {
+    input: "",
+    handleInputChange: vi.fn(),
+    handleSubmit: vi.fn((event) => event.preventDefault()),
+    onStop: vi.fn(),
+    isLoading: false,
+    interactionMode: "Agent",
+    selectedModel: "gpt-test",
+    editingState: null,
+    textareaRef,
+    onInteractionModeChange: vi.fn(),
+    onModelChange: vi.fn(),
+    onCancelEdit: vi.fn(),
+    models,
+    modelSettings: {},
+    onModelSettingsChange: vi.fn(),
+    ...props,
+  };
+}
+
 function renderTextbox(
   props: Partial<React.ComponentProps<typeof ChatTextbox>> = {}
 ) {
-  const textareaRef = React.createRef<HTMLTextAreaElement>();
-  return render(
-    <ChatTextbox
-      input=""
-      handleInputChange={vi.fn()}
-      handleSubmit={vi.fn((event) => event.preventDefault())}
-      onStop={vi.fn()}
-      isLoading={false}
-      interactionMode="Agent"
-      selectedModel="gpt-test"
-      editingState={null}
-      textareaRef={textareaRef}
-      onInteractionModeChange={vi.fn()}
-      onModelChange={vi.fn()}
-      onCancelEdit={vi.fn()}
-      models={models}
-      modelSettings={{}}
-      onModelSettingsChange={vi.fn()}
-      {...props}
-    />
-  );
+  return render(<ChatTextbox {...createTextboxProps(props)} />);
 }
 
 afterEach(() => {
@@ -172,5 +178,46 @@ describe("ChatTextbox attachments", () => {
     fireEvent.mouseDown(screen.getByRole("button", { name: "Remove chart.png" }));
 
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
+  });
+});
+
+describe("ChatTextbox generation state", () => {
+  it("returns to compose mode when loading clears after stop", () => {
+    const onStop = vi.fn();
+    const props = createTextboxProps({ isLoading: true, onStop });
+    const { rerender } = render(<ChatTextbox {...props} />);
+
+    expect(
+      screen.getByPlaceholderText("Queue a message · Enter to add")
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop generation" }));
+    expect(onStop).toHaveBeenCalledOnce();
+
+    rerender(<ChatTextbox {...props} isLoading={false} />);
+
+    expect(
+      screen.getByPlaceholderText("Type a message · / for commands · @ for mentions")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeInTheDocument();
+  });
+});
+
+describe("ChatTextbox rules", () => {
+  it("shows active rules and opens the selected rule", () => {
+    const rule: AgentRule = {
+      path: "AGENTS.md",
+      filename: "AGENTS.md",
+      scope: "workspace",
+      content: "Use project conventions.",
+    };
+    const onOpenRule = vi.fn();
+    renderTextbox({ activeRules: [rule], onOpenRule });
+
+    expect(screen.getByText("Rules:")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "AGENTS.md" }));
+
+    expect(onOpenRule).toHaveBeenCalledWith(rule);
   });
 });

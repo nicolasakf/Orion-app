@@ -22,8 +22,12 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import type { AgentRule } from "@/lib/agent/rules";
 import { cn } from "@/lib/utils";
-import { findModelBySelectionKey } from "@/lib/agent/model-selection-key";
+import {
+  findModelBySelectionKey,
+  formatModelSelectionKey,
+} from "@/lib/agent/model-selection-key";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -182,12 +186,21 @@ export interface ChatTextboxProps {
   queuedMessages?: QueuedMessage[];
   /** Removes a queued message before it is sent. */
   onRemoveQueuedMessage?: (id: string) => void;
+  /** AGENTS.md / CLAUDE.md rules currently applied to chat requests. */
+  activeRules?: AgentRule[];
+  /** Opens a loaded rule file in the editor. */
+  onOpenRule?: (rule: AgentRule) => void;
 }
 
 function formatAttachmentSize(size: number): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
   return `${(size / (1024 * 1024)).toFixed(size < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+/** Returns a compact display label for a loaded rule file. */
+function formatRuleLabel(rule: AgentRule): string {
+  return rule.scope === "workspace" ? rule.filename : `${rule.filename} (${rule.scope})`;
 }
 
 /** Returns true when a drag payload contains operating-system files. */
@@ -394,6 +407,8 @@ export function ChatTextbox({
   disabledReferenceTabs = [],
   queuedMessages = [],
   onRemoveQueuedMessage,
+  activeRules = [],
+  onOpenRule,
 }: ChatTextboxProps) {
   const [isModelComboboxOpen, setIsModelComboboxOpen] = useState(false);
   const [isModePopoverOpen, setIsModePopoverOpen] = useState(false);
@@ -1006,6 +1021,24 @@ export function ChatTextbox({
               ))}
             </div>
           </Card>
+        </div>
+      )}
+      {activeRules.length > 0 && (
+        <div className="flex min-h-4 flex-wrap items-center gap-1 px-1.5 pb-1 text-[11px] leading-none text-muted-foreground/60">
+          <span>Rules:</span>
+          {activeRules.map((rule, index) => (
+            <React.Fragment key={`${rule.scope}:${rule.path}`}>
+              {index > 0 && <span aria-hidden="true">,</span>}
+              <button
+                type="button"
+                className="max-w-[12rem] truncate rounded-sm text-left underline-offset-2 transition-colors hover:text-muted-foreground hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                title={`Open ${rule.scope} rule: ${rule.path}`}
+                onClick={() => onOpenRule?.(rule)}
+              >
+                {formatRuleLabel(rule)}
+              </button>
+            </React.Fragment>
+          ))}
         </div>
       )}
       <Card
@@ -1741,7 +1774,9 @@ export function ChatTextbox({
                                   onOpenProvidersSettings?.();
                                   return;
                                 }
-                                onModelChange(model.value);
+                                onModelChange(
+                                  formatModelSelectionKey(model.provider, model.value)
+                                );
                                 setIsModelComboboxOpen(false);
                                 focusTextareaAfterPopoverSelect();
                               }}

@@ -14,6 +14,7 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  Ban,
   Check,
   X,
   AlertTriangle,
@@ -141,6 +142,12 @@ function detectIsError(result: unknown, isPending: boolean, leadingText: string 
   return leadingText != null && leadingText.startsWith("[ERROR");
 }
 
+function resultErrorCode(result: unknown): string | null {
+  if (typeof result !== "object" || result === null || Array.isArray(result)) return null;
+  const error = (result as { error?: unknown }).error;
+  return typeof error === "string" ? error : null;
+}
+
 function detectIsWarning(isPending: boolean, isError: boolean, leadingText: string | null): boolean {
   return !isPending && !isError && leadingText != null && leadingText.startsWith("[WARNING");
 }
@@ -198,6 +205,7 @@ interface ToolInvocationCardProps {
   | "approval-responded"
   | "output-error"
   | "output-denied";
+  errorText?: string;
   className?: string;
   /** Whether this tool call is waiting for user approval */
   pendingApproval?: boolean;
@@ -219,6 +227,7 @@ export function ToolInvocationCard({
   args: rawArgs,
   result,
   state,
+  errorText,
   className,
   pendingApproval,
   onApprove,
@@ -236,7 +245,13 @@ export function ToolInvocationCard({
   const Icon = meta.icon;
   const isPending = isPendingState(state);
   const leadingText = extractLeadingText(result);
-  const isError = detectIsError(result, isPending, leadingText);
+  const isCancelled =
+    errorText === "cancelled_by_user" || resultErrorCode(result) === "cancelled_by_user";
+  const isError = !isCancelled && (
+    state === "output-error" ||
+    state === "output-denied" ||
+    detectIsError(result, isPending, leadingText)
+  );
   const isWarning = detectIsWarning(isPending, isError, leadingText);
   const fullResultText = resultToText(result);
   /** Expanded panel: selected tools hide redundant metadata; full text stays in tool result. */
@@ -313,6 +328,7 @@ export function ToolInvocationCard({
           <StatusIcon
             pendingApproval={pendingApproval}
             isPending={isPending}
+            isCancelled={isCancelled}
             isError={isError}
             isWarning={isWarning}
           />
@@ -430,16 +446,21 @@ export function ToolInvocationCard({
 function StatusIcon({
   pendingApproval,
   isPending,
+  isCancelled,
   isError,
   isWarning,
 }: {
   pendingApproval?: boolean;
   isPending: boolean;
+  isCancelled: boolean;
   isError: boolean;
   isWarning: boolean;
 }) {
   if (pendingApproval) return <Shield className="h-3 w-3 shrink-0 text-amber-500" />;
   if (isPending) return <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />;
+  if (isCancelled) {
+    return <Ban aria-label="Cancelled" className="h-3 w-3 shrink-0 text-muted-foreground" />;
+  }
   if (isError) return <X className="h-3 w-3 shrink-0 text-destructive" />;
   if (isWarning) return <AlertTriangle className="h-3 w-3 shrink-0 text-amber-500" />;
   return <Check className="h-3 w-3 shrink-0 text-emerald-500" />;
