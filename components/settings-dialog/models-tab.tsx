@@ -2,7 +2,16 @@
 
 import * as React from "react";
 import { useState, useCallback } from "react";
-import { RefreshCw, Search, LayoutGrid, List, Pin } from "lucide-react";
+import {
+  RefreshCw,
+  Search,
+  LayoutGrid,
+  List,
+  Pin,
+  Pencil,
+  ChevronsDownUp,
+  ChevronsUpDown,
+} from "lucide-react";
 import {
   cn,
   scheduleAfterMinDuration,
@@ -16,6 +25,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Separator } from "@/components/ui/separator";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import {
   Select,
@@ -24,11 +34,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { AutoRunConfirmDialog } from "@/components/common/auto-run-confirm-dialog";
 import { ProviderLogo } from "@/components/provider-logo";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
-import type { ToolApprovalMode } from "@/lib/settings/schema";
+import type { ProviderCredential, ToolApprovalMode } from "@/lib/settings/schema";
 import { toast } from "sonner";
+import {
+  buildModelLabelsUpdate,
+  getCustomModelLabel,
+  resolveModelDisplayLabel,
+} from "@/lib/agent/model-display-label";
 import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
 import {
   decodeLocalModelCatalogId,
@@ -50,6 +74,10 @@ interface ModelRow {
   pinned_by_default: boolean;
 }
 
+interface DisplayModelRow extends ModelRow {
+  baseLabel: string;
+}
+
 function getProviderDisplayName(providerId: string): string {
   const names: Record<string, string> = {
     google: "Google",
@@ -66,6 +94,96 @@ function getProviderDisplayName(providerId: string): string {
 
 function isStaticLocalModelValue(modelId: string): boolean {
   return decodeLocalModelCatalogId(modelId) === undefined;
+}
+
+function resolveBaseModelLabel(
+  model: ModelRow,
+  credentials: Record<string, ProviderCredential>
+): string {
+  if (isLocalProvider(model.provider_id) && isStaticLocalModelValue(model.model_id)) {
+    const credential = credentials[model.provider_id];
+    if (credential?.type === "local_endpoint") {
+      return (
+        credential.label ??
+        getLocalModelLabel(model.provider_id, credential.modelId) ??
+        credential.modelId
+      );
+    }
+  }
+
+  return model.label;
+}
+
+function compareModelsByRecency(a: ModelRow, b: ModelRow): number {
+  const dateDiff =
+    new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+  if (dateDiff !== 0) return dateDiff;
+  return formatModelSelectionKey(a.provider_id, a.model_id).localeCompare(
+    formatModelSelectionKey(b.provider_id, b.model_id)
+  );
+}
+
+/** Pencil control for renaming a model in pickers; highlighted when a custom label is set. */
+function ModelEditLabelButton({
+  hasCustomLabel,
+  onEdit,
+}: {
+  hasCustomLabel: boolean;
+  onEdit: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "corner-squircle shrink-0 rounded p-1 text-muted-foreground transition-colors",
+        "opacity-0 group-hover:opacity-100",
+        "hover:bg-primary/10 hover:text-primary",
+        hasCustomLabel && "opacity-100 text-primary"
+      )}
+      onClick={(e) => {
+        e.stopPropagation();
+        onEdit();
+      }}
+      aria-label="Rename model"
+      title="Rename model"
+    >
+      <Pencil className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
+function ModelListRow({
+  model,
+  hasCustomLabel,
+  pinned,
+  showProviderLogo,
+  onEditLabel,
+  onTogglePin,
+}: {
+  model: DisplayModelRow;
+  hasCustomLabel: boolean;
+  pinned: boolean;
+  showProviderLogo: boolean;
+  onEditLabel: () => void;
+  onTogglePin: () => void;
+}) {
+  return (
+    <div className="corner-squircle group flex items-center justify-between py-1 px-2 rounded hover:bg-accent/50 min-h-8">
+      <div className="flex items-center gap-2 min-w-0">
+        {showProviderLogo ? (
+          <ProviderLogo
+            providerId={model.provider_id}
+            className="h-3.5 w-3.5 opacity-70"
+          />
+        ) : null}
+        <span className="text-sm truncate">{model.label}</span>
+      </div>
+      <div className="flex items-center gap-0.5 shrink-0">
+        <ModelEditLabelButton hasCustomLabel={hasCustomLabel} onEdit={onEditLabel} />
+        <ModelPinButton pinned={pinned} onToggle={onTogglePin} />
+      </div>
+    </div>
+  );
 }
 
 /** Pin control aligned with workspace picker: outline pin appears on row hover; filled when pinned. */
@@ -107,11 +225,17 @@ export function ModelsTab() {
   const [models, setModels] = useState<ModelRow[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [groupByProvider, setGroupByProvider] = useState(true);
+  const [groupByProvider, setGroupByProvider] = useState(false);
   const [expandedProviders, setExpandedProviders] = useState<Set<string>>(
     new Set()
   );
   const [autoRunConfirmOpen, setAutoRunConfirmOpen] = useState(false);
+  const [labelDialogOpen, setLabelDialogOpen] = useState(false);
+  const [labelDialogModel, setLabelDialogModel] = useState<DisplayModelRow | null>(
+    null
+  );
+  const [labelDraft, setLabelDraft] = useState("");
+  const initializedProvidersRef = React.useRef<Set<string>>(new Set());
 
   const visibleProviderIds = React.useMemo(
     () => getVisibleProviderIds(effectiveSettings.providers),
@@ -212,37 +336,42 @@ export function ModelsTab() {
     void fetchModels();
   }, [fetchModels]);
 
-  /** Expand provider groups for configured providers once catalog rows are available. */
+  /** Expand only newly seen provider groups; preserve user collapse state on later updates. */
   React.useEffect(() => {
     if (models.length === 0) return;
     setExpandedProviders((prev) => {
       const next = new Set(prev);
+      let changed = false;
       for (const row of models) {
-        if (visibleProviderIds.has(row.provider_id)) {
-          next.add(row.provider_id);
-        }
+        if (!visibleProviderIds.has(row.provider_id)) continue;
+        if (initializedProvidersRef.current.has(row.provider_id)) continue;
+        initializedProvidersRef.current.add(row.provider_id);
+        next.add(row.provider_id);
+        changed = true;
       }
-      return next;
+      return changed ? next : prev;
     });
   }, [models, visibleProviderIds]);
 
-  const modelsWithConfiguredLabels = React.useMemo(() => {
+  const modelLabels = effectiveSettings.chat.modelLabels ?? {};
+
+  const modelsWithConfiguredLabels = React.useMemo<DisplayModelRow[]>(() => {
     const credentials = effectiveSettings.providers?.credentials ?? {};
 
     return allModels.map((model) => {
-      if (!isLocalProvider(model.provider_id) || !isStaticLocalModelValue(model.model_id)) {
-        return model;
-      }
-
-      const credential = credentials[model.provider_id];
-      if (credential?.type !== "local_endpoint") return model;
-
+      const baseLabel = resolveBaseModelLabel(model, credentials);
       return {
         ...model,
-        label: credential.label ?? getLocalModelLabel(model.provider_id, credential.modelId) ?? credential.modelId,
+        baseLabel,
+        label: resolveModelDisplayLabel(
+          model.provider_id,
+          model.model_id,
+          baseLabel,
+          modelLabels
+        ),
       };
     });
-  }, [allModels, effectiveSettings.providers?.credentials]);
+  }, [allModels, effectiveSettings.providers?.credentials, modelLabels]);
 
   const titleGenerationModels = React.useMemo(() => {
     return [...modelsWithConfiguredLabels].sort((a, b) =>
@@ -262,25 +391,38 @@ export function ModelsTab() {
     );
   }, [modelsWithConfiguredLabels, searchQuery]);
 
-  /** Sort: pinned first (preserving pin order), then by created_at (latest first). */
+  /** Stable display order for grouped view so pin toggles do not reshuffle within a provider. */
   const sortedModels = React.useMemo(() => {
-    return [...filteredModels].sort((a, b) => {
-      const aKey = formatModelSelectionKey(a.provider_id, a.model_id);
-      const bKey = formatModelSelectionKey(b.provider_id, b.model_id);
-      const aPinned = pinnedModelIds.includes(aKey);
-      const bPinned = pinnedModelIds.includes(bKey);
-      if (aPinned !== bPinned) return aPinned ? -1 : 1;
-      if (aPinned) {
+    return [...filteredModels].sort(compareModelsByRecency);
+  }, [filteredModels]);
+
+  const listViewPinnedModels = React.useMemo(() => {
+    return filteredModels
+      .filter((model) =>
+        pinnedModelIds.includes(
+          formatModelSelectionKey(model.provider_id, model.model_id)
+        )
+      )
+      .sort((a, b) => {
+        const aKey = formatModelSelectionKey(a.provider_id, a.model_id);
+        const bKey = formatModelSelectionKey(b.provider_id, b.model_id);
         return pinnedModelIds.indexOf(aKey) - pinnedModelIds.indexOf(bKey);
-      }
-      return (
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
-    });
+      });
+  }, [filteredModels, pinnedModelIds]);
+
+  const listViewUnpinnedModels = React.useMemo(() => {
+    return filteredModels
+      .filter(
+        (model) =>
+          !pinnedModelIds.includes(
+            formatModelSelectionKey(model.provider_id, model.model_id)
+          )
+      )
+      .sort(compareModelsByRecency);
   }, [filteredModels, pinnedModelIds]);
 
   const modelsByProvider = React.useMemo(() => {
-    const map = new Map<string, ModelRow[]>();
+    const map = new Map<string, DisplayModelRow[]>();
     for (const m of sortedModels) {
       const list = map.get(m.provider_id) ?? [];
       list.push(m);
@@ -291,6 +433,59 @@ export function ModelsTab() {
 
   const isModelPinned = (providerId: string, modelId: string) =>
     pinnedModelIds.includes(formatModelSelectionKey(providerId, modelId));
+
+  const hasCustomModelLabel = (providerId: string, modelId: string) =>
+    getCustomModelLabel(modelLabels, providerId, modelId) !== undefined;
+
+  const openLabelDialog = (model: DisplayModelRow) => {
+    setLabelDialogModel(model);
+    setLabelDraft(model.label);
+    setLabelDialogOpen(true);
+  };
+
+  const closeLabelDialog = () => {
+    setLabelDialogOpen(false);
+    setLabelDialogModel(null);
+    setLabelDraft("");
+  };
+
+  const saveModelLabel = () => {
+    if (!labelDialogModel) return;
+
+    void setUserSettings((current) => ({
+      ...current,
+      chat: {
+        ...current.chat,
+        modelLabels: buildModelLabelsUpdate(
+          current.chat.modelLabels ?? {},
+          labelDialogModel.provider_id,
+          labelDialogModel.model_id,
+          labelDraft,
+          labelDialogModel.baseLabel
+        ),
+      },
+    }));
+    closeLabelDialog();
+  };
+
+  const resetModelLabel = () => {
+    if (!labelDialogModel) return;
+
+    void setUserSettings((current) => ({
+      ...current,
+      chat: {
+        ...current.chat,
+        modelLabels: buildModelLabelsUpdate(
+          current.chat.modelLabels ?? {},
+          labelDialogModel.provider_id,
+          labelDialogModel.model_id,
+          labelDialogModel.baseLabel,
+          labelDialogModel.baseLabel
+        ),
+      },
+    }));
+    closeLabelDialog();
+  };
 
   const setModelPinned = (providerId: string, modelId: string, pinned: boolean) => {
     const pinKey = formatModelSelectionKey(providerId, modelId);
@@ -325,6 +520,27 @@ export function ModelsTab() {
         next.add(providerId);
       }
       return next;
+    });
+  };
+
+  const groupedProviderIds = React.useMemo(
+    () =>
+      Array.from(modelsByProvider.keys()).sort((a, b) => a.localeCompare(b)),
+    [modelsByProvider]
+  );
+
+  const allGroupsExpanded =
+    groupedProviderIds.length > 0 &&
+    groupedProviderIds.every((providerId) =>
+      expandedProviders.has(providerId)
+    );
+
+  const toggleAllProviderGroups = () => {
+    setExpandedProviders((prev) => {
+      if (allGroupsExpanded) {
+        return new Set();
+      }
+      return new Set(groupedProviderIds);
     });
   };
 
@@ -459,6 +675,22 @@ export function ModelsTab() {
             <LayoutGrid className="h-4 w-4" />
           )}
         </Button>
+        {groupByProvider ? (
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={toggleAllProviderGroups}
+            disabled={groupedProviderIds.length === 0}
+            aria-label={allGroupsExpanded ? "Collapse all groups" : "Expand all groups"}
+            title={allGroupsExpanded ? "Collapse all groups" : "Expand all groups"}
+          >
+            {allGroupsExpanded ? (
+              <ChevronsDownUp className="h-4 w-4" />
+            ) : (
+              <ChevronsUpDown className="h-4 w-4" />
+            )}
+          </Button>
+        ) : null}
         <Button
           variant="outline"
           size="icon"
@@ -511,18 +743,20 @@ export function ModelsTab() {
                       {providerModels.map((model) => {
                         const pinned = isModelPinned(model.provider_id, model.model_id);
                         return (
-                          <div
+                          <ModelListRow
                             key={formatModelSelectionKey(model.provider_id, model.model_id)}
-                            className="corner-squircle group flex items-center justify-between py-1 px-2 rounded hover:bg-accent/50 min-h-8"
-                          >
-                            <span className="text-sm">{model.label}</span>
-                            <ModelPinButton
-                              pinned={pinned}
-                              onToggle={() =>
-                                setModelPinned(model.provider_id, model.model_id, !pinned)
-                              }
-                            />
-                          </div>
+                            model={model}
+                            hasCustomLabel={hasCustomModelLabel(
+                              model.provider_id,
+                              model.model_id
+                            )}
+                            pinned={pinned}
+                            showProviderLogo={false}
+                            onEditLabel={() => openLabelDialog(model)}
+                            onTogglePin={() =>
+                              setModelPinned(model.provider_id, model.model_id, !pinned)
+                            }
+                          />
                         );
                       })}
                     </div>
@@ -533,24 +767,40 @@ export function ModelsTab() {
         </div>
       ) : (
         <div className="flex flex-col gap-0.5">
-          {sortedModels.map((model) => {
+          {listViewPinnedModels.map((model) => {
             const pinned = isModelPinned(model.provider_id, model.model_id);
             return (
-              <div
+              <ModelListRow
                 key={formatModelSelectionKey(model.provider_id, model.model_id)}
-                className="corner-squircle group flex items-center justify-between py-1 px-2 rounded hover:bg-accent/50 min-h-8"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <ProviderLogo providerId={model.provider_id} className="h-3.5 w-3.5 opacity-70" />
-                  <span className="text-sm truncate">{model.label}</span>
-                </div>
-                <ModelPinButton
-                  pinned={pinned}
-                  onToggle={() =>
-                    setModelPinned(model.provider_id, model.model_id, !pinned)
-                  }
-                />
-              </div>
+                model={model}
+                hasCustomLabel={hasCustomModelLabel(model.provider_id, model.model_id)}
+                pinned={pinned}
+                showProviderLogo
+                onEditLabel={() => openLabelDialog(model)}
+                onTogglePin={() =>
+                  setModelPinned(model.provider_id, model.model_id, !pinned)
+                }
+              />
+            );
+          })}
+          {listViewPinnedModels.length > 0 &&
+            listViewUnpinnedModels.length > 0 && (
+              <Separator className="my-1" />
+            )}
+          {listViewUnpinnedModels.map((model) => {
+            const pinned = isModelPinned(model.provider_id, model.model_id);
+            return (
+              <ModelListRow
+                key={formatModelSelectionKey(model.provider_id, model.model_id)}
+                model={model}
+                hasCustomLabel={hasCustomModelLabel(model.provider_id, model.model_id)}
+                pinned={pinned}
+                showProviderLogo
+                onEditLabel={() => openLabelDialog(model)}
+                onTogglePin={() =>
+                  setModelPinned(model.provider_id, model.model_id, !pinned)
+                }
+              />
             );
           })}
         </div>
@@ -563,6 +813,66 @@ export function ModelsTab() {
             : "No models found for your providers. Click refresh to reload."}
         </p>
       )}
+
+      <Dialog
+        open={labelDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) closeLabelDialog();
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rename model</DialogTitle>
+            <DialogDescription>
+              {labelDialogModel
+                ? `${getProviderDisplayName(labelDialogModel.provider_id)} · ${formatModelSelectionKey(labelDialogModel.provider_id, labelDialogModel.model_id)}`
+                : "Set a custom display label for this model."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2 py-2">
+            <Label htmlFor="model-label">Display label</Label>
+            <Input
+              id="model-label"
+              value={labelDraft}
+              onChange={(e) => setLabelDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  saveModelLabel();
+                }
+              }}
+              placeholder={labelDialogModel?.baseLabel ?? "Model label"}
+              autoFocus
+            />
+            {labelDialogModel ? (
+              <p className="text-xs text-muted-foreground">
+                Default: {labelDialogModel.baseLabel}
+              </p>
+            ) : null}
+          </div>
+          <DialogFooter className="flex-col-reverse gap-2 sm:flex-row sm:justify-between">
+            {labelDialogModel &&
+            hasCustomModelLabel(
+              labelDialogModel.provider_id,
+              labelDialogModel.model_id
+            ) ? (
+              <Button type="button" variant="ghost" onClick={resetModelLabel}>
+                Reset to default
+              </Button>
+            ) : (
+              <div className="hidden sm:block" />
+            )}
+            <div className="flex items-center gap-2 sm:ml-auto">
+              <Button type="button" variant="outline" onClick={closeLabelDialog}>
+                Cancel
+              </Button>
+              <Button type="button" onClick={saveModelLabel}>
+                Save
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AutoRunConfirmDialog
         open={autoRunConfirmOpen}

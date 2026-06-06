@@ -20,6 +20,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
     titleGenerationModelId: DEFAULT_TITLE_GENERATION_MODEL_ID,
     toolApprovalMode: "always_ask",
     pinnedModelIds: [],
+    modelLabels: {},
     fontSize: 12,
     communicationStyle: "default" as const,
   },

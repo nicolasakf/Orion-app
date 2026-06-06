@@ -688,6 +688,44 @@ disable-model-invocation: true
     );
   });
 
+  await runTest("inherited subagent model preserves composite provider selection", () => {
+    const resolution = resolveSubagentExecutionModel({
+      subagentName: "web-search",
+      selectedModelId: "vercel/moonshotai/kimi-k2.6",
+      parentModel: {
+        value: "moonshotai/kimi-k2.6",
+        label: "Kimi K2.6",
+        provider: "vercel",
+      },
+      modelsWithAccess: [
+        {
+          value: "moonshotai/kimi-k2.6",
+          label: "Kimi K2.6",
+          provider: "moonshotai",
+          isAccessible: false,
+        },
+        {
+          value: "moonshotai/kimi-k2.6",
+          label: "Kimi K2.6",
+          provider: "vercel",
+          isAccessible: true,
+        },
+      ],
+      modelSettingsMap: {
+        "vercel/moonshotai/kimi-k2.6": { custom: true },
+      },
+    });
+
+    assert(resolution.ok === true, "composite inherited model should resolve");
+    if (!resolution.ok) return;
+    assert(resolution.modelId === "moonshotai/kimi-k2.6", "API model id should omit provider prefix");
+    assert(resolution.providerId === "vercel", "provider should come from parent selection");
+    assert(
+      resolution.modelSettings?.custom === true,
+      "model settings should remain keyed by the selected composite model"
+    );
+  });
+
   console.log("\n--- Runner guards ---");
 
   await runTest("runSubagent throws AbortError when signal is pre-aborted", async () => {

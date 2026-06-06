@@ -229,6 +229,8 @@ const SettingsDataSchema = z.object({
     toolApprovalMode: ToolApprovalModeSchema,
     /** Model IDs shown in the chat model selector. Order preserved. */
     pinnedModelIds: z.array(z.string()),
+    /** User-defined display labels keyed by `providerId/modelId`. */
+    modelLabels: z.record(z.string()).default({}),
     /** Font size in pixels for the chat message stream and composer. */
     fontSize: z.number().int().min(10).max(20),
     /** Communication style preset injected into the agent system prompt. */

@@ -1,4 +1,5 @@
 import { DEFAULT_SELECTED_CHAT_MODEL_ID } from "@/lib/settings/defaults";
+import { findModelBySelectionKey } from "@/lib/agent/model-selection-key";
 
 const SESSION_MODEL_KEY = "orion:selectedModel";
 
@@ -7,6 +8,7 @@ export const SESSION_FALLBACK_CHAT_MODEL_ID = DEFAULT_SELECTED_CHAT_MODEL_ID;
 
 export interface ModelSelectionOption {
   value: string;
+  provider: string;
 }
 
 interface ResolveSelectedModelFallbackOptions {
@@ -50,7 +52,7 @@ export function resolveSelectedModelFallback({
   settingsReady,
 }: ResolveSelectedModelFallbackOptions): string | null {
   if (!modelsCatalogLoaded || !settingsReady || models.length === 0) return null;
-  if (models.some((model) => model.value === selectedModel)) return null;
+  if (findModelBySelectionKey(models, selectedModel)) return null;
 
   return (
     models.find((model) => model.value === SESSION_FALLBACK_CHAT_MODEL_ID)?.value ??

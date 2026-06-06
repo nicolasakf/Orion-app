@@ -1,3 +1,8 @@
+import {
+  findModelBySelectionKey,
+  resolveCatalogModelIdForApi,
+} from "@/lib/agent/model-selection-key";
+
 import type { LLM, ModelSettingsMap } from "./types";
 
 export type SubagentExecutionModelResolution =
@@ -38,9 +43,7 @@ export function resolveSubagentExecutionModel(options: {
   }
 
   if (configuredModelId) {
-    const configuredModel = modelsWithAccess.find(
-      (candidate) => candidate.value === configuredModelId
-    );
+    const configuredModel = findModelBySelectionKey(modelsWithAccess, configuredModelId);
 
     if (!configuredModel) {
       return {
@@ -66,7 +69,7 @@ export function resolveSubagentExecutionModel(options: {
 
   return {
     ok: true,
-    modelId: selectedModelId,
+    modelId: resolveCatalogModelIdForApi(selectedModelId, parentModel),
     providerId: parentModel.provider,
     modelSettings: modelSettingsMap[selectedModelId] as Record<string, unknown> | undefined,
   };

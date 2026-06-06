@@ -9,7 +9,7 @@ describe("resolveSelectedModelFallback", () => {
   it("waits for settings before replacing a stored local endpoint model", () => {
     const fallback = resolveSelectedModelFallback({
       selectedModel: "ollama-local:gemma-4b",
-      models: [{ value: SESSION_FALLBACK_CHAT_MODEL_ID }],
+      models: [{ value: SESSION_FALLBACK_CHAT_MODEL_ID, provider: "google" }],
       modelsCatalogLoaded: true,
       settingsReady: false,
     });
@@ -21,8 +21,8 @@ describe("resolveSelectedModelFallback", () => {
     const fallback = resolveSelectedModelFallback({
       selectedModel: "ollama-local:gemma-4b",
       models: [
-        { value: SESSION_FALLBACK_CHAT_MODEL_ID },
-        { value: "ollama-local:gemma-4b" },
+        { value: SESSION_FALLBACK_CHAT_MODEL_ID, provider: "google" },
+        { value: "ollama-local:gemma-4b", provider: "ollama" },
       ],
       modelsCatalogLoaded: true,
       settingsReady: true,
@@ -35,13 +35,27 @@ describe("resolveSelectedModelFallback", () => {
     const fallback = resolveSelectedModelFallback({
       selectedModel: "removed-model",
       models: [
-        { value: "gpt-5.5" },
-        { value: SESSION_FALLBACK_CHAT_MODEL_ID },
+        { value: "gpt-5.5", provider: "openai" },
+        { value: SESSION_FALLBACK_CHAT_MODEL_ID, provider: "google" },
       ],
       modelsCatalogLoaded: true,
       settingsReady: true,
     });
 
     expect(fallback).toBe(SESSION_FALLBACK_CHAT_MODEL_ID);
+  });
+
+  it("keeps a composite selected model when duplicate model ids exist", () => {
+    const fallback = resolveSelectedModelFallback({
+      selectedModel: "vercel/moonshotai/kimi-k2.6",
+      models: [
+        { value: "moonshotai/kimi-k2.6", provider: "moonshotai" },
+        { value: "moonshotai/kimi-k2.6", provider: "vercel" },
+      ],
+      modelsCatalogLoaded: true,
+      settingsReady: true,
+    });
+
+    expect(fallback).toBeNull();
   });
 });
