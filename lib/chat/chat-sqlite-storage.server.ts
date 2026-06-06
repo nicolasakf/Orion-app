@@ -418,11 +418,11 @@ export async function getChat(chatId: string): Promise<ChatWire | undefined> {
     subagentSessions:
       sessionRows.length > 0
         ? Object.fromEntries(
-            sessionRows.map((sessionRow) => [
-              sessionRow.tool_call_id,
-              JSON.parse(sessionRow.session_json),
-            ])
-          )
+          sessionRows.map((sessionRow) => [
+            sessionRow.tool_call_id,
+            JSON.parse(sessionRow.session_json),
+          ])
+        )
         : undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -831,23 +831,23 @@ export async function interruptOpenEditCheckpoints(options: {
   const cutoff = new Date(Date.now() - olderThanMs).toISOString();
   const result = options.localChatId
     ? db
-        .prepare(
-          `
+      .prepare(
+        `
             update edit_checkpoint
             set status = 'interrupted', updated_at = ?
             where status = 'open' and updated_at <= ? and local_chat_id = ?
           `
-        )
-        .run(new Date().toISOString(), cutoff, options.localChatId)
+      )
+      .run(new Date().toISOString(), cutoff, options.localChatId)
     : db
-        .prepare(
-          `
+      .prepare(
+        `
             update edit_checkpoint
             set status = 'interrupted', updated_at = ?
             where status = 'open' and updated_at <= ?
           `
-        )
-        .run(new Date().toISOString(), cutoff);
+      )
+      .run(new Date().toISOString(), cutoff);
   return result.changes;
 }
 
