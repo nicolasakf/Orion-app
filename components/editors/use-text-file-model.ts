@@ -17,6 +17,7 @@ import {
   type OpenDocumentSaveResult,
   type TextDocumentSnapshot,
 } from "@/lib/agent/open-document-snapshots";
+import { isRuleFilePath } from "@/lib/agent/rules";
 
 interface UseTextFileModelOptions {
   filepath: string | null;
@@ -254,6 +255,13 @@ export function useTextFileModel({
         if (isSkillDefinitionPath(filepath)) {
           window.dispatchEvent(
             new CustomEvent("orion:skills-changed", {
+              detail: { path: filepath },
+            }),
+          );
+        }
+        if (isRuleFilePath(filepath)) {
+          window.dispatchEvent(
+            new CustomEvent("orion:rules-changed", {
               detail: { path: filepath },
             }),
           );

@@ -62,6 +62,8 @@ import {
   buildSubagentSystemPrompt,
 } from "@/lib/agent/agent-system-prompt";
 import { AgentCommunicationStyleSchema, type AgentCommunicationStyle } from "@/lib/settings/schema";
+import type { AgentRule } from "@/lib/agent/rules";
+import { parseAgentRulesPayload } from "@/lib/agent/rules/request-schema";
 import type { SubagentPromptPayload } from "@/lib/agent/subagents";
 import type { JupyterServerInfo } from "@/lib/kernel/kernel-service";
 import type { PlatformOS } from "@/lib/utils";
@@ -166,6 +168,8 @@ export async function POST(req: Request) {
       description: string;
       options?: { model?: string; disableModelInvocation?: boolean };
     }>;
+    /** AGENTS.md / CLAUDE.md rule files loaded for this workspace. */
+    agentRules?: unknown;
     /** Skill selected via legacy slash command and enforced for this request turn */
     forcedSkillName?: string;
     /** Skills selected via slash command and enforced for this request turn */
@@ -227,6 +231,7 @@ export async function POST(req: Request) {
     modelSettings,
     availableSkills,
     availableSubagents,
+    agentRules: rawAgentRules,
     forcedSkillName: forcedSkillNameRaw,
     forcedSkillNames: forcedSkillNamesRaw,
     forcedSubagentName: forcedSubagentNameRaw,
@@ -279,6 +284,20 @@ export async function POST(req: Request) {
   const jupyterServerIsLocal =
     typeof jupyterServerIsLocalRaw === "boolean" ? jupyterServerIsLocalRaw : undefined;
   const clientPlatformOs = parseClientPlatformOs(clientPlatformOsRaw);
+  let agentRules: AgentRule[] = [];
+  if (rawAgentRules !== undefined) {
+    const parsedRules = parseAgentRulesPayload(rawAgentRules);
+    if (parsedRules === null) {
+      return new Response(
+        JSON.stringify({
+          title: "Invalid Request",
+          message: "agentRules must be an array of valid AGENTS.md/CLAUDE.md rule payloads.",
+        }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+    }
+    agentRules = parsedRules;
+  }
 
   const subagentDevLogInstance =
     typeof subagentDevLogInstanceRaw === "number" &&
@@ -893,6 +912,7 @@ export async function POST(req: Request) {
         agentSystemPrompt = buildSubagentSystemPrompt({
           subagent: subagentPrompt,
           envContext,
+          agentRules,
         });
       } else {
         agentSystemPrompt = buildAgentSystemPrompt({
@@ -901,6 +921,7 @@ export async function POST(req: Request) {
           workspaceDirectory,
           availableSkills,
           availableSubagents,
+          agentRules,
           forcedSkillNames: missingForcedSkillNames,
           forcedSubagentName,
           serverInfo,
@@ -914,6 +935,7 @@ export async function POST(req: Request) {
         notebookPath,
         activeFilePath,
         workspaceDirectory,
+        agentRules,
         serverInfo,
         jupyterServerIsLocal,
         clientPlatformOs,
@@ -926,6 +948,7 @@ export async function POST(req: Request) {
         workspaceDirectory,
         availableSkills,
         availableSubagents,
+        agentRules,
         forcedSkillNames: missingForcedSkillNames,
         forcedSubagentName,
         serverInfo,

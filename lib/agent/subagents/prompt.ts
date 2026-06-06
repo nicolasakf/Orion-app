@@ -1,12 +1,15 @@
+import { buildRulesPromptSection, type AgentRule } from "@/lib/agent/rules";
 import type { SubagentPromptPayload } from "./types";
 
 export function buildSubagentSystemPrompt(options: {
   subagent: SubagentPromptPayload;
   envContext?: string;
+  agentRules?: AgentRule[];
 }): string {
-  const { subagent, envContext } = options;
+  const { subagent, envContext, agentRules } = options;
   const tripleBacktick = "```";
   const fencedSystemPrompt = `${tripleBacktick}markdown\n${subagent.systemPrompt}\n${tripleBacktick}`;
+  const rulesSection = buildRulesPromptSection(agentRules);
   const sections = [
     `You are a notebook-defined Orion sub-agent named "${subagent.label}" (\`${subagent.name}\`). You were spawned by a parent agent to complete one focused task and return a concise result.
 
@@ -30,9 +33,9 @@ You **do not need to read or run the first three cells** after connecting to the
 
 The content below defines your **task and goals** for this sub-agent role (notebook cell 3). Use it to decide what to do and how to judge when the work is complete.
 
-${fencedSystemPrompt}
-
-## Runtime Instructions
+${fencedSystemPrompt}`,
+    rulesSection,
+    `## Runtime Instructions
 
 - First, call \`use_notebook\` with \`notebookPath: "${subagent.tmpNotebookPath}"\`, \`notebookName: "${subagent.name}"\`, and \`mode: "connect"\`.
 - Inspect, run, and edit cells in the temporary notebook as needed to complete the delegated task.

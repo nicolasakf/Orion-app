@@ -45,6 +45,7 @@ import {
 import { SkillRegistry } from "@/lib/skills/skill-registry";
 import { isSkillDefinitionPath } from "@/lib/skills/paths";
 import type { SkillInfo } from "@/lib/skills/types";
+import { isRuleFilePath, RuleRegistry, type AgentRule } from "@/lib/agent/rules";
 import {
   SubagentRegistry,
   buildSubagentTmpNotebookPath,
@@ -121,6 +122,8 @@ export interface AssistantContextValue {
   availableSkills: SkillInfo[];
   /** All available notebook-defined subagents; passed to the server for system prompt injection */
   availableSubagents: SubagentDefinition[];
+  /** AGENTS.md / CLAUDE.md rules loaded for this workspace. */
+  availableRules: AgentRule[];
   /** Basic environment info fetched from the Jupyter server on connect; null until connected */
   serverInfo: JupyterServerInfo | null;
   /** True when the configured Jupyter server URL is loopback (client-derived). */
@@ -139,6 +142,8 @@ export interface AssistantContextValue {
   refreshSkills: () => Promise<void>;
   /** Trigger a notebook-defined subagent refresh. */
   refreshSubagents: () => Promise<void>;
+  /** Re-scan AGENTS.md / CLAUDE.md rules. */
+  refreshRules: () => Promise<void>;
 
   /**
    * Execute a named tool with the given parameters.
@@ -170,6 +175,7 @@ export type AssistantChatContextValue = Pick<
   | "terminalPool"
   | "availableSkills"
   | "availableSubagents"
+  | "availableRules"
   | "listVariables"
   | "listDirectoryEntries"
   | "serverInfo"
@@ -212,6 +218,7 @@ export function AssistantProvider({
   const toolSetRef = useRef<JupyterToolSet | null>(null);
   const terminalPoolRef = useRef<TerminalPool | null>(null);
   const skillRegistryRef = useRef<SkillRegistry>(new SkillRegistry());
+  const ruleRegistryRef = useRef<RuleRegistry>(new RuleRegistry());
   const subagentRegistryRef = useRef<SubagentRegistry>(new SubagentRegistry());
   const checkpointRecorderRef = useRef(new ApiEditCheckpointRecorder());
 
@@ -227,6 +234,9 @@ export function AssistantProvider({
   );
   const [availableSubagents, setAvailableSubagents] = useState<SubagentDefinition[]>(
     () => subagentRegistryRef.current.getAll()
+  );
+  const [availableRules, setAvailableRules] = useState<AgentRule[]>(
+    () => ruleRegistryRef.current.getAll()
   );
   const [serverInfo, setServerInfo] = useState<JupyterServerInfo | null>(null);
   // Ref so tool constructors can read the latest chatId without stale closures
@@ -405,6 +415,29 @@ export function AssistantProvider({
     });
   }, [kernelService, workspaceDirectory]);
 
+  /**
+   * Keep rule files aligned with the active Jupyter ContentsManager and
+   * workspace root. Rules are loaded from root/workspace AGENTS.md with
+   * CLAUDE.md fallback at each scope.
+   */
+  useEffect(() => {
+    const registry = ruleRegistryRef.current;
+    if (!kernelService) {
+      registry.setContentsManager(null, "");
+      void registry.refresh().then(() => {
+        setAvailableRules(registry.getAll());
+      });
+      return;
+    }
+    registry.setContentsManager(
+      kernelService.getContentsManager(),
+      workspaceDirectory ?? ""
+    );
+    void registry.refresh().then(() => {
+      setAvailableRules(registry.getAll());
+    });
+  }, [kernelService, workspaceDirectory]);
+
   // Reset runtime store on kernel disconnect
   useEffect(() => {
     if (!kernelService) {
@@ -542,6 +575,13 @@ export function AssistantProvider({
     setAvailableSubagents(registry.getAll());
   }, []);
 
+  /** Re-scan AGENTS.md / CLAUDE.md rules and update the available rules list. */
+  const refreshRules = useCallback(async (): Promise<void> => {
+    const registry = ruleRegistryRef.current;
+    await registry.refresh();
+    setAvailableRules(registry.getAll());
+  }, []);
+
   useEffect(() => {
     const handleSkillsChanged = () => {
       void refreshSkills();
@@ -549,14 +589,19 @@ export function AssistantProvider({
     const handleSubagentsChanged = () => {
       void refreshSubagents();
     };
+    const handleRulesChanged = () => {
+      void refreshRules();
+    };
 
     window.addEventListener("orion:skills-changed", handleSkillsChanged);
     window.addEventListener("orion:subagents-changed", handleSubagentsChanged);
+    window.addEventListener("orion:rules-changed", handleRulesChanged);
     return () => {
       window.removeEventListener("orion:skills-changed", handleSkillsChanged);
       window.removeEventListener("orion:subagents-changed", handleSubagentsChanged);
+      window.removeEventListener("orion:rules-changed", handleRulesChanged);
     };
-  }, [refreshSkills, refreshSubagents]);
+  }, [refreshSkills, refreshRules, refreshSubagents]);
 
   const ensureJupyterDirectory = useCallback(
     async (directoryPath: string): Promise<void> => {
@@ -859,6 +904,9 @@ export function AssistantProvider({
           if (typeof filePath === "string" && isSkillDefinitionPath(filePath)) {
             await refreshSkills();
           }
+          if (typeof filePath === "string" && isRuleFilePath(filePath)) {
+            await refreshRules();
+          }
           if (
             typeof filePath === "string" &&
             typeof finalResult === "string" &&
@@ -881,7 +929,7 @@ export function AssistantProvider({
         return guardToolResult({ error: `Tool execution failed: ${message}` });
       }
     },
-    [refreshSkills, sanitizeToolParams, saveOpenDocumentBeforeMutation]
+    [refreshRules, refreshSkills, sanitizeToolParams, saveOpenDocumentBeforeMutation]
   );
 
   /**
@@ -926,6 +974,7 @@ export function AssistantProvider({
       terminalPool,
       availableSkills,
       availableSubagents,
+      availableRules,
       serverInfo,
       jupyterServerIsLocal,
       inspectVariable,
@@ -937,6 +986,7 @@ export function AssistantProvider({
       registerNotebook,
       refreshSkills,
       refreshSubagents,
+      refreshRules,
       setNotebook,
       setChatId,
     }),
@@ -949,6 +999,7 @@ export function AssistantProvider({
       terminalPool,
       availableSkills,
       availableSubagents,
+      availableRules,
       serverInfo,
       jupyterServerIsLocal,
       inspectVariable,
@@ -960,6 +1011,7 @@ export function AssistantProvider({
       registerNotebook,
       refreshSkills,
       refreshSubagents,
+      refreshRules,
     ]
   );
 
@@ -969,6 +1021,7 @@ export function AssistantProvider({
       terminalPool,
       availableSkills,
       availableSubagents,
+      availableRules,
       serverInfo,
       jupyterServerIsLocal,
       executeToolCall,
@@ -982,6 +1035,7 @@ export function AssistantProvider({
       terminalPool,
       availableSkills,
       availableSubagents,
+      availableRules,
       serverInfo,
       jupyterServerIsLocal,
       executeToolCall,

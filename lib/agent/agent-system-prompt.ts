@@ -12,6 +12,7 @@ import type { JupyterServerInfo } from "@/lib/kernel/kernel-service";
 import { formatPlatformOsForPrompt, type PlatformOS } from "@/lib/utils";
 import { filterDiscoverableSubagents } from "@/lib/agent/subagents/discovery";
 import { filterModelInvocableSkills } from "@/lib/skills/discovery";
+import { buildRulesPromptSection, type AgentRule } from "@/lib/agent/rules";
 import type { AgentCommunicationStyle } from "@/lib/settings/schema";
 export { buildSubagentSystemPrompt } from "@/lib/agent/subagents";
 
@@ -236,6 +237,7 @@ ${agentLines}`;
  * @param options.workspaceDirectory - Workspace directory relative to Jupyter root
  * @param options.availableSkills - Skills to advertise in the system prompt
  * @param options.availableSubagents - Notebook-defined subagents to advertise in the system prompt
+ * @param options.agentRules - AGENTS.md / CLAUDE.md rule files loaded for this workspace
  * @param options.forcedSkillName - Legacy single skill explicitly selected by slash command for this turn
  * @param options.forcedSkillNames - Skills explicitly selected by slash command for this turn
  * @param options.forcedSubagentName - Subagent explicitly selected by slash command for this turn
@@ -260,6 +262,8 @@ export function buildAgentSystemPrompt(options?: {
     description: string;
     options?: { disableModelInvocation?: boolean };
   }>;
+  /** AGENTS.md / CLAUDE.md rule files loaded for this workspace. */
+  agentRules?: AgentRule[];
   /** Skill selected by user for this turn — enforce loading this skill before answering */
   forcedSkillName?: string;
   forcedSkillNames?: string[];
@@ -277,6 +281,7 @@ export function buildAgentSystemPrompt(options?: {
     workspaceDirectory,
     availableSkills,
     availableSubagents,
+    agentRules,
     forcedSkillName,
     forcedSkillNames,
     forcedSubagentName,
@@ -293,6 +298,9 @@ export function buildAgentSystemPrompt(options?: {
 
   const styleSection = buildCommunicationStyleSection(communicationStyle);
   if (styleSection) sections.push(styleSection);
+
+  const rulesSection = buildRulesPromptSection(agentRules);
+  if (rulesSection) sections.push(rulesSection);
 
   const subagentSection = buildSubagentDelegationSection(availableSubagents);
   if (subagentSection) sections.push(subagentSection);
@@ -363,6 +371,8 @@ interface ModeModePromptOptions {
   serverInfo?: JupyterServerInfo | null;
   jupyterServerIsLocal?: boolean;
   clientPlatformOs?: PlatformOS;
+  /** AGENTS.md / CLAUDE.md rule files loaded for this workspace. */
+  agentRules?: AgentRule[];
   /** Communication style preset; omitting or "default" uses minimal narration instructions */
   communicationStyle?: AgentCommunicationStyle;
 }
@@ -376,6 +386,9 @@ export function buildAskModeSystemPrompt(options?: ModeModePromptOptions): strin
 
   const styleSection = buildCommunicationStyleSection(options?.communicationStyle);
   if (styleSection) sections.push(styleSection);
+
+  const rulesSection = buildRulesPromptSection(options?.agentRules);
+  if (rulesSection) sections.push(rulesSection);
 
   const envContext = buildAgentEnvironmentContextPrompt({
     serverInfo: options?.serverInfo,
@@ -405,6 +418,7 @@ export function buildEditModeSystemPrompt(options?: {
     description: string;
     options?: { disableModelInvocation?: boolean };
   }>;
+  agentRules?: AgentRule[];
   forcedSkillName?: string;
   forcedSkillNames?: string[];
   forcedSubagentName?: string;
@@ -418,6 +432,9 @@ export function buildEditModeSystemPrompt(options?: {
 
   const styleSection = buildCommunicationStyleSection(options?.communicationStyle);
   if (styleSection) sections.push(styleSection);
+
+  const rulesSection = buildRulesPromptSection(options?.agentRules);
+  if (rulesSection) sections.push(rulesSection);
 
   const subagentSection = buildSubagentDelegationSection(options?.availableSubagents);
   if (subagentSection) sections.push(subagentSection);

@@ -9,6 +9,7 @@
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { JupyterServerInfo } from "@/lib/kernel/kernel-service";
+import type { AgentRule } from "@/lib/agent/rules";
 import type { PlatformOS } from "@/lib/utils";
 import type { NotebookType } from "@/lib/types";
 import type { UIMessage } from "ai";
@@ -80,6 +81,9 @@ export interface RunSubagentOptions {
 
   /** All notebook-defined sub-agents available in the current session. */
   availableSubagents: SubagentDefinition[];
+
+  /** AGENTS.md / CLAUDE.md rules loaded for the current workspace. */
+  agentRules?: AgentRule[];
 
   /** The task description passed from the parent agent as the sub-agent's prompt. */
   description: string;
