@@ -9,6 +9,7 @@ import {
 import { formatHomeRelativePath } from "@/lib/local/terminal-output-storage.server";
 import { compactUserSettingsDocument } from "@/lib/settings/compact";
 import { createDefaultUserSettingsDocument } from "@/lib/settings/defaults";
+import { backupUserSettingsFileBeforeSave } from "@/lib/settings/user-settings-backup.server";
 import {
   migrateUserSettingsDocument,
   parseUserSettingsDocumentFromJson,
@@ -78,6 +79,7 @@ export async function saveUserSettingsDocument(
   );
 
   try {
+    await backupUserSettingsFileBeforeSave();
     await writeFile(tempPath, `${JSON.stringify(sanitized, null, 2)}\n`, "utf8");
     await rename(tempPath, filePath);
   } catch (error) {

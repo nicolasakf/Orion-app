@@ -20,6 +20,18 @@ export function getUserSettingsFilePath(): string {
   return path.join(getOrionDataDirectory(), "settings.json");
 }
 
+/** Returns the absolute path to timestamped user settings backups. */
+export function getUserSettingsBackupDirectory(): string {
+  return path.join(getOrionDataDirectory(), "settings-backup");
+}
+
+/** Ensures `~/.orion/settings-backup` exists and returns its absolute path. */
+export async function ensureUserSettingsBackupDirectory(): Promise<string> {
+  const directory = getUserSettingsBackupDirectory();
+  await mkdir(directory, { recursive: true });
+  return directory;
+}
+
 /** Returns the absolute path to Orion's local SQLite database file. */
 export function getOrionDatabasePath(): string {
   return path.join(getOrionDataDirectory(), "orion.db");

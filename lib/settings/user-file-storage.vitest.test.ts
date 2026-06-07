@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "fs/promises";
 import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -93,5 +93,27 @@ describe("user file settings storage", () => {
     await expect(
       readFile(path.join(tempDirectory, "settings.json"), "utf8")
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("creates a backup in settings-backup before overwriting settings.json", async () => {
+    const document = structuredClone(createDefaultUserSettingsDocument());
+    document.settings.appearance.theme = "dark";
+
+    await saveUserSettingsDocument(document);
+
+    document.settings.chat.fontSize = 14;
+    await saveUserSettingsDocument(document);
+
+    const backupDirectory = path.join(tempDirectory, "settings-backup");
+    const backupFiles = await readdir(backupDirectory);
+    expect(backupFiles).toHaveLength(1);
+
+    const backedUp = await readFile(path.join(backupDirectory, backupFiles[0]!), "utf8");
+    expect(JSON.parse(backedUp)).toEqual({
+      version: 1,
+      settings: {
+        appearance: { theme: "dark" },
+      },
+    });
   });
 });
