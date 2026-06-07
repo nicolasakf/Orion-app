@@ -1,13 +1,19 @@
 "use client";
 
 import React, { useCallback, useEffect, useState, useRef } from "react";
-import { Editor, EditorProps, Monaco, OnMount } from "@monaco-editor/react";
-import { editor } from "monaco-editor/esm/vs/editor/editor.api";
+import dynamic from "next/dynamic";
+import type { EditorProps, Monaco, OnMount } from "@monaco-editor/react";
+import type { editor } from "monaco-editor/esm/vs/editor/editor.api";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useOrionSetting } from "@/hooks/use-orion-settings";
 import { useTheme } from "next-themes";
 import { registerPythonLanguageWithMultilineFStringFix } from "@/lib/editor/python-monaco-tokenizer";
+
+const MonacoReactEditor = dynamic<EditorProps>(
+  () => import("@monaco-editor/react").then((mod) => mod.Editor),
+  { ssr: false }
+);
 
 // Custom theme definitions
 const customLightTheme: editor.IStandaloneThemeData = {
@@ -484,7 +490,7 @@ export function MonacoEditor({
           className={cn("w-full", height === "auto" ? editorHeight : height)}
         />
       )}
-      <Editor
+      <MonacoReactEditor
         height={editorHeight}
         language={language}
         value={editorValue}

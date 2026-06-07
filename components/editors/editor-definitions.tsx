@@ -1,20 +1,35 @@
 "use client";
 
-import { MarkdownFileEditor } from "@/components/editors/markdown-file-editor";
+import dynamic from "next/dynamic";
+
 import { MarkdownEditorToolbar } from "@/components/editors/markdown-editor-toolbar";
 import { NotebookEditorToolbar } from "@/components/editors/notebook-editor-toolbar";
-import { TextFileEditor } from "@/components/editors/text-file-editor";
 import type {
   EditorRuntimeProps,
   OrionEditorDefinition,
 } from "@/components/editors/types";
-import { NotebookEditor } from "@/components/notebook/notebook-editor";
 import { useNotebookViewMode } from "@/contexts/notebook-view-mode-context";
 import {
   BUILT_IN_EDITOR_DEFINITIONS,
   resolveEditorDefinition,
   type EditorFileReference,
 } from "@/lib/editor/editor-registry";
+
+const NotebookEditor = dynamic(
+  () => import("@/components/notebook/notebook-editor").then((mod) => mod.NotebookEditor),
+  { ssr: false }
+);
+const TextFileEditor = dynamic(
+  () => import("@/components/editors/text-file-editor").then((mod) => mod.TextFileEditor),
+  { ssr: false }
+);
+const MarkdownFileEditor = dynamic(
+  () =>
+    import("@/components/editors/markdown-file-editor").then(
+      (mod) => mod.MarkdownFileEditor
+    ),
+  { ssr: false }
+);
 
 const baseDefinitionById = Object.fromEntries(
   BUILT_IN_EDITOR_DEFINITIONS.map((definition) => [definition.id, definition]),
