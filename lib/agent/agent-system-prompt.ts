@@ -208,7 +208,7 @@ The user currently has a non-notebook file open in the editor at path: \`${fileP
 - To read this file, use \`read_file\` with path="${filePath}".
 - To edit this file, use \`edit_file\` with path="${filePath}".
 - Official reads see Orion's unsaved editor buffer, and official mutation tools save the active dirty editor before writing; shell commands read only the saved disk copy.
-- This is not a notebook — do not call \`use_notebook\`, \`read_notebook\`, \`list_notebooks\`, or any notebook tools unless the user explicitly asks to work with a notebook.`);
+- This is not a notebook — do not call \`use_notebook\`, \`read_notebook\`, or any notebook tools unless the user explicitly asks to work with a notebook.`);
   }
 
   return sections.join("\n\n");

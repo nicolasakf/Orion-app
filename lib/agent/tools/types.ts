@@ -170,12 +170,6 @@ export interface ShutdownKernelParams {
   kernelIds: string[];
 }
 
-/** Parameters for UnuseNotebookTool */
-export interface UnuseNotebookParams {
-  /** ID returned by use_notebook */
-  notebookId: string;
-}
-
 /** Parameters for BashTool */
 export interface BashParams {
   /** Shell command to execute in a persistent PTY terminal */

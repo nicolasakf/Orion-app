@@ -18,6 +18,9 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  SettingsInfoLabel,
+} from "@/components/settings-dialog/settings-info-label";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import {
   getDefaultInteractionModeConfig,
@@ -33,10 +36,8 @@ const TOOL_LABELS: Record<OrionToolName, string> = {
   list_kernels: "List kernels",
   shutdown_kernel: "Shutdown kernel",
   use_notebook: "Use notebook",
-  list_notebooks: "List notebooks",
   read_notebook: "Read notebook",
   restart_notebook: "Restart notebook",
-  unuse_notebook: "Unuse notebook",
   read_cell: "Read cell",
   insert_cell: "Insert cell",
   delete_cell: "Delete cell",
@@ -60,7 +61,6 @@ const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
     label: "Notebook",
     tools: [
       "use_notebook",
-      "list_notebooks",
       "read_notebook",
       "read_cell",
       "read_cell_output",
@@ -71,7 +71,6 @@ const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
       "execute_cell",
       "execute_code",
       "restart_notebook",
-      "unuse_notebook",
     ],
   },
   {
@@ -115,8 +114,8 @@ function createCustomMode(
   };
 }
 
-/** Settings tab for built-in and custom interaction mode behavior. */
-export function InteractionModesTab() {
+/** Agent subsection for built-in and custom interaction mode behavior. */
+export function AgentInteractionModesSection() {
   const { effectiveSettings, setUserSettings } = useOrionSettings();
   const modes = React.useMemo(
     () => normalizeInteractionModeConfigs(effectiveSettings.chat.interactionModes),
@@ -212,9 +211,9 @@ export function InteractionModesTab() {
   return (
     <div className="flex h-full min-h-0 flex-col gap-5 p-6">
       <div className="space-y-2">
-        <h2 className="text-lg font-semibold">Interaction Modes</h2>
+        <h2 className="text-lg font-semibold">Interaction modes</h2>
         <p className="text-sm text-muted-foreground">
-          Customize each mode's tools and appended system prompt instructions.
+          Customize each mode&apos;s tools and appended system prompt instructions.
         </p>
       </div>
 
@@ -225,7 +224,7 @@ export function InteractionModesTab() {
       >
         <div className="flex items-center gap-3">
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            <div className="min-w-0 overflow-x-auto pb-1">
+            <div className="min-w-0 overflow-x-auto">
             <TabsList className="w-max justify-start">
               {modes.map((mode) => (
                 <TabsTrigger
@@ -243,9 +242,9 @@ export function InteractionModesTab() {
               ))}
             </TabsList>
             </div>
-            <Button type="button" size="sm" className="shrink-0" onClick={createMode}>
+            <Button type="button" className="h-10 shrink-0 px-3" onClick={createMode}>
               <Plus className="size-4" />
-              New mode
+              New
             </Button>
           </div>
           {selectedMode ? (
@@ -370,7 +369,11 @@ export function InteractionModesTab() {
             <Separator />
 
             <section className="space-y-2">
-              <Label htmlFor="mode-custom-prompt">Custom system prompt instructions</Label>
+              <SettingsInfoLabel
+                htmlFor="mode-custom-prompt"
+                label="Custom system prompt instructions"
+                description="Append mode-specific instructions to the protected Orion base prompt."
+              />
               <Textarea
                 id="mode-custom-prompt"
                 value={selectedMode.customSystemPrompt}

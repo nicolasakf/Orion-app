@@ -4,7 +4,6 @@
  * Covers:
  *   - BaseTool utilities (normalizeCellSource, extractOutputText, formatTSV, etc.)
  *   - NotebookManager (pure logic, no I/O)
- *   - ListNotebooksTool / UnuseNotebookTool (NotebookManager-only, no I/O)
  *   - ReadNotebookTool / ReadCellTool (read-only mock)
  *   - InsertCellTool / DeleteCellTool / OverwriteCellSourceTool (stateful mock)
  *   - ReadCellOutputTool (mocked ContentsManager)
@@ -16,8 +15,6 @@
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { NotebookManager } from "../notebook-manager";
 import { BaseTool } from "../base-tool";
-import { ListNotebooksTool } from "../list-notebooks";
-import { UnuseNotebookTool } from "../unuse-notebook";
 import { ReadNotebookTool } from "../read-notebook";
 import { ReadCellTool } from "../read-cell";
 import { ReadFileTool } from "../read-file";
@@ -690,93 +687,6 @@ await runTest("reset clears all state", async () => {
   mgr.reset();
   assert(mgr.size === 0, "should have no notebooks");
   assert(mgr.getCurrentNotebookId() === null, "current should be null");
-});
-
-// ============================================================================
-// ListNotebooksTool
-// ============================================================================
-
-console.log("\n--- ListNotebooksTool ---");
-
-await runTest("empty manager returns warning", async () => {
-  const ks = createReadOnlyKernelService({});
-  const mgr = new NotebookManager();
-  const tool = new ListNotebooksTool(ks, null, mgr);
-  const result = await tool.execute();
-  assertIncludes(result, "[WARNING]", "should warn about empty manager");
-  assertIncludes(result, "use_notebook", "should mention use_notebook");
-});
-
-await runTest("lists notebooks as TSV with correct columns", async () => {
-  const ks = createReadOnlyKernelService({});
-  const mgr = new NotebookManager();
-  mgr.addNotebook("alpha", "/alpha.ipynb", "k1");
-  mgr.addNotebook("beta", "/beta.ipynb", "k2");
-  const tool = new ListNotebooksTool(ks, null, mgr);
-  const result = await tool.execute();
-  assertIncludes(result, "alpha", "should list alpha");
-  assertIncludes(result, "beta", "should list beta");
-  assertIncludes(result, "ID", "should have ID column");
-  assertIncludes(result, "Name", "should have Name column");
-  assertIncludes(result, "Path", "should have Path column");
-});
-
-await runTest("marks current notebook with checkmark", async () => {
-  const ks = createReadOnlyKernelService({});
-  const mgr = new NotebookManager();
-  mgr.addNotebook("alpha", "/alpha.ipynb", "k1");
-  const betaId = mgr.addNotebook("beta", "/beta.ipynb", "k2");
-  mgr.setCurrentNotebook(betaId);
-  const tool = new ListNotebooksTool(ks, null, mgr);
-  const result = await tool.execute();
-  // The current row for "beta" should contain "✓"
-  const betaLine = result.split("\n").find((l) => l.includes("beta"));
-  assert(betaLine?.includes("✓") ?? false, "current notebook should have ✓");
-});
-
-// ============================================================================
-// UnuseNotebookTool
-// ============================================================================
-
-console.log("\n--- UnuseNotebookTool ---");
-
-await runTest("unuse existing notebook confirms removal", async () => {
-  const ks = createReadOnlyKernelService({});
-  const mgr = new NotebookManager();
-  const id = mgr.addNotebook("nb1", "/nb1.ipynb", "k1");
-  const tool = new UnuseNotebookTool(ks, null, mgr);
-  const result = await tool.execute({ notebookId: id });
-  assertIncludes(result, "unused successfully", "should confirm removal");
-  assert(!mgr.has(id), "notebook should be gone from manager");
-});
-
-await runTest("unuse non-existent notebook ID returns warning", async () => {
-  const ks = createReadOnlyKernelService({});
-  const mgr = new NotebookManager();
-  const tool = new UnuseNotebookTool(ks, null, mgr);
-  const result = await tool.execute({ notebookId: "00000000-0000-0000-0000-000000000000" });
-  assertIncludes(result, "[WARNING]", "should return warning");
-  assertIncludes(result, "00000000-0000-0000-0000-000000000000", "should mention the ID");
-});
-
-await runTest("unuse current notebook mentions new current", async () => {
-  const ks = createReadOnlyKernelService({});
-  const mgr = new NotebookManager();
-  const id1 = mgr.addNotebook("nb1", "/nb1.ipynb", "k1");
-  mgr.addNotebook("nb2", "/nb2.ipynb", "k2");
-  mgr.setCurrentNotebook(id1);
-  const tool = new UnuseNotebookTool(ks, null, mgr);
-  const result = await tool.execute({ notebookId: id1 });
-  assertIncludes(result, "nb2", "should mention new current notebook name");
-});
-
-await runTest("unuse last notebook says no notebooks remaining", async () => {
-  const ks = createReadOnlyKernelService({});
-  const mgr = new NotebookManager();
-  const id = mgr.addNotebook("nb1", "/nb1.ipynb", "k1");
-  const tool = new UnuseNotebookTool(ks, null, mgr);
-  const result = await tool.execute({ notebookId: id });
-  assertIncludes(result, "No notebooks remaining", "should say no notebooks remaining");
 });
 
 // ============================================================================

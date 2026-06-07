@@ -5,11 +5,9 @@
  *   - ListKernelsTool: Kernel introspection
  *   - ShutdownKernelTool: Shut down a kernel by ID
  *
- * Notebook Management (5):
+ * Notebook Management (3):
  *   - UseNotebookTool: Connect/create notebooks
- *   - ListNotebooksTool: List managed notebooks
  *   - RestartNotebookTool: Restart kernels
- *   - UnuseNotebookTool: Disconnect notebooks
  *   - ReadNotebookTool: Read notebook content
  *
  * Cell Operations (6):
@@ -53,9 +51,7 @@ export { ShutdownKernelTool } from "./shutdown-kernel";
 
 // Notebook Management
 export { UseNotebookTool } from "./use-notebook";
-export { ListNotebooksTool } from "./list-notebooks";
 export { RestartNotebookTool } from "./restart-notebook";
-export { UnuseNotebookTool } from "./unuse-notebook";
 export { ReadNotebookTool } from "./read-notebook";
 
 // Cell Operations
@@ -84,9 +80,7 @@ import { NotebookManager } from "./notebook-manager";
 import { ListKernelsTool } from "./list-kernels";
 import { ShutdownKernelTool } from "./shutdown-kernel";
 import { UseNotebookTool } from "./use-notebook";
-import { ListNotebooksTool } from "./list-notebooks";
 import { RestartNotebookTool } from "./restart-notebook";
-import { UnuseNotebookTool } from "./unuse-notebook";
 import { ReadNotebookTool } from "./read-notebook";
 import { ReadCellTool } from "./read-cell";
 import { InsertCellTool } from "./insert-cell";
@@ -114,9 +108,7 @@ export interface JupyterToolSet {
     shutdownKernel: ShutdownKernelTool;
     // Notebook Management
     useNotebook: UseNotebookTool;
-    listNotebooks: ListNotebooksTool;
     restartNotebook: RestartNotebookTool;
-    unuseNotebook: UnuseNotebookTool;
     readNotebook: ReadNotebookTool;
     // Cell Operations
     readCell: ReadCellTool;
@@ -185,13 +177,11 @@ export function createJupyterTools(
 
       // Notebook Management
       useNotebook: new UseNotebookTool(kernelService, sc, notebookManager),
-      listNotebooks: new ListNotebooksTool(kernelService, sc, notebookManager),
       restartNotebook: new RestartNotebookTool(
         kernelService,
         sc,
         notebookManager
       ),
-      unuseNotebook: new UnuseNotebookTool(kernelService, sc, notebookManager),
       readNotebook: new ReadNotebookTool(
         kernelService,
         sc,

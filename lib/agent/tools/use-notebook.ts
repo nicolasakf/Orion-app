@@ -124,7 +124,7 @@ export class UseNotebookTool extends BaseTool {
     this.notebookManager.setCurrentNotebook(notebookId);
     infoList.push(
       `[INFO] Successfully activated notebook '${notebookName}' (id: ${notebookId}). ` +
-      `Use notebookId '${notebookId}' in subsequent tool calls (read_notebook, restart_notebook, unuse_notebook).`
+      `Use notebookId '${notebookId}' in subsequent tool calls (read_notebook, restart_notebook).`
     );
 
     // Cell count

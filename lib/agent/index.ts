@@ -72,9 +72,7 @@ export {
   ShutdownKernelTool,
   // Notebook Management
   UseNotebookTool,
-  ListNotebooksTool,
   RestartNotebookTool,
-  UnuseNotebookTool,
   ReadNotebookTool,
   // Cell Operations
   ReadCellTool,

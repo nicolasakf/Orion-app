@@ -822,17 +822,11 @@ export function AssistantProvider({
           case "use_notebook":
             result = await toolSet.tools.useNotebook.execute(sanitizedParams as any);
             break;
-          case "list_notebooks":
-            result = await toolSet.tools.listNotebooks.execute();
-            break;
           case "read_notebook":
             result = await toolSet.tools.readNotebook.execute(sanitizedParams as any);
             break;
           case "restart_notebook":
             result = await toolSet.tools.restartNotebook.execute(sanitizedParams as any);
-            break;
-          case "unuse_notebook":
-            result = await toolSet.tools.unuseNotebook.execute(sanitizedParams as any);
             break;
           case "read_cell":
             result = await toolSet.tools.readCell.execute(sanitizedParams as any);

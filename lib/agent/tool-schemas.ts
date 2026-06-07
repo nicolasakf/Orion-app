@@ -47,7 +47,7 @@ export const orionTools = {
 
   use_notebook: tool({
     description:
-      "Connect to an existing notebook file or create a new one, associating it with a kernel. MUST be called before any cell operations. Use mode='connect' for existing notebooks, mode='create' for new ones. The response includes a notebookId — save it and pass it to read_notebook, restart_notebook, and unuse_notebook.",
+      "Connect to an existing notebook file or create a new one, associating it with a kernel. MUST be called before any cell operations. Use mode='connect' for existing notebooks, mode='create' for new ones. The response includes a notebookId — save it and pass it to read_notebook and restart_notebook.",
     inputSchema: z.object({
       notebookName: z
         .string()
@@ -70,12 +70,6 @@ export const orionTools = {
           "ID of an existing running kernel to connect to (from list_kernels). Pass an empty string \"\" to start a new kernel instead."
         ),
     }),
-  }),
-
-  list_notebooks: tool({
-    description:
-      "List all notebooks currently registered with the agent. Shows notebook IDs, names, paths, and kernel IDs. Use list_notebooks to look up a notebookId when you don't have it.",
-    inputSchema: z.object({}),
   }),
 
   read_notebook: tool({
@@ -120,16 +114,6 @@ export const orionTools = {
         .describe(
           "ID returned by use_notebook for the notebook to restart. Pass an empty string \"\" to restart the currently active notebook."
         ),
-    }),
-  }),
-
-  unuse_notebook: tool({
-    description:
-      "Disconnect a notebook from the agent (removes it from the tracked notebook list). Does NOT delete the file.",
-    inputSchema: z.object({
-      notebookId: z
-        .string()
-        .describe("ID returned by use_notebook for the notebook to disconnect."),
     }),
   }),
 
@@ -548,9 +532,7 @@ export const SERVER_ONLY_TOOLS: ReadonlySet<OrionToolName> = new Set<OrionToolNa
   "read_file",
   "edit_file",
   "use_notebook",
-  "list_notebooks",
   "read_notebook",
-  "unuse_notebook",
   "read_cell",
   "insert_cell",
   "delete_cell",
@@ -576,7 +558,6 @@ export const ASK_MODE_TOOLS: Pick<
   | "read_notebook"
   | "read_cell"
   | "read_cell_output"
-  | "list_notebooks"
   | "bash"
   | "await_command"
   | "web_fetch"
@@ -586,7 +567,6 @@ export const ASK_MODE_TOOLS: Pick<
   read_notebook: orionTools.read_notebook,
   read_cell: orionTools.read_cell,
   read_cell_output: orionTools.read_cell_output,
-  list_notebooks: orionTools.list_notebooks,
   bash: orionTools.bash,
   await_command: orionTools.await_command,
   web_fetch: orionTools.web_fetch,

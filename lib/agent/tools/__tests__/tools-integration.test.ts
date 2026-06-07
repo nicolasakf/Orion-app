@@ -361,12 +361,6 @@ async function main() {
       assertIncludes(result, "already registered", "should warn about duplicate");
     });
 
-    await runTest("ListNotebooksTool: shows managed notebook", async () => {
-      const result = await tools.listNotebooks.execute();
-      assertIncludes(result, TEST_NOTEBOOK_NAME, "should list our notebook");
-      assertIncludes(result, TEST_NOTEBOOK_PATH, "should show path");
-    });
-
     await runTest(
       "ReadNotebookTool: reads notebook cells (brief)",
       async () => {
@@ -611,8 +605,6 @@ async function main() {
 
     console.log("\n--- Cell Output Tool: read_cell_output ---");
 
-    let outputNotebookId = "";
-
     // Create a dedicated notebook with cells producing various output types
     await runTest("read_cell_output setup: create output notebook", async () => {
       const result = await tools.useNotebook.execute({
@@ -622,8 +614,6 @@ async function main() {
         kernelId: "",
       });
       assertIncludes(result, "Successfully activated", "should create notebook");
-      const found = notebookManager.getByPath(OUTPUT_NOTEBOOK_PATH);
-      if (found) outputNotebookId = found.id;
     });
 
     await runTest("read_cell_output setup: insert and execute output cells", async () => {
@@ -725,26 +715,6 @@ async function main() {
       });
 
       assertIncludes(result, "restarted successfully", "should confirm restart");
-    });
-
-    await runTest("UnuseNotebookTool: remove main test notebook", async () => {
-      const result = await tools.unuseNotebook.execute({
-        notebookId: testNotebookId,
-      });
-
-      assertIncludes(result, "unused successfully", "should confirm removal");
-      assert(
-        !notebookManager.has(testNotebookId),
-        "notebook should be removed from manager"
-      );
-    });
-
-    await runTest("UnuseNotebookTool: remove output test notebook", async () => {
-      if (!outputNotebookId || !notebookManager.has(outputNotebookId)) return; // not created if setup failed
-      const result = await tools.unuseNotebook.execute({
-        notebookId: outputNotebookId,
-      });
-      assertIncludes(result, "unused successfully", "should confirm removal");
     });
 
     // Clean up all test files created during the run
