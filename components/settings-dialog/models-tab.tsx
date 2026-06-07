@@ -64,6 +64,7 @@ import { getVisibleProviderIds } from "@/lib/settings/visible-providers";
 import {
   formatModelSelectionKey,
   normalizePinnedModelKeys,
+  parseModelSelectionKey,
 } from "@/lib/agent/model-selection-key";
 
 interface ModelRow {
@@ -121,6 +122,117 @@ function compareModelsByRecency(a: ModelRow, b: ModelRow): number {
   return formatModelSelectionKey(a.provider_id, a.model_id).localeCompare(
     formatModelSelectionKey(b.provider_id, b.model_id)
   );
+}
+
+function providerMatchesSearchPrefix(providerId: string, prefix: string): boolean {
+  const normalizedPrefix = prefix.toLowerCase();
+  if (!normalizedPrefix) return false;
+  const normalizedProviderId = providerId.toLowerCase();
+  const providerName = getProviderDisplayName(providerId).toLowerCase();
+  return (
+    normalizedProviderId === normalizedPrefix ||
+    normalizedProviderId.startsWith(normalizedPrefix) ||
+    providerName === normalizedPrefix ||
+    providerName.startsWith(normalizedPrefix)
+  );
+}
+
+/**
+ * Scores how well a catalog row matches a models-tab search query.
+ * Higher scores surface exact id / provider+id matches before fuzzy label hits.
+ */
+function scoreModelSearchMatch(
+  model: Pick<DisplayModelRow, "model_id" | "label" | "provider_id">,
+  rawQuery: string
+): number {
+  const q = rawQuery.trim().toLowerCase();
+  if (!q) return 0;
+
+  const selectionKey = formatModelSelectionKey(
+    model.provider_id,
+    model.model_id
+  ).toLowerCase();
+  const modelId = model.model_id.toLowerCase();
+  const label = model.label.toLowerCase();
+  const providerId = model.provider_id.toLowerCase();
+  const providerName = getProviderDisplayName(model.provider_id).toLowerCase();
+
+  const parsedSelectionKey = parseModelSelectionKey(rawQuery.trim());
+  if (
+    parsedSelectionKey &&
+    parsedSelectionKey.providerId === model.provider_id &&
+    parsedSelectionKey.modelId.toLowerCase() === modelId
+  ) {
+    return 1_000;
+  }
+
+  if (selectionKey === q) return 990;
+
+  const slashIdx = q.indexOf("/");
+  if (slashIdx > 0) {
+    const qProviderPart = q.slice(0, slashIdx);
+    const qModelPart = q.slice(slashIdx + 1);
+
+    if (modelId === q) return 980;
+
+    if (qModelPart) {
+      if (
+        providerMatchesSearchPrefix(model.provider_id, qProviderPart) &&
+        modelId === qModelPart
+      ) {
+        return 970;
+      }
+      if (
+        providerMatchesSearchPrefix(model.provider_id, qProviderPart) &&
+        modelId.startsWith(qModelPart)
+      ) {
+        return 950;
+      }
+      if (
+        providerMatchesSearchPrefix(model.provider_id, qProviderPart) &&
+        modelId.includes(qModelPart)
+      ) {
+        return 930;
+      }
+    }
+
+    if (selectionKey.includes(q)) return 910;
+    if (modelId.includes(q)) return 890;
+  }
+
+  if (modelId === q) return 870;
+  if (modelId.startsWith(q)) return 850;
+
+  if (label === q) return 830;
+  if (label.startsWith(q)) return 810;
+  if (label.includes(q)) return 790;
+
+  if (providerId === q || providerName === q) return 770;
+  if (providerId.startsWith(q) || providerName.startsWith(q)) return 750;
+  if (providerId.includes(q) || providerName.includes(q)) return 730;
+
+  if (selectionKey.includes(q)) return 710;
+  if (modelId.includes(q)) return 690;
+
+  return 0;
+}
+
+/** Filters catalog rows by label, provider, model id, or `provider/modelId` queries. */
+function filterAndRankModelsBySearch<T extends DisplayModelRow>(
+  models: readonly T[],
+  rawQuery: string
+): T[] {
+  const q = rawQuery.trim();
+  if (!q) return [...models];
+
+  return models
+    .map((model) => ({ model, score: scoreModelSearchMatch(model, q) }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return compareModelsByRecency(a.model, b.model);
+    })
+    .map(({ model }) => model);
 }
 
 /** Pencil control for renaming a model in pickers; highlighted when a custom label is set. */
@@ -381,45 +493,44 @@ export function ModelsTab() {
     );
   }, [modelsWithConfiguredLabels]);
 
-  const filteredModels = React.useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return modelsWithConfiguredLabels;
-    return modelsWithConfiguredLabels.filter(
-      (m) =>
-        m.label.toLowerCase().includes(q) ||
-        getProviderDisplayName(m.provider_id).toLowerCase().includes(q)
-    );
-  }, [modelsWithConfiguredLabels, searchQuery]);
+  const filteredModels = React.useMemo(
+    () => filterAndRankModelsBySearch(modelsWithConfiguredLabels, searchQuery),
+    [modelsWithConfiguredLabels, searchQuery]
+  );
+
+  const isSearchActive = searchQuery.trim().length > 0;
 
   /** Stable display order for grouped view so pin toggles do not reshuffle within a provider. */
   const sortedModels = React.useMemo(() => {
+    if (isSearchActive) return filteredModels;
     return [...filteredModels].sort(compareModelsByRecency);
-  }, [filteredModels]);
+  }, [filteredModels, isSearchActive]);
 
   const listViewPinnedModels = React.useMemo(() => {
-    return filteredModels
-      .filter((model) =>
-        pinnedModelIds.includes(
-          formatModelSelectionKey(model.provider_id, model.model_id)
-        )
+    const pinned = filteredModels.filter((model) =>
+      pinnedModelIds.includes(
+        formatModelSelectionKey(model.provider_id, model.model_id)
       )
-      .sort((a, b) => {
-        const aKey = formatModelSelectionKey(a.provider_id, a.model_id);
-        const bKey = formatModelSelectionKey(b.provider_id, b.model_id);
-        return pinnedModelIds.indexOf(aKey) - pinnedModelIds.indexOf(bKey);
-      });
-  }, [filteredModels, pinnedModelIds]);
+    );
+    if (isSearchActive) return pinned;
+
+    return pinned.sort((a, b) => {
+      const aKey = formatModelSelectionKey(a.provider_id, a.model_id);
+      const bKey = formatModelSelectionKey(b.provider_id, b.model_id);
+      return pinnedModelIds.indexOf(aKey) - pinnedModelIds.indexOf(bKey);
+    });
+  }, [filteredModels, pinnedModelIds, isSearchActive]);
 
   const listViewUnpinnedModels = React.useMemo(() => {
-    return filteredModels
-      .filter(
-        (model) =>
-          !pinnedModelIds.includes(
-            formatModelSelectionKey(model.provider_id, model.model_id)
-          )
-      )
-      .sort(compareModelsByRecency);
-  }, [filteredModels, pinnedModelIds]);
+    const unpinned = filteredModels.filter(
+      (model) =>
+        !pinnedModelIds.includes(
+          formatModelSelectionKey(model.provider_id, model.model_id)
+        )
+    );
+    if (isSearchActive) return unpinned;
+    return unpinned.sort(compareModelsByRecency);
+  }, [filteredModels, pinnedModelIds, isSearchActive]);
 
   const modelsByProvider = React.useMemo(() => {
     const map = new Map<string, DisplayModelRow[]>();
@@ -656,25 +767,12 @@ export function ModelsTab() {
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search by model or provider name..."
+            placeholder="Search by label, provider, or model id..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="pl-9"
           />
         </div>
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={() => setGroupByProvider((p) => !p)}
-          aria-label={groupByProvider ? "Switch to simple list" : "Switch to grouped by provider"}
-          title={groupByProvider ? "Switch to simple list" : "Switch to grouped by provider"}
-        >
-          {groupByProvider ? (
-            <List className="h-4 w-4" />
-          ) : (
-            <LayoutGrid className="h-4 w-4" />
-          )}
-        </Button>
         {groupByProvider ? (
           <Button
             variant="outline"
@@ -691,6 +789,19 @@ export function ModelsTab() {
             )}
           </Button>
         ) : null}
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => setGroupByProvider((p) => !p)}
+          aria-label={groupByProvider ? "Switch to simple list" : "Switch to grouped by provider"}
+          title={groupByProvider ? "Switch to simple list" : "Switch to grouped by provider"}
+        >
+          {groupByProvider ? (
+            <List className="h-4 w-4" />
+          ) : (
+            <LayoutGrid className="h-4 w-4" />
+          )}
+        </Button>
         <Button
           variant="outline"
           size="icon"
@@ -713,7 +824,22 @@ export function ModelsTab() {
       ) : groupByProvider ? (
         <div className="flex flex-col gap-0.5">
           {Array.from(modelsByProvider.entries())
-            .sort(([a], [b]) => a.localeCompare(b))
+            .sort(([providerA, providerAModels], [providerB, providerBModels]) => {
+              if (isSearchActive) {
+                const aScore = Math.max(
+                  ...providerAModels.map((model) =>
+                    scoreModelSearchMatch(model, searchQuery)
+                  )
+                );
+                const bScore = Math.max(
+                  ...providerBModels.map((model) =>
+                    scoreModelSearchMatch(model, searchQuery)
+                  )
+                );
+                if (bScore !== aScore) return bScore - aScore;
+              }
+              return providerA.localeCompare(providerB);
+            })
             .map(([providerId, providerModels]) => {
               const isExpanded = expandedProviders.has(providerId);
               const displayName = getProviderDisplayName(providerId);
