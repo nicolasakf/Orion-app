@@ -15,9 +15,13 @@ import {
   FileText,
   SquareArrowOutUpRight,
   AtSign,
+  Pin,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useOrionSettings } from "@/hooks/use-orion-settings";
 import { DEFAULT_SETTINGS } from "@/lib/settings/defaults";
+import { togglePinnedFilePath } from "@/lib/settings/pinned-files";
+import { MAX_PINNED_FILE_PATHS } from "@/lib/settings/schema";
 import { cn } from "@/lib/utils";
 import { CustomIcon } from "@/components/common/custom-icon";
 import { FileIcon } from "@/components/common/file-icon";
@@ -227,11 +231,31 @@ function FileTreeNode({
   /** Absorbs the first blur caused by the context menu restoring focus to its trigger. */
   const ignoreNextBlurRef = React.useRef(false);
 
+  const { effectiveSettings, setUserSettings } = useOrionSettings();
   const isFolder = item.type === "folder";
   const isNotebookFile =
     item.type === "file" && item.name.toLowerCase().endsWith(".ipynb");
+  const isPinnedFile =
+    item.type === "file" &&
+    effectiveSettings.workspace.pinnedFilePaths.includes(item.path);
+  const atPinnedFileLimit =
+    effectiveSettings.workspace.pinnedFilePaths.length >= MAX_PINNED_FILE_PATHS;
   // CRUD operations require a ContentsManager
   const canCreateFile = isFolder && !!contentsManager;
+
+  const handleTogglePinFile = React.useCallback(async () => {
+    if (item.type !== "file") return;
+    await setUserSettings((current) => ({
+      ...current,
+      workspace: {
+        ...current.workspace,
+        pinnedFilePaths: togglePinnedFilePath(
+          current.workspace.pinnedFilePaths,
+          item.path,
+        ),
+      },
+    }));
+  }, [item.path, item.type, setUserSettings]);
 
   // Focus input when create dialogs open
   React.useEffect(() => {
@@ -685,6 +709,22 @@ function FileTreeNode({
             >
               <FileText className="mr-2 h-4 w-4" />
               Open with text editor
+            </ContextMenuItem>
+          )}
+
+          {item.type === "file" && (
+            <ContextMenuItem
+              className="outline-none ring-0 focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0"
+              disabled={!isPinnedFile && atPinnedFileLimit}
+              onSelect={() => {
+                void handleTogglePinFile();
+              }}
+            >
+              <Pin
+                className={cn("mr-2 h-4 w-4", isPinnedFile && "fill-current")}
+                strokeWidth={isPinnedFile ? 2.5 : 2}
+              />
+              {isPinnedFile ? "Unpin file" : "Pin file"}
             </ContextMenuItem>
           )}
 

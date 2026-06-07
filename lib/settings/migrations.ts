@@ -111,13 +111,14 @@ function normalizeUserDocument(raw: unknown): Record<string, unknown> {
   };
 }
 
-/** Server root (`""`) is not pin-eligible; strip it from stored pins (legacy cleanup). */
+/** Server root (`""`) is not pin-eligible; strip empty paths from stored pins (legacy cleanup). */
 function stripInvalidWorkspacePins(settings: SettingsData): SettingsData {
   return {
     ...settings,
     workspace: {
       ...settings.workspace,
       pinnedDirectoryPaths: settings.workspace.pinnedDirectoryPaths.filter((p) => p !== ""),
+      pinnedFilePaths: settings.workspace.pinnedFilePaths.filter((p) => p !== ""),
     },
   };
 }

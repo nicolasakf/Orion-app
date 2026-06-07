@@ -27,6 +27,7 @@ describe("compactSettingsForPersistence", () => {
       },
       workspace: {
         pinnedDirectoryPaths: ["project/a"],
+        pinnedFilePaths: ["project/a/notebook.ipynb"],
       },
     });
 
@@ -39,6 +40,7 @@ describe("compactSettingsForPersistence", () => {
       },
       workspace: {
         pinnedDirectoryPaths: ["project/a"],
+        pinnedFilePaths: ["project/a/notebook.ipynb"],
       },
     });
   });

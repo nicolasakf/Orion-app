@@ -44,6 +44,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
   },
   workspace: {
     pinnedDirectoryPaths: [],
+    pinnedFilePaths: [],
   },
   agent: BUILTIN_AGENT_DEFAULTS,
   shell: BUILTIN_SHELL_DEFAULTS,

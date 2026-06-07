@@ -101,7 +101,7 @@ describe("settings migrations", () => {
             scrollbarVisible: true,
             presentationHideAllCellInputs: false,
           },
-          workspace: { pinnedDirectoryPaths: [] },
+          workspace: { pinnedDirectoryPaths: [], pinnedFilePaths: [] },
           providers: { credentials: {} },
         },
       })

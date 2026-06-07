@@ -5,6 +5,9 @@ export const SETTINGS_SCHEMA_VERSION = 1;
 /** Max entries for `workspace.pinnedDirectoryPaths` in user settings. */
 export const MAX_PINNED_WORKSPACE_DIRECTORY_PATHS = 50;
 
+/** Max entries for `workspace.pinnedFilePaths` in user settings. */
+export const MAX_PINNED_FILE_PATHS = 50;
+
 export const ThemeSettingSchema = z.enum(["light", "dark", "system"]);
 export const InteractionModeSchema = z.enum(["Agent", "Ask", "Edit"]).catch("Agent");
 export const InteractionModeBaseSchema = z.enum(["Agent", "Ask", "Edit"]);
@@ -286,6 +289,8 @@ const SettingsDataSchema = z.object({
     pinnedDirectoryPaths: z
       .array(z.string().min(1))
       .max(MAX_PINNED_WORKSPACE_DIRECTORY_PATHS),
+    /** Jupyter-relative file paths pinned in the recent-files combobox (order preserved). */
+    pinnedFilePaths: z.array(z.string().min(1)).max(MAX_PINNED_FILE_PATHS),
   }),
   agent: AgentSettingsSchema,
   shell: ShellSettingsSchema,

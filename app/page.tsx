@@ -22,8 +22,6 @@ import {
   MessagesSquare,
   PanelLeft,
   X,
-  AlertTriangle,
-  History,
 } from "lucide-react";
 import { ToolbarButton } from "@/components/common/toolbar-button";
 import {
@@ -31,7 +29,6 @@ import {
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-  isTooltipReopenFromOverlaySuppressed,
 } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { KernelStatus, KernelInfo } from "@/lib/types";
@@ -58,23 +55,13 @@ import { getAutoConnectionCandidates } from "@/lib/kernel/connection-candidates"
 import { fetchLauncherJupyterConnection } from "@/lib/kernel/launcher-connection";
 import { AssistantProvider } from "@/lib/agent";
 import type { NotebookType } from "@/lib/types";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
-import { FileIcon } from "@/components/common/file-icon";
 import { KernelIcon } from "@/components/common/kernel-icon";
 import { AltOrOption, CmdOrCtrl } from "@/components/common/keyboard-icons";
-import { TooltipPortal } from "@radix-ui/react-tooltip";
+import { RecentFilesCombobox } from "@/components/recent-files-combobox";
+import {
+  filterPinnedFilePathsAfterDelete,
+  updatePinnedFilePathsAfterRename,
+} from "@/lib/settings/pinned-files";
 import { EditorReloadDialog } from "@/components/editor-reload-dialog";
 import { useJupyterShellReady } from "@/hooks/use-jupyter-shell-ready";
 import { useRegisterOpenUserSettingsFile } from "@/hooks/use-register-open-user-settings-file";
@@ -320,6 +307,7 @@ function MobileLayout({
     open: isSettingsOpen,
     onOpenChange: setIsSettingsOpen,
     initialTab,
+    initialAgentSection,
   } = useOpenSettings();
 
   /** Wraps file selection to also navigate to the editor view on mobile. */
@@ -460,6 +448,7 @@ function MobileLayout({
         open={isSettingsOpen}
         onOpenChange={setIsSettingsOpen}
         initialTab={initialTab}
+        initialAgentSection={initialAgentSection}
       />
     </div>
   );
@@ -592,14 +581,6 @@ export default function Page() {
   const [isSaved, setIsSaved] = useState<boolean>(false);
   const [recentFiles, setRecentFiles] = useState<ActiveFile[]>([]);
   const [open, setOpen] = useState(false);
-  const [recentFilesTooltipOpen, setRecentFilesTooltipOpen] = useState(false);
-  const [recentFilesSelectionPath, setRecentFilesSelectionPath] = useState("");
-  const recentFilesSelectionPathRef = useRef("");
-  const recentFilesCommandInputRef = useRef<HTMLInputElement>(null);
-  const recentFilesShortcutActiveRef = useRef(false);
-  /** Cmd/Ctrl+P taps in the current hold cycle; commit on release only when > 1. */
-  const recentFilesShortcutPressCountRef = useRef(0);
-  const [isFileIconHovered, setIsFileIconHovered] = useState(false);
   const leftPanelRef = useRef<any>(null);
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(
     DEFAULT_PANEL_VISIBILITY_STATE.leftCollapsed,
@@ -951,26 +932,6 @@ export default function Page() {
   );
 
   /**
-   * Keeps the selected recent-file path available to keyboard event handlers
-   * without waiting for React state to flush.
-   */
-  const updateRecentFilesSelection = useCallback((path: string) => {
-    recentFilesSelectionPathRef.current = path;
-    setRecentFilesSelectionPath(path);
-  }, []);
-
-  /**
-   * Moves the recent-files combobox selection by index.
-   */
-  const selectRecentFileAtIndex = useCallback(
-    (index: number) => {
-      const file = recentFiles[index];
-      updateRecentFilesSelection(file?.path ?? "");
-    },
-    [recentFiles, updateRecentFilesSelection],
-  );
-
-  /**
    * Moves keyboard focus into the active editor after the recent-files combobox
    * closes. Retries briefly so Monaco/notebook mounts can receive the event.
    */
@@ -997,121 +958,6 @@ export default function Page() {
     },
     [currentFile.openAsText, currentFile.path, hasUnsavedChanges],
   );
-
-  /**
-   * Opens the currently highlighted recent file and ends the shortcut cycle.
-   */
-  const commitSelectedRecentFile = useCallback(() => {
-    const selectedPath = recentFilesSelectionPathRef.current;
-    const selectedFile = recentFiles.find((file) => file.path === selectedPath);
-    const shortcutPressCount = recentFilesShortcutPressCountRef.current;
-
-    recentFilesShortcutActiveRef.current = false;
-    recentFilesShortcutPressCountRef.current = 0;
-
-    if (!selectedFile) {
-      setRecentFilesTooltipOpen(false);
-      setOpen(false);
-      return;
-    }
-
-    // Single Cmd/Ctrl+P leaves the combobox open for arrow keys / search.
-    if (shortcutPressCount <= 1) {
-      setRecentFilesTooltipOpen(false);
-      window.requestAnimationFrame(() => {
-        recentFilesCommandInputRef.current?.focus();
-      });
-      return;
-    }
-
-    if (
-      selectedFile.path === currentFile.path &&
-      selectedFile.openAsText === currentFile.openAsText
-    ) {
-      setRecentFilesTooltipOpen(false);
-      setOpen(false);
-      requestEditorFocus();
-      return;
-    }
-
-    setRecentFilesTooltipOpen(false);
-    handleFileSelect(selectedFile);
-    setOpen(false);
-    if (shouldFocusEditorAfterRecentFileSelect(selectedFile)) {
-      requestEditorFocus();
-    }
-  }, [
-    currentFile.openAsText,
-    currentFile.path,
-    handleFileSelect,
-    recentFiles,
-    requestEditorFocus,
-    shouldFocusEditorAfterRecentFileSelect,
-  ]);
-
-  /**
-   * Cycles recent files with Cmd/Ctrl+P. One press opens the combobox for
-   * keyboard search; two or more presses in the same hold open the highlight on release.
-   */
-  useEffect(() => {
-    const isRecentFilesShortcut = (event: KeyboardEvent) =>
-      ((event.metaKey && !event.ctrlKey) ||
-        (!event.metaKey && event.ctrlKey)) &&
-      !event.altKey &&
-      !event.shiftKey &&
-      event.code === "KeyP";
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (!isRecentFilesShortcut(event)) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (event.repeat || recentFiles.length === 0) return;
-
-      const selectedIndex = recentFiles.findIndex(
-        (file) => file.path === recentFilesSelectionPathRef.current,
-      );
-      const isCycling =
-        recentFilesShortcutActiveRef.current ||
-        recentFilesSelectionPathRef.current !== "";
-      const nextIndex = isCycling
-        ? (Math.max(selectedIndex, -1) + 1) % recentFiles.length
-        : 0;
-
-      if (recentFilesShortcutActiveRef.current) {
-        recentFilesShortcutPressCountRef.current += 1;
-      } else {
-        recentFilesShortcutPressCountRef.current = 1;
-      }
-      recentFilesShortcutActiveRef.current = true;
-      setOpen(true);
-      selectRecentFileAtIndex(nextIndex);
-    };
-
-    const handleKeyUp = (event: KeyboardEvent) => {
-      if (!recentFilesShortcutActiveRef.current) return;
-      if (event.metaKey || event.ctrlKey) return;
-
-      event.preventDefault();
-      event.stopPropagation();
-      commitSelectedRecentFile();
-    };
-
-    const handleWindowBlur = () => {
-      recentFilesShortcutActiveRef.current = false;
-      recentFilesShortcutPressCountRef.current = 0;
-    };
-
-    window.addEventListener("keydown", handleKeyDown, { capture: true });
-    window.addEventListener("keyup", handleKeyUp, { capture: true });
-    window.addEventListener("blur", handleWindowBlur);
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown, { capture: true });
-      window.removeEventListener("keyup", handleKeyUp, { capture: true });
-      window.removeEventListener("blur", handleWindowBlur);
-    };
-  }, [commitSelectedRecentFile, recentFiles, selectRecentFileAtIndex]);
 
   /**
    * Opens a file and scrolls to a specific line number.
@@ -1458,8 +1304,19 @@ export default function Page() {
         saveRecentFilesToStorage(next);
         return next;
       });
+
+      void setUserSettings((current) => ({
+        ...current,
+        workspace: {
+          ...current.workspace,
+          pinnedFilePaths: updatePinnedFilePathsAfterRename(
+            current.workspace.pinnedFilePaths,
+            payload,
+          ),
+        },
+      }));
     },
-    [kernelService, saveRecentFilesToStorage],
+    [kernelService, saveRecentFilesToStorage, setUserSettings],
   );
 
   /**
@@ -1492,6 +1349,17 @@ export default function Page() {
         return next;
       });
 
+      void setUserSettings((current) => ({
+        ...current,
+        workspace: {
+          ...current.workspace,
+          pinnedFilePaths: filterPinnedFilePathsAfterDelete(
+            current.workspace.pinnedFilePaths,
+            payload,
+          ),
+        },
+      }));
+
       let closedEditor = false;
       setCurrentFile((prev) => {
         if (!pathMatches(prev.path)) return prev;
@@ -1505,7 +1373,7 @@ export default function Page() {
         setOpen(false);
       }
     },
-    [kernelService, saveRecentFilesToStorage],
+    [kernelService, saveRecentFilesToStorage, setUserSettings],
   );
 
   /**
@@ -2585,201 +2453,21 @@ export default function Page() {
                               >
                                 <PanelLeft className="h-4 w-4" />
                               </ToolbarButton>
-                              {/* Recent Files Combobox — shown when a file is open or when there are recents (empty editor) */}
-                              {(currentFile.name || recentFiles.length > 0) && (
-                                <Popover
-                                  open={open}
-                                  onOpenChange={(next) => {
-                                    setOpen(next);
-                                    if (next) {
-                                      setRecentFilesTooltipOpen(false);
-                                      if (
-                                        recentFiles.length > 0 &&
-                                        !recentFilesSelectionPathRef.current
-                                      ) {
-                                        updateRecentFilesSelection(
-                                          recentFiles[0].path,
-                                        );
-                                      }
-                                    } else {
-                                      recentFilesShortcutActiveRef.current = false;
-                                      recentFilesShortcutPressCountRef.current = 0;
-                                      updateRecentFilesSelection("");
-                                      setIsFileIconHovered(false);
-                                    }
-                                  }}
-                                >
-                                  <TooltipProvider delayDuration={300}>
-                                    <Tooltip
-                                      open={recentFilesTooltipOpen}
-                                      onOpenChange={(nextOpen) => {
-                                        if (
-                                          nextOpen &&
-                                          isTooltipReopenFromOverlaySuppressed()
-                                        ) {
-                                          return;
-                                        }
-                                        setRecentFilesTooltipOpen(nextOpen);
-                                      }}
-                                    >
-                                      <TooltipTrigger asChild>
-                                        <PopoverTrigger asChild>
-                                          <Button
-                                            variant="ghost"
-                                            role="combobox"
-                                            aria-expanded={open}
-                                            aria-label={
-                                              currentFile.name
-                                                ? `Current file: ${currentFile.name}. Open recent files`
-                                                : "Open recent files"
-                                            }
-                                            className={cn(
-                                              "h-8 max-w-[min(100%,15rem)] min-w-0 shrink px-2 justify-between font-normal",
-                                              currentFileOutsideWorkspace &&
-                                              "border bg-amber-50 dark:bg-amber-950/35 border-amber-200/90 dark:border-amber-800/80 hover:bg-amber-100/90 dark:hover:bg-amber-900/45",
-                                            )}
-                                            disabled={
-                                              !currentFile.name &&
-                                              recentFiles.length === 0
-                                            }
-                                            onMouseEnter={() =>
-                                              setIsFileIconHovered(true)
-                                            }
-                                            onMouseLeave={() =>
-                                              setIsFileIconHovered(false)
-                                            }
-                                          >
-                                            <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
-                                              {currentFile.name ? (
-                                                <>
-                                                  <TooltipProvider delayDuration={300}>
-                                                    <Tooltip>
-                                                      <TooltipTrigger asChild>
-                                                        <button
-                                                          type="button"
-                                                          className="corner-squircle flex items-center justify-center w-5 h-5 shrink-0 rounded cursor-pointer hover:bg-muted transition-colors text-red-500/50 hover:text-red-500"
-                                                          onClick={handleCloseFile}
-                                                          aria-label="Close file"
-                                                        >
-                                                          {open || isFileIconHovered ? (
-                                                            <X className="h-4 w-4" />
-                                                          ) : (
-                                                            <FileIcon
-                                                              filename={
-                                                                currentFile.name || ""
-                                                              }
-                                                            />
-                                                          )}
-                                                        </button>
-                                                      </TooltipTrigger>
-                                                      <TooltipContent>
-                                                        <p>Close file</p>
-                                                      </TooltipContent>
-                                                    </Tooltip>
-                                                  </TooltipProvider>
-                                                  <span
-                                                    className="min-w-0 flex-1 truncate text-left"
-                                                    title={currentFile.name}
-                                                  >
-                                                    {currentFile.name}
-                                                  </span>
-                                                </>
-                                              ) : (
-                                                <>
-                                                  <History className="h-4 w-4 shrink-0 text-muted-foreground" />
-                                                  <span className="min-w-0 flex-1 truncate text-left text-muted-foreground">
-                                                    Recent files
-                                                  </span>
-                                                </>
-                                              )}
-                                            </div>
-                                            <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
-                                          </Button>
-                                        </PopoverTrigger>
-                                      </TooltipTrigger>
-                                      <TooltipPortal>
-                                        <TooltipContent className="z-[100]">
-                                          <div className="flex items-center">
-                                            <p>
-                                              {currentFile.name
-                                                ? "Open recent files"
-                                                : "Recent files"}
-                                            </p>
-                                            <kbd className="pointer-events-none ml-2 inline-flex shrink-0 flex-nowrap h-5 min-h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[12px] font-medium text-muted-foreground opacity-100">
-                                              <CmdOrCtrl className="h-3 w-3" />
-                                              P
-                                            </kbd>
-                                          </div>
-                                        </TooltipContent>
-                                      </TooltipPortal>
-                                    </Tooltip>
-                                  </TooltipProvider>
-                                  <PopoverContent className="w-80 p-1">
-                                    <Command
-                                      value={recentFilesSelectionPath}
-                                      onValueChange={updateRecentFilesSelection}
-                                    >
-                                      {currentFileOutsideWorkspace && (
-                                        <div
-                                          className="corner-squircle mx-1 mb-1 flex gap-2 rounded-md border border-amber-300/90 bg-amber-100/90 px-2 py-2 text-xs text-amber-950 dark:border-amber-700 dark:bg-amber-900/45 dark:text-amber-50"
-                                          role="status"
-                                        >
-                                          <AlertTriangle className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-400" />
-                                          <p className="leading-snug">
-                                            This file is not inside the workspace
-                                            folder open in the Files sidebar.
-                                          </p>
-                                        </div>
-                                      )}
-                                      <CommandInput
-                                        ref={recentFilesCommandInputRef}
-                                        placeholder="Search recent files..."
-                                      />
-                                      <CommandEmpty>
-                                        No recent files found.
-                                      </CommandEmpty>
-                                      <CommandList>
-                                        <CommandGroup heading="Recent Files">
-                                          {recentFiles.map((file, index) => (
-                                            <CommandItem
-                                              key={`${file.path}-${index}`}
-                                              value={file.path}
-                                              onSelect={() => {
-                                                recentFilesShortcutActiveRef.current =
-                                                  false;
-                                                setRecentFilesTooltipOpen(false);
-                                                handleFileSelect(file);
-                                                setOpen(false);
-                                                if (
-                                                  shouldFocusEditorAfterRecentFileSelect(
-                                                    file,
-                                                  )
-                                                ) {
-                                                  requestEditorFocus();
-                                                }
-                                              }}
-                                              className="flex items-center gap-2"
-                                            >
-                                              <FileIcon filename={file.name} />
-                                              <div className="flex flex-col min-w-0 flex-1">
-                                                <span className="truncate font-medium">
-                                                  {file.name}
-                                                </span>
-                                                <span className="text-xs text-muted-foreground truncate">
-                                                  {file.path}
-                                                </span>
-                                              </div>
-                                              {currentFile.path === file.path && (
-                                                <Check className="h-4 w-4 text-green-500" />
-                                              )}
-                                            </CommandItem>
-                                          ))}
-                                        </CommandGroup>
-                                      </CommandList>
-                                    </Command>
-                                  </PopoverContent>
-                                </Popover>
-                              )}
+                              <RecentFilesCombobox
+                                currentFile={currentFile}
+                                recentFiles={recentFiles}
+                                currentFileOutsideWorkspace={
+                                  currentFileOutsideWorkspace
+                                }
+                                open={open}
+                                onOpenChange={setOpen}
+                                onFileSelect={handleFileSelect}
+                                onCloseFile={handleCloseFile}
+                                shouldFocusEditorAfterSelect={
+                                  shouldFocusEditorAfterRecentFileSelect
+                                }
+                                requestEditorFocus={requestEditorFocus}
+                              />
                               {/* Save File Button */}
                               {currentFile.path && kernelService && (
                                 <>
