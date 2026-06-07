@@ -67,6 +67,15 @@ import type { KernelStatus, KernelInfo } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { runCells as runCellsBatch } from "@/lib/notebook/cell-executor";
 import type { CellExecutionResult } from "@/lib/notebook/cell-executor";
+import { CellExecutionQueue } from "@/lib/notebook/cell-execution-queue";
+import {
+  RUN_ALL_CELLS_EVENT_NAME,
+  SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+  RUN_ALL_STOPPED_ON_ERROR_EVENT_NAME,
+  type RunAllCellsEventDetail,
+  type RunAllTriggerSource,
+  type ScrollToNotebookCellEventDetail,
+} from "@/lib/notebook/notebook-execution-events";
 import {
   buildScreenNotebookExportHtml,
   downloadNotebookExport,
@@ -671,6 +680,7 @@ export function NotebookEditor({
   const cellComponentRefs = useRef<
     Map<CellId, { getSource: () => string; focusSource: () => void }>
   >(new Map());
+  const executionQueueRef = useRef(new CellExecutionQueue());
 
   // Clipboard for copy/paste
   const [copiedCells, setCopiedCells] = useState<NotebookCellType[]>([]);
@@ -722,6 +732,7 @@ export function NotebookEditor({
         modifiedCellsRef.current = new Set();
         pendingCellChangesRef.current = new Map();
         cellComponentRefs.current = new Map();
+        executionQueueRef.current.clear();
         cellRefs.current = new Map();
         deletedCellHistoryRef.current = [];
         markClean();
@@ -933,6 +944,72 @@ export function NotebookEditor({
       markDirty();
     },
     [cellIdForIndex, markDirty],
+  );
+
+  /**
+   * Updates only the execution status while preserving prior timing metadata.
+   */
+  const setCellExecutionStatus = useCallback(
+    (cellIndex: number, status: CellExecutionStatus) => {
+      const currentNotebook = notebookRef.current;
+      if (
+        !currentNotebook ||
+        cellIndex < 0 ||
+        cellIndex >= currentNotebook.cells.length
+      ) {
+        return;
+      }
+
+      const previousInfo =
+        currentNotebook.cells[cellIndex]?.metadata?.orion?.cellState
+          ?.executionInfo;
+      updateExecutionInfo(cellIndex, {
+        ...previousInfo,
+        status,
+      });
+    },
+    [updateExecutionInfo],
+  );
+
+  /** Marks code cells as queued when a run request is waiting to execute. */
+  const markCellsQueued = useCallback(
+    (indices: number[]) => {
+      const currentNotebook = notebookRef.current;
+      if (!currentNotebook) return;
+
+      for (const idx of indices) {
+        const cell = currentNotebook.cells[idx];
+        if (!cell || cell.cell_type !== CellType.CODE) continue;
+
+        const currentStatus =
+          cell.metadata?.orion?.cellState?.executionInfo?.status;
+        if (currentStatus === CellExecutionStatus.RUNNING) continue;
+
+        setCellExecutionStatus(idx, CellExecutionStatus.QUEUED);
+      }
+    },
+    [setCellExecutionStatus],
+  );
+
+  /** Clears queued status for cells that will not run. */
+  const clearQueuedExecutionStatuses = useCallback(
+    (indices?: number[]) => {
+      const currentNotebook = notebookRef.current;
+      if (!currentNotebook) return;
+
+      const targetIndices =
+        indices ?? currentNotebook.cells.map((_, cellIndex) => cellIndex);
+
+      for (const idx of targetIndices) {
+        const status =
+          currentNotebook.cells[idx]?.metadata?.orion?.cellState?.executionInfo
+            ?.status;
+        if (status === CellExecutionStatus.QUEUED) {
+          setCellExecutionStatus(idx, CellExecutionStatus.IDLE);
+        }
+      }
+    },
+    [setCellExecutionStatus],
   );
 
   /**
@@ -1598,80 +1675,104 @@ export function NotebookEditor({
   }, [parentKernelService]);
 
   /**
+   * Resolves the latest executable source for a cell from editor refs and pending edits.
+   */
+  const resolveCellExecutionSource = useCallback((cellIndex: number): string => {
+    const currentNotebook = notebookRef.current;
+    if (
+      !currentNotebook ||
+      cellIndex < 0 ||
+      cellIndex >= currentNotebook.cells.length
+    ) {
+      return "";
+    }
+
+    const cell = currentNotebook.cells[cellIndex];
+    const cellId = getCellId(cell);
+    const cellRef = cellId ? cellComponentRefs.current.get(cellId) : null;
+    if (cellRef) {
+      return cellRef.getSource();
+    }
+
+    const pendingSource = cellId
+      ? pendingCellChangesRef.current.get(cellId)
+      : undefined;
+    if (pendingSource !== undefined) {
+      return pendingSource;
+    }
+
+    return Array.isArray(cell.source) ? cell.source.join("") : "";
+  }, []);
+
+  /**
    * Prepares the list of { index, source } pairs for execution,
    * resolving the latest source from cell component refs when available.
    */
   const prepareCellsForExecution = useCallback(
     (indices: number[]): { index: number; source: string }[] => {
-      if (!notebook) return [];
+      const currentNotebook = notebookRef.current;
+      if (!currentNotebook) return [];
       return indices
         .filter((idx) => {
-          const cell = notebook.cells[idx];
+          const cell = currentNotebook.cells[idx];
           return cell && cell.cell_type === CellType.CODE;
         })
-        .map((idx) => {
-          const cell = notebook.cells[idx];
-          const cellId = getCellId(cell);
-          const cellRef = cellId ? cellComponentRefs.current.get(cellId) : null;
-          const source = cellRef
-            ? cellRef.getSource()
-            : Array.isArray(cell.source)
-              ? cell.source.join("")
-              : "";
-          return { index: idx, source };
-        });
+        .map((idx) => ({
+          index: idx,
+          source: resolveCellExecutionSource(idx),
+        }));
     },
-    [notebook],
+    [resolveCellExecutionSource],
   );
 
   /**
-   * Runs a specific cell or selected cells.
-   *
-   * Delegates execution to the standalone `runCells` utility which handles
-   * sequential execution, output mapping, error detection, and stop-on-error
-   * (matching Jupyter Notebook v7 / JupyterLab behavior).
-   *
-   * @param indicesToRun - Cell indices to run. If undefined, runs all selected cells.
-   * @param stopOnError - Whether to stop on first cell error. Defaults to true for
-   *   batch operations (run all, run all above/below) and false for explicit
-   *   multi-select runs.
+   * Returns true when the active kernel session can accept execute requests.
    */
-  const handleRunCell = useCallback(
-    async (indicesToRun?: number[] | number, stopOnError = true) => {
-      if (!notebook || !parentKernelService || !parentKernelService.isReady()) {
-        console.warn("Cannot run cell: kernel not ready");
-        return;
-      }
+  const isKernelAvailableForExecution = useCallback((): boolean => {
+    if (!parentKernelService) return false;
+    const kernel = parentKernelService.getKernel();
+    if (!kernel) return false;
+    const status = parentKernelService.getStatus();
+    return status !== "dead" && status !== "terminating" && status !== "unknown";
+  }, [parentKernelService]);
 
-      let finalIndices: number[];
-      if (indicesToRun === undefined) {
-        finalIndices = Array.from(selectedCellIndices);
-      } else if (typeof indicesToRun === "number") {
-        finalIndices = [indicesToRun];
-      } else {
-        finalIndices = indicesToRun;
-      }
+  /**
+   * Processes queued cell runs one batch at a time until the queue is empty.
+   */
+  const processExecutionQueue = useCallback(async () => {
+    const queue = executionQueueRef.current;
+    if (queue.isProcessing) return;
 
-      const cellsToRun = prepareCellsForExecution(finalIndices);
-      if (cellsToRun.length === 0) return;
+    queue.setProcessing(true);
+    parentSetIsRunning?.(true);
 
-      parentSetIsRunning?.(true);
+    try {
+      let job = queue.dequeue();
+      while (job) {
+        if (!parentKernelService || !isKernelAvailableForExecution()) {
+          console.warn("Cannot run cell: kernel not available");
+          queue.clear();
+          break;
+        }
 
-      try {
-        await runCellsBatch({
+        capturePendingCellSources();
+        const cellsToRun = prepareCellsForExecution(job.indices);
+        if (cellsToRun.length === 0) {
+          job = queue.dequeue();
+          continue;
+        }
+
+        const batchResult = await runCellsBatch({
           kernelService: parentKernelService,
           cells: cellsToRun,
-          stopOnError,
+          stopOnError: job.stopOnError,
 
           onCellStart: (idx) => {
-            // Clear outputs and set cell to RUNNING
-            const cellId = getCellIdByIndex(notebook, idx);
-            const cellRef = cellId ? cellComponentRefs.current.get(cellId) : null;
-            const source = cellRef
-              ? cellRef.getSource()
-              : Array.isArray(notebook.cells[idx]?.source)
-                ? notebook.cells[idx].source.join("")
-                : "";
+            const source = resolveCellExecutionSource(idx);
+            const currentNotebook = notebookRef.current;
+            if (!currentNotebook) return;
+
+            const cellId = getCellIdByIndex(currentNotebook, idx);
 
             setNotebook((prev) => {
               if (!prev || idx < 0 || idx >= prev.cells.length) return prev;
@@ -1692,12 +1793,14 @@ export function NotebookEditor({
               startTime: new Date(),
             });
 
-            if (cellId) modifiedCellsRef.current.add(cellId);
+            if (cellId) {
+              modifiedCellsRef.current.add(cellId);
+              pendingCellChangesRef.current.set(cellId, source);
+            }
             markDirty();
           },
 
           onCellOutput: (idx, output) => {
-            // Append output to the cell in real time
             setNotebook((prev) => {
               if (!prev || idx < 0 || idx >= prev.cells.length) return prev;
               const newCells = prev.cells.slice();
@@ -1710,7 +1813,6 @@ export function NotebookEditor({
           },
 
           onCellExecutionCount: (idx, count) => {
-            // Update cell execution count and parent ref
             setNotebook((prev) => {
               if (!prev || idx < 0 || idx >= prev.cells.length) return prev;
               const newCells = prev.cells.slice();
@@ -1726,7 +1828,6 @@ export function NotebookEditor({
           },
 
           onCellComplete: (idx, result: CellExecutionResult) => {
-            // Update execution info with final status and timing
             updateExecutionInfo(idx, {
               status: result.success
                 ? CellExecutionStatus.SUCCESS
@@ -1741,20 +1842,113 @@ export function NotebookEditor({
             });
           },
         });
-      } catch (error) {
-        console.error("Error executing cells:", error);
-      } finally {
+
+        if (
+          job.stopOnError &&
+          job.triggerSource &&
+          !batchResult.success
+        ) {
+          const errorCellIndex = cellsToRun.find(({ index }) => {
+            const result = batchResult.results.get(index);
+            return result !== undefined && !result.success;
+          })?.index;
+
+          if (errorCellIndex !== undefined) {
+            window.dispatchEvent(
+              new CustomEvent(RUN_ALL_STOPPED_ON_ERROR_EVENT_NAME, {
+                detail: {
+                  cellIndex: errorCellIndex,
+                  triggerSource: job.triggerSource,
+                },
+              }),
+            );
+          }
+        }
+
+        if (job.stopOnError && !batchResult.success) {
+          clearQueuedExecutionStatuses(
+            cellsToRun
+              .map(({ index }) => index)
+              .filter((index) => !batchResult.results.has(index)),
+          );
+        }
+
+        job = queue.dequeue();
+      }
+    } catch (error) {
+      console.error("Error executing cells:", error);
+    } finally {
+      queue.setProcessing(false);
+      if (queue.pendingCount > 0) {
+        void processExecutionQueue();
+      } else {
         parentSetIsRunning?.(false);
       }
+    }
+  }, [
+    parentKernelService,
+    parentSetIsRunning,
+    parentExecutionCountRef,
+    prepareCellsForExecution,
+    updateExecutionInfo,
+    isKernelAvailableForExecution,
+    markDirty,
+    clearQueuedExecutionStatuses,
+    capturePendingCellSources,
+    resolveCellExecutionSource,
+  ]);
+
+  /**
+   * Runs a specific cell or selected cells.
+   *
+   * Requests are enqueued and processed sequentially so rapid triggers are not
+   * dropped while the kernel is busy.
+   *
+   * @param indicesToRun - Cell indices to run. If undefined, runs all selected cells.
+   * @param stopOnError - Whether to stop on first cell error. Defaults to true for
+   *   batch operations (run all, run all above/below) and false for explicit
+   *   multi-select runs.
+   */
+  const handleRunCell = useCallback(
+    (
+      indicesToRun?: number[] | number,
+      stopOnError = true,
+      triggerSource?: RunAllTriggerSource,
+    ) => {
+      if (!notebook || !isKernelAvailableForExecution()) {
+        console.warn("Cannot run cell: kernel not available");
+        return;
+      }
+
+      let finalIndices: number[];
+      if (indicesToRun === undefined) {
+        finalIndices = Array.from(selectedCellIndices);
+      } else if (typeof indicesToRun === "number") {
+        finalIndices = [indicesToRun];
+      } else {
+        finalIndices = indicesToRun;
+      }
+
+      const cellsToRun = prepareCellsForExecution(finalIndices);
+      if (cellsToRun.length === 0) return;
+
+      capturePendingCellSources();
+      executionQueueRef.current.enqueue({
+        indices: finalIndices,
+        stopOnError,
+        triggerSource,
+      });
+      markCellsQueued(finalIndices);
+      void processExecutionQueue();
     },
     [
       notebook,
       selectedCellIndices,
-      parentKernelService,
-      parentSetIsRunning,
-      parentExecutionCountRef,
+      isKernelAvailableForExecution,
       prepareCellsForExecution,
-      updateExecutionInfo,
+      processExecutionQueue,
+      markCellsQueued,
+      capturePendingCellSources,
     ],
   );
 
@@ -1826,35 +2020,93 @@ export function NotebookEditor({
    *   executing remaining cells regardless of errors.
    */
   const handleRunAll = useCallback(
-    (stopOnError = true) => {
+    (stopOnError = true, triggerSource?: RunAllTriggerSource) => {
       if (!notebook) return;
       const allIndices = notebook.cells
         .map((cell, idx) => (cell.cell_type === CellType.CODE ? idx : -1))
         .filter((idx) => idx !== -1);
-      handleRunCell(allIndices, stopOnError);
+      handleRunCell(allIndices, stopOnError, triggerSource);
     },
     [notebook, handleRunCell],
   );
 
   // Listen for runAllCells events from the toolbar
   useEffect(() => {
-    const handleRunAllCellsEvent = (e: CustomEvent) => {
-      const stopOnError = e.detail?.stopOnError ?? true;
-      handleRunAll(stopOnError);
+    const handleRunAllCellsEvent = (e: Event) => {
+      const detail = (e as CustomEvent<RunAllCellsEventDetail>).detail;
+      const stopOnError = detail?.stopOnError ?? true;
+      const triggerSource = detail?.triggerSource;
+      handleRunAll(stopOnError, triggerSource);
     };
 
     window.addEventListener(
-      "runAllCells",
+      RUN_ALL_CELLS_EVENT_NAME,
       handleRunAllCellsEvent as EventListener,
     );
 
     return () => {
       window.removeEventListener(
-        "runAllCells",
+        RUN_ALL_CELLS_EVENT_NAME,
         handleRunAllCellsEvent as EventListener,
       );
     };
   }, [handleRunAll]);
+
+  // Scroll to a cell when the toolbar go-to-error popover is clicked.
+  useEffect(() => {
+    const handleScrollToCell = (e: Event) => {
+      const { cellIndex } = (e as CustomEvent<ScrollToNotebookCellEventDetail>)
+        .detail;
+      const currentNotebook = notebookRef.current;
+      if (
+        cellIndex < 0 ||
+        !currentNotebook ||
+        cellIndex >= currentNotebook.cells.length
+      ) {
+        return;
+      }
+
+      selectCellByIndex(cellIndex);
+      const cellId = getCellIdByIndex(currentNotebook, cellIndex);
+      if (cellId) {
+        scrollToCellIdAfterLayout(cellId);
+      } else {
+        scrollToCell(cellIndex);
+      }
+    };
+
+    window.addEventListener(
+      SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+      handleScrollToCell as EventListener,
+    );
+
+    return () => {
+      window.removeEventListener(
+        SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+        handleScrollToCell as EventListener,
+      );
+    };
+  }, [scrollToCell, scrollToCellIdAfterLayout, selectCellByIndex]);
+
+  // Clear pending runs when the user interrupts the kernel.
+  useEffect(() => {
+    const handleClearExecutionQueue = () => {
+      executionQueueRef.current.clear();
+      clearQueuedExecutionStatuses();
+    };
+
+    window.addEventListener(
+      "clearCellExecutionQueue",
+      handleClearExecutionQueue as EventListener,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "clearCellExecutionQueue",
+        handleClearExecutionQueue as EventListener,
+      );
+    };
+  }, [clearQueuedExecutionStatuses]);
 
   /**
    * Handles kernel selection

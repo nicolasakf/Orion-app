@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import {
   ChevronDown,
   Download,
@@ -11,6 +12,7 @@ import {
   RefreshCw,
   RotateCcw,
   Square,
+  XCircle,
 } from "lucide-react";
 
 import { AltOrOption, CmdOrCtrl, Enter } from "@/components/common/keyboard-icons";
@@ -24,11 +26,22 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
+  Popover,
+  PopoverAnchor,
+  PopoverContent,
+} from "@/components/ui/popover";
+import {
   NOTEBOOK_EXPORT_EVENT_NAME,
   NOTEBOOK_EXPORT_OPTIONS,
   type NotebookExportEventDetail,
   type NotebookExportFormat,
 } from "@/lib/notebook/notebook-export";
+import {
+  RUN_ALL_STOPPED_ON_ERROR_EVENT_NAME,
+  SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+  type RunAllStoppedOnErrorEventDetail,
+  type RunAllTriggerSource,
+} from "@/lib/notebook/notebook-execution-events";
 import {
   Tooltip,
   TooltipContent,
@@ -46,16 +59,60 @@ function dispatchNotebookExport(format: NotebookExportFormat): void {
   );
 }
 
+type GoToErrorPopoverState = {
+  cellIndex: number;
+  triggerSource: RunAllTriggerSource;
+};
+
 export interface NotebookEditorToolbarProps {
   currentKernel: KernelInfo | null;
   kernelStatus: KernelStatus;
   isRunning: boolean;
   presentationHideAllCellInputs: boolean;
-  onRunAll: (stopOnError?: boolean) => void;
+  onRunAll: (stopOnError?: boolean, triggerSource?: RunAllTriggerSource) => void;
   onStopKernel: () => void | Promise<void>;
   onRestartKernel: () => void | Promise<void>;
   onRestartAndRunAll: () => void | Promise<void>;
   onTogglePresentationHideAllCellInputs: () => void;
+}
+
+/** Popover content that scrolls to the first run-all error cell. */
+function GoToErrorPopoverContent({
+  cellIndex,
+  onDismiss,
+  align = "start",
+}: {
+  cellIndex: number;
+  onDismiss: () => void;
+  align?: "start" | "center";
+}) {
+  const handleGoToError = React.useCallback(() => {
+    window.dispatchEvent(
+      new CustomEvent(SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME, {
+        detail: { cellIndex },
+      }),
+    );
+    onDismiss();
+  }, [cellIndex, onDismiss]);
+
+  return (
+    <PopoverContent
+      side="bottom"
+      align={align}
+      className="w-auto p-1"
+      onOpenAutoFocus={(event) => event.preventDefault()}
+    >
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7 gap-1.5 px-2 text-xs text-destructive hover:text-destructive/80 hover:bg-transparent"
+        onClick={handleGoToError}
+      >
+        <XCircle className="h-3.5 w-3.5 shrink-0" />
+        Go to error
+      </Button>
+    </PopoverContent>
+  );
 }
 
 /** Toolbar controls that only apply to the notebook editor. */
@@ -70,6 +127,9 @@ export function NotebookEditorToolbar({
   onRestartAndRunAll,
   onTogglePresentationHideAllCellInputs,
 }: NotebookEditorToolbarProps) {
+  const [goToErrorState, setGoToErrorState] =
+    React.useState<GoToErrorPopoverState | null>(null);
+
   const canRun =
     Boolean(currentKernel) && kernelStatus === "connected" && !isRunning;
   const canControlKernel =
@@ -77,61 +137,122 @@ export function NotebookEditorToolbar({
     kernelStatus !== "disconnected" &&
     kernelStatus !== "connecting";
 
+  const dismissGoToError = React.useCallback(() => {
+    setGoToErrorState(null);
+  }, []);
+
+  const handleRunAllClick = React.useCallback(
+    (stopOnError: boolean) => {
+      dismissGoToError();
+      if (stopOnError) {
+        onRunAll(true, "run-all");
+      } else {
+        onRunAll(false);
+      }
+    },
+    [dismissGoToError, onRunAll],
+  );
+
+  const handleRestartAndRunAllClick = React.useCallback(() => {
+    dismissGoToError();
+    void onRestartAndRunAll();
+  }, [dismissGoToError, onRestartAndRunAll]);
+
+  React.useEffect(() => {
+    const handleRunAllStoppedOnError = (event: Event) => {
+      const detail = (event as CustomEvent<RunAllStoppedOnErrorEventDetail>)
+        .detail;
+      setGoToErrorState({
+        cellIndex: detail.cellIndex,
+        triggerSource: detail.triggerSource,
+      });
+    };
+
+    window.addEventListener(
+      RUN_ALL_STOPPED_ON_ERROR_EVENT_NAME,
+      handleRunAllStoppedOnError as EventListener,
+    );
+
+    return () => {
+      window.removeEventListener(
+        RUN_ALL_STOPPED_ON_ERROR_EVENT_NAME,
+        handleRunAllStoppedOnError as EventListener,
+      );
+    };
+  }, []);
+
+  const goToErrorOpen = goToErrorState !== null;
+
   return (
     <>
       <TooltipProvider delayDuration={300}>
-        <div
-          role="group"
-          aria-label="Run all cells"
-          className="inline-flex h-8 overflow-hidden rounded-md border border-border/50 bg-background shadow-sm"
+        <Popover
+          open={goToErrorOpen && goToErrorState?.triggerSource === "run-all"}
+          onOpenChange={(open) => {
+            if (!open) dismissGoToError();
+          }}
         >
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-7 shrink-0 !rounded-none border-0 border-e border-border/50 bg-background px-0 shadow-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10"
-                onClick={() => onRunAll(true)}
-                disabled={!canRun}
-              >
-                <Play className="h-4 w-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <div className="flex items-center">
-                <p>Run All Cells</p>
-                <kbd className="pointer-events-none ml-2 inline-flex shrink-0 flex-nowrap h-5 min-h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[12px] font-medium text-muted-foreground opacity-100">
-                  <CmdOrCtrl className="h-3 w-3" />
-                  <AltOrOption className="h-3 w-3" />
-                  <Enter className="h-3 w-3" />
-                </kbd>
-              </div>
-            </TooltipContent>
-          </Tooltip>
+          <PopoverAnchor asChild>
+            <div
+              role="group"
+              aria-label="Run all cells"
+              className="inline-flex h-8 overflow-hidden rounded-md border border-border/50 bg-background shadow-sm"
+            >
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-8 w-7 shrink-0 !rounded-none border-0 border-e border-border/50 bg-background px-0 shadow-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10"
+                    onClick={() => handleRunAllClick(true)}
+                    disabled={!canRun}
+                  >
+                    <Play className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <div className="flex items-center">
+                    <p>Run All Cells</p>
+                    <kbd className="pointer-events-none ml-2 inline-flex shrink-0 flex-nowrap h-5 min-h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[12px] font-medium text-muted-foreground opacity-100">
+                      <CmdOrCtrl className="h-3 w-3" />
+                      <AltOrOption className="h-3 w-3" />
+                      <Enter className="h-3 w-3" />
+                    </kbd>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                size="icon"
-                className="h-8 w-4 shrink-0 !rounded-none border-0 bg-background px-0 shadow-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10"
-                disabled={!canRun}
-              >
-                <ChevronDown className="h-3 w-3" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56">
-              <DropdownMenuItem onClick={() => onRunAll(true)}>
-                <Play className="h-4 w-4 mr-2" />
-                Run All Cells
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onRunAll(false)}>
-                <Play className="h-4 w-4 mr-2 text-yellow-500" />
-                Run All Cells (Ignore Errors)
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    className="h-8 w-4 shrink-0 !rounded-none border-0 bg-background px-0 shadow-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10"
+                    disabled={!canRun}
+                  >
+                    <ChevronDown className="h-3 w-3" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56">
+                  <DropdownMenuItem onClick={() => handleRunAllClick(true)}>
+                    <Play className="h-4 w-4 mr-2" />
+                    Run All Cells
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleRunAllClick(false)}>
+                    <Play className="h-4 w-4 mr-2 text-yellow-500" />
+                    Run All Cells (Ignore Errors)
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          </PopoverAnchor>
+          {goToErrorState?.triggerSource === "run-all" ? (
+            <GoToErrorPopoverContent
+              cellIndex={goToErrorState.cellIndex}
+              onDismiss={dismissGoToError}
+            />
+          ) : null}
+        </Popover>
       </TooltipProvider>
       <ToolbarButton
         onClick={onStopKernel}
@@ -148,13 +269,33 @@ export function NotebookEditorToolbar({
       >
         <RotateCcw className="h-4 w-4" />
       </ToolbarButton>
-      <ToolbarButton
-        onClick={onRestartAndRunAll}
-        disabled={!canControlKernel || isRunning}
-        toolTipLabel="Restart Kernel and Run All Cells"
+      <Popover
+        open={
+          goToErrorOpen && goToErrorState?.triggerSource === "restart-run-all"
+        }
+        onOpenChange={(open) => {
+          if (!open) dismissGoToError();
+        }}
       >
-        <RefreshCw className="h-4 w-4" />
-      </ToolbarButton>
+        <PopoverAnchor asChild>
+          <span className="inline-flex">
+            <ToolbarButton
+              onClick={handleRestartAndRunAllClick}
+              disabled={!canControlKernel || isRunning}
+              toolTipLabel="Restart Kernel and Run All Cells"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </ToolbarButton>
+          </span>
+        </PopoverAnchor>
+        {goToErrorState?.triggerSource === "restart-run-all" ? (
+          <GoToErrorPopoverContent
+            cellIndex={goToErrorState.cellIndex}
+            onDismiss={dismissGoToError}
+            align="center"
+          />
+        ) : null}
+      </Popover>
       <ToolbarButton
         onClick={onTogglePresentationHideAllCellInputs}
         aria-pressed={presentationHideAllCellInputs}

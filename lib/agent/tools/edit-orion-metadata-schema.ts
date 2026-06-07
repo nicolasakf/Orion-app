@@ -131,7 +131,7 @@ export const CellOrionMetadataSchema = z
         isOutputCollapsed: z.boolean().optional(),
         executionInfo: z
           .object({
-            status: z.enum(["idle", "running", "success", "error"]).optional(),
+            status: z.enum(["idle", "queued", "running", "success", "error"]).optional(),
             startTime: DateLikeSchema.optional(),
             endTime: DateLikeSchema.optional(),
             lastExecuted: DateLikeSchema.optional(),

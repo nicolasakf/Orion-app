@@ -13,6 +13,7 @@ export enum OutputType {
 
 export enum CellExecutionStatus {
   IDLE = "idle",
+  QUEUED = "queued",
   RUNNING = "running",
   SUCCESS = "success",
   ERROR = "error",

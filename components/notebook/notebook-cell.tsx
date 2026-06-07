@@ -37,6 +37,7 @@ import {
   Loader2,
   XCircle,
   Clock,
+  Timer,
   Zap,
   ChevronsUp,
   ChevronsDown,
@@ -347,6 +348,13 @@ function ActionButton({
 function StatusIndicator({ status }: { status: CellExecutionStatus }) {
   const getStatusIcon = () => {
     switch (status) {
+      case CellExecutionStatus.QUEUED:
+        return (
+          <Timer
+            className="h-3.5 w-3.5 text-muted-foreground animate-pulse"
+            aria-label="Queued for execution"
+          />
+        );
       case CellExecutionStatus.RUNNING:
         return <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />;
       case CellExecutionStatus.SUCCESS:
@@ -1438,12 +1446,14 @@ function NotebookCellComponent({
     });
   }, []);
 
-  // Reset local source when cell prop changes (e.g. when loading a new notebook)
+  // Sync notebook source into the editor when the saved cell changes externally.
+  // Skip while the user has unsaved local edits — parent updates (queued/running
+  // status, other cells executing) replace the cell object and must not wipe typing.
   useEffect(() => {
-    const src = Array.isArray(cell.source) ? cell.source : [];
-    setLocalSource(src.join(""));
-    setHasLocalChanges(false);
-  }, [cell]);
+    if (hasLocalChanges) return;
+    const src = Array.isArray(cell.source) ? cell.source.join("") : "";
+    setLocalSource(src);
+  }, [cell.source, cellId, hasLocalChanges]);
 
   // Initialize visibility and collapse states from cell metadata
   useEffect(() => {

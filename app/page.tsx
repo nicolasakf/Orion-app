@@ -110,6 +110,10 @@ import type {
   OpenDocumentSnapshotProvider,
 } from "@/lib/agent/open-document-snapshots";
 import { OPEN_CHAT_SIDEBAR_EVENT } from "@/lib/chat/chat-composer-events";
+import {
+  RUN_ALL_CELLS_EVENT_NAME,
+  type RunAllTriggerSource,
+} from "@/lib/notebook/notebook-execution-events";
 
 type ActiveFile = {
   name: string;
@@ -1695,11 +1699,9 @@ export default function Page() {
       switch (status) {
         case "idle":
           setKernelStatus("connected");
-          setIsRunning(false);
           break;
         case "busy":
           setKernelStatus("busy");
-          setIsRunning(true);
           break;
         case "starting":
         case "restarting":
@@ -1864,12 +1866,15 @@ export default function Page() {
     }
   }, [kernelService, refreshRunningKernels]);
 
-  const handleRunAll = React.useCallback((stopOnError = true) => {
-    const event = new CustomEvent("runAllCells", {
-      detail: { stopOnError },
-    });
-    window.dispatchEvent(event);
-  }, []);
+  const handleRunAll = React.useCallback(
+    (stopOnError = true, triggerSource?: RunAllTriggerSource) => {
+      const event = new CustomEvent(RUN_ALL_CELLS_EVENT_NAME, {
+        detail: { stopOnError, triggerSource },
+      });
+      window.dispatchEvent(event);
+    },
+    [],
+  );
 
   const handleRestartKernel = React.useCallback(async () => {
     if (!kernelService) return;
@@ -1887,6 +1892,7 @@ export default function Page() {
   const handleStopKernel = React.useCallback(async () => {
     if (!kernelService) return;
     try {
+      window.dispatchEvent(new CustomEvent("clearCellExecutionQueue"));
       await kernelService.interrupt();
       setIsRunning(false); // Explicitly set isRunning to false
     } catch (error) {
@@ -1904,7 +1910,7 @@ export default function Page() {
 
       // Wait for kernel to be fully ready before running all cells
       setTimeout(() => {
-        handleRunAll();
+        handleRunAll(true, "restart-run-all");
       }, 1000);
     } catch (error) {
       console.error("Error restarting kernel:", error);

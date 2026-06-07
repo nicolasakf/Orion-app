@@ -3,6 +3,7 @@ import type React from "react";
 import type { TextFileModelState } from "@/components/editors/use-text-file-model";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { EditorDefinition as BaseEditorDefinition } from "@/lib/editor/editor-registry";
+import type { RunAllTriggerSource } from "@/lib/notebook/notebook-execution-events";
 import type { KernelInfo, KernelStatus, NotebookType } from "@/lib/types";
 import type {
   OpenDocumentSaveResult,
@@ -39,7 +40,7 @@ export interface EditorToolbarProps {
   kernelStatus: KernelStatus;
   isRunning: boolean;
   presentationHideAllCellInputs: boolean;
-  onRunAll: (stopOnError?: boolean) => void;
+  onRunAll: (stopOnError?: boolean, triggerSource?: RunAllTriggerSource) => void;
   onStopKernel: () => void | Promise<void>;
   onRestartKernel: () => void | Promise<void>;
   onRestartAndRunAll: () => void | Promise<void>;
