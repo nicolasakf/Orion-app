@@ -1,10 +1,24 @@
 import path from "path";
+import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
+/** Treat `.md` imports as raw strings (mirrors Next.js webpack `asset/source`). */
+function markdownRawPlugin(): Plugin {
+  return {
+    name: "markdown-raw",
+    transform(code, id) {
+      if (!id.endsWith(".md")) return null;
+      return {
+        code: `export default ${JSON.stringify(code)};`,
+        map: null,
+      };
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react()],
-  assetsInclude: ["**/*.md"],
+  plugins: [react(), markdownRawPlugin()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "."),
