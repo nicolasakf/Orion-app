@@ -372,12 +372,12 @@ export function AgentInteractionModesSection() {
               <SettingsInfoLabel
                 htmlFor="mode-custom-prompt"
                 label="Custom system prompt instructions"
-                description="Append mode-specific instructions to the protected Orion base prompt."
+                description="Add mode-specific instructions"
               />
               <Textarea
                 id="mode-custom-prompt"
                 value={selectedMode.customSystemPrompt}
-                placeholder="Append mode-specific instructions to the protected Orion base prompt."
+                placeholder="Add mode-specific instructions"
                 className="min-h-40 font-mono text-xs"
                 onChange={(event) =>
                   updateSelectedMode({ customSystemPrompt: event.target.value })
