@@ -47,6 +47,16 @@ export function getOrionRuntimeDirectory(): string {
   return path.join(getOrionDataDirectory(), "runtime");
 }
 
+/** Returns the absolute path to Orion's managed cache directory. */
+export function getOrionCacheDirectory(): string {
+  return path.join(getOrionRuntimeDirectory(), "cache");
+}
+
+/** Returns the absolute path to the cached normalized models.dev catalog. */
+export function getModelsDevCatalogCacheFilePath(): string {
+  return path.join(getOrionCacheDirectory(), "models-dev-catalog.json");
+}
+
 /** Returns the absolute path to the CLI-managed Jupyter connection file. */
 export function getJupyterConnectionFilePath(): string {
   return path.join(getOrionRuntimeDirectory(), "jupyter-connection.json");
@@ -55,6 +65,13 @@ export function getJupyterConnectionFilePath(): string {
 /** Ensures `~/.orion/terminal` exists and returns its absolute path. */
 export async function ensureTerminalOutputDirectory(): Promise<string> {
   const directory = getTerminalOutputDirectory();
+  await mkdir(directory, { recursive: true });
+  return directory;
+}
+
+/** Ensures `~/.orion/runtime/cache` exists and returns its absolute path. */
+export async function ensureOrionCacheDirectory(): Promise<string> {
+  const directory = getOrionCacheDirectory();
   await mkdir(directory, { recursive: true });
   return directory;
 }
