@@ -7,6 +7,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useOrionSetting } from "@/hooks/use-orion-settings";
 import { useTheme } from "next-themes";
+import { registerPythonLanguageWithMultilineFStringFix } from "@/lib/editor/python-monaco-tokenizer";
 
 // Custom theme definitions
 const customLightTheme: editor.IStandaloneThemeData = {
@@ -442,6 +443,7 @@ export function MonacoEditor({
     // Define themes early in beforeMount to ensure they're available
     monaco.editor.defineTheme("orion-light", finalLightTheme);
     monaco.editor.defineTheme("orion-dark", finalDarkTheme);
+    registerPythonLanguageWithMultilineFStringFix(monaco);
   };
 
   /**
