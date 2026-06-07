@@ -2412,6 +2412,22 @@ export function RightSidebar({
     void showCostSummary({ refresh: true });
   }, [showCostSummary]);
 
+  /** Runs slash commands that submit immediately without a trailing message. */
+  const handleImmediateSlashCommand = useCallback(
+    async (command: SlashCommand) => {
+      if (command.name === "cost") {
+        await showCostSummary();
+        return;
+      }
+
+      if (command.name === "report-bug") {
+        setEphemeralCostMessage(null);
+        window.open(ORION_GITHUB_ISSUES_URL, "_blank", "noopener,noreferrer");
+      }
+    },
+    [showCostSummary]
+  );
+
   // Keep messagesRef up to date
   useEffect(() => {
     messagesRef.current = messages;
@@ -4209,6 +4225,7 @@ export function RightSidebar({
             activeSlashCommand={activeSlashCommand}
             extraSlashCommands={[...subagentSlashCommands, ...skillSlashCommands]}
             onOpenSlashDefinition={handleOpenSlashDefinition}
+            onImmediateSlashCommand={handleImmediateSlashCommand}
             hasMessages={visibleMessages.length > 0}
             contextEstimate={contextEstimate}
             onCompact={runCompaction}

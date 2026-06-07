@@ -3,6 +3,9 @@ import { Bot, Brain, Bug, DollarSign, Minimize2, type LucideIcon } from "lucide-
 /** GitHub issues page for reporting bugs in Orion. */
 export const ORION_GITHUB_ISSUES_URL = "https://github.com/nicolasakf/Orion-app/issues/new";
 
+/** How a slash command is submitted from the composer. */
+export type SlashCommandSubmissionMode = "immediate" | "message";
+
 /** A slash command available in the chat textbox. */
 export interface SlashCommand {
   /** Internal identifier, e.g. "compact". */
@@ -15,6 +18,11 @@ export interface SlashCommand {
   icon: LucideIcon;
   /** Category — used to group commands in the palette. */
   category?: "builtin" | "subagent" | "skill";
+  /**
+   * `immediate` runs as soon as the command is chosen (no trailing message).
+   * `message` keeps the composer open for optional instructions (default).
+   */
+  submissionMode?: SlashCommandSubmissionMode;
   /**
    * Jupyter-relative path of the SKILL.md / subagent notebook opened when the user
    * invokes “edit definition” from the slash palette (optional).
@@ -36,6 +44,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: "Show cost and request totals for this session",
     icon: DollarSign,
     category: "builtin",
+    submissionMode: "immediate",
   },
   {
     name: "report-bug",
@@ -43,8 +52,14 @@ export const SLASH_COMMANDS: SlashCommand[] = [
     description: "Open GitHub to report a bug in Orion",
     icon: Bug,
     category: "builtin",
+    submissionMode: "immediate",
   },
 ];
+
+/** Returns whether a slash command runs immediately without a trailing message. */
+export function isImmediateSlashCommand(command: SlashCommand): boolean {
+  return command.submissionMode === "immediate";
+}
 
 /**
  * Build slash commands for the given skills.

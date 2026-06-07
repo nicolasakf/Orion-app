@@ -66,7 +66,7 @@ import type {
   InteractionModeBase,
   InteractionModeConfig,
 } from "@/lib/agent/interaction-modes";
-import { SLASH_COMMANDS, type SlashCommand } from "./slash-commands";
+import { isImmediateSlashCommand, SLASH_COMMANDS, type SlashCommand } from "./slash-commands";
 import { ContextUsagePill } from "./context-usage-pill";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { TokenEstimate } from "@/lib/agent/token-budget";
@@ -144,6 +144,8 @@ export interface ChatTextboxProps {
   extraSlashCommands?: SlashCommand[];
   /** Opens a Jupyter path for slash entries that expose {@link SlashCommand.definitionPath} (skills/subagents). */
   onOpenSlashDefinition?: (path: string) => void;
+  /** Runs slash commands configured with {@link SlashCommand.submissionMode} `immediate`. */
+  onImmediateSlashCommand?: (command: SlashCommand) => void;
   /** Whether the active chat has messages; keeps the context pill hidden for empty chats. */
   hasMessages?: boolean;
   /** Precomputed context usage estimate for the active chat. */
@@ -384,6 +386,7 @@ export function ChatTextbox({
   activeSlashCommand,
   extraSlashCommands = [],
   onOpenSlashDefinition,
+  onImmediateSlashCommand,
   hasMessages = false,
   contextEstimate = null,
   onCompact,
@@ -495,6 +498,15 @@ export function ChatTextbox({
     };
   }, [activeSlashCommand, allSlashCommands, input]);
   const selectedSubagentName = slashChip?.category === "subagent" ? slashChip.name : null;
+  const activeSlashCommandDef = React.useMemo(
+    () =>
+      slashChip
+        ? allSlashCommands.find((command) => command.name === slashChip.name) ?? null
+        : null,
+    [allSlashCommands, slashChip]
+  );
+  const isImmediateSlashChipActive =
+    activeSlashCommandDef != null && isImmediateSlashCommand(activeSlashCommandDef);
 
   const bodyInputValue = slashChip ? slashChip.message : input;
   const selectedSkillProjection = React.useMemo(
@@ -627,6 +639,30 @@ export function ChatTextbox({
         return;
       }
 
+      if (isImmediateSlashCommand(cmd)) {
+        const slashToken = findTrailingSlashToken(input);
+        const clearedValue = slashToken
+          ? input.slice(0, slashToken.start).trimEnd()
+          : (() => {
+            const leadingWhitespace = input.match(/^\s*/)?.[0] ?? "";
+            const trimmed = input.slice(leadingWhitespace.length);
+            if (!trimmed.startsWith(cmd.label)) return input;
+            const trailingMessage = trimmed.slice(cmd.label.length).trimStart();
+            return trailingMessage.length > 0
+              ? `${leadingWhitespace}${trailingMessage}`
+              : leadingWhitespace;
+          })();
+        if (clearedValue !== input) {
+          const syntheticEvent = {
+            target: { value: clearedValue },
+          } as React.ChangeEvent<HTMLTextAreaElement>;
+          handleInputChange(syntheticEvent);
+        }
+        onImmediateSlashCommand?.(cmd);
+        textareaRef.current?.focus();
+        return;
+      }
+
       const slashToken = findTrailingSlashToken(input);
       const cmdLabel = cmd.label;
       let newValue = cmdLabel + " ";
@@ -660,7 +696,14 @@ export function ChatTextbox({
       handleInputChange(syntheticEvent);
       textareaRef.current?.focus();
     },
-    [activeSlashCommand, handleInputChange, input, selectedSubagentName, textareaRef]
+    [
+      activeSlashCommand,
+      handleInputChange,
+      input,
+      onImmediateSlashCommand,
+      selectedSubagentName,
+      textareaRef,
+    ]
   );
 
   /** Auto-resize textarea to fit content while keeping a max height. */
@@ -851,9 +894,11 @@ export function ChatTextbox({
     ? "Edit your message..."
     : readOnly
       ? readOnlyPlaceholder
-      : isLoading
-        ? "Queue a message · Enter to add"
-        : "Type a message · / for commands · @ for mentions";
+      : isImmediateSlashChipActive && slashChip
+        ? `Press Enter to run ${slashChip.label}`
+        : isLoading
+          ? "Queue a message · Enter to add"
+          : "Type a message · / for commands · @ for mentions";
 
   React.useEffect(() => {
     if (!isModelComboboxOpen) {
@@ -1183,9 +1228,10 @@ export function ChatTextbox({
                 <div className="w-full flex items-start gap-1.5 px-3 py-2">
                   <Textarea
                     ref={textareaRef}
-                    value={textareaValue}
+                    value={isImmediateSlashChipActive ? "" : textareaValue}
                     style={chatBoxFont}
                     onChange={(e) => {
+                      if (isImmediateSlashChipActive) return;
                       updateComposerText(e.target.value);
                       resizeTextarea();
                     }}
@@ -1332,6 +1378,10 @@ export function ChatTextbox({
                       } else if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
                         e.stopPropagation();
+                        if (isImmediateSlashChipActive && activeSlashCommandDef) {
+                          selectSlashCommand(activeSlashCommandDef);
+                          return;
+                        }
                         (e.target as HTMLTextAreaElement).form?.requestSubmit();
                       }
                     }}
