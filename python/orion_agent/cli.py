@@ -23,7 +23,7 @@ from typing import Any
 
 from .managed_packages import get_python_support, managed_runtime_packages
 
-VERSION = "0.6.7"
+VERSION = "0.7.0"
 NODE_VERSION = "v22.12.0"
 DEFAULT_APP_BUNDLE_URL = (
     f"https://github.com/nicolasakf/Orion-app/releases/download/"

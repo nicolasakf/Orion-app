@@ -4,6 +4,36 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.7.0] - 2026-06-08
+
+### Added
+
+- Agent: customizable interaction modes (Plan, Agent, Debug, Ask) with editable prompts
+- Agent: inject workspace `AGENTS.md` and `CLAUDE.md` rules into the system prompt
+- Agent: persist models.dev catalog to disk cache for faster startup
+- Chat: immediate slash command submission mode
+- Chat: mention notebook cell outputs from context menus
+- Chat: improved stop handling and sidebar integrations
+- Notebook: serialize cell runs with an execution queue
+- Settings: reorganized dialog with dedicated Agent and Notebook tabs
+- Settings: backup user settings before overwrite
+- Settings: custom model display labels
+- Settings: improved models tab search ranking
+- Workspace: pinned files in the combobox and file tree
+
+### Fixed
+
+- Chat: exclude title generation from cost summaries
+- Editor: register Python Monaco tokenizer for multiline f-strings
+
+### Changed
+
+- Agent: remove notebook management tools (cells handled via UI and kernel)
+- Notebook: store presentation hide flag in session storage
+- Settings: shorten interaction mode prompt labels
+
+[0.7.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.7.0
+
 ## [0.6.7] - 2026-06-04
 
 ### Added
