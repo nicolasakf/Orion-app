@@ -66,9 +66,30 @@ Be direct and minimal. State exactly what you're doing and what you found — no
 - Prefer bullet points over prose where possible.`,
 };
 
-/** Returns the communication style prompt section for the given preset. */
-function buildCommunicationStyleSection(style?: AgentCommunicationStyle): string {
-  return COMMUNICATION_STYLE_SECTIONS[style ?? "default"];
+/** Options for building the communication style section of the system prompt. */
+interface CommunicationStylePromptOptions {
+  style?: AgentCommunicationStyle;
+  /** When non-empty, overrides the preset style. */
+  customStyle?: string;
+}
+
+/** Returns the communication style prompt section for a preset or custom instructions. */
+function buildCommunicationStyleSection(
+  options?: CommunicationStylePromptOptions
+): string {
+  const customStyle = options?.customStyle?.trim();
+  if (customStyle) {
+    return `## Communication Style\n\n${customStyle}`;
+  }
+
+  return COMMUNICATION_STYLE_SECTIONS[options?.style ?? "default"];
+}
+
+/** Returns a protected custom-instructions section appended to a mode base prompt. */
+function buildCustomInteractionModeSection(customSystemPrompt?: string): string {
+  const trimmed = customSystemPrompt?.trim();
+  if (!trimmed) return "";
+  return `## Custom Interaction Mode Instructions\n\n${trimmed}`;
 }
 
 /** Non-placeholder values only — omit fields we could not determine. */
@@ -245,6 +266,7 @@ ${agentLines}`;
  * @param options.jupyterServerIsLocal - Client flag: Jupyter URL is loopback; with clientPlatformOs, OS may be inferred
  * @param options.clientPlatformOs - Browser OS; used when local server and server OS unknown
  * @param options.communicationStyle - Communication style preset ("default" | "narrative" | "friendly" | "pragmatic")
+ * @param options.customCommunicationStyle - Optional custom instructions; overrides preset when non-empty
  * @returns Formatted system prompt string
  */
 export function buildAgentSystemPrompt(options?: {
@@ -275,6 +297,14 @@ export function buildAgentSystemPrompt(options?: {
   clientPlatformOs?: PlatformOS;
   /** Communication style preset; omitting or "default" uses minimal narration instructions */
   communicationStyle?: AgentCommunicationStyle;
+  /** Custom communication instructions; overrides preset when non-empty */
+  customCommunicationStyle?: string;
+  /** User-authored instructions appended to this mode's protected base prompt. */
+  customSystemPrompt?: string;
+  /** Whether to advertise loadable skills in this mode. */
+  enableSkills?: boolean;
+  /** Whether to advertise notebook-defined sub-agent delegation in this mode. */
+  enableSubagents?: boolean;
 }): string {
   const {
     notebookPath,
@@ -289,24 +319,36 @@ export function buildAgentSystemPrompt(options?: {
     jupyterServerIsLocal,
     clientPlatformOs,
     communicationStyle,
+    customCommunicationStyle,
+    customSystemPrompt,
   } = options ?? {};
+  const enableSkills = options?.enableSkills ?? true;
+  const enableSubagents = options?.enableSubagents ?? true;
 
   // XOR enforcement: a request has either a notebook or a file, never both.
   // If both are somehow provided, notebookPath takes precedence.
   const activeFilePath = notebookPath ? undefined : options?.activeFilePath;
   const sections: string[] = [ORION_AGENT_SYSTEM_PROMPT];
 
-  const styleSection = buildCommunicationStyleSection(communicationStyle);
+  const styleSection = buildCommunicationStyleSection({
+    style: communicationStyle,
+    customStyle: customCommunicationStyle,
+  });
   if (styleSection) sections.push(styleSection);
 
   const rulesSection = buildRulesPromptSection(agentRules);
   if (rulesSection) sections.push(rulesSection);
 
-  const subagentSection = buildSubagentDelegationSection(availableSubagents);
+  const customModeSection = buildCustomInteractionModeSection(customSystemPrompt);
+  if (customModeSection) sections.push(customModeSection);
+
+  const subagentSection = enableSubagents
+    ? buildSubagentDelegationSection(availableSubagents)
+    : null;
   if (subagentSection) sections.push(subagentSection);
 
   // Inject skills section when skills are available.
-  if (availableSkills && availableSkills.length > 0) {
+  if (enableSkills && availableSkills && availableSkills.length > 0) {
     const modelInvocableSkills = filterModelInvocableSkills(availableSkills);
     if (modelInvocableSkills.length > 0) {
       const skillLines = modelInvocableSkills
@@ -375,6 +417,9 @@ interface ModeModePromptOptions {
   agentRules?: AgentRule[];
   /** Communication style preset; omitting or "default" uses minimal narration instructions */
   communicationStyle?: AgentCommunicationStyle;
+  /** Custom communication instructions; overrides preset when non-empty */
+  customCommunicationStyle?: string;
+  customSystemPrompt?: string;
 }
 
 /**
@@ -384,11 +429,17 @@ interface ModeModePromptOptions {
 export function buildAskModeSystemPrompt(options?: ModeModePromptOptions): string {
   const sections: string[] = [ORION_AGENT_SYSTEM_PROMPT_ASK];
 
-  const styleSection = buildCommunicationStyleSection(options?.communicationStyle);
+  const styleSection = buildCommunicationStyleSection({
+    style: options?.communicationStyle,
+    customStyle: options?.customCommunicationStyle,
+  });
   if (styleSection) sections.push(styleSection);
 
   const rulesSection = buildRulesPromptSection(options?.agentRules);
   if (rulesSection) sections.push(rulesSection);
+
+  const customModeSection = buildCustomInteractionModeSection(options?.customSystemPrompt);
+  if (customModeSection) sections.push(customModeSection);
 
   const envContext = buildAgentEnvironmentContextPrompt({
     serverInfo: options?.serverInfo,
@@ -427,20 +478,36 @@ export function buildEditModeSystemPrompt(options?: {
   clientPlatformOs?: PlatformOS;
   /** Communication style preset; omitting or "default" uses minimal narration instructions */
   communicationStyle?: AgentCommunicationStyle;
+  /** Custom communication instructions; overrides preset when non-empty */
+  customCommunicationStyle?: string;
+  /** User-authored instructions appended to this mode's protected base prompt. */
+  customSystemPrompt?: string;
+  /** Whether to advertise loadable skills in this mode. */
+  enableSkills?: boolean;
+  /** Whether to advertise notebook-defined sub-agent delegation in this mode. */
+  enableSubagents?: boolean;
 }): string {
   const sections: string[] = [ORION_AGENT_SYSTEM_PROMPT_EDIT];
 
-  const styleSection = buildCommunicationStyleSection(options?.communicationStyle);
+  const styleSection = buildCommunicationStyleSection({
+    style: options?.communicationStyle,
+    customStyle: options?.customCommunicationStyle,
+  });
   if (styleSection) sections.push(styleSection);
 
   const rulesSection = buildRulesPromptSection(options?.agentRules);
   if (rulesSection) sections.push(rulesSection);
 
-  const subagentSection = buildSubagentDelegationSection(options?.availableSubagents);
+  const customModeSection = buildCustomInteractionModeSection(options?.customSystemPrompt);
+  if (customModeSection) sections.push(customModeSection);
+
+  const subagentSection = options?.enableSubagents === false
+    ? null
+    : buildSubagentDelegationSection(options?.availableSubagents);
   if (subagentSection) sections.push(subagentSection);
 
   // Skills
-  if (options?.availableSkills && options.availableSkills.length > 0) {
+  if (options?.enableSkills !== false && options?.availableSkills && options.availableSkills.length > 0) {
     const modelInvocableSkills = filterModelInvocableSkills(options.availableSkills);
     if (modelInvocableSkills.length > 0) {
       const skillLines = modelInvocableSkills.map((s) => `- **${s.name}**: ${s.description}`).join("\n");

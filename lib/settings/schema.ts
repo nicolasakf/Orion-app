@@ -7,6 +7,18 @@ export const MAX_PINNED_WORKSPACE_DIRECTORY_PATHS = 50;
 
 export const ThemeSettingSchema = z.enum(["light", "dark", "system"]);
 export const InteractionModeSchema = z.enum(["Agent", "Ask", "Edit"]).catch("Agent");
+export const InteractionModeBaseSchema = z.enum(["Agent", "Ask", "Edit"]);
+export const InteractionModeBashPolicySchema = z.enum(["read_only", "full"]);
+export const InteractionModeConfigSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().catch(""),
+  baseMode: InteractionModeBaseSchema,
+  toolNames: z.array(z.string()).catch([]),
+  customSystemPrompt: z.string().catch(""),
+  builtIn: z.boolean(),
+  bashPolicy: InteractionModeBashPolicySchema,
+});
 /**
  * Communication style preset for the agent's responses.
  * - "default": minimal narration before and after tool calls
@@ -235,6 +247,13 @@ const SettingsDataSchema = z.object({
     fontSize: z.number().int().min(10).max(20),
     /** Communication style preset injected into the agent system prompt. */
     communicationStyle: AgentCommunicationStyleSchema,
+    /**
+     * Optional custom communication instructions. When non-empty, overrides
+     * `communicationStyle` in the agent system prompt.
+     */
+    customCommunicationStyle: z.string().catch(""),
+    /** User-configurable built-in and custom chat interaction modes. */
+    interactionModes: z.array(InteractionModeConfigSchema).default([]),
   }),
   /** Left sidebar file list typography. */
   fileTree: z.object({
@@ -298,6 +317,9 @@ export const WorkspaceSettingsDocumentSchema = z.object({
 
 export type ThemeSetting = z.infer<typeof ThemeSettingSchema>;
 export type InteractionModeSetting = z.infer<typeof InteractionModeSchema>;
+export type InteractionModeBase = z.infer<typeof InteractionModeBaseSchema>;
+export type InteractionModeBashPolicy = z.infer<typeof InteractionModeBashPolicySchema>;
+export type InteractionModeConfig = z.infer<typeof InteractionModeConfigSchema>;
 export type ToolApprovalMode = z.infer<typeof ToolApprovalModeSchema>;
 export type WordWrapSetting = z.infer<typeof WordWrapSchema>;
 export type AgentCommunicationStyle = z.infer<typeof AgentCommunicationStyleSchema>;

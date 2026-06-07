@@ -518,6 +518,14 @@ export const orionTools = {
 /** Type representing the names of all available Orion tools */
 export type OrionToolName = keyof typeof orionTools;
 
+/** Canonical runtime list of model-facing Orion tool names. */
+export const ORION_TOOL_NAMES = Object.keys(orionTools) as OrionToolName[];
+
+/** Returns true when a raw value is the name of a model-facing Orion tool. */
+export function isOrionToolName(value: unknown): value is OrionToolName {
+  return typeof value === "string" && ORION_TOOL_NAMES.includes(value as OrionToolName);
+}
+
 /**
  * Tools that require no Jupyter server or kernel session for gating purposes.
  * These always execute regardless of kernel or Jupyter server status (client-side handlers).

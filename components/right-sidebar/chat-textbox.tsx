@@ -62,6 +62,10 @@ import type {
   ModelSettings,
   QueuedMessage,
 } from "./types";
+import type {
+  InteractionModeBase,
+  InteractionModeConfig,
+} from "@/lib/agent/interaction-modes";
 import { SLASH_COMMANDS, type SlashCommand } from "./slash-commands";
 import { ContextUsagePill } from "./context-usage-pill";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
@@ -88,29 +92,14 @@ const REFERENCE_TABS: Array<{
     { value: "terminal", label: "Terminal", icon: Terminal },
   ];
 
-const MODES = [
-  {
-    value: "Agent" as InteractionMode,
-    label: "Agent",
-    icon: Bot,
-    description:
-      "Full autonomy. Executes code, edits files, runs terminal commands, and spawns sub-agents.",
-  },
-  {
-    value: "Ask" as InteractionMode,
-    label: "Ask",
-    icon: MessageCircle,
-    description:
-      "Read-only access. Reads files and notebooks, and runs read-only terminal commands. Cannot modify anything.",
-  },
-  {
-    value: "Edit" as InteractionMode,
-    label: "Edit",
-    icon: PenLine,
-    description:
-      "File and terminal access. Edits files and runs terminal commands freely, but cannot execute notebook cells.",
-  },
-] as const;
+const MODE_ICONS: Record<
+  InteractionModeBase,
+  React.ComponentType<{ className?: string }>
+> = {
+  Agent: Bot,
+  Ask: MessageCircle,
+  Edit: PenLine,
+};
 
 export interface ChatTextboxProps {
   input: string;
@@ -123,6 +112,7 @@ export interface ChatTextboxProps {
   onStop: () => void;
   isLoading: boolean;
   interactionMode: InteractionMode;
+  interactionModes: InteractionModeConfig[];
   selectedModel: string;
   editingState: EditingState | null;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -132,6 +122,8 @@ export interface ChatTextboxProps {
   models: LLM[];
   /** Opens settings on the models tab so the user can pin models for the selector. */
   onOpenModelsSettings?: () => void;
+  /** Opens settings on the interaction modes tab. */
+  onOpenInteractionModesSettings?: () => void;
   /** Opens settings dialog on the providers tab. */
   onOpenProvidersSettings?: () => void;
   /** Opens the provider credentials flow for models without a configured credential. */
@@ -372,6 +364,7 @@ export function ChatTextbox({
   onStop,
   isLoading,
   interactionMode,
+  interactionModes,
   selectedModel,
   editingState,
   textareaRef,
@@ -380,6 +373,7 @@ export function ChatTextbox({
   onCancelEdit,
   models,
   onOpenModelsSettings,
+  onOpenInteractionModesSettings,
   onOpenProvidersSettings,
   onConfigureProvider,
   pinnedModelIds = [],
@@ -588,7 +582,7 @@ export function ChatTextbox({
   const slashMatchItemRefs = React.useRef<Map<number, HTMLElement>>(new Map());
   const referenceMatchItemRefs = React.useRef<Map<number, HTMLButtonElement>>(new Map());
   /** Refs for mode rows so keyboard navigation mirrors the slash popover behavior. */
-  const modeItemRefs = React.useRef<Map<number, HTMLButtonElement>>(new Map());
+  const modeItemRefs = React.useRef<Map<number, HTMLDivElement>>(new Map());
 
   // Reset highlighted item when matches change
   React.useEffect(() => {
@@ -684,9 +678,9 @@ export function ChatTextbox({
   }, [textareaRef]);
 
   const selectedModeIndex = React.useMemo(() => {
-    const index = MODES.findIndex((mode) => mode.value === interactionMode);
+    const index = interactionModes.findIndex((mode) => mode.id === interactionMode);
     return index >= 0 ? index : 0;
-  }, [interactionMode]);
+  }, [interactionMode, interactionModes]);
 
   /** Selects an interaction mode and returns keyboard focus to the composer. */
   const selectInteractionMode = React.useCallback(
@@ -956,7 +950,9 @@ export function ChatTextbox({
     if (e.key === "ArrowDown") {
       e.preventDefault();
       e.stopPropagation();
-      setHighlightedModeIndex((index) => Math.min(index + 1, MODES.length - 1));
+      setHighlightedModeIndex((index) =>
+        Math.min(index + 1, Math.max(interactionModes.length - 1, 0))
+      );
       return;
     }
 
@@ -970,7 +966,9 @@ export function ChatTextbox({
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       e.stopPropagation();
-      selectInteractionMode(MODES[highlightedModeIndex]?.value ?? MODES[0].value);
+      selectInteractionMode(
+        interactionModes[highlightedModeIndex]?.id ?? interactionModes[0]?.id ?? "Agent"
+      );
       return;
     }
 
@@ -1580,7 +1578,7 @@ export function ChatTextbox({
                                   onOpenSlashDefinition(definitionPath);
                                 }}
                                 className={cn(
-                                  "corner-squircle absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-inherit transition-opacity duration-150",
+                                  "corner-squircle absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md bg-transparent text-inherit transition-opacity duration-150 hover:bg-transparent",
                                   i === highlightedIndex
                                     ? "pointer-events-auto opacity-70 hover:opacity-100"
                                     : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-70 group-hover:hover:opacity-100",
@@ -1615,8 +1613,10 @@ export function ChatTextbox({
                     aria-label={`Interaction mode: ${interactionMode}`}
                   >
                     {(() => {
-                      const m = MODES.find((m) => m.value === interactionMode) ?? MODES[0];
-                      const Icon = m.icon;
+                      const m =
+                        interactionModes.find((mode) => mode.id === interactionMode) ??
+                        interactionModes[0];
+                      const Icon = MODE_ICONS[m?.baseMode ?? "Agent"];
                       return <Icon className="shrink-0 opacity-70" />;
                     })()}
                     <ChevronDown className="shrink-0 opacity-60" />
@@ -1641,7 +1641,7 @@ export function ChatTextbox({
                 >
                   {/* Hovercard shown to the right for the highlighted mode */}
                   {(() => {
-                    const m = MODES[highlightedModeIndex];
+                    const m = interactionModes[highlightedModeIndex];
                     if (!m) return null;
                     return (
                       <div className="corner-squircle absolute right-full top-0 mr-2 w-56 rounded-md border border-border/50 bg-popover px-2.5 py-2 shadow-sm pointer-events-none">
@@ -1651,25 +1651,20 @@ export function ChatTextbox({
                     );
                   })()}
                   <div className="flex flex-col gap-1">
-                    {MODES.map((m, i) => {
-                      const Icon = m.icon;
-                      const isSelected = interactionMode === m.value;
+                    {interactionModes.map((m, i) => {
+                      const Icon = MODE_ICONS[m.baseMode];
+                      const isSelected = interactionMode === m.id;
                       const isHighlighted = i === highlightedModeIndex;
                       return (
-                        <button
-                          key={m.value}
-                          type="button"
+                        <div
+                          key={m.id}
                           ref={(el) => {
                             if (el) modeItemRefs.current.set(i, el);
                             else modeItemRefs.current.delete(i);
                           }}
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            selectInteractionMode(m.value);
-                          }}
                           onMouseEnter={() => setHighlightedModeIndex(i)}
                           className={cn(
-                            "corner-squircle flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-inherit transition-colors [&_svg]:!size-3",
+                            "corner-squircle group flex w-full items-center gap-1 rounded-md px-1 py-1 text-inherit transition-colors [&_svg]:!size-3",
                             isHighlighted
                               ? "bg-muted text-foreground"
                               : isSelected
@@ -1677,9 +1672,34 @@ export function ChatTextbox({
                                 : "text-muted-foreground hover:bg-muted/60"
                           )}
                         >
-                          <Icon className="shrink-0 opacity-60" />
-                          <span className="font-medium">{m.label}</span>
-                        </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              selectInteractionMode(m.id);
+                            }}
+                            className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-0.5 text-left"
+                          >
+                            <Icon className="shrink-0 opacity-60" />
+                            <span className="truncate font-medium">{m.label}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setIsModePopoverOpen(false);
+                              onOpenInteractionModesSettings?.();
+                            }}
+                            className={cn(
+                              "corner-squircle flex h-6 w-6 shrink-0 items-center justify-center rounded-md opacity-60 transition-opacity hover:bg-transparent hover:opacity-100",
+                              onOpenInteractionModesSettings ? "" : "pointer-events-none opacity-30"
+                            )}
+                            aria-label={`Edit ${m.label} interaction mode`}
+                          >
+                            <Pencil className="h-3 w-3" />
+                          </button>
+                        </div>
                       );
                     })}
                   </div>

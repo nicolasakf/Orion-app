@@ -5,6 +5,7 @@ import {
   BUILTIN_NOTEBOOK_DEFAULTS,
   BUILTIN_SHELL_DEFAULTS,
 } from "@/lib/settings/builtin-defaults";
+import { DEFAULT_INTERACTION_MODE_CONFIGS } from "@/lib/agent/interaction-modes";
 
 /** Default model for generating short chat titles. */
 export const DEFAULT_TITLE_GENERATION_MODEL_ID = "gemini-3.1-flash-lite";
@@ -23,6 +24,8 @@ export const DEFAULT_SETTINGS: SettingsData = {
     modelLabels: {},
     fontSize: 12,
     communicationStyle: "default" as const,
+    customCommunicationStyle: "",
+    interactionModes: structuredClone(DEFAULT_INTERACTION_MODE_CONFIGS),
   },
   fileTree: {
     fontSize: 12,

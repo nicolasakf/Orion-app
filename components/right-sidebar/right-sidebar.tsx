@@ -56,6 +56,10 @@ import { useAssistantChatOptional } from "@/lib/agent";
 import type { AgentRule } from "@/lib/agent/rules";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import { NO_DEPENDENCY_TOOLS, SERVER_ONLY_TOOLS } from "@/lib/agent/tool-schemas";
+import {
+  normalizeInteractionModeConfigs,
+  resolveInteractionModeConfig,
+} from "@/lib/agent/interaction-modes";
 import { isReadOnlyBashBlocked } from "@/lib/agent/read-only-bash-guard";
 import { restoreEditCheckpoint } from "@/lib/agent/edit-checkpoint-restore";
 import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
@@ -652,7 +656,7 @@ export function RightSidebar({
   const [interactionMode, setInteractionMode] = useState<InteractionMode>(() => {
     if (typeof window !== "undefined") {
       const stored = sessionStorage.getItem(SESSION_MODE_KEY);
-      if (stored === "Agent" || stored === "Ask" || stored === "Edit") return stored;
+      if (stored && stored.trim().length > 0) return stored;
     }
     return "Agent";
   });
@@ -1988,16 +1992,37 @@ export function RightSidebar({
   }, [getCredentialForModel, setUserSettings]);
 
   const agentCommunicationStyle = effectiveSettings.chat.communicationStyle;
+  const agentCustomCommunicationStyle = effectiveSettings.chat.customCommunicationStyle;
+  const interactionModeConfigs = React.useMemo(
+    () => normalizeInteractionModeConfigs(effectiveSettings.chat.interactionModes),
+    [effectiveSettings.chat.interactionModes]
+  );
+  const resolvedInteractionModeConfig = React.useMemo(
+    () =>
+      resolveInteractionModeConfig({
+        modeId: interactionMode,
+        modes: interactionModeConfigs,
+      }),
+    [interactionMode, interactionModeConfigs]
+  );
 
-  // Ref for dynamic body values — read by the transport function at send time
-  const bodyRef = useRef<Record<string, unknown>>(
-    (() => {
+  useEffect(() => {
+    if (resolvedInteractionModeConfig.id === interactionMode) return;
+    setInteractionMode(resolvedInteractionModeConfig.id);
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem(SESSION_MODE_KEY, resolvedInteractionModeConfig.id);
+    }
+  }, [interactionMode, resolvedInteractionModeConfig.id]);
+
+  const buildChatRequestBody = useCallback(
+    (overrides?: Record<string, unknown>) => {
       const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
       return {
         provider: modelInfo?.provider,
         model: apiModelId,
-        interactionMode,
-        agentMode: interactionMode === "Agent",
+        interactionMode: resolvedInteractionModeConfig.id,
+        interactionModeConfig: resolvedInteractionModeConfig,
+        agentMode: resolvedInteractionModeConfig.baseMode === "Agent",
         chatId: effectiveChatId ?? undefined,
         modelRequestId: modelRequestIdRef.current,
         modelSettings: modelSettingsMap[selectedModel],
@@ -2012,51 +2037,38 @@ export function RightSidebar({
         clientPlatformOs,
         userCredential,
         agentCommunicationStyle,
+        agentCustomCommunicationStyle,
+        ...overrides,
       };
-    })()
+    },
+    [
+      activeNotebookPath,
+      agentCommunicationStyle,
+      agentCustomCommunicationStyle,
+      apiModelId,
+      assistant?.availableRules,
+      assistant?.availableSkills,
+      assistant?.availableSubagents,
+      assistant?.jupyterServerIsLocal,
+      assistant?.serverInfo,
+      clientPlatformOs,
+      effectiveChatId,
+      modelInfo?.provider,
+      modelSettingsMap,
+      resolvedInteractionModeConfig,
+      selectedModel,
+      userCredential,
+      workspaceDirectory,
+    ]
   );
+
+  // Ref for dynamic body values — read by the transport function at send time
+  const bodyRef = useRef<Record<string, unknown>>(buildChatRequestBody());
 
   // Keep bodyRef in sync with latest values
   useEffect(() => {
-    const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
-    bodyRef.current = {
-      provider: modelInfo?.provider,
-      model: apiModelId,
-      interactionMode,
-      agentMode: interactionMode === "Agent",
-      chatId: effectiveChatId ?? undefined,
-      modelRequestId: modelRequestIdRef.current,
-      modelSettings: modelSettingsMap[selectedModel],
-      notebookPath,
-      activeFilePath,
-      workspaceDirectory: workspaceDirectory ?? undefined,
-      availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
-      availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
-      agentRules: serializeAgentRules(assistant?.availableRules ?? []),
-      serverInfo: assistant?.serverInfo ?? undefined,
-      jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
-      clientPlatformOs,
-      userCredential,
-      agentCommunicationStyle,
-    };
-  }, [
-    apiModelId,
-    modelInfo?.provider,
-    selectedModel,
-    interactionMode,
-    effectiveChatId,
-    modelSettingsMap,
-    activeNotebookPath,
-    workspaceDirectory,
-    assistant?.availableSkills,
-    assistant?.availableSubagents,
-    assistant?.availableRules,
-    assistant?.serverInfo,
-    assistant?.jupyterServerIsLocal,
-    clientPlatformOs,
-    userCredential,
-    agentCommunicationStyle,
-  ]);
+    bodyRef.current = buildChatRequestBody();
+  }, [buildChatRequestBody]);
 
   // Stable transport instance — uses bodyRef for dynamic body values.
   // prepareSendMessagesRequest intercepts every outbound send to apply the
@@ -2212,8 +2224,7 @@ export function RightSidebar({
   const addToolOutputRef = useRef(addToolOutput);
 
   const hasPendingToolCalls = React.useMemo(() => {
-    const modeUsesTools =
-      interactionMode === "Agent" || interactionMode === "Ask" || interactionMode === "Edit";
+    const modeUsesTools = resolvedInteractionModeConfig.toolNames.length > 0;
     if (!modeUsesTools) return false;
 
     return messages.some((msg) =>
@@ -2224,7 +2235,7 @@ export function RightSidebar({
           part.state === "input-available"
       )
     );
-  }, [interactionMode, messages]);
+  }, [messages, resolvedInteractionModeConfig.toolNames.length]);
 
   /**
    * True while the agent is mid-turn: streaming, executing tools, or waiting for
@@ -2858,10 +2869,9 @@ export function RightSidebar({
     ]
   );
 
-  // Agent/Ask/Edit tool execution loop — fires whenever messages update with pending tool calls
+  // Tool execution loop — fires whenever messages update with pending tool calls
   useEffect(() => {
-    const modeUsesTools =
-      interactionMode === "Agent" || interactionMode === "Ask" || interactionMode === "Edit";
+    const modeUsesTools = resolvedInteractionModeConfig.toolNames.length > 0;
     if (!modeUsesTools || !assistant?.toolsReady) return;
 
     for (const msg of messages) {
@@ -2937,8 +2947,8 @@ export function RightSidebar({
           }
         }
 
-        // In Ask mode, block destructive bash commands before they execute
-        if (interactionMode === "Ask" && toolNameTyped === "bash") {
+        // Read-only modes block destructive bash commands before they execute.
+        if (resolvedInteractionModeConfig.bashPolicy === "read_only" && toolNameTyped === "bash") {
           const blockReason = isReadOnlyBashBlocked(
             (inv.input as { command?: string }).command ?? ""
           );
@@ -3012,7 +3022,8 @@ export function RightSidebar({
     }
   }, [
     messages,
-    interactionMode,
+    resolvedInteractionModeConfig.bashPolicy,
+    resolvedInteractionModeConfig.toolNames.length,
     assistant,
     kernelStatus,
     enqueueToolExecution,
@@ -3452,7 +3463,6 @@ export function RightSidebar({
         userCredential: freshCredential,
       };
 
-      const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
       await sendMessage(
         {
           text: messageText,
@@ -3462,26 +3472,7 @@ export function RightSidebar({
             : {}),
         },
         {
-          body: {
-            provider: modelInfo?.provider,
-            model: apiModelId,
-            interactionMode,
-            agentMode: interactionMode === "Agent",
-            chatId: effectiveChatId ?? undefined,
-            modelRequestId,
-            modelSettings: modelSettingsMap[selectedModel],
-            notebookPath,
-            activeFilePath,
-            workspaceDirectory: workspaceDirectory ?? undefined,
-            availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
-            availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
-            agentRules: serializeAgentRules(assistant?.availableRules ?? []),
-            serverInfo: assistant?.serverInfo ?? undefined,
-            jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
-            clientPlatformOs,
-            userCredential: freshCredential,
-            agentCommunicationStyle,
-          },
+          body: buildChatRequestBody({ modelRequestId, userCredential: freshCredential }),
         }
       );
     },
@@ -3493,20 +3484,8 @@ export function RightSidebar({
       modelInfo,
       apiModelId,
       selectedModel,
-      interactionMode,
-      effectiveChatId,
-      modelSettingsMap,
       isInputLocked,
-      activeNotebookPath,
-      workspaceDirectory,
-      assistant?.availableSkills,
-      assistant?.availableSubagents,
-      assistant?.availableRules,
-      assistant?.serverInfo,
-      assistant?.jupyterServerIsLocal,
-      clientPlatformOs,
-      userCredential,
-      agentCommunicationStyle,
+      buildChatRequestBody,
       refreshCredentialForProviderIfNeeded,
       runCompaction,
       getModel,
@@ -3580,31 +3559,10 @@ export function RightSidebar({
         forcedSubagentForCurrentTurnRef.current = subagent.name;
         bodyRef.current = { ...bodyRef.current, modelRequestId };
 
-        const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
         await sendMessage(
           { text: plainUserText },
           {
-            body: {
-              provider: modelInfo?.provider,
-              model: apiModelId,
-              interactionMode,
-              agentMode: interactionMode === "Agent",
-              chatId: effectiveChatId ?? undefined,
-              modelRequestId,
-              modelSettings: modelSettingsMap[selectedModel],
-              notebookPath,
-              activeFilePath,
-              workspaceDirectory: workspaceDirectory ?? undefined,
-              availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
-              availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
-              agentRules: serializeAgentRules(assistant?.availableRules ?? []),
-              forcedSubagentName: subagent.name,
-              serverInfo: assistant?.serverInfo ?? undefined,
-              jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
-              clientPlatformOs,
-              userCredential,
-              agentCommunicationStyle,
-            },
+            body: buildChatRequestBody({ modelRequestId, forcedSubagentName: subagent.name }),
           }
         );
         return;
@@ -3629,31 +3587,13 @@ export function RightSidebar({
         forcedSubagentForCurrentTurnRef.current = null;
         bodyRef.current = { ...bodyRef.current, modelRequestId };
 
-        const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
         await sendMessage(
           { text: plainUserText },
           {
-            body: {
-              provider: modelInfo?.provider,
-              model: apiModelId,
-              interactionMode,
-              agentMode: interactionMode === "Agent",
-              chatId: effectiveChatId ?? undefined,
+            body: buildChatRequestBody({
               modelRequestId,
-              modelSettings: modelSettingsMap[selectedModel],
-              notebookPath,
-              activeFilePath,
-              workspaceDirectory: workspaceDirectory ?? undefined,
-              availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
-              availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
-              agentRules: serializeAgentRules(assistant?.availableRules ?? []),
               forcedSkillNames: selectedSkills.skillNames,
-              serverInfo: assistant?.serverInfo ?? undefined,
-              jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
-              clientPlatformOs,
-              userCredential,
-              agentCommunicationStyle,
-            },
+            }),
           }
         );
         return;
@@ -3706,28 +3646,10 @@ export function RightSidebar({
       setEditingState(null);
 
       try {
-        const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
-        const bodyPayload = {
+        const bodyPayload = buildChatRequestBody({
           messages: newMessages.map((m) => ({ role: m.role, content: getTextContent(m) })),
-          provider: modelInfo?.provider,
-          model: apiModelId,
-          interactionMode,
-          agentMode: interactionMode === "Agent",
-          chatId: effectiveChatId ?? undefined,
           modelRequestId,
-          modelSettings: modelSettingsMap[selectedModel],
-          notebookPath,
-          activeFilePath,
-          workspaceDirectory: workspaceDirectory ?? undefined,
-          availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
-          availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
-          agentRules: serializeAgentRules(assistant?.availableRules ?? []),
-          serverInfo: assistant?.serverInfo ?? undefined,
-          jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
-          clientPlatformOs,
-          userCredential,
-          agentCommunicationStyle,
-        };
+        });
 
         const response = await fetch("/api/chat", {
           method: "POST",
@@ -4178,6 +4100,7 @@ export function RightSidebar({
             onStop={() => { }}
             isLoading={false}
             interactionMode={interactionMode}
+            interactionModes={interactionModeConfigs}
             selectedModel={selectedModel}
             editingState={null}
             textareaRef={textareaRef}
@@ -4188,6 +4111,7 @@ export function RightSidebar({
             pinnedModelIds={pinnedModelIds}
             onReorderPinned={handleReorderPinned}
             onOpenModelsSettings={() => openWithTab("models")}
+            onOpenInteractionModesSettings={() => openWithTab("interaction-modes")}
             onOpenProvidersSettings={handleOpenProvidersSettings}
             onConfigureProvider={handleConfigureProvider}
             selectedModelProvider={modelInfo?.provider}
@@ -4261,6 +4185,7 @@ export function RightSidebar({
             onStop={handleStopGeneration}
             isLoading={isInputLocked}
             interactionMode={interactionMode}
+            interactionModes={interactionModeConfigs}
             selectedModel={selectedModel}
             editingState={editingState}
             textareaRef={textareaRef}
@@ -4271,6 +4196,7 @@ export function RightSidebar({
             pinnedModelIds={pinnedModelIds}
             onReorderPinned={handleReorderPinned}
             onOpenModelsSettings={() => openWithTab("models")}
+            onOpenInteractionModesSettings={() => openWithTab("interaction-modes")}
             onOpenProvidersSettings={handleOpenProvidersSettings}
             onConfigureProvider={handleConfigureProvider}
             selectedModelProvider={modelInfo?.provider}

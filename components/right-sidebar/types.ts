@@ -3,7 +3,7 @@ import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { ResolvedChatReference } from "@/lib/chat/chat-references";
 import type { FileUIPart } from "ai";
 
-export type InteractionMode = "Agent" | "Ask" | "Edit";
+export type InteractionMode = string;
 
 export interface LLM {
   value: string;

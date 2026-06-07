@@ -15,7 +15,12 @@ import {
   getStaticLocalModelId,
   isLocalProvider,
 } from "@/lib/agent/local-provider-models";
-import { orionTools, ASK_MODE_TOOLS, EDIT_MODE_TOOLS } from "@/lib/agent/tool-schemas";
+import { orionTools } from "@/lib/agent/tool-schemas";
+import {
+  getDefaultInteractionModeConfig,
+  getToolsForInteractionMode,
+  resolveInteractionModeConfig,
+} from "@/lib/agent/interaction-modes";
 import {
   calculateCostUsd,
   extractTokenBreakdown,
@@ -146,6 +151,8 @@ export async function POST(req: Request) {
     agentMode?: boolean;
     /** Interaction mode from the chat UI — used to select tools and system prompt. */
     interactionMode?: string;
+    /** Full selected interaction mode config from user settings. */
+    interactionModeConfig?: unknown;
     chatId?: string;
     /** Active notebook path. Mutually exclusive with activeFilePath — only one may be set. */
     notebookPath?: string;
@@ -199,6 +206,8 @@ export async function POST(req: Request) {
     previousSummaryText?: string;
     /** Communication style preset for the agent's response narration. */
     agentCommunicationStyle?: unknown;
+    /** Custom communication instructions; overrides preset when non-empty. */
+    agentCustomCommunicationStyle?: unknown;
   };
 
   try {
@@ -222,6 +231,7 @@ export async function POST(req: Request) {
     provider: providerId,
     agentMode,
     interactionMode: rawInteractionMode,
+    interactionModeConfig: rawInteractionModeConfig,
     chatId,
     notebookPath,
     activeFilePath,
@@ -245,10 +255,15 @@ export async function POST(req: Request) {
     userCredential: rawUserCredential,
     previousSummaryText,
     agentCommunicationStyle: rawAgentCommunicationStyle,
+    agentCustomCommunicationStyle: rawAgentCustomCommunicationStyle,
   } = body;
 
   const agentCommunicationStyle: AgentCommunicationStyle =
     AgentCommunicationStyleSchema.parse(rawAgentCommunicationStyle);
+  const agentCustomCommunicationStyle =
+    typeof rawAgentCustomCommunicationStyle === "string"
+      ? rawAgentCustomCommunicationStyle.trim()
+      : "";
 
   // Validate user credential if provided and convert to CredentialMode.
   let resolvedCredential: CredentialMode | undefined;
@@ -852,14 +867,18 @@ export async function POST(req: Request) {
 
   // Derive effective mode early so it's available for logging and the request handler.
   // Sub-agent requests always behave as full Agent mode regardless of what the UI sent.
-  const effectiveMode: "Agent" | "Ask" | "Edit" =
+  const effectiveInteractionModeConfig =
     origin === "subagent"
-      ? "Agent"
-      : rawInteractionMode === "Ask" || rawInteractionMode === "Edit"
-        ? rawInteractionMode
-        : "Agent";
+      ? getDefaultInteractionModeConfig("Agent")
+      : resolveInteractionModeConfig({
+          modeId: rawInteractionMode,
+          requestConfig: rawInteractionModeConfig,
+        });
+  const effectiveMode = effectiveInteractionModeConfig.baseMode;
+  const enableSkills = effectiveInteractionModeConfig.toolNames.includes("load_skill");
+  const enableSubagents = effectiveInteractionModeConfig.toolNames.includes("delegate");
   const missingForcedSkillNames =
-    effectiveMode !== "Ask"
+    enableSkills
       ? forcedSkillNames.filter((skillName) => !hasLoadedSkillInHistory(skillName))
       : [];
 
@@ -928,6 +947,10 @@ export async function POST(req: Request) {
           jupyterServerIsLocal,
           clientPlatformOs,
           communicationStyle: agentCommunicationStyle,
+          customCommunicationStyle: agentCustomCommunicationStyle,
+          customSystemPrompt: effectiveInteractionModeConfig.customSystemPrompt,
+          enableSkills,
+          enableSubagents,
         });
       }
     } else if (effectiveMode === "Ask") {
@@ -940,6 +963,8 @@ export async function POST(req: Request) {
         jupyterServerIsLocal,
         clientPlatformOs,
         communicationStyle: agentCommunicationStyle,
+        customCommunicationStyle: agentCustomCommunicationStyle,
+        customSystemPrompt: effectiveInteractionModeConfig.customSystemPrompt,
       });
     } else if (effectiveMode === "Edit") {
       agentSystemPrompt = buildEditModeSystemPrompt({
@@ -955,6 +980,10 @@ export async function POST(req: Request) {
         jupyterServerIsLocal,
         clientPlatformOs,
         communicationStyle: agentCommunicationStyle,
+        customCommunicationStyle: agentCustomCommunicationStyle,
+        customSystemPrompt: effectiveInteractionModeConfig.customSystemPrompt,
+        enableSkills,
+        enableSubagents,
       });
     }
     // Process request through the gateway (injects agent system prompt into messages)
@@ -988,16 +1017,11 @@ export async function POST(req: Request) {
           : "none",
     });
 
-    const toolsForMode =
-      effectiveMode === "Ask"
-        ? ASK_MODE_TOOLS
-        : effectiveMode === "Edit"
-          ? EDIT_MODE_TOOLS
-          : orionTools;
+    const toolsForMode = getToolsForInteractionMode(effectiveInteractionModeConfig);
     const missingForcedSkillName = missingForcedSkillNames[0];
     const shouldForceLoadSkill = !!missingForcedSkillName;
     const shouldForceDelegate =
-      !!(effectiveMode !== "Ask" && forcedSubagentName && !hasDelegatedSubagentInHistory(forcedSubagentName));
+      !!(enableSubagents && forcedSubagentName && !hasDelegatedSubagentInHistory(forcedSubagentName));
     const forcedToolChoice = shouldForceDelegate
       ? { type: "tool" as const, toolName: "delegate" as const }
       : shouldForceLoadSkill

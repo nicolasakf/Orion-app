@@ -16,6 +16,7 @@ import {
   SidebarProvider,
 } from "@/components/ui/sidebar";
 import { AppearanceTab } from "@/components/settings-dialog/appearance-tab";
+import { InteractionModesTab } from "@/components/settings-dialog/interaction-modes-tab";
 import { ModelsTab } from "@/components/settings-dialog/models-tab";
 import { ProvidersTab } from "@/components/settings-dialog/providers-tab";
 import { SettingsFileTab } from "@/components/settings-dialog/settings-file-tab";
@@ -71,6 +72,8 @@ export function SettingsDialog({
     switch (activeTab) {
       case "appearance":
         return <AppearanceTab />;
+      case "interaction-modes":
+        return <InteractionModesTab />;
       case "models":
         return <ModelsTab />;
       case "providers":

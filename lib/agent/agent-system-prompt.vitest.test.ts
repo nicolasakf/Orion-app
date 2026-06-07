@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/agent/prompts/agent-system-prompt.md", () => ({
+vi.mock("./prompts/agent-system-prompt.md", () => ({
   default: "BASE AGENT PROMPT",
 }));
-vi.mock("@/lib/agent/prompts/agent-system-prompt-ask.md", () => ({
+vi.mock("./prompts/agent-system-prompt-ask.md", () => ({
   default: "BASE ASK PROMPT",
 }));
-vi.mock("@/lib/agent/prompts/agent-system-prompt-edit.md", () => ({
+vi.mock("./prompts/agent-system-prompt-edit.md", () => ({
   default: "BASE EDIT PROMPT",
 }));
 
@@ -61,5 +61,30 @@ describe("agent rule prompt injection", () => {
     expect(prompt).toContain("## Workspace Rules");
     expect(prompt).toContain("`AGENTS.md`");
     expect(prompt).toContain("Always run the focused checks.");
+  });
+});
+
+describe("custom interaction mode prompt injection", () => {
+  it("appends custom mode instructions while keeping workspace rules", () => {
+    const prompt = buildAgentSystemPrompt({
+      agentRules: rules,
+      customSystemPrompt: "Prefer concise SQL explanations.",
+    });
+
+    expect(prompt).toContain("## Workspace Rules");
+    expect(prompt).toContain("## Custom Interaction Mode Instructions");
+    expect(prompt).toContain("Prefer concise SQL explanations.");
+  });
+
+  it("omits skill and delegation sections when their tools are disabled", () => {
+    const prompt = buildAgentSystemPrompt({
+      availableSkills: [{ name: "demo", description: "Demo skill" }],
+      availableSubagents: [{ name: "analyst", description: "Analyze data" }],
+      enableSkills: false,
+      enableSubagents: false,
+    });
+
+    expect(prompt).not.toContain("## Available Skills");
+    expect(prompt).not.toContain("## Sub-agent Delegation");
   });
 });

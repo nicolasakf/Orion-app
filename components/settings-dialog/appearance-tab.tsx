@@ -11,6 +11,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import { cn } from "@/lib/utils";
 import type { AgentCommunicationStyle } from "@/lib/settings/schema";
@@ -54,6 +55,8 @@ export function AppearanceTab() {
   const editor = effectiveSettings.editor;
   const notebook = effectiveSettings.notebook;
   const communicationStyle = chat.communicationStyle;
+  const customCommunicationStyle = chat.customCommunicationStyle;
+  const hasCustomCommunicationStyle = customCommunicationStyle.trim().length > 0;
 
   const handleThemeChange = (value: "light" | "dark" | "system") => {
     void setUserSettings((current) => ({
@@ -326,7 +329,8 @@ export function AppearanceTab() {
                 }
                 className={cn(
                   "corner-squircle flex flex-col items-start gap-1 rounded-md border p-3 text-left transition-colors",
-                  communicationStyle === option.value
+                  hasCustomCommunicationStyle && "opacity-60",
+                  !hasCustomCommunicationStyle && communicationStyle === option.value
                     ? "border-primary bg-primary/5"
                     : "hover:bg-muted/50"
                 )}
@@ -337,6 +341,28 @@ export function AppearanceTab() {
                 </span>
               </button>
             ))}
+          </div>
+          <div className="space-y-2 max-w-2xl">
+            <Label htmlFor="agent-custom-communication-style">Custom behavior</Label>
+            <p className="text-xs text-muted-foreground">
+              Optional instructions for how the agent should communicate. When filled in, these
+              replace the preset above.
+            </p>
+            <Textarea
+              id="agent-custom-communication-style"
+              value={customCommunicationStyle}
+              placeholder="e.g. Be concise and use bullet points. Explain technical terms briefly."
+              rows={4}
+              onChange={(e) => {
+                void setUserSettings((current) => ({
+                  ...current,
+                  chat: {
+                    ...current.chat,
+                    customCommunicationStyle: e.target.value,
+                  },
+                }));
+              }}
+            />
           </div>
         </section>
 

@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentRule } from "@/lib/agent/rules";
+import { DEFAULT_INTERACTION_MODE_CONFIGS } from "@/lib/agent/interaction-modes";
 
 import { ChatTextbox } from "./chat-textbox";
 import type { ChatDraftAttachment, LLM } from "./types";
@@ -39,6 +40,7 @@ function createTextboxProps(
     onStop: vi.fn(),
     isLoading: false,
     interactionMode: "Agent",
+    interactionModes: DEFAULT_INTERACTION_MODE_CONFIGS,
     selectedModel: "gpt-test",
     editingState: null,
     textareaRef,

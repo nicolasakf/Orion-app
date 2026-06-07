@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Palette, Box, Key, FileJson, ExternalLink } from "lucide-react";
+import { Palette, Box, Key, FileJson, ExternalLink, SlidersHorizontal } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils";
 
 const SETTINGS_NAV_BASE: { id: SettingsTab; title: string; icon: React.ElementType }[] = [
   { id: "appearance", title: "Appearance", icon: Palette },
+  { id: "interaction-modes", title: "Modes", icon: SlidersHorizontal },
   { id: "models", title: "Models", icon: Box },
   { id: "providers", title: "Providers", icon: Key },
   { id: "settings-file", title: "Settings JSON", icon: FileJson },

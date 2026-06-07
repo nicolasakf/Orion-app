@@ -6,15 +6,23 @@ import {
   UserSettingsDocumentSchema,
   WorkspaceSettingsDocumentSchema,
 } from "@/lib/settings/schema";
+import { normalizeInteractionModeConfigs } from "@/lib/agent/interaction-modes";
 
 /**
  * Ensures a migrated document satisfies the current schema (fills gaps from invalid
  * partial saves or incomplete defaults).
  */
 function finalizeUserSettingsDocument(settings: SettingsData): UserSettingsDocument {
+  const finalizedSettings = {
+    ...settings,
+    chat: {
+      ...settings.chat,
+      interactionModes: normalizeInteractionModeConfigs(settings.chat.interactionModes),
+    },
+  };
   const candidate = {
     version: SETTINGS_SCHEMA_VERSION,
-    settings: stripInvalidWorkspacePins(settings),
+    settings: stripInvalidWorkspacePins(finalizedSettings),
   };
   const parsed = UserSettingsDocumentSchema.safeParse(candidate);
   if (parsed.success) {

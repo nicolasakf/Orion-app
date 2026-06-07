@@ -32,6 +32,11 @@ describe("UserSettingsDocumentSchema", () => {
     expect(doc.settings.agent.context.compactionAutoThreshold).toBe(0.92);
     expect(doc.settings.shell.panelLayout.horizontal).toEqual([15, 50, 20]);
     expect(doc.settings.notebook.output.chartColors).toHaveLength(10);
+    expect(doc.settings.chat.interactionModes.map((mode) => mode.id)).toEqual([
+      "Agent",
+      "Ask",
+      "Edit",
+    ]);
   });
 
   it("rejects compaction threshold above 1 on a full document", () => {
@@ -64,6 +69,11 @@ describe("settings migrations", () => {
     expect(migrated.settings.agent.context.compactionAutoThreshold).toBe(0.92);
     expect(migrated.settings.agent.toolOutput.textCharBudget).toBe(40_000);
     expect(migrated.settings.shell.mobileBreakpointPx).toBe(768);
+    expect(migrated.settings.chat.interactionModes.map((mode) => mode.id)).toEqual([
+      "Agent",
+      "Ask",
+      "Edit",
+    ]);
   });
 
   it("migrates chatGenerationModelId to titleGenerationModelId", () => {
