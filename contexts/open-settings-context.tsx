@@ -1,15 +1,20 @@
 "use client";
 
 import * as React from "react";
-import type { SettingsTab } from "@/components/settings-dialog/types";
+import type {
+  AgentSettingsSection,
+  SettingsTab,
+} from "@/components/settings-dialog/types";
 
 interface OpenSettingsContextValue {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Open the settings dialog and switch to the given tab. */
-  openWithTab: (tab: SettingsTab) => void;
+  openWithTab: (tab: SettingsTab, agentSection?: AgentSettingsSection) => void;
   /** Tab to show when dialog opens (cleared after use). */
   initialTab: SettingsTab | null;
+  /** Agent subsection to show when opening the Agent tab. */
+  initialAgentSection: AgentSettingsSection | null;
   /** Opens the user settings JSON file in the main editor. */
   openUserSettingsFile: () => void;
   /** Registers the handler that opens the user settings file in the editor. */
@@ -22,6 +27,8 @@ const OpenSettingsContext =
 export function OpenSettingsProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = React.useState(false);
   const [initialTab, setInitialTab] = React.useState<SettingsTab | null>(null);
+  const [initialAgentSection, setInitialAgentSection] =
+    React.useState<AgentSettingsSection | null>(null);
   const openUserSettingsFileHandlerRef = React.useRef<(() => void) | null>(null);
 
   /** ⌘⌥, (Windows: Win+Alt+,): toggle the settings dialog from anywhere in the app shell. */
@@ -38,7 +45,10 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
       }
       e.preventDefault();
       setOpen((prev) => {
-        if (prev) setInitialTab(null);
+        if (prev) {
+          setInitialTab(null);
+          setInitialAgentSection(null);
+        }
         return !prev;
       });
     };
@@ -46,15 +56,20 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  const openWithTab = React.useCallback((tab: SettingsTab) => {
-    setInitialTab(tab);
-    setOpen(true);
-  }, []);
+  const openWithTab = React.useCallback(
+    (tab: SettingsTab, agentSection?: AgentSettingsSection) => {
+      setInitialTab(tab);
+      setInitialAgentSection(agentSection ?? null);
+      setOpen(true);
+    },
+    []
+  );
 
   const onOpenChange = React.useCallback((next: boolean) => {
     setOpen(next);
     if (!next) {
       setInitialTab(null);
+      setInitialAgentSection(null);
     }
   }, []);
 
@@ -75,6 +90,7 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
       onOpenChange,
       openWithTab,
       initialTab,
+      initialAgentSection,
       openUserSettingsFile,
       registerOpenUserSettingsFileHandler,
     }),
@@ -83,6 +99,7 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
       onOpenChange,
       openWithTab,
       initialTab,
+      initialAgentSection,
       openUserSettingsFile,
       registerOpenUserSettingsFileHandler,
     ],

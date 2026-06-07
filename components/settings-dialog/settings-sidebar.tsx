@@ -1,7 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { Palette, Box, Key, FileJson, ExternalLink, SlidersHorizontal } from "lucide-react";
+import {
+  Palette,
+  Box,
+  Key,
+  FileJson,
+  ExternalLink,
+  Bot,
+  BookOpen,
+} from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -10,14 +18,22 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
-import type { SettingsTab } from "@/components/settings-dialog/types";
+import {
+  AGENT_SETTINGS_SECTIONS,
+  type AgentSettingsSection,
+  type SettingsTab,
+} from "@/components/settings-dialog/types";
 import { ORION_USER_DOCS_URL } from "@/lib/constants/user-docs";
 import { cn } from "@/lib/utils";
 
 const SETTINGS_NAV_BASE: { id: SettingsTab; title: string; icon: React.ElementType }[] = [
   { id: "appearance", title: "Appearance", icon: Palette },
-  { id: "interaction-modes", title: "Modes", icon: SlidersHorizontal },
+  { id: "notebook", title: "Notebook", icon: BookOpen },
+  { id: "agent", title: "Agent", icon: Bot },
   { id: "models", title: "Models", icon: Box },
   { id: "providers", title: "Providers", icon: Key },
   { id: "settings-file", title: "Settings JSON", icon: FileJson },
@@ -25,13 +41,17 @@ const SETTINGS_NAV_BASE: { id: SettingsTab; title: string; icon: React.ElementTy
 
 interface SettingsSidebarProps extends React.ComponentProps<typeof Sidebar> {
   activeTab: SettingsTab;
+  agentSection: AgentSettingsSection;
   onTabChange: (tab: SettingsTab) => void;
+  onAgentSectionChange: (section: AgentSettingsSection) => void;
 }
 
-/** Settings dialog sidebar with navigation items. */
+/** Settings dialog sidebar with navigation items and agent subsections. */
 export function SettingsSidebar({
   activeTab,
+  agentSection,
   onTabChange,
+  onAgentSectionChange,
   className,
   ...props
 }: SettingsSidebarProps) {
@@ -62,16 +82,36 @@ export function SettingsSidebar({
           <SidebarMenu className="gap-1">
             {SETTINGS_NAV_BASE.map((item) => {
               const Icon = item.icon;
+              const isAgentTab = item.id === "agent";
+              const isActive = isAgentTab
+                ? activeTab === "agent"
+                : activeTab === item.id;
+
               return (
                 <SidebarMenuItem key={item.id}>
                   <SidebarMenuButton
-                    isActive={activeTab === item.id}
+                    isActive={isActive}
                     onClick={() => onTabChange(item.id)}
                     className="cursor-pointer"
                   >
                     <Icon className="h-4 w-4" />
                     {item.title}
                   </SidebarMenuButton>
+                  {isAgentTab && activeTab === "agent" ? (
+                    <SidebarMenuSub>
+                      {AGENT_SETTINGS_SECTIONS.map((section) => (
+                        <SidebarMenuSubItem key={section.id}>
+                          <SidebarMenuSubButton
+                            isActive={agentSection === section.id}
+                            onClick={() => onAgentSectionChange(section.id)}
+                            className="cursor-pointer"
+                          >
+                            {section.title}
+                          </SidebarMenuSubButton>
+                        </SidebarMenuSubItem>
+                      ))}
+                    </SidebarMenuSub>
+                  ) : null}
                 </SidebarMenuItem>
               );
             })}

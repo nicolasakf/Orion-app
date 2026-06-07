@@ -748,6 +748,8 @@ export function RightSidebar({
     const tab = params.get("settings");
     const validTabs: SettingsTab[] = [
       "appearance",
+      "notebook",
+      "agent",
       "models",
       "providers",
       "settings-file",
@@ -4111,7 +4113,7 @@ export function RightSidebar({
             pinnedModelIds={pinnedModelIds}
             onReorderPinned={handleReorderPinned}
             onOpenModelsSettings={() => openWithTab("models")}
-            onOpenInteractionModesSettings={() => openWithTab("interaction-modes")}
+            onOpenInteractionModesSettings={() => openWithTab("agent", "modes")}
             onOpenProvidersSettings={handleOpenProvidersSettings}
             onConfigureProvider={handleConfigureProvider}
             selectedModelProvider={modelInfo?.provider}
@@ -4196,7 +4198,7 @@ export function RightSidebar({
             pinnedModelIds={pinnedModelIds}
             onReorderPinned={handleReorderPinned}
             onOpenModelsSettings={() => openWithTab("models")}
-            onOpenInteractionModesSettings={() => openWithTab("interaction-modes")}
+            onOpenInteractionModesSettings={() => openWithTab("agent", "modes")}
             onOpenProvidersSettings={handleOpenProvidersSettings}
             onConfigureProvider={handleConfigureProvider}
             selectedModelProvider={modelInfo?.provider}

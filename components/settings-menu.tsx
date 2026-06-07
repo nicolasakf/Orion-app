@@ -30,6 +30,7 @@ export function SettingsMenu(props: ButtonProps) {
     open: isSettingsDialogOpen,
     onOpenChange: setIsSettingsDialogOpen,
     initialTab,
+    initialAgentSection,
   } = useOpenSettings();
 
   const handleThemeToggle = (checked: boolean) => {
@@ -98,6 +99,7 @@ export function SettingsMenu(props: ButtonProps) {
         open={isSettingsDialogOpen}
         onOpenChange={setIsSettingsDialogOpen}
         initialTab={initialTab}
+        initialAgentSection={initialAgentSection}
       />
     </>
   );

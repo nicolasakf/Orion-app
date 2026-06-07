@@ -20,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { SettingsInfoHeading } from "@/components/settings-dialog/settings-info-label";
 import {
   Command,
   CommandEmpty,
@@ -473,12 +474,7 @@ function ProviderGroupSection({
 
   return (
     <section className="space-y-3">
-      <div className="space-y-1">
-        <h3 className="text-sm font-medium">{title}</h3>
-        {description ? (
-          <p className="text-xs text-muted-foreground">{description}</p>
-        ) : null}
-      </div>
+      <SettingsInfoHeading label={title} description={description} />
       <div className="space-y-6">
         {providers.map((provider, idx) => (
           <React.Fragment key={provider.id}>

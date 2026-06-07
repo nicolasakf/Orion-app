@@ -45,6 +45,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { AutoRunConfirmDialog } from "@/components/common/auto-run-confirm-dialog";
 import { ProviderLogo } from "@/components/provider-logo";
+import { SettingsInfoHeading } from "@/components/settings-dialog/settings-info-label";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import type { ProviderCredential, ToolApprovalMode } from "@/lib/settings/schema";
 import { toast } from "sonner";
@@ -688,12 +689,10 @@ export function ModelsTab() {
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Agent</h2>
         <div className="flex items-center justify-between max-w-xl">
-          <div className="space-y-0.5">
-            <p className="text-sm font-medium">Tool approval</p>
-            <p className="text-xs text-muted-foreground">
-              Whether tools require confirmation before running.
-            </p>
-          </div>
+          <SettingsInfoHeading
+            label="Tool approval"
+            description="Whether tools require confirmation before running."
+          />
           <Select value={toolApprovalMode} onValueChange={handleToolApprovalModeChange}>
             <SelectTrigger className="w-[140px]">
               <SelectValue />
@@ -712,12 +711,10 @@ export function ModelsTab() {
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Chat titles</h2>
         <div className="flex items-center justify-between max-w-xl">
-          <div className="space-y-0.5">
-            <p className="text-sm font-medium">Title generation model</p>
-            <p className="text-xs text-muted-foreground">
-              Used when generating short titles for new chats.
-            </p>
-          </div>
+          <SettingsInfoHeading
+            label="Title generation model"
+            description="Used when generating short titles for new chats."
+          />
           <Select
             value={effectiveSettings.chat.titleGenerationModelId}
             onValueChange={(modelId) => {
