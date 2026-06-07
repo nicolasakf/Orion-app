@@ -88,15 +88,6 @@ export function NotebookTab() {
               checked={notebook.scrollbarVisible}
               onCheckedChange={(checked) => updateNotebook({ scrollbarVisible: checked })}
             />
-            <SettingsSwitchField
-              id="notebook-presentation-hide-inputs"
-              label="Hide cell inputs (presentation mode)"
-              description="Hides code cell source editors in the UI without changing notebook files."
-              checked={notebook.presentationHideAllCellInputs}
-              onCheckedChange={(checked) =>
-                updateNotebook({ presentationHideAllCellInputs: checked })
-              }
-            />
           </div>
         </section>
 

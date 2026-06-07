@@ -99,7 +99,6 @@ describe("settings migrations", () => {
           },
           notebook: {
             scrollbarVisible: true,
-            presentationHideAllCellInputs: false,
           },
           workspace: { pinnedDirectoryPaths: [], pinnedFilePaths: [] },
           providers: { credentials: {} },

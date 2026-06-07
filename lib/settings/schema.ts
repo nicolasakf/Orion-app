@@ -275,11 +275,6 @@ const SettingsDataSchema = z.object({
      * When false, scrolling still works but the scrollbar is hidden (overlay-style).
      */
     scrollbarVisible: z.boolean(),
-    /**
-     * When true, code cell source editors are hidden in the UI (presentation mode).
-     * Does not change notebook file metadata.
-     */
-    presentationHideAllCellInputs: z.boolean(),
     output: NotebookOutputSettingsSchema,
     export: NotebookExportSettingsSchema,
     editor: NotebookEditorSettingsSchema,

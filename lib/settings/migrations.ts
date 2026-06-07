@@ -79,6 +79,15 @@ function stripRemovedTableSettings(settings: Record<string, unknown>): void {
   }
 }
 
+/** Drops notebook presentation-mode UI state that belongs in browser session storage. */
+function stripSessionOnlyNotebookKeys(settings: Record<string, unknown>): void {
+  const notebook = asObject(settings.notebook);
+  if (!notebook) return;
+  if ("presentationHideAllCellInputs" in notebook) {
+    delete notebook.presentationHideAllCellInputs;
+  }
+}
+
 /** Drops app-shell layout keys that belong to browser session state. */
 function stripSessionOnlyLayoutKeys(settings: Record<string, unknown>): void {
   const layout = asObject(settings.layout);
@@ -153,6 +162,7 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
   const settingsObj = asObject(normalized.settings);
   if (settingsObj) {
     stripLegacyAppearanceKeys(settingsObj);
+    stripSessionOnlyNotebookKeys(settingsObj);
     stripSessionOnlyLayoutKeys(settingsObj);
     stripRemovedTableSettings(settingsObj);
   }
@@ -188,6 +198,7 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
   }
 
   stripLegacyAppearanceKeys(partialSettings);
+  stripSessionOnlyNotebookKeys(partialSettings);
   stripSessionOnlyLayoutKeys(partialSettings);
   stripRemovedTableSettings(partialSettings);
 

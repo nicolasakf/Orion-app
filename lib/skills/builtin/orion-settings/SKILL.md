@@ -83,7 +83,6 @@ Copy this structure for a full user file. Omitted keys are backfilled from these
     },
     "notebook": {
       "scrollbarVisible": true,
-      "presentationHideAllCellInputs": false,
       "output": {
         "textOutputAutoCollapseThreshold": 2000,
         "collapsedHeightDefaultPx": 192,
@@ -220,7 +219,6 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | Field | Type | Allowed values | Default | Description |
 | --- | --- | --- | --- | --- |
 | `scrollbarVisible` | boolean | `true`, `false` | `true` | Show notebook vertical scrollbar (`false` = overlay scroll, bar hidden). |
-| `presentationHideAllCellInputs` | boolean | `true`, `false` | `false` | Hide code cell inputs in UI (presentation mode); does not change `.ipynb` files. |
 
 #### `notebook.output`
 

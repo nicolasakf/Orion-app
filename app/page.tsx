@@ -84,8 +84,10 @@ import { openPathInSystemTerminal } from "@/lib/shell/system-commands/open-file"
 import {
   DEFAULT_PANEL_LAYOUT_STATE,
   DEFAULT_PANEL_VISIBILITY_STATE,
+  loadNotebookPresentationHideAllCellInputs,
   loadPanelLayoutState,
   loadPanelVisibilityState,
+  saveNotebookPresentationHideAllCellInputs,
   savePanelLayoutState,
   savePanelVisibilityState,
   type PanelLayoutState,
@@ -595,6 +597,8 @@ export default function Page() {
   );
   const [hasLoadedPanelVisibilityState, setHasLoadedPanelVisibilityState] =
     useState(false);
+  const [presentationHideAllCellInputs, setPresentationHideAllCellInputs] =
+    useState(false);
   const [isFocusMode, setIsFocusMode] = useState(
     DEFAULT_PANEL_VISIBILITY_STATE.isFocusMode,
   );
@@ -629,6 +633,7 @@ export default function Page() {
     setRightSidebarCollapsed(savedVisibility.rightCollapsed);
     setBottomSidebarCollapsed(savedVisibility.bottomCollapsed);
     setIsFocusMode(savedVisibility.isFocusMode);
+    setPresentationHideAllCellInputs(loadNotebookPresentationHideAllCellInputs());
     setHasLoadedPanelVisibilityState(true);
   }, []);
 
@@ -647,6 +652,11 @@ export default function Page() {
     leftSidebarCollapsed,
     rightSidebarCollapsed,
   ]);
+
+  useEffect(() => {
+    if (!hasLoadedPanelVisibilityState) return;
+    saveNotebookPresentationHideAllCellInputs(presentationHideAllCellInputs);
+  }, [hasLoadedPanelVisibilityState, presentationHideAllCellInputs]);
 
   useEffect(() => {
     if (!isHydrated || !hasLoadedPanelVisibilityState) return;
@@ -2003,15 +2013,8 @@ export default function Page() {
   );
 
   const handleTogglePresentationHideAllCellInputs = React.useCallback(() => {
-    void setUserSettings((current) => ({
-      ...current,
-      notebook: {
-        ...current.notebook,
-        presentationHideAllCellInputs:
-          !current.notebook.presentationHideAllCellInputs,
-      },
-    }));
-  }, [setUserSettings]);
+    setPresentationHideAllCellInputs((current) => !current);
+  }, []);
 
   const handleHorizontalLayout = React.useCallback(
     (sizes: number[]) => {
@@ -2326,9 +2329,7 @@ export default function Page() {
                 }
                 onTextSaveHandlerChange={handleTextSaveHandlerChange}
                 onNotebookSaveHandlerChange={handleNotebookSaveHandlerChange}
-                notebookPresentationHideAllInputs={
-                  effectiveSettings.notebook.presentationHideAllCellInputs
-                }
+                notebookPresentationHideAllInputs={presentationHideAllCellInputs}
                 onFileLoadError={handleEditorFileLoadError}
                 onWorkspacePathRenamed={handleWorkspacePathRenamed}
                 onWorkspacePathDeleted={handleWorkspacePathDeleted}
@@ -2503,8 +2504,7 @@ export default function Page() {
                                   kernelStatus={kernelStatus}
                                   isRunning={isRunning}
                                   presentationHideAllCellInputs={
-                                    effectiveSettings.notebook
-                                      .presentationHideAllCellInputs
+                                    presentationHideAllCellInputs
                                   }
                                   onRunAll={handleRunAll}
                                   onStopKernel={handleStopKernel}
@@ -2635,7 +2635,7 @@ export default function Page() {
                               handleNotebookSaveHandlerChange
                             }
                             presentationHideAllCellInputs={
-                              effectiveSettings.notebook.presentationHideAllCellInputs
+                              presentationHideAllCellInputs
                             }
                             onFileLoadError={handleEditorFileLoadError}
                           />

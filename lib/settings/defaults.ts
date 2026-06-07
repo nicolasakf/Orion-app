@@ -39,7 +39,6 @@ export const DEFAULT_SETTINGS: SettingsData = {
   },
   notebook: {
     scrollbarVisible: true,
-    presentationHideAllCellInputs: false,
     ...BUILTIN_NOTEBOOK_DEFAULTS,
   },
   workspace: {

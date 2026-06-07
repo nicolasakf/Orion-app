@@ -245,10 +245,10 @@ export const BUILTIN_NOTEBOOK_EDITOR_DEFAULTS: NotebookEditorSettings = {
   doublePressTimeoutMs: NOTEBOOK_EDITOR_DOUBLE_PRESS_TIMEOUT_MS,
 };
 
-/** Full built-in notebook settings (presentation flags filled in defaults.ts). */
+/** Full built-in notebook settings (scrollbar flag filled in defaults.ts). */
 export const BUILTIN_NOTEBOOK_DEFAULTS: Omit<
   NotebookSettings,
-  "scrollbarVisible" | "presentationHideAllCellInputs"
+  "scrollbarVisible"
 > = {
   output: BUILTIN_NOTEBOOK_OUTPUT_DEFAULTS,
   export: BUILTIN_NOTEBOOK_EXPORT_DEFAULTS,

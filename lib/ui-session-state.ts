@@ -12,6 +12,8 @@ export interface PanelLayoutState {
 
 const PANEL_VISIBILITY_SESSION_KEY = "orion.panelVisibility";
 const PANEL_LAYOUT_SESSION_KEY = "orion.panelLayout";
+const NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS_SESSION_KEY =
+  "orion.notebookPresentationHideAllCellInputs";
 
 export const DEFAULT_PANEL_VISIBILITY_STATE: PanelVisibilityState = {
   leftCollapsed: false,
@@ -134,6 +136,41 @@ export function savePanelLayoutState(state: PanelLayoutState): void {
     window.sessionStorage.setItem(
       PANEL_LAYOUT_SESSION_KEY,
       JSON.stringify(state)
+    );
+  } catch {
+    // Ignore storage quota/privacy failures; UI state can safely fall back.
+  }
+}
+
+/**
+ * Reads whether code cell inputs are hidden for presentation in the current tab.
+ */
+export function loadNotebookPresentationHideAllCellInputs(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    const raw = window.sessionStorage.getItem(
+      NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS_SESSION_KEY
+    );
+    if (!raw) return false;
+    return JSON.parse(raw) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Stores presentation-mode hide/show for code cell inputs in the current tab.
+ */
+export function saveNotebookPresentationHideAllCellInputs(hidden: boolean): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.setItem(
+      NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS_SESSION_KEY,
+      JSON.stringify(hidden)
     );
   } catch {
     // Ignore storage quota/privacy failures; UI state can safely fall back.
