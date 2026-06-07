@@ -399,6 +399,54 @@ describe("SQLite chat storage", () => {
     });
   });
 
+  it("excludes title generation requests from chat cost summaries", async () => {
+    const session = await resolveOrCreateChatSession("chat-title-cost");
+    const userRequest = await resolveOrCreateModelRequest({
+      id: "request-user",
+      origin: "user",
+      chatSessionId: session?.sessionId,
+    });
+    const titleRequest = await resolveOrCreateModelRequest({
+      id: "request-title",
+      origin: "title_generation",
+      chatSessionId: session?.sessionId,
+    });
+
+    await insertModelUsage({
+      requestId: userRequest.requestId,
+      modelId: "gpt-5.5",
+      providerId: "openai",
+      tokensIn: 100,
+      tokensOut: 25,
+      costUsd: 0.001,
+      isByok: true,
+    });
+    await insertModelUsage({
+      requestId: titleRequest.requestId,
+      modelId: "gpt-4o-mini",
+      providerId: "openai",
+      tokensIn: 50,
+      tokensOut: 10,
+      costUsd: 0.0002,
+      isByok: true,
+    });
+
+    await expect(getChatCostSummary("chat-title-cost")).resolves.toEqual({
+      totalCostUsd: 0.001,
+      requestCount: 1,
+      unknownCostRequestCount: 0,
+      models: [
+        {
+          modelId: "gpt-5.5",
+          providerId: "openai",
+          requestCount: 1,
+          totalCostUsd: 0.001,
+          unknownCostRequestCount: 0,
+        },
+      ],
+    });
+  });
+
   it("records and coalesces repeated text file edits for one request", async () => {
     await recordEditCheckpointTarget({
       requestId: "request-1",

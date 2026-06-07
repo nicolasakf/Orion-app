@@ -992,6 +992,7 @@ export async function getChatCostSummary(
         join model_request request on request.id = usage.request_id
         join chat_session session on session.id = request.chat_session_id
         where session.local_chat_id = ?
+          and request.origin != 'title_generation'
         group by usage.model_id, usage.provider_id
         order by totalCostUsd desc, requestCount desc, usage.model_id asc
       `
@@ -1014,6 +1015,7 @@ export async function getChatCostSummary(
         join chat_session session on session.id = request.chat_session_id
         left join model_usage usage on usage.request_id = request.id
         where session.local_chat_id = ?
+          and request.origin != 'title_generation'
       `
     )
     .get(localChatId) as
