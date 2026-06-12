@@ -23,7 +23,7 @@ from typing import Any
 
 from .managed_packages import get_python_support, managed_runtime_packages
 
-VERSION = "0.7.0"
+VERSION = "0.8.0"
 NODE_VERSION = "v22.12.0"
 DEFAULT_APP_BUNDLE_URL = (
     f"https://github.com/nicolasakf/Orion-app/releases/download/"
@@ -321,6 +321,7 @@ def write_handoff(
     base_url: str,
     token: str,
     python: str,
+    root_directory: Path,
     capabilities: dict[str, bool],
     version: str,
     source: str,
@@ -334,6 +335,7 @@ def write_handoff(
                 "token": token,
                 "source": source,
                 "pythonPath": python,
+                "rootDirectory": str(root_directory),
                 "jupyterVersion": version,
                 "capabilities": capabilities,
                 "createdAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -352,7 +354,19 @@ def ensure_native_modules(node: str, app: Path) -> None:
         return
 
     print("Checking platform-native dependencies...")
-    subprocess.run([node, str(script)], cwd=app, check=True)
+    try:
+        subprocess.run([node, str(script)], cwd=app, check=True)
+    except subprocess.CalledProcessError as error:
+        raise SystemExit(
+            "Orion failed while checking platform-native dependencies.\n"
+            "Try one of the following:\n"
+            "  1. Upgrade the launcher: pip install -U orion-notebook\n"
+            "  2. Clear the cached app bundle: orion uninstall -y\n"
+            "  3. Retry: orion --yes\n"
+            "If the problem persists, report it at "
+            "https://github.com/nicolasakf/Orion-app/issues\n"
+            f"Details: {error}"
+        ) from error
 
 
 def start_orion_app(node: str, app: Path) -> tuple[subprocess.Popen[bytes], str]:
@@ -509,6 +523,7 @@ def start_main(argv: list[str]) -> None:
             base_url,
             token,
             python,
+            jupyter_root,
             capabilities,
             version,
             "existing" if uses_existing_jupyter else "managed",

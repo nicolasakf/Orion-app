@@ -1,7 +1,15 @@
 {
   "name": "orion-notebook",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Local Orion CLI launcher for notebooks and Jupyter",
+  "homepage": "https://github.com/nicolasakf/Orion-app",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nicolasakf/Orion-app.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nicolasakf/Orion-app/issues"
+  },
   "license": "Apache-2.0",
   "private": false,
   "bin": {
@@ -74,6 +82,8 @@
     "@radix-ui/react-toggle": "1.1.1",
     "@radix-ui/react-toggle-group": "1.1.1",
     "@radix-ui/react-tooltip": "^1.1.6",
+    "@supabase/ssr": "^0.8.0",
+    "@supabase/supabase-js": "^2.87.1",
     "@tanstack/react-virtual": "^3.13.24",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@uiw/react-markdown-preview": "^5.1.4",

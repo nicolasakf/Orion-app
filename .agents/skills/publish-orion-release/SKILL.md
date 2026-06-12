@@ -1,6 +1,6 @@
 ---
 name: publish-orion-release
-description: Publishes an Orion release end-to-end — version bump, build, tag, GitHub release, npm/PyPI publish via scripts/publish-release.sh (NPM_TOKEN + PyPI token in ~/.zprofile), then post-release verification. Use when the user asks to publish a release, ship a version, bump and publish orion-notebook or orion-ui, or cut a new npm/PyPI release.
+description: Publishes an Orion release end-to-end — version bump, build, tag, GitHub release, npm/PyPI publish via scripts/publish-release.sh (NPM_TOKEN + PyPI token in ~/.zprofile), sync version tags in Orion-api and Orion-docs, then post-release verification. Use when the user asks to publish a release, ship a version, bump and publish orion-notebook or orion-ui, or cut a new npm/PyPI release.
 ---
 
 # Publish Orion Release
@@ -17,17 +17,27 @@ The Python module directory stays `python/orion_agent/`; only `[project].name` i
 
 The legacy npm package `@nicolasakf/orion-agent` should be deprecated after the first `orion-notebook` npm publish (see registry publish notes).
 
+Orion also ships as three GitHub repos that share the **same semver tag** (`v<version>`):
+
+| Repo | Role | Release artifact |
+| --- | --- | --- |
+| `Orion-app` | CLI, desktop app, `orion-ui` Python lib | npm + PyPI + GitHub release with app bundle |
+| `Orion-api` | Hosted Orion API / cloud backend | Git tag only (no GitHub release for now) |
+| `Orion-docs` | User-facing documentation site | Git tag only (no GitHub release for now) |
+
 Detailed reference: [CONTRIBUTING.md — Publishing The CLI](../../../CONTRIBUTING.md#publishing-the-cli)
 
 ## Automated workflow
 
 **Phase 1 — Prepare:** pre-flight → version bump → commit → build → tag/push → GitHub release → build PyPI artifacts.
 
+**Phase 1b — Sync sibling repos:** bump version markers in `Orion-api` and `Orion-docs`, commit, tag `v<version>`, push (no GitHub releases).
+
 **Phase 2 — Publish:** run `scripts/publish-release.sh` (npm + both PyPI packages, non-interactive via env tokens).
 
-**Phase 3 — Verify:** post-release registry checks immediately after Phase 2 succeeds.
+**Phase 3 — Verify:** post-release registry checks and sibling-repo tag checks immediately after Phase 2 succeeds.
 
-If the user invokes this skill and has already completed Phase 1 (tag + GitHub release exist for the target version), skip to Phase 2 (publish) or Phase 3 (verify only) as appropriate.
+If the user invokes this skill and has already completed Phase 1 (tag + GitHub release exist for the target version), skip to Phase 1b (if sibling tags missing), Phase 2 (publish), or Phase 3 (verify only) as appropriate.
 
 ## Publish credentials (one-time setup)
 
@@ -69,6 +79,19 @@ Bump the **same semver** in all of:
 
 Prefer `npm version <x.y.z> --no-git-tag-version` for `package.json` + lockfile, then mirror the version in the Python files.
 
+### Sibling repos (Orion-api, Orion-docs)
+
+Use the **same semver** as `Orion-app`. These repos are not published to npm/PyPI — only a version marker commit + git tag.
+
+Assume sibling checkouts next to `Orion-app` (adjust paths if the user's layout differs):
+
+| Repo | Path (default) | Version files |
+| --- | --- | --- |
+| `Orion-api` | `../Orion-api` | `package.json` `"version"`, `package-lock.json` top-level `"version"` and `"packages"."".version` |
+| `Orion-docs` | `../Orion-docs` | `package.json` `"version"` (add the field if missing) |
+
+Prefer `npm version <x.y.z> --no-git-tag-version` in each repo when it has a `package.json`.
+
 ## Release Checklist
 
 ```
@@ -82,6 +105,7 @@ Phase 1 — Prepare
 - [ ] 7. Tag and push
 - [ ] 8. GitHub release + app bundle asset
 - [ ] 9. Build PyPI artifacts (twine check only)
+- [ ] 9b. Sync Orion-api + Orion-docs (version commit, tag, push — no GitHub release)
 
 Phase 2 — Publish
 - [ ] 10. Run scripts/publish-release.sh
@@ -189,6 +213,57 @@ git push origin v<version>
 ```
 
 Use the branch the user specifies if not `main`.
+
+### Step 5b: Sync Orion-api and Orion-docs (tag only)
+
+After `Orion-app` is tagged and pushed, align the sibling repos to the **same** `v<version>` tag. Do **not** create GitHub releases for these repos.
+
+For each repo (`Orion-api`, then `Orion-docs`):
+
+1. `cd` to the repo (default: sibling of `Orion-app`).
+2. Confirm the target branch is clean or only contains release-related changes the user wants tagged.
+3. Bump version files to `<version>` (see **Sibling repos** table above).
+4. Commit (only when publishing — invoking this skill counts):
+
+   ```text
+   chore(release): v<version>
+   ```
+
+5. Tag and push:
+
+   ```bash
+   git tag v<version>    # skip if tag already points at this release commit
+   git push origin main  # or the branch the user specifies
+   git push origin v<version>
+   ```
+
+**Orion-api** example:
+
+```bash
+cd ../Orion-api
+npm version <version> --no-git-tag-version
+git add package.json package-lock.json
+git commit -m "chore(release): v<version>"
+git tag v<version>
+git push origin main
+git push origin v<version>
+```
+
+**Orion-docs** example (add `"version"` to `package.json` if the field is missing):
+
+```bash
+cd ../Orion-docs
+npm version <version> --no-git-tag-version
+git add package.json
+git commit -m "chore(release): v<version>"
+git tag v<version>
+git push origin main
+git push origin v<version>
+```
+
+If a sibling repo has **no changes** beyond the version bump, the commit may contain only the version file edits — that is expected.
+
+If `v<version>` already exists on the remote for a sibling repo, skip that repo unless the user explicitly wants to move the tag (never force-push tags without explicit approval).
 
 ### Step 6: GitHub release (required before PyPI)
 
@@ -299,6 +374,27 @@ gh release view v<version> --json assets
 
 Confirm `orion-app-<version>.tar.gz` is listed and the download URL responds.
 
+### Sibling repo tags
+
+From any directory, verify all three repos expose the same tag:
+
+```bash
+for repo in Orion-app Orion-api Orion-docs; do
+  echo "=== $repo ==="
+  git -C "../$repo" tag -l "v<version>"
+  git -C "../$repo" show "v<version>" --no-patch --format="%H %s"
+done
+```
+
+Or with `gh`:
+
+```bash
+gh api repos/nicolasakf/Orion-api/git/refs/tags/v<version> --jq .object.sha
+gh api repos/nicolasakf/Orion-docs/git/refs/tags/v<version> --jq .object.sha
+```
+
+Both sibling tags must exist and point at commits whose message is `chore(release): v<version>` (or include the version bump in `package.json`).
+
 ### Optional live smoke tests (run if environment allows)
 
 ```bash
@@ -331,15 +427,18 @@ Remove release temp files: `CHANGELOG-excerpt.md`, local `npm pack` tarballs, an
 
 ## Publish order (critical)
 
-1. Version bump + CHANGELOG commit (all version files, including `orion-ui`)
-2. Tag + push
+1. Version bump + CHANGELOG commit in **Orion-app** (all version files, including `orion-ui`)
+2. Tag + push **Orion-app**
 3. `npm run prepack` (if not already run)
 4. **GitHub release with app bundle** ← `orion-notebook` PyPI depends on this
 5. Build PyPI artifacts for **`orion-ui`** and **`orion-notebook`**
-6. **`scripts/publish-release.sh`** (npm, then PyPI `orion-ui`, then PyPI `orion-notebook`)
-7. Post-release verification
+6. **Sync Orion-api + Orion-docs** — version commit, `v<version>` tag, push (no GitHub release)
+7. **`scripts/publish-release.sh`** (npm, then PyPI `orion-ui`, then PyPI `orion-notebook`)
+8. Post-release verification (registries + sibling tags)
 
 Publishing `orion-notebook` to PyPI before the GitHub release asset exists will break first-run `pip install orion-notebook` users. Publishing `orion-notebook` before `orion-ui` will break managed runtime venv sync on first startup.
+
+Sibling repo sync (step 6) can run in parallel with PyPI artifact build (step 5) if time is tight, but must finish before Phase 3 verification.
 
 ## Troubleshooting
 
@@ -357,6 +456,9 @@ Publishing `orion-notebook` to PyPI before the GitHub release asset exists will 
 | Verification: pip install 404 on bundle | PyPI published before GitHub asset | Upload GitHub asset first, then re-run PyPI publish |
 | Managed runtime `ModuleNotFoundError: orion_ui` | `orion-ui` not on PyPI for this version | Publish `orion-ui` first; users retry after both PyPI packages are live |
 | Verification: `orion-ui` missing on PyPI | Script failed mid-run | `cd python/orion-ui && twine upload dist/*` (with token env set) |
+| Sibling tag missing after release | Phase 1b skipped or push failed | Re-run Step 5b for the missing repo; do not force-push unless user approves |
+| `npm version` fails in Orion-docs | No `"version"` field yet | Add `"version": "0.0.0"` to `package.json`, then re-run `npm version <x.y.z> --no-git-tag-version` |
+| Sibling repo dirty tree | Uncommitted local work | Commit or stash unrelated changes before the release commit |
 
 ## Notes
 
@@ -367,6 +469,8 @@ Publishing `orion-notebook` to PyPI before the GitHub release asset exists will 
 - npm package size is large (~160 MB compressed, includes app bundle); both PyPI wheels stay small by design.
 - User-facing install commands: `npm install -g orion-notebook`, `pip install orion-notebook`, and `pip install orion-ui` (external kernels only — managed runtimes sync `orion-ui` automatically).
 - `orion-ui` is version-coupled to the Orion app: the Python output MIME format and the frontend renderer ship together. Do not publish a mismatched `orion-ui` version for a given Orion release.
+- **Orion-api** and **Orion-docs** stay version-aligned via git tags only — no npm/PyPI publish and no GitHub release assets for those repos yet.
+- Sibling repo paths default to `../Orion-api` and `../Orion-docs` relative to the `Orion-app` root; ask the user if their checkout layout differs.
 
 ## Additional Resources
 

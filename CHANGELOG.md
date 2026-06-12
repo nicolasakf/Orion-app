@@ -4,6 +4,25 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.8.0] - 2026-06-12
+
+### Added
+
+- Cloud: publish notebooks to Orion Cloud with shareable links at `app.orion-agent.ai/p/<slug>`
+- Cloud: sign in with email/password or Google from the settings menu
+- Cloud: account tab for profile, password change, and sign out
+- Cloud: import published notebooks into local Orion via **Open in Orion**
+- Cloud: update an existing publication from the publish dialog
+- Cloud: optional source `.ipynb` download for published viewers
+- Notebook: **Publish to Orion Cloud** toolbar action (Notebook view and App View)
+- Auth: password reset flow for Orion Cloud accounts
+
+### Changed
+
+- App bundle: strip dev logs from standalone copy to keep npm tarball under registry limits
+
+[0.8.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.8.0
+
 ## [0.7.0] - 2026-06-08
 
 ### Added
