@@ -448,7 +448,7 @@ export function RecentFilesCombobox({
             </div>
           )}
           <div
-            className="mx-1 mb-1 flex items-center gap-1 rounded-md border border-border/60 bg-muted/40 p-0.5"
+            className="mx-1 mb-1 flex w-fit items-center justify-start gap-1 rounded-md border border-border/60 bg-muted/40 p-0.5"
             role="tablist"
             aria-label="Recent files tabs"
           >
@@ -459,7 +459,7 @@ export function RecentFilesCombobox({
                 role="tab"
                 aria-selected={activeTab === tab}
                 className={cn(
-                  "corner-squircle flex-1 rounded-sm px-2 py-1 text-xs font-medium transition-colors",
+                  "corner-squircle rounded-sm px-2 py-1 text-xs font-medium transition-colors",
                   activeTab === tab
                     ? "bg-background text-foreground shadow-sm"
                     : "text-muted-foreground hover:text-foreground",

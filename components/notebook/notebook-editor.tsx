@@ -53,6 +53,7 @@ import { parseNotebook } from "@/lib/notebook/notebook-parser";
 import { NotebookCell } from "@/components/notebook/notebook-cell";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
 import { NotebookAppView } from "@/components/notebook/notebook-app-view";
+import { NotebookPublishDialog } from "@/components/notebook/notebook-publish-dialog";
 import type {
   NotebookType,
   NotebookCellType,
@@ -92,8 +93,14 @@ import {
   type NotebookExportFormat,
 } from "@/lib/notebook/notebook-export";
 import {
+  NOTEBOOK_PUBLISH_EVENT_NAME,
+  publishNotebookToCloud,
+  type PublishNotebookResponse,
+} from "@/lib/cloud/publishing";
+import {
   addNotebookAppViewReference,
   isNotebookAppViewReferenceInNotebook,
+  NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
   removeNotebookAppViewReference,
   type NotebookAppViewReference,
 } from "@/lib/notebook/app-view";
@@ -169,6 +176,8 @@ interface NotebookEditorProps {
    * When true, code cell inputs are hidden in the UI only (does not change notebook metadata).
    */
   presentationHideAllCellInputs?: boolean;
+  /** Updates transient global code-input visibility for presentation/export flows. */
+  onSetPresentationHideAllCellInputs?: (hidden: boolean) => void;
   activeNotebookView?: "notebook" | "app";
   onActiveNotebookViewChange?: (view: "notebook" | "app") => void;
   // Callbacks for actions that are now handled in the parent (page.tsx)
@@ -274,6 +283,13 @@ function SubagentOptionTooltip({
   );
 }
 
+/** Waits for the browser to commit one frame of DOM updates. */
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => resolve());
+  });
+}
+
 /** Dialog listing notebook command-mode keyboard shortcuts. */
 function NotebookShortcutsDialog({
   open,
@@ -356,6 +372,7 @@ export function NotebookEditor({
   onNotebookSnapshotGetterChange,
   onNotebookSaveHandlerChange,
   presentationHideAllCellInputs,
+  onSetPresentationHideAllCellInputs,
   activeNotebookView: controlledActiveNotebookView,
   onActiveNotebookViewChange,
 }: NotebookEditorProps) {
@@ -385,6 +402,7 @@ export function NotebookEditor({
   const [showRunningKernelDialog, setShowRunningKernelDialog] = useState(false);
   const [showNotebookShortcutsDialog, setShowNotebookShortcutsDialog] =
     useState(false);
+  const [publishDialogOpen, setPublishDialogOpen] = useState(false);
   const [connectionError, setConnectionError] = useState("");
   const [subagentModelComboboxOpen, setSubagentModelComboboxOpen] =
     useState(false);
@@ -687,6 +705,8 @@ export function NotebookEditor({
   const deletedCellHistoryRef = useRef<DeletedCellSnapshot[][]>([]);
   const activeNotebookView = controlledActiveNotebookView ?? "notebook";
   const previousActiveNotebookViewRef = useRef(activeNotebookView);
+  /** Cell index to scroll to after switching from app view to notebook view. */
+  const pendingScrollToCellIndexRef = useRef<number | null>(null);
   // For 'D' twice to delete
   const lastDKeyPressTimeRef = useRef<number>(0);
 
@@ -1192,6 +1212,135 @@ export function NotebookEditor({
     return notebookRootRef.current?.querySelector<HTMLElement>(selector) ?? null;
   }, [activeNotebookView]);
 
+  /** Resolves a readable title for dialogs and published notebook metadata. */
+  const getNotebookDefaultTitle = useCallback((): string => {
+    const metadataTitle = notebook?.metadata?.title;
+    if (typeof metadataTitle === "string" && metadataTitle.trim()) {
+      return metadataTitle.trim();
+    }
+
+    const basename = filepath.split("/").filter(Boolean).pop() ?? "notebook";
+    return basename.replace(/\.ipynb$/i, "") || "Notebook";
+  }, [filepath, notebook?.metadata?.title]);
+
+  /** Saves pending editor edits and returns the notebook content used by publish/export flows. */
+  const saveNotebookForCloudPublish = useCallback(async (): Promise<NotebookType> => {
+    if (!parentKernelService || !notebook) {
+      throw new Error(
+        "Wait for the notebook to finish loading and confirm Jupyter is connected.",
+      );
+    }
+
+    capturePendingCellSources();
+    const notebookToPublish = applyPendingChanges(notebook);
+    const contentsManager = parentKernelService.getContentsManager();
+    await contentsManager.save(filepath, {
+      type: "notebook",
+      format: "json",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      content: notebookToPublish as any,
+    });
+
+    if (getSubagentMetadata(notebookToPublish.metadata)) {
+      window.dispatchEvent(
+        new CustomEvent("orion:subagents-changed", {
+          detail: { path: filepath },
+        }),
+      );
+    }
+
+    setNotebook(notebookToPublish);
+    pendingCellChangesRef.current.clear();
+    modifiedCellsRef.current.clear();
+    markClean();
+
+    return notebookToPublish;
+  }, [
+    applyPendingChanges,
+    capturePendingCellSources,
+    filepath,
+    markClean,
+    notebook,
+    parentKernelService,
+  ]);
+
+  /** Publishes the active notebook view to Orion Cloud after saving local edits. */
+  const handlePublishNotebook = useCallback(
+    async (input: {
+      publishId?: string;
+      title: string;
+      description: string;
+      hideInputCells: boolean;
+      allowSourceDownload: boolean;
+      apiBaseUrl: string;
+      accessToken: string;
+    }): Promise<PublishNotebookResponse> => {
+      const sourceFilename =
+        filepath.split("/").filter(Boolean).pop() ?? "notebook.ipynb";
+      const title = input.title.trim();
+      const snapshotTitle = title || getNotebookDefaultTitle();
+      let staticHtmlSnapshot: string;
+
+      if (input.hideInputCells && !presentationHideAllCellInputs) {
+        if (!onSetPresentationHideAllCellInputs) {
+          throw new Error("Input cell visibility cannot be updated for publishing.");
+        }
+        onSetPresentationHideAllCellInputs(true);
+        await nextAnimationFrame();
+      }
+
+      try {
+        const sourceElement = getScreenExportElement();
+        if (!sourceElement) {
+          throw new Error("No rendered notebook surface is available.");
+        }
+
+        staticHtmlSnapshot = buildScreenNotebookExportHtml({
+          sourceElement,
+          title: snapshotTitle,
+        });
+      } finally {
+        if (input.hideInputCells && !presentationHideAllCellInputs) {
+          onSetPresentationHideAllCellInputs?.(false);
+        }
+      }
+
+      const notebookToPublish = await saveNotebookForCloudPublish();
+      const metadata = {
+        title: snapshotTitle,
+        description: input.description.trim(),
+        sourceFilename,
+        currentView: activeNotebookView,
+        allowSourceDownload: input.allowSourceDownload,
+      };
+
+      return publishNotebookToCloud({
+        apiBaseUrl: input.apiBaseUrl,
+        accessToken: input.accessToken,
+        request: {
+          publishId: input.publishId,
+          metadata,
+          bundle: {
+            schemaVersion: 1,
+            rendererSchemaVersion: NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
+            metadata,
+            notebook: notebookToPublish as unknown as Record<string, unknown>,
+            staticHtmlSnapshot,
+          },
+        },
+      });
+    },
+    [
+      activeNotebookView,
+      filepath,
+      getNotebookDefaultTitle,
+      getScreenExportElement,
+      onSetPresentationHideAllCellInputs,
+      presentationHideAllCellInputs,
+      saveNotebookForCloudPublish,
+    ],
+  );
+
   /** Saves the current editor state and exports the notebook in the requested format. */
   const handleExportNotebook = useCallback(
     async (format: NotebookExportFormat) => {
@@ -1345,6 +1494,24 @@ export function NotebookEditor({
     };
   }, [handleExportNotebook]);
 
+  useEffect(() => {
+    /** Opens the cloud publishing dialog from the notebook toolbar. */
+    const handleNotebookPublishEvent = () => {
+      setPublishDialogOpen(true);
+    };
+
+    window.addEventListener(
+      NOTEBOOK_PUBLISH_EVENT_NAME,
+      handleNotebookPublishEvent,
+    );
+    return () => {
+      window.removeEventListener(
+        NOTEBOOK_PUBLISH_EVENT_NAME,
+        handleNotebookPublishEvent,
+      );
+    };
+  }, []);
+
   /**
    * Listen for agentNotebookModified events dispatched when the Orion agent
    * modifies the notebook via Jupyter's ContentsManager. Re-reads from
@@ -1468,6 +1635,29 @@ export function NotebookEditor({
       }, 0);
     },
     [scrollToCellId],
+  );
+
+  /** Selects and scrolls to a cell by index (e.g. go-to-error from the toolbar). */
+  const scrollToCellIndexFromEvent = useCallback(
+    (cellIndex: number) => {
+      const currentNotebook = notebookRef.current;
+      if (
+        cellIndex < 0 ||
+        !currentNotebook ||
+        cellIndex >= currentNotebook.cells.length
+      ) {
+        return;
+      }
+
+      selectCellByIndex(cellIndex);
+      const cellId = getCellIdByIndex(currentNotebook, cellIndex);
+      if (cellId) {
+        scrollToCellIdAfterLayout(cellId);
+      } else {
+        scrollToCell(cellIndex);
+      }
+    },
+    [scrollToCell, scrollToCellIdAfterLayout, selectCellByIndex],
   );
 
   useEffect(() => {
@@ -2066,13 +2256,13 @@ export function NotebookEditor({
         return;
       }
 
-      selectCellByIndex(cellIndex);
-      const cellId = getCellIdByIndex(currentNotebook, cellIndex);
-      if (cellId) {
-        scrollToCellIdAfterLayout(cellId);
-      } else {
-        scrollToCell(cellIndex);
+      if (activeNotebookView !== "notebook") {
+        pendingScrollToCellIndexRef.current = cellIndex;
+        onActiveNotebookViewChange?.("notebook");
+        return;
       }
+
+      scrollToCellIndexFromEvent(cellIndex);
     };
 
     window.addEventListener(
@@ -2086,7 +2276,22 @@ export function NotebookEditor({
         handleScrollToCell as EventListener,
       );
     };
-  }, [scrollToCell, scrollToCellIdAfterLayout, selectCellByIndex]);
+  }, [
+    activeNotebookView,
+    onActiveNotebookViewChange,
+    scrollToCellIndexFromEvent,
+  ]);
+
+  // Finish scrolling after switching from app view to notebook view.
+  useEffect(() => {
+    if (activeNotebookView !== "notebook") return;
+
+    const cellIndex = pendingScrollToCellIndexRef.current;
+    if (cellIndex === null) return;
+
+    pendingScrollToCellIndexRef.current = null;
+    scrollToCellIndexFromEvent(cellIndex);
+  }, [activeNotebookView, scrollToCellIndexFromEvent]);
 
   // Clear pending runs when the user interrupts the kernel.
   useEffect(() => {
@@ -3430,6 +3635,13 @@ export function NotebookEditor({
         <NotebookShortcutsDialog
           open={showNotebookShortcutsDialog}
           onOpenChange={setShowNotebookShortcutsDialog}
+        />
+
+        <NotebookPublishDialog
+          open={publishDialogOpen}
+          onOpenChange={setPublishDialogOpen}
+          defaultTitle={getNotebookDefaultTitle()}
+          onPublish={handlePublishNotebook}
         />
 
         {/* Remove focus outline for the notebook editor content area and its focusable children */}

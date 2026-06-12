@@ -9,6 +9,7 @@ import {
   ExternalLink,
   Bot,
   BookOpen,
+  User,
 } from "lucide-react";
 import {
   Sidebar,
@@ -31,6 +32,7 @@ import { ORION_USER_DOCS_URL } from "@/lib/constants/user-docs";
 import { cn } from "@/lib/utils";
 
 const SETTINGS_NAV_BASE: { id: SettingsTab; title: string; icon: React.ElementType }[] = [
+  { id: "account", title: "Account", icon: User },
   { id: "appearance", title: "Appearance", icon: Palette },
   { id: "notebook", title: "Notebook", icon: BookOpen },
   { id: "agent", title: "Agent", icon: Bot },
@@ -44,6 +46,7 @@ interface SettingsSidebarProps extends React.ComponentProps<typeof Sidebar> {
   agentSection: AgentSettingsSection;
   onTabChange: (tab: SettingsTab) => void;
   onAgentSectionChange: (section: AgentSettingsSection) => void;
+  showAccountTab?: boolean;
 }
 
 /** Settings dialog sidebar with navigation items and agent subsections. */
@@ -52,9 +55,15 @@ export function SettingsSidebar({
   agentSection,
   onTabChange,
   onAgentSectionChange,
+  showAccountTab = false,
   className,
   ...props
 }: SettingsSidebarProps) {
+  const settingsNav = SETTINGS_NAV_BASE.filter((item) => {
+    if (item.id === "account" && !showAccountTab) return false;
+    return true;
+  });
+
   return (
     <Sidebar
       /** In-dialog layout: avoid default sidebar `fixed` + `h-svh`, which overflows/clips inside `DialogContent`. */
@@ -80,7 +89,7 @@ export function SettingsSidebar({
       <SidebarContent>
         <SidebarGroup>
           <SidebarMenu className="gap-1">
-            {SETTINGS_NAV_BASE.map((item) => {
+            {settingsNav.map((item) => {
               const Icon = item.icon;
               const isAgentTab = item.id === "agent";
               const isActive = isAgentTab

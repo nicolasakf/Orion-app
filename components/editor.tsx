@@ -79,6 +79,8 @@ interface EditorProps {
    * Notebook only: hide all code cell inputs in the UI without persisting to metadata.
    */
   presentationHideAllCellInputs?: boolean;
+  /** Notebook only: updates the transient global hide-input presentation state. */
+  onSetPresentationHideAllCellInputs?: (hidden: boolean) => void;
 }
 
 /**
@@ -112,6 +114,7 @@ export function Editor({
   onOpenFile,
   onWorkspaceChange,
   presentationHideAllCellInputs,
+  onSetPresentationHideAllCellInputs,
 }: EditorProps) {
   const activeEditor = resolveOrionEditorDefinition({
     path: filepath ?? undefined,
@@ -193,6 +196,7 @@ export function Editor({
         onNotebookSnapshotGetterChange={onNotebookSnapshotGetterChange}
         onNotebookSaveHandlerChange={onNotebookSaveHandlerChange}
         presentationHideAllCellInputs={presentationHideAllCellInputs}
+        onSetPresentationHideAllCellInputs={onSetPresentationHideAllCellInputs}
         textFileModel={textFileModel}
       />
     ) : !hasServerConnection || !hasWorkspace ? (

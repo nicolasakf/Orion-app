@@ -14,6 +14,7 @@ export const LauncherJupyterConnectionSchema = z.object({
   token: z.string().optional(),
   source: z.enum(["managed", "existing"]),
   pythonPath: z.string().min(1),
+  rootDirectory: z.string().min(1).optional(),
   jupyterVersion: z.string().min(1),
   capabilities: JupyterCapabilitiesSchema,
   createdAt: z.string().datetime(),

@@ -12,6 +12,7 @@ import {
   RefreshCw,
   RotateCcw,
   Square,
+  UploadCloud,
   XCircle,
 } from "lucide-react";
 
@@ -36,6 +37,7 @@ import {
   type NotebookExportEventDetail,
   type NotebookExportFormat,
 } from "@/lib/notebook/notebook-export";
+import { NOTEBOOK_PUBLISH_EVENT_NAME } from "@/lib/cloud/publishing";
 import {
   RUN_ALL_STOPPED_ON_ERROR_EVENT_NAME,
   SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
@@ -57,6 +59,11 @@ function dispatchNotebookExport(format: NotebookExportFormat): void {
       detail: { format },
     }),
   );
+}
+
+/** Dispatches a notebook publish request to the mounted notebook editor. */
+function dispatchNotebookPublish(): void {
+  window.dispatchEvent(new CustomEvent(NOTEBOOK_PUBLISH_EVENT_NAME));
 }
 
 type GoToErrorPopoverState = {
@@ -333,6 +340,9 @@ export function NotebookEditorToolbar({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
+      <ToolbarButton onClick={dispatchNotebookPublish} toolTipLabel="Publish to Orion Cloud">
+        <UploadCloud className="h-4 w-4" />
+      </ToolbarButton>
       <NotebookViewToggle />
     </>
   );

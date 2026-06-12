@@ -2,9 +2,13 @@
 
 import * as React from "react";
 import { useState, useEffect, useRef, useCallback } from "react";
+import { toast } from "sonner";
 import { LeftSidebar } from "@/components/left-sidebar/left-sidebar";
 import { RightSidebar } from "@/components/right-sidebar/right-sidebar";
 import { SettingsMenu } from "@/components/settings-menu";
+import { CloudAuthDialog } from "@/components/cloud/cloud-auth-dialog";
+import { PublishedNotebookDownloadOverlay } from "@/components/cloud/published-notebook-download-overlay";
+import { PublishedNotebookImportDialog } from "@/components/cloud/published-notebook-import-dialog";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -103,6 +107,16 @@ import {
   RUN_ALL_CELLS_EVENT_NAME,
   type RunAllTriggerSource,
 } from "@/lib/notebook/notebook-execution-events";
+import { useCloudUser } from "@/hooks/use-cloud-user";
+import {
+  downloadPublishedNotebookSource,
+  type PublishedNotebookSourceDownload,
+} from "@/lib/cloud/publishing";
+import { savePublishedNotebookWithNativePicker } from "@/lib/cloud/published-import-save";
+import {
+  clearPendingPublishedNotebookImport,
+  readPendingPublishedNotebookImport,
+} from "@/lib/cloud/published-import";
 
 type ActiveFile = {
   name: string;
@@ -120,6 +134,7 @@ const ACTIVE_FILE_SESSION_KEY = "activeFile";
 const WORKSPACE_DIRECTORY_SESSION_KEY = "workspaceDirectory";
 /** Persists open-file history across sessions and browser tabs. */
 const RECENT_FILES_STORAGE_KEY = "recentFiles";
+const PUBLISHED_IMPORT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Returns a stable display name from a full Jupyter-relative path.
@@ -153,6 +168,17 @@ function isJupyterPathWithinWorkspace(
   if (ws === "") return true;
   if (fp === ws) return true;
   return fp.startsWith(`${ws}/`);
+}
+
+/** Produces a safe notebook filename for imported published notebooks. */
+function sanitizeNotebookImportFilename(filename: string): string {
+  const basename =
+    filename.split(/[\\/]/).filter(Boolean).pop() ?? "published-notebook.ipynb";
+  const safe = basename
+    .replace(/[^\w.\- ()]/g, "_")
+    .replace(/\.ipynb$/i, "")
+    .trim();
+  return `${safe || "published-notebook"}.ipynb`;
 }
 
 /**
@@ -246,6 +272,7 @@ interface MobileLayoutProps {
   ) => void;
   /** When true, code cell editors are hidden in the UI only (not persisted). */
   notebookPresentationHideAllInputs: boolean;
+  onSetNotebookPresentationHideAllInputs: (hidden: boolean) => void;
   onFileLoadError: (path: string) => void;
   onWorkspacePathRenamed?: (payload: {
     oldPath: string;
@@ -300,6 +327,7 @@ function MobileLayout({
   onTextSaveHandlerChange,
   onNotebookSaveHandlerChange,
   notebookPresentationHideAllInputs,
+  onSetNotebookPresentationHideAllInputs,
   onFileLoadError,
   onWorkspacePathRenamed,
   onWorkspacePathDeleted,
@@ -431,6 +459,9 @@ function MobileLayout({
               onTextSaveHandlerChange={onTextSaveHandlerChange}
               onNotebookSaveHandlerChange={onNotebookSaveHandlerChange}
               presentationHideAllCellInputs={notebookPresentationHideAllInputs}
+              onSetPresentationHideAllCellInputs={
+                onSetNotebookPresentationHideAllInputs
+              }
               onFileLoadError={onFileLoadError}
             />
           </div>
@@ -463,6 +494,27 @@ export default function Page() {
     setUserSettings,
     setWorkspaceSettingsSource,
   } = useOrionSettings();
+  const {
+    configured: cloudConfigured,
+    user: cloudUser,
+    accessToken: cloudAccessToken,
+    loading: cloudLoading,
+    refresh: refreshCloudUser,
+  } = useCloudUser();
+  const [cloudImportAuthOpen, setCloudImportAuthOpen] = useState(false);
+  const [publishedImportDownloading, setPublishedImportDownloading] = useState(false);
+  const [publishedImportDialogOpen, setPublishedImportDialogOpen] = useState(false);
+  const [publishedImportSaving, setPublishedImportSaving] = useState(false);
+  const [pendingPublishedNotebookSource, setPendingPublishedNotebookSource] =
+    useState<PublishedNotebookSourceDownload | null>(null);
+  const [publishedImportFilename, setPublishedImportFilename] = useState(
+    "published-notebook.ipynb",
+  );
+  const [jupyterRootDirectory, setJupyterRootDirectory] = useState<string | null>(
+    null,
+  );
+  const cloudImportInProgressRef = useRef(false);
+  const cloudImportWaitingForKernelRef = useRef(false);
   const isMobile = useIsMobile();
   const [currentFile, setCurrentFile] = useState<ActiveFile>({
     name: "",
@@ -1396,8 +1448,10 @@ export default function Page() {
     let launcherConnection = null;
     try {
       launcherConnection = await fetchLauncherJupyterConnection();
+      setJupyterRootDirectory(launcherConnection?.rootDirectory ?? null);
     } catch (error) {
       console.warn("Failed to load CLI-managed Jupyter connection:", error);
+      setJupyterRootDirectory(null);
     }
 
     const recentConnections = getStoredKernelConnections();
@@ -1514,6 +1568,138 @@ export default function Page() {
     externalOpenTerminalPoolRef.current?.dispose();
     externalOpenTerminalPoolRef.current = null;
   }, [kernelService]);
+
+  /**
+   * Completes a hosted published-notebook handoff once local Orion has both a
+   * cloud session and a running Jupyter connection to open the saved notebook.
+   */
+  useEffect(() => {
+    const pendingImport = readPendingPublishedNotebookImport();
+    if (!pendingImport) return;
+    if (pendingPublishedNotebookSource || publishedImportDialogOpen) return;
+
+    if (Date.now() - pendingImport.createdAt > PUBLISHED_IMPORT_MAX_AGE_MS) {
+      clearPendingPublishedNotebookImport();
+      return;
+    }
+
+    if (cloudLoading) return;
+
+    if (!cloudConfigured) {
+      toast.error("Orion Cloud is not configured for this local app.");
+      clearPendingPublishedNotebookImport();
+      return;
+    }
+
+    if (!cloudUser || !cloudAccessToken) {
+      setCloudImportAuthOpen(true);
+      return;
+    }
+
+    if (cloudImportAuthOpen) {
+      setCloudImportAuthOpen(false);
+    }
+
+    if (!kernelService) {
+      if (isAutoConnecting) return;
+      if (!cloudImportWaitingForKernelRef.current) {
+        toast.info("Connect Orion to Jupyter to import this published notebook.");
+        cloudImportWaitingForKernelRef.current = true;
+      }
+      return;
+    }
+
+    if (cloudImportInProgressRef.current) return;
+    cloudImportInProgressRef.current = true;
+    cloudImportWaitingForKernelRef.current = false;
+    setPublishedImportDownloading(true);
+
+    const importNotebook = async () => {
+      try {
+        const source = await downloadPublishedNotebookSource({
+          apiBaseUrl: pendingImport.apiBaseUrl,
+          accessToken: cloudAccessToken,
+          slug: pendingImport.slug,
+        });
+        setPendingPublishedNotebookSource(source);
+        setPublishedImportFilename(sanitizeNotebookImportFilename(source.filename));
+        setPublishedImportDialogOpen(true);
+      } catch (error) {
+        clearPendingPublishedNotebookImport();
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to import the published notebook.",
+        );
+      } finally {
+        cloudImportInProgressRef.current = false;
+        setPublishedImportDownloading(false);
+      }
+    };
+
+    void importNotebook();
+  }, [
+    cloudAccessToken,
+    cloudConfigured,
+    cloudImportAuthOpen,
+    cloudLoading,
+    cloudUser,
+    isAutoConnecting,
+    kernelService,
+    pendingPublishedNotebookSource,
+    publishedImportDialogOpen,
+  ]);
+
+  /** Cancels a pending published-notebook import when the save dialog is dismissed. */
+  const handlePublishedImportDialogOpenChange = useCallback(
+    (open: boolean) => {
+      if (publishedImportSaving) return;
+      setPublishedImportDialogOpen(open);
+      if (!open) {
+        setPendingPublishedNotebookSource(null);
+        setPublishedImportFilename("published-notebook.ipynb");
+        clearPendingPublishedNotebookImport();
+      }
+    },
+    [publishedImportSaving],
+  );
+
+  /** Opens the OS-native save picker, then opens the saved notebook in Orion. */
+  const handleChoosePublishedNotebookSaveLocation = useCallback(async () => {
+    if (!pendingPublishedNotebookSource) return;
+
+    setPublishedImportSaving(true);
+    try {
+      const saved = await savePublishedNotebookWithNativePicker({
+        filename: sanitizeNotebookImportFilename(publishedImportFilename),
+        notebook: pendingPublishedNotebookSource.notebook,
+      });
+
+      if (!saved) {
+        toast.info("Save cancelled.");
+        return;
+      }
+
+      setJupyterRootDirectory(saved.rootDirectory);
+      clearPendingPublishedNotebookImport();
+      setPendingPublishedNotebookSource(null);
+      setPublishedImportFilename("published-notebook.ipynb");
+      setPublishedImportDialogOpen(false);
+      handleFileSelect({
+        name: saved.name,
+        path: saved.path,
+      });
+      toast.success(`Imported ${saved.name}.`);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to save the published notebook.",
+      );
+    } finally {
+      setPublishedImportSaving(false);
+    }
+  }, [handleFileSelect, pendingPublishedNotebookSource, publishedImportFilename]);
 
   // Initialize kernel service and attempt auto-connection
   useEffect(() => {
@@ -2330,6 +2516,9 @@ export default function Page() {
                 onTextSaveHandlerChange={handleTextSaveHandlerChange}
                 onNotebookSaveHandlerChange={handleNotebookSaveHandlerChange}
                 notebookPresentationHideAllInputs={presentationHideAllCellInputs}
+                onSetNotebookPresentationHideAllInputs={
+                  setPresentationHideAllCellInputs
+                }
                 onFileLoadError={handleEditorFileLoadError}
                 onWorkspacePathRenamed={handleWorkspacePathRenamed}
                 onWorkspacePathDeleted={handleWorkspacePathDeleted}
@@ -2348,6 +2537,26 @@ export default function Page() {
                 onSave={handleUnsavedDialogSave}
                 onDiscard={handleUnsavedDialogDiscard}
                 onCancel={() => setUnsavedDialogIntent(null)}
+              />
+
+              <CloudAuthDialog
+                open={cloudImportAuthOpen}
+                onOpenChange={setCloudImportAuthOpen}
+                onAuthenticated={refreshCloudUser}
+              />
+
+              <PublishedNotebookDownloadOverlay
+                open={publishedImportDownloading}
+              />
+
+              <PublishedNotebookImportDialog
+                open={publishedImportDialogOpen}
+                filename={publishedImportFilename}
+                onFilenameChange={setPublishedImportFilename}
+                jupyterRootDirectory={jupyterRootDirectory}
+                saving={publishedImportSaving}
+                onOpenChange={handlePublishedImportDialogOpenChange}
+                onChooseLocation={handleChoosePublishedNotebookSaveLocation}
               />
             </MobileLayoutProvider>
           </MarkdownEditorViewModeProvider>
@@ -2637,6 +2846,9 @@ export default function Page() {
                             presentationHideAllCellInputs={
                               presentationHideAllCellInputs
                             }
+                            onSetPresentationHideAllCellInputs={
+                              setPresentationHideAllCellInputs
+                            }
                             onFileLoadError={handleEditorFileLoadError}
                           />
                         </div>
@@ -2739,6 +2951,26 @@ export default function Page() {
               onSave={handleUnsavedDialogSave}
               onDiscard={handleUnsavedDialogDiscard}
               onCancel={() => setUnsavedDialogIntent(null)}
+            />
+
+            <CloudAuthDialog
+              open={cloudImportAuthOpen}
+              onOpenChange={setCloudImportAuthOpen}
+              onAuthenticated={refreshCloudUser}
+            />
+
+            <PublishedNotebookDownloadOverlay
+              open={publishedImportDownloading}
+            />
+
+            <PublishedNotebookImportDialog
+              open={publishedImportDialogOpen}
+              filename={publishedImportFilename}
+              onFilenameChange={setPublishedImportFilename}
+              jupyterRootDirectory={jupyterRootDirectory}
+              saving={publishedImportSaving}
+              onOpenChange={handlePublishedImportDialogOpenChange}
+              onChooseLocation={handleChoosePublishedNotebookSaveLocation}
             />
           </div>
         </MarkdownEditorViewModeProvider>

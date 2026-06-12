@@ -16,6 +16,7 @@ import {
   SidebarProvider,
 } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { AccountTab } from "@/components/settings-dialog/account-tab";
 import { AgentTab } from "@/components/settings-dialog/agent-tab";
 import { AppearanceTab } from "@/components/settings-dialog/appearance-tab";
 import { ModelsTab } from "@/components/settings-dialog/models-tab";
@@ -30,6 +31,7 @@ import {
 } from "@/components/settings-dialog/types";
 import { useSettingsContext } from "@/components/settings/settings-provider";
 import { useOpenSettings } from "@/contexts/open-settings-context";
+import { useCloudUser } from "@/hooks/use-cloud-user";
 
 interface SettingsDialogProps {
   open: boolean;
@@ -54,6 +56,8 @@ export function SettingsDialog({
   const { errorMessage, reloadUserSettings, userSettingsLoadStatus } =
     useSettingsContext();
   const { openUserSettingsFile, onOpenChange: setSettingsOpen } = useOpenSettings();
+  const { user, refresh } = useCloudUser();
+  const showAccountTab = Boolean(user);
   const settingsLoadFailed =
     userSettingsLoadStatus === "failed" && errorMessage;
 
@@ -64,7 +68,9 @@ export function SettingsDialog({
         setSettingsOpen(false);
         return;
       }
-      setActiveTab(initialTab);
+      setActiveTab(
+        initialTab === "account" && !showAccountTab ? "providers" : initialTab,
+      );
       if (initialTab === "agent") {
         setAgentSection(initialAgentSection ?? DEFAULT_AGENT_SETTINGS_SECTION);
       }
@@ -75,7 +81,13 @@ export function SettingsDialog({
     initialAgentSection,
     openUserSettingsFile,
     setSettingsOpen,
+    showAccountTab,
   ]);
+
+  React.useEffect(() => {
+    if (showAccountTab || activeTab !== "account") return;
+    setActiveTab("providers");
+  }, [activeTab, showAccountTab]);
 
   const handleTabChange = React.useCallback(
     (tab: SettingsTab) => {
@@ -84,9 +96,13 @@ export function SettingsDialog({
         setSettingsOpen(false);
         return;
       }
+      if (tab === "account" && !showAccountTab) {
+        setActiveTab("providers");
+        return;
+      }
       setActiveTab(tab);
     },
-    [openUserSettingsFile, setSettingsOpen],
+    [openUserSettingsFile, setSettingsOpen, showAccountTab],
   );
 
   const handleAgentSectionChange = React.useCallback(
@@ -99,6 +115,13 @@ export function SettingsDialog({
 
   const renderTabContent = () => {
     switch (activeTab) {
+      case "account":
+        return (
+          <AccountTab
+            onClose={() => onOpenChange(false)}
+            onSignedOut={refresh}
+          />
+        );
       case "appearance":
         return <AppearanceTab />;
       case "notebook":
@@ -160,6 +183,7 @@ export function SettingsDialog({
               agentSection={agentSection}
               onTabChange={handleTabChange}
               onAgentSectionChange={handleAgentSectionChange}
+              showAccountTab={showAccountTab}
             />
             <SidebarInset className="min-h-0 flex-1 overflow-auto scrollbar-hide">
               {renderTabContent()}

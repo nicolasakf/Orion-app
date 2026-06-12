@@ -161,6 +161,7 @@ export async function bootstrapJupyter(
     token: server.token,
     source: choice.kind === "managed" || choice.installation?.managed ? "managed" : "existing",
     pythonPath: server.pythonPath,
+    rootDirectory: jupyterRoot,
     jupyterVersion: capabilities.jupyterVersion,
     capabilities: capabilities.capabilities,
     createdAt: new Date().toISOString(),

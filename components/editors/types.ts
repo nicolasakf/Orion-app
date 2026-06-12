@@ -32,6 +32,7 @@ export interface EditorRuntimeProps {
     handler: ((path: string) => Promise<OpenDocumentSaveResult>) | null,
   ) => void;
   presentationHideAllCellInputs?: boolean;
+  onSetPresentationHideAllCellInputs?: (hidden: boolean) => void;
   textFileModel?: TextFileModelState;
 }
 

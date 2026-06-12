@@ -9,3 +9,6 @@ export const ORION_USER_DOCS_PDF_EXPORT_URL =
 
 export const ORION_USER_DOCS_PROVIDERS_URL =
   `${ORION_USER_DOCS_URL}/configuration/api-keys-and-providers`;
+
+export const ORION_USER_DOCS_PUBLISH_NOTEBOOKS_URL =
+  `${ORION_USER_DOCS_URL}/notebooks/publish-notebooks`;
