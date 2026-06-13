@@ -9,30 +9,47 @@ Thanks for helping improve Orion.
 
 ## Setup
 
-Clone the repo, install dependencies, then run the dev server (hot reload, Turbopack):
+Clone the repo, copy `.env.example` to `.env`, install dependencies, then start a dev server. Next.js loads `.env`, not `.env.example`.
+
+**macOS / Linux:**
 
 ```bash
 git clone https://github.com/nicolasakf/Orion-app.git
 cd Orion-app
+cp .env.example .env
 npm install
-npm run dev
 ```
 
-The dev server runs on port 3001 by default. For a production-like local run, use `npm run build` and `npm run start` instead (see [README](./README.md#quick-start)).
+**Windows (PowerShell):**
 
-To develop notebook execution with the same Jupyter bootstrap as the Orion CLI (managed venv, handoff file, auto-connect in the UI):
+```powershell
+git clone https://github.com/nicolasakf/Orion-app.git
+cd Orion-app
+Copy-Item .env.example .env
+npm install
+```
+
+### Dev mode
+
+Both commands run Next.js dev on port 3001 with hot reload (Turbopack):
+
+- **`npm run dev`** — starts the Next.js dev server only. Use this for UI and general app work. You connect to Jupyter yourself in the app (kernel selector or an external server you already run).
+- **`npm run dev:notebook`** — starts Jupyter and Next.js together, using the same Python/Jupyter bootstrap as the `orion` CLI. Orion auto-connects via `~/.orion/runtime/jupyter-connection.json`. Prefer this when you are developing or testing notebook execution.
 
 ```bash
-npm run dev:notebook
+npm run dev              # Next.js only
+npm run dev:notebook     # Jupyter + Next.js (recommended for notebooks)
 ```
 
-Useful flags: `--here` (Jupyter root = current directory), `--pick-python` (interactive Python selection). Setup prompts are auto-approved by default; set `ORION_DEV_YES=0` to require interactive consent.
+Useful `dev:notebook` flags: `--here` (Jupyter root = current directory), `--pick-python` (interactive Python selection). Setup prompts are auto-approved by default; set `ORION_DEV_YES=0` to require interactive consent.
+
+For a production-like local run (no hot reload), use `npm run build` and `npm run start` instead (see [README](./README.md#run-from-source-developers)).
 
 Configure model credentials inside the app under **Settings → Providers**.
 
 ## CLI Development
 
-To test the `orion` CLI locally (the same command published as `orion-notebook` on npm):
+To test the `orion` CLI locally (the same command published as `orion-notebook` on npm), ensure `.env` exists (copy from `.env.example` if you have not already):
 
 ```bash
 npm run build          # production Next build (required once, or after app changes)

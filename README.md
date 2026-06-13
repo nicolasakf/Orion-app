@@ -121,17 +121,54 @@ For manual Jupyter setup instead of the CLI, connect a Jupyter server in the GUI
 
 ### Run from source (developers)
 
+Copy `.env.example` to `.env` in the repo root before building or running the dev server. Next.js loads `.env`, not `.env.example`.
+
+**macOS / Linux:**
+
 ```bash
 git clone https://github.com/nicolasakf/Orion-app.git
 cd Orion-app
+cp .env.example .env
 npm install
+```
+
+**Windows (PowerShell):**
+
+```powershell
+git clone https://github.com/nicolasakf/Orion-app.git
+cd Orion-app
+Copy-Item .env.example .env
+npm install
+```
+
+#### Dev mode
+
+Both commands start the Next.js dev server on port 3001 with hot reload (Turbopack). Pick one:
+
+| Command | What it starts | When to use |
+| --- | --- | --- |
+| `npm run dev` | Next.js only | UI and app work. Connect Jupyter yourself in the app (kernel selector or an existing server). |
+| `npm run dev:notebook` | Jupyter + Next.js (same bootstrap as the `orion` CLI) | Notebook and kernel work. Orion auto-connects via `~/.orion/runtime/jupyter-connection.json`. |
+
+```bash
+npm run dev              # Next.js dev server only
+npm run dev:notebook     # Jupyter + Next.js (recommended for notebooks)
+```
+
+Useful `dev:notebook` flags: `--here` (Jupyter root = current directory), `--pick-python` (interactive Python selection). Setup prompts are auto-approved by default; set `ORION_DEV_YES=0` to require interactive consent.
+
+#### Production-like CLI run
+
+To test the packaged `orion` CLI locally (not the dev server):
+
+```bash
 npm run build
 npm run build:cli
 npm run prepare:app-bundle
 node dist/cli/cli/orion.js
 ```
 
-See [Contributing](./CONTRIBUTING.md#cli-development) for CLI flags, publishing, and local development details.
+See [Contributing](./CONTRIBUTING.md#setup) for more development details and [CLI development](./CONTRIBUTING.md#cli-development) for flags, publishing, and local CLI testing.
 
 ## Links
 
