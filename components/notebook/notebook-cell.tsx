@@ -9,6 +9,7 @@ import React, {
   memo,
 } from "react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   CellType,
   OutputType,
@@ -370,6 +371,22 @@ function StatusIndicator({ status }: { status: CellExecutionStatus }) {
   if (!icon) return null;
 
   return <div className="flex items-center">{icon}</div>;
+}
+
+/** Placeholder shown while a cell is waiting in Orion's execution queue. */
+function QueuedOutputSkeleton() {
+  return (
+    <div
+      className="border-t border-muted px-3 py-3"
+      aria-label="Cell output queued"
+    >
+      <div className="space-y-2">
+        <Skeleton className="h-3 w-2/5" />
+        <Skeleton className="h-3 w-4/5" />
+        <Skeleton className="h-3 w-3/5" />
+      </div>
+    </div>
+  );
 }
 
 /** Execution info: last run time and wall-clock duration (inline, no hover card). */
@@ -1235,6 +1252,10 @@ function NotebookCellComponent({
   const getExecutionInfo = useCallback(() => {
     return cell.metadata?.orion?.cellState?.executionInfo;
   }, [cell.metadata]);
+
+  const executionInfo = getExecutionInfo();
+  const isQueuedForExecution =
+    executionInfo?.status === CellExecutionStatus.QUEUED;
 
   const hasCodeOutputs =
     cell.cell_type === CellType.CODE && !!cell.outputs?.length;
@@ -2450,6 +2471,7 @@ function NotebookCellComponent({
                       <CellOutputToolbar
                         isVisible={
                           hoveredOutputIndex !== null &&
+                          !isQueuedForExecution &&
                           !isOutputHidden &&
                           !!cell.outputs?.length
                         }
@@ -2462,7 +2484,9 @@ function NotebookCellComponent({
                       />
                     </div>
                   )}
-                  {isOutputHidden &&
+                  {isQueuedForExecution && <QueuedOutputSkeleton />}
+                  {!isQueuedForExecution &&
+                    isOutputHidden &&
                     cell.outputs &&
                     cell.outputs.length > 0 && (
                       <div
@@ -2472,7 +2496,8 @@ function NotebookCellComponent({
                         Output hidden — click to show
                       </div>
                     )}
-                  {!isOutputHidden &&
+                  {!isQueuedForExecution &&
+                    !isOutputHidden &&
                     cell.outputs &&
                     cell.outputs.length > 0 && (
                       <div className="relative">
