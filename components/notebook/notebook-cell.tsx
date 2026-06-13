@@ -2253,13 +2253,13 @@ function NotebookCellComponent({
                     </TooltipProvider>
                   )}
                   {/* Status indicators and execution info */}
-                  {!isMetadataEditingMode && getExecutionInfo() && (
+                  {!isMetadataEditingMode && executionInfo && (
                     <>
                       <div className="flex items-center gap-1.5">
-                        <StatusIndicator status={getExecutionInfo()!.status} />
+                        <StatusIndicator status={executionInfo.status} />
                         <ExecutionInfo
-                          lastExecuted={getExecutionInfo()!.lastExecuted}
-                          duration={getExecutionInfo()!.duration}
+                          lastExecuted={executionInfo.lastExecuted}
+                          duration={executionInfo.duration}
                         />
                       </div>
                     </>
