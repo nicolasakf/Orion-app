@@ -29,6 +29,8 @@ DEFAULT_APP_BUNDLE_URL = (
     f"https://github.com/nicolasakf/Orion-app/releases/download/"
     f"v{VERSION}/orion-app-{VERSION}.tar.gz"
 )
+DOWNLOAD_CHUNK_SIZE = 1024 * 256
+DOWNLOAD_PROGRESS_WIDTH = 28
 
 
 def orion_home() -> Path:
@@ -116,11 +118,67 @@ def node_platform_slug() -> tuple[str, str]:
     return f"linux-{arch}", "tar.gz"
 
 
-def download_file(url: str, destination: Path) -> None:
-    """Download a URL to a destination path."""
+def format_download_size(byte_count: int) -> str:
+    """Format a byte count for compact CLI download progress."""
+    value = float(byte_count)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            if unit == "B":
+                return f"{int(value)} {unit}"
+            return f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{value:.1f} GB"
+
+
+def parse_content_length(value: str | None) -> int | None:
+    """Parse an HTTP Content-Length header when it is present and valid."""
+    if value is None:
+        return None
+    try:
+        length = int(value)
+    except ValueError:
+        return None
+    return length if length > 0 else None
+
+
+def render_download_progress(downloaded: int, total: int | None) -> str:
+    """Return a single-line progress bar for a streaming download."""
+    if total is None:
+        return f"{format_download_size(downloaded)} downloaded"
+
+    ratio = min(downloaded / total, 1)
+    filled = int(DOWNLOAD_PROGRESS_WIDTH * ratio)
+    bar = "#" * filled + "-" * (DOWNLOAD_PROGRESS_WIDTH - filled)
+    current = format_download_size(downloaded)
+    expected = format_download_size(total)
+    return f"[{bar}] {ratio * 100:5.1f}% {current} / {expected}"
+
+
+def write_download_progress(downloaded: int, total: int | None) -> None:
+    """Write an in-place download progress update for interactive terminals."""
+    sys.stderr.write(f"\r{render_download_progress(downloaded, total)}")
+    sys.stderr.flush()
+
+
+def download_file(url: str, destination: Path, show_progress: bool = False) -> None:
+    """Download a URL to a destination path, optionally showing progress."""
     destination.parent.mkdir(parents=True, exist_ok=True)
     with urllib.request.urlopen(url) as response, destination.open("wb") as handle:
-        shutil.copyfileobj(response, handle)
+        total = parse_content_length(response.headers.get("Content-Length"))
+        progress_enabled = show_progress and sys.stderr.isatty()
+        downloaded = 0
+        while True:
+            chunk = response.read(DOWNLOAD_CHUNK_SIZE)
+            if not chunk:
+                break
+            handle.write(chunk)
+            downloaded += len(chunk)
+            if progress_enabled:
+                write_download_progress(downloaded, total)
+        if progress_enabled:
+            write_download_progress(downloaded, total)
+            sys.stderr.write("\n")
+            sys.stderr.flush()
 
 
 def ensure_node(assume_yes: bool) -> str:
@@ -170,7 +228,7 @@ def ensure_app_bundle(assume_yes: bool) -> Path:
 
     archive = runtime_dir() / "downloads" / f"orion-app-{VERSION}.tar.gz"
     print(f"Downloading Orion app bundle from {url}")
-    download_file(url, archive)
+    download_file(url, archive, show_progress=True)
     directory.parent.mkdir(parents=True, exist_ok=True)
     if directory.exists():
         shutil.rmtree(directory)
