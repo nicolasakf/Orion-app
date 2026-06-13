@@ -2110,6 +2110,14 @@ export default function Page() {
     [currentFile, replaceKernelService],
   );
 
+  const displayKernelStatus: KernelStatus =
+    isRunning &&
+      currentKernel &&
+      kernelStatus !== "connecting" &&
+      kernelStatus !== "disconnected"
+      ? "busy"
+      : kernelStatus;
+
   const getStatusIcon = () => {
     if (isAutoConnecting) {
       return (
@@ -2120,7 +2128,7 @@ export default function Page() {
       );
     }
 
-    switch (kernelStatus) {
+    switch (displayKernelStatus) {
       case "connected":
         return (
           <Circle
@@ -2496,7 +2504,7 @@ export default function Page() {
                     : () => setIsKernelDropdownOpen(true)
                 }
                 currentKernel={currentKernel}
-                kernelStatus={kernelStatus}
+                kernelStatus={displayKernelStatus}
                 notebook={notebook}
                 hasWorkspaceOpen={hasWorkspaceOpen}
                 hasServerConnection={hasServerConnection}
@@ -2710,7 +2718,7 @@ export default function Page() {
                               {currentFile.path && ActiveEditorToolbar ? (
                                 <ActiveEditorToolbar
                                   currentKernel={currentKernel}
-                                  kernelStatus={kernelStatus}
+                                  kernelStatus={displayKernelStatus}
                                   isRunning={isRunning}
                                   presentationHideAllCellInputs={
                                     presentationHideAllCellInputs
@@ -2825,7 +2833,7 @@ export default function Page() {
                             // Pass kernel related props
                             kernelService={kernelService}
                             currentKernel={currentKernel}
-                            kernelStatus={kernelStatus}
+                            kernelStatus={displayKernelStatus}
                             isRunning={isRunning}
                             executionCountRef={executionCountRef}
                             onKernelStatusChange={setKernelStatus}
@@ -2920,7 +2928,7 @@ export default function Page() {
                           activeNotebookPath={currentFile.path}
                           activeNotebook={notebook}
                           kernelService={kernelService}
-                          kernelStatus={kernelStatus}
+                          kernelStatus={displayKernelStatus}
                           onOpenKernelDropdown={
                             !currentKernel
                               ? openConnectionDialog
