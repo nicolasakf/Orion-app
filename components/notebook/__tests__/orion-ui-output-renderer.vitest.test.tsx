@@ -15,7 +15,11 @@ function renderOrionUiOutput({
   onAction = vi.fn(),
 }: {
   value: unknown;
-  onStateChange?: (key: string, value: string | number | boolean, outputId?: string) => void;
+  onStateChange?: (
+    key: string,
+    value: string | number | boolean,
+    outputId?: string,
+  ) => void;
   onAction?: (action: unknown) => void;
 }) {
   const output: NotebookOutputType = {
@@ -125,5 +129,58 @@ describe("OrionUiOutputRenderer", () => {
     expect(screen.getByRole("button", { name: "Styled" })).toHaveClass(
       "metric-action",
     );
+  });
+
+  it("renders date range slider presets and forwards range changes", () => {
+    const onStateChange = vi.fn();
+    renderOrionUiOutput({
+      onStateChange,
+      value: {
+        version: 1,
+        id: "ui-date-range",
+        root: {
+          type: "DateRangeSlider",
+          props: {
+            label: "Analysis window",
+            stateKey: "analysis_window",
+            defaultValue: '{"from":"2026-05-01","to":"2026-05-07"}',
+          },
+          children: [],
+        },
+        state: {
+          analysis_window: '{"from":"2026-05-01","to":"2026-05-07"}',
+        },
+        bindings: {
+          analysis_window: { kind: "python_state", valueType: "string" },
+        },
+      },
+    });
+
+    expect(
+      screen.getByRole("group", { name: "Analysis window" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "This month" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Last 7D" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "30D" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "90D" })).toBeInTheDocument();
+    expect(screen.getByText("7 Days")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "30D" }));
+
+    expect(onStateChange).toHaveBeenCalled();
+    const [key, rawValue, outputId] = onStateChange.mock.calls.at(-1) ?? [];
+    expect(key).toBe("analysis_window");
+    expect(outputId).toBe("ui-date-range");
+    const nextRange = JSON.parse(String(rawValue)) as {
+      from: string;
+      to: string;
+    };
+    const from = new Date(`${nextRange.from}T00:00:00`);
+    const to = new Date(`${nextRange.to}T00:00:00`);
+    const dayCount =
+      Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1;
+    expect(dayCount).toBe(30);
   });
 });

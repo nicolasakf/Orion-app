@@ -87,6 +87,12 @@ class OrionUiTests(unittest.TestCase):
                 ui.radio_group("mode", ["fast", "accurate"], default_value="fast"),
                 ui.toggle_group("view", ["chart", "table"], default_value="chart"),
                 ui.date_picker("start_date", default_value="2026-05-26"),
+                ui.date_range_slider(
+                    "analysis_window",
+                    label="Analysis window",
+                    default_value='{"from":"2026-06-01","to":"2026-06-07"}',
+                    visible_months=3,
+                ),
                 ui.progress("completion", default_value=25, max=100),
                 ui.alert(title="Status", description="Ready"),
                 ui.avatar(fallback="OR"),
@@ -105,16 +111,22 @@ class OrionUiTests(unittest.TestCase):
         self.assertEqual(stack_children[0]["type"], "RadioGroup")
         self.assertEqual(stack_children[1]["type"], "ToggleGroup")
         self.assertEqual(stack_children[2]["type"], "DatePicker")
-        self.assertEqual(stack_children[3]["type"], "Progress")
-        self.assertEqual(stack_children[4]["type"], "Alert")
-        self.assertEqual(stack_children[5]["type"], "Avatar")
-        self.assertEqual(stack_children[6]["type"], "Popover")
-        self.assertEqual(stack_children[7]["type"], "Carousel")
-        self.assertEqual(stack_children[8]["type"], "Collapsible")
-        self.assertEqual(stack_children[9]["type"], "Accordion")
+        self.assertEqual(stack_children[3]["type"], "DateRangeSlider")
+        self.assertEqual(stack_children[4]["type"], "Progress")
+        self.assertEqual(stack_children[5]["type"], "Alert")
+        self.assertEqual(stack_children[6]["type"], "Avatar")
+        self.assertEqual(stack_children[7]["type"], "Popover")
+        self.assertEqual(stack_children[8]["type"], "Carousel")
+        self.assertEqual(stack_children[9]["type"], "Collapsible")
+        self.assertEqual(stack_children[10]["type"], "Accordion")
         self.assertEqual(payload["state"]["mode"], "fast")
         self.assertEqual(payload["state"]["view"], "chart")
         self.assertEqual(payload["state"]["start_date"], "2026-05-26")
+        self.assertEqual(
+            payload["state"]["analysis_window"],
+            '{"from":"2026-06-01","to":"2026-06-07"}',
+        )
+        self.assertEqual(stack_children[3]["props"]["visibleMonths"], 3)
         self.assertEqual(payload["state"]["completion"], 25)
 
     def test_class_name_serializes_to_class_name_prop(self):

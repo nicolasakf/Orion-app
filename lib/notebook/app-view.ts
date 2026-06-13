@@ -24,6 +24,7 @@ export const BUILTIN_APP_VIEW_PRIMITIVES = [
   "ToggleGroup",
   "Calendar",
   "DatePicker",
+  "DateRangeSlider",
   "DateTimePicker",
   "Label",
   "Badge",

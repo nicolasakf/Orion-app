@@ -91,6 +91,7 @@ Controls:
 - `ui.toggle_group("key", options, label=None, default_value=None, value=<unset>, variant=None)`
 - `ui.calendar("key", label=None, mode="single", default_value="", value=<unset>, caption_layout=None, from_year=None, to_year=None, number_of_months=None, show_outside_days=False, presets=None)`
 - `ui.date_picker("key", label=None, mode="single", default_value="", value=<unset>, placeholder=None, caption_layout=None, from_year=None, to_year=None, number_of_months=None, show_outside_days=False, presets=None)`
+- `ui.date_range_slider("key", label=None, default_value=None, value=<unset>, visible_months=4, min_days=1, presets=None)`
 - `ui.date_time_picker("key", label=None, default_value="", value=<unset>, start_time_key=None, end_time_key=None, start_time_label="Start time", end_time_label="End time", default_start_time="09:00:00", default_end_time="17:00:00", caption_layout=None, from_year=None, to_year=None, show_outside_days=False, presets=None)`
 - `ui.button(label, action=None, variant=None, size=None)`
 
@@ -160,6 +161,7 @@ Only use this action when the target cell ids already exist in `cells[i].metadat
 - Components accept JSON-serializable props only.
 - `Calendar`, `DatePicker`, and `DateTimePicker` use ISO-like `YYYY-MM-DD` strings in Python state for single dates.
 - `Calendar` and `DatePicker` support `mode="range"`; range state is a JSON string such as `{"from":"2026-06-01","to":"2026-06-07"}`.
+- `DateRangeSlider` also stores range state as a JSON string such as `{"from":"2026-06-01","to":"2026-06-07"}` and includes built-in quick presets when none are provided.
 - Calendar-style components support `caption_layout="buttons"`, `"dropdown"`, or `"dropdown-buttons"` (dropdowns plus prev/next month buttons), `from_year`, `to_year`, `number_of_months`, `show_outside_days` (default `False`), and `presets=[{"label": "Today", "daysOffset": 0}]`.
 - Do not rely on arbitrary Tailwind runtime class strings; Tailwind only includes classes known at build time.
 - Do not use arbitrary React, custom component imports, inline `style`, or raw CSS inside Python UI code.

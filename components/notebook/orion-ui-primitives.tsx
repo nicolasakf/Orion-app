@@ -2,7 +2,11 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
-import { CalendarIcon } from "lucide-react";
+import {
+  CalendarIcon,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 import type { DateRange } from "react-day-picker";
 
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
@@ -131,6 +135,19 @@ interface DatePreset {
 
 type CalendarCaptionLayout = "buttons" | "dropdown" | "dropdown-buttons";
 type DateSelectionMode = "single" | "range";
+type DateRangeDragMode = "start" | "end" | "range";
+
+interface NormalizedDateRange {
+  from: Date;
+  to: Date;
+}
+
+interface DateRangeDragState {
+  mode: DateRangeDragMode;
+  pointerDay: number;
+  initialFromDay: number;
+  initialToDay: number;
+}
 
 const gapClasses = {
   none: "gap-0",
@@ -182,6 +199,7 @@ const builtinPrimitiveRenderers: Record<string, PrimitiveRenderer> = {
   ToggleGroup: renderToggleGroup,
   Calendar: renderCalendar,
   DatePicker: renderDatePicker,
+  DateRangeSlider: renderDateRangeSlider,
   DateTimePicker: renderDateTimePicker,
   Label: renderLabel,
   Badge: renderBadge,
@@ -487,6 +505,120 @@ function formatDateRange(range: DateRange | undefined): string {
     value.to = formatIsoDate(range.to);
   }
   return JSON.stringify(value);
+}
+
+/** Returns a cloned date at local midnight. */
+function startOfLocalDay(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+/** Returns today's local date without a time component. */
+function todayLocalDate(): Date {
+  return startOfLocalDay(new Date());
+}
+
+/** Adds a whole number of days while preserving local calendar dates. */
+function addLocalDays(date: Date, days: number): Date {
+  const nextDate = startOfLocalDay(date);
+  nextDate.setDate(nextDate.getDate() + days);
+  return nextDate;
+}
+
+/** Adds whole months while anchoring on the first of the target month. */
+function addLocalMonths(date: Date, months: number): Date {
+  return new Date(date.getFullYear(), date.getMonth() + months, 1);
+}
+
+/** Returns the first day of the date's local month. */
+function startOfLocalMonth(date: Date): Date {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+/** Converts a local calendar date to a timezone-stable day index. */
+function localDayIndex(date: Date): number {
+  return Math.floor(
+    Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()) /
+    86_400_000,
+  );
+}
+
+/** Converts a timezone-stable day index back to a local calendar date. */
+function dateFromLocalDayIndex(dayIndex: number): Date {
+  const utcDate = new Date(dayIndex * 86_400_000);
+  return new Date(
+    utcDate.getUTCFullYear(),
+    utcDate.getUTCMonth(),
+    utcDate.getUTCDate(),
+  );
+}
+
+/** Restricts a numeric value to an inclusive range. */
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** Returns the inclusive day count for a normalized date range. */
+function dateRangeDayCount(range: NormalizedDateRange): number {
+  return localDayIndex(range.to) - localDayIndex(range.from) + 1;
+}
+
+/** Parses a range string and falls back to the last 30 days. */
+function normalizedDateRange(value: string | undefined): NormalizedDateRange {
+  const parsed = parseDateRange(value);
+  const fallbackTo = todayLocalDate();
+  const fallbackFrom = addLocalDays(fallbackTo, -29);
+  const from = parsed?.from ? startOfLocalDay(parsed.from) : undefined;
+  const to = parsed?.to ? startOfLocalDay(parsed.to) : undefined;
+
+  if (from && to) {
+    return localDayIndex(from) <= localDayIndex(to)
+      ? { from, to }
+      : { from: to, to: from };
+  }
+  if (from) {
+    return { from, to: from };
+  }
+  if (to) {
+    return { from: to, to };
+  }
+  return { from: fallbackFrom, to: fallbackTo };
+}
+
+/** Formats a compact endpoint label for the timeline header. */
+function formatRangeEndpoint(date: Date): string {
+  const today = todayLocalDate();
+  if (localDayIndex(date) === localDayIndex(today)) {
+    return "Today";
+  }
+  return format(date, "MMMM d");
+}
+
+/** Returns the visible month count for the compact timeline. */
+function dateRangeVisibleMonths(props: Record<string, unknown>): number {
+  const value = numberProp(props, "visibleMonths");
+  return clampNumber(Math.floor(value ?? 4), 2, 12);
+}
+
+/** Builds default quick-select date range presets. */
+function defaultDateRangePresets(): DatePreset[] {
+  return [
+    {
+      label: "This month",
+      from: formatIsoDate(startOfLocalMonth(todayLocalDate())),
+      toDaysOffset: 0,
+    },
+    { label: "Last 7D", fromDaysOffset: -6, toDaysOffset: 0 },
+    { label: "30D", fromDaysOffset: -29, toDaysOffset: 0 },
+    { label: "90D", fromDaysOffset: -89, toDaysOffset: 0 },
+  ];
+}
+
+/** Returns custom range presets or the built-in date range controls. */
+function getDateRangeSliderPresets(
+  props: Record<string, unknown>,
+): DatePreset[] {
+  const customPresets = getDatePresets(props);
+  return customPresets.length > 0 ? customPresets : defaultDateRangePresets();
 }
 
 /** Formats a stored range string for display in date picker triggers. */
@@ -1697,6 +1829,437 @@ function renderDatePicker(
           )}
         </PopoverContent>
       </Popover>
+    </div>
+  );
+}
+
+/** Renders a compact draggable date range timeline bound to JSON range state. */
+function renderDateRangeSlider(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  return <DateRangeSliderControl node={node} context={context} />;
+}
+
+function DateRangeSliderControl({
+  node,
+  context,
+}: {
+  node: NotebookAppViewSchemaNode;
+  context: SchemaRenderContext;
+}): React.JSX.Element {
+  const value = getStringState(node, context);
+  const range = normalizedDateRange(value);
+  const visibleMonths = dateRangeVisibleMonths(node.props);
+  const label =
+    stringProp(node.props, "label") ??
+    stringProp(node.props, "stateKey") ??
+    "Date range";
+  const minDays = Math.max(
+    1,
+    Math.floor(numberProp(node.props, "minDays") ?? 1),
+  );
+  const rangeFromDay = localDayIndex(range.from);
+  const rangeToDay = localDayIndex(range.to);
+  const [visibleStartDay, setVisibleStartDay] = useState(() =>
+    localDayIndex(addLocalMonths(startOfLocalMonth(range.from), -1)),
+  );
+  const [activeDragMode, setActiveDragMode] =
+    useState<DateRangeDragMode | null>(null);
+  const trackRef = React.useRef<HTMLDivElement | null>(null);
+  const dragStateRef = React.useRef<DateRangeDragState | null>(null);
+  const visibleStartDate = dateFromLocalDayIndex(visibleStartDay);
+  const visibleEndDay = localDayIndex(
+    addLocalDays(addLocalMonths(visibleStartDate, visibleMonths), -1),
+  );
+  const visibleSpan = Math.max(1, visibleEndDay - visibleStartDay);
+  const months = useMemo(
+    () =>
+      Array.from({ length: visibleMonths }, (_, index) =>
+        addLocalMonths(visibleStartDate, index),
+      ),
+    [visibleMonths, visibleStartDay],
+  );
+  const tickDays = useMemo(() => {
+    const days = visibleEndDay - visibleStartDay + 1;
+    const stride = days > 150 ? 3 : days > 95 ? 2 : 1;
+    return Array.from({ length: Math.ceil(days / stride) }, (_, index) =>
+      visibleStartDay + index * stride,
+    );
+  }, [visibleEndDay, visibleStartDay]);
+  const presets = useMemo(
+    () => getDateRangeSliderPresets(node.props),
+    [node.props],
+  );
+  const rangeLeft = clampNumber(
+    ((rangeFromDay - visibleStartDay) / visibleSpan) * 100,
+    0,
+    100,
+  );
+  const rangeRight = clampNumber(
+    ((rangeToDay - visibleStartDay) / visibleSpan) * 100,
+    0,
+    100,
+  );
+  const rangeWidth = Math.max(3, rangeRight - rangeLeft);
+  const dayLabel = `${dateRangeDayCount(range)} Days`;
+  const rangeLabel = `${formatRangeEndpoint(range.from)} - ${formatRangeEndpoint(
+    range.to,
+  )}`;
+
+  useEffect(() => {
+    if (rangeFromDay >= visibleStartDay && rangeToDay <= visibleEndDay) {
+      return;
+    }
+
+    setVisibleStartDay(
+      localDayIndex(addLocalMonths(startOfLocalMonth(range.from), -1)),
+    );
+  }, [
+    range.from,
+    range.to,
+    rangeFromDay,
+    rangeToDay,
+    visibleEndDay,
+    visibleStartDay,
+  ]);
+
+  const commitRange = useCallback(
+    (fromDay: number, toDay: number) => {
+      const normalizedFromDay = Math.min(fromDay, toDay);
+      const normalizedToDay = Math.max(fromDay, toDay);
+      setNodeState(
+        node,
+        context,
+        formatDateRange({
+          from: dateFromLocalDayIndex(normalizedFromDay),
+          to: dateFromLocalDayIndex(normalizedToDay),
+        }),
+      );
+    },
+    [context, node],
+  );
+
+  const dayFromPointer = useCallback(
+    (clientX: number) => {
+      const track = trackRef.current;
+      if (!track) {
+        return visibleStartDay;
+      }
+
+      const rect = track.getBoundingClientRect();
+      const ratio =
+        rect.width > 0
+          ? clampNumber((clientX - rect.left) / rect.width, 0, 1)
+          : 0;
+      return Math.round(visibleStartDay + ratio * visibleSpan);
+    },
+    [visibleSpan, visibleStartDay],
+  );
+
+  const handleDragMove = useCallback(
+    (clientX: number) => {
+      const dragState = dragStateRef.current;
+      if (!dragState) {
+        return;
+      }
+
+      const pointerDay = dayFromPointer(clientX);
+      const deltaDays = pointerDay - dragState.pointerDay;
+      if (dragState.mode === "range") {
+        const duration = dragState.initialToDay - dragState.initialFromDay;
+        const nextFrom = clampNumber(
+          dragState.initialFromDay + deltaDays,
+          visibleStartDay,
+          visibleEndDay - duration,
+        );
+        commitRange(nextFrom, nextFrom + duration);
+        return;
+      }
+
+      if (dragState.mode === "start") {
+        commitRange(
+          clampNumber(
+            dragState.initialFromDay + deltaDays,
+            visibleStartDay,
+            dragState.initialToDay - minDays + 1,
+          ),
+          dragState.initialToDay,
+        );
+        return;
+      }
+
+      commitRange(
+        dragState.initialFromDay,
+        clampNumber(
+          dragState.initialToDay + deltaDays,
+          dragState.initialFromDay + minDays - 1,
+          visibleEndDay,
+        ),
+      );
+    },
+    [commitRange, dayFromPointer, minDays, visibleEndDay, visibleStartDay],
+  );
+
+  const startDrag = useCallback(
+    (event: React.PointerEvent<HTMLElement>, mode: DateRangeDragMode) => {
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      dragStateRef.current = {
+        mode,
+        pointerDay: dayFromPointer(event.clientX),
+        initialFromDay: rangeFromDay,
+        initialToDay: rangeToDay,
+      };
+      setActiveDragMode(mode);
+    },
+    [dayFromPointer, rangeFromDay, rangeToDay],
+  );
+
+  const stopDrag = useCallback((event: React.PointerEvent<HTMLElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    dragStateRef.current = null;
+    setActiveDragMode(null);
+  }, []);
+
+  const nudgeRange = useCallback(
+    (mode: DateRangeDragMode, deltaDays: number) => {
+      if (mode === "range") {
+        const duration = rangeToDay - rangeFromDay;
+        const nextFrom = clampNumber(
+          rangeFromDay + deltaDays,
+          visibleStartDay,
+          visibleEndDay - duration,
+        );
+        commitRange(nextFrom, nextFrom + duration);
+        return;
+      }
+
+      if (mode === "start") {
+        commitRange(
+          clampNumber(
+            rangeFromDay + deltaDays,
+            visibleStartDay,
+            rangeToDay - minDays + 1,
+          ),
+          rangeToDay,
+        );
+        return;
+      }
+
+      commitRange(
+        rangeFromDay,
+        clampNumber(
+          rangeToDay + deltaDays,
+          rangeFromDay + minDays - 1,
+          visibleEndDay,
+        ),
+      );
+    },
+    [
+      commitRange,
+      minDays,
+      rangeFromDay,
+      rangeToDay,
+      visibleEndDay,
+      visibleStartDay,
+    ],
+  );
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLElement>, mode: DateRangeDragMode) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+        return;
+      }
+
+      event.preventDefault();
+      nudgeRange(mode, event.key === "ArrowLeft" ? -1 : 1);
+    },
+    [nudgeRange],
+  );
+
+  const applyPreset = useCallback(
+    (preset: DatePreset) => {
+      const nextValue = presetRangeValue(preset);
+      const nextRange = normalizedDateRange(nextValue);
+      if (nextValue !== undefined) {
+        setNodeState(node, context, nextValue);
+        setVisibleStartDay(
+          localDayIndex(
+            addLocalMonths(startOfLocalMonth(nextRange.from), -1),
+          ),
+        );
+      }
+    },
+    [context, node],
+  );
+
+  const isPresetActive = useCallback(
+    (preset: DatePreset) => {
+      const presetValue = presetRangeValue(preset);
+      if (!presetValue) {
+        return false;
+      }
+      const presetRange = normalizedDateRange(presetValue);
+      return (
+        localDayIndex(presetRange.from) === rangeFromDay &&
+        localDayIndex(presetRange.to) === rangeToDay
+      );
+    },
+    [rangeFromDay, rangeToDay],
+  );
+
+  return (
+    <div
+      className={primitiveClass(
+        node,
+        "corner-squircle w-full overflow-hidden rounded-lg border bg-background shadow-sm",
+      )}
+      role="group"
+      aria-label={label}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+        <div className="min-w-0 text-sm font-medium text-foreground">
+          {rangeLabel}
+        </div>
+        <div className="corner-squircle flex max-w-full items-center gap-1 rounded-md bg-muted/50 p-0.5">
+          {presets.map((preset) => (
+            <button
+              key={preset.label}
+              type="button"
+              className={cn(
+                "corner-squircle h-7 rounded px-2 text-xs font-medium text-muted-foreground transition-colors",
+                "hover:bg-background hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                isPresetActive(preset) &&
+                  "bg-background text-foreground shadow-sm",
+              )}
+              onClick={() => applyPreset(preset)}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="grid grid-cols-[2rem_1fr_2rem] items-center gap-1 px-2 pb-3 pt-4">
+        <button
+          type="button"
+          className="corner-squircle inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label="Show earlier months"
+          onClick={() =>
+            setVisibleStartDay((current) =>
+              localDayIndex(
+                addLocalMonths(dateFromLocalDayIndex(current), -1),
+              ),
+            )
+          }
+        >
+          <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+        </button>
+        <div className="min-w-0">
+          <div
+            ref={trackRef}
+            className="relative h-12 touch-none select-none"
+            onPointerMove={(event) => handleDragMove(event.clientX)}
+            onPointerUp={stopDrag}
+            onPointerCancel={stopDrag}
+          >
+            <div className="absolute inset-x-0 top-4 h-px rounded-full bg-border" />
+            <div className="absolute inset-x-0 top-2 flex h-5 items-center justify-between overflow-hidden">
+              {tickDays.map((day) => (
+                <span
+                  key={day}
+                  className="h-3 w-px shrink-0 rounded-full bg-muted-foreground/15"
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              className={cn(
+                "corner-squircle absolute top-0 h-8 cursor-grab rounded-md border bg-background/95 shadow-sm",
+                "transition-[left,width,box-shadow] duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring active:cursor-grabbing",
+                activeDragMode && "transition-none",
+              )}
+              style={{ left: `${rangeLeft}%`, width: `${rangeWidth}%` }}
+              aria-label={`Move selected range, ${dayLabel}`}
+              onPointerDown={(event) => startDrag(event, "range")}
+              onKeyDown={(event) => handleKeyDown(event, "range")}
+            >
+              <span className="flex h-full items-center justify-center whitespace-nowrap px-8 text-xs font-semibold text-foreground">
+                {dayLabel}
+              </span>
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "absolute top-1 flex h-6 w-6 -translate-x-1/2 items-center justify-center rounded-full border bg-background shadow-md",
+                "transition-[left,transform] duration-300 hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                activeDragMode && "transition-none",
+              )}
+              style={{ left: `${rangeLeft}%` }}
+              aria-label={`Adjust start date, ${formatRangeEndpoint(
+                range.from,
+              )}`}
+              onPointerDown={(event) => startDrag(event, "start")}
+              onKeyDown={(event) => handleKeyDown(event, "start")}
+            >
+              <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "absolute top-1 flex h-6 w-6 -translate-x-1/2 items-center justify-center rounded-full border bg-background shadow-md",
+                "transition-[left,transform] duration-300 hover:scale-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                activeDragMode && "transition-none",
+              )}
+              style={{ left: `${rangeRight}%` }}
+              aria-label={`Adjust end date, ${formatRangeEndpoint(range.to)}`}
+              onPointerDown={(event) => startDrag(event, "end")}
+              onKeyDown={(event) => handleKeyDown(event, "end")}
+            >
+              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          </div>
+          <div
+            className="mt-1 grid"
+            style={{
+              gridTemplateColumns: `repeat(${visibleMonths}, minmax(0, 1fr))`,
+            }}
+          >
+            {months.map((month) => {
+              const isRangeMonth =
+                month.getFullYear() === range.from.getFullYear() &&
+                month.getMonth() === range.from.getMonth();
+              return (
+                <div
+                  key={`${month.getFullYear()}-${month.getMonth()}`}
+                  className={cn(
+                    "truncate text-center text-xs font-medium text-muted-foreground",
+                    isRangeMonth && "text-foreground",
+                  )}
+                >
+                  {format(month, "MMMM")}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="corner-squircle inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          aria-label="Show later months"
+          onClick={() =>
+            setVisibleStartDay((current) =>
+              localDayIndex(
+                addLocalMonths(dateFromLocalDayIndex(current), 1),
+              ),
+            )
+          }
+        >
+          <ChevronRight className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
     </div>
   );
 }

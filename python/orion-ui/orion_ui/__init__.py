@@ -8,6 +8,7 @@ import html
 import json
 import uuid
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 from . import _runtime, theme
@@ -37,6 +38,7 @@ _COMPONENT_TYPES = {
     "ToggleGroup",
     "Calendar",
     "DatePicker",
+    "DateRangeSlider",
     "DateTimePicker",
     "Label",
     "Badge",
@@ -105,6 +107,16 @@ def _value_type(value: StateValue) -> str:
     if isinstance(value, (int, float)):
         return "number"
     return "string"
+
+
+def _default_date_range_value(days: int = 30) -> str:
+    """Return a compact JSON date range ending on today's local date."""
+    today = date.today()
+    start = today - timedelta(days=max(1, days) - 1)
+    return json.dumps(
+        {"from": start.isoformat(), "to": today.isoformat()},
+        separators=(",", ":"),
+    )
 
 
 @dataclass(frozen=True)
@@ -1096,6 +1108,71 @@ def date_picker(
     )
 
 
+def date_range_slider(
+    key: str,
+    *,
+    label: Optional[str] = None,
+    default_value: Optional[str] = None,
+    value: Any = _UNSET,
+    visible_months: int = 4,
+    min_days: int = 1,
+    presets: Optional[Sequence[Mapping[str, Any]]] = None,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create an animated timeline date range slider bound to Python state.
+
+    The control stores a JSON string such as
+    ``'{"from":"2026-06-01","to":"2026-06-07"}'``. Users can click presets,
+    drag the selected range, drag either endpoint, or page the visible months.
+
+    Parameters
+    ----------
+    key : str
+        Non-empty state key used by ``get()``, ``set()``, and ``state()``.
+    label : str or None, optional
+        Accessible group label for the slider. Default is ``None``.
+    default_value : str or None, optional
+        Initial range JSON string. When ``None``, defaults to the last 30 days
+        ending today. Default is ``None``.
+    value
+        When omitted, registers ``default_value`` without overwriting user
+        selection on rerun. When provided, must be a ``str``, ``int``,
+        ``float``, or ``bool`` and forces that value into runtime state on
+        rerun.
+    visible_months : int, optional
+        Number of months visible in the timeline, clamped by the renderer to a
+        compact range. Default is ``4``.
+    min_days : int, optional
+        Minimum inclusive range length while dragging endpoints. Default is
+        ``1``.
+    presets : sequence of mapping or None, optional
+        Quick-pick buttons. Each mapping must include ``"label"`` and may
+        include ``"from"``, ``"to"``, ``"fromDaysOffset"``,
+        ``"toDaysOffset"``, ``"value"``, or ``"daysOffset"``. When omitted,
+        Orion renders ``"This month"``, ``"Last 7D"``, ``"30D"``, and
+        ``"90D"`` presets.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``DateRangeSlider`` component node bound to ``key``.
+    """
+    resolved_default = default_value or _default_date_range_value()
+    return _control(
+        "DateRangeSlider",
+        key,
+        resolved_default,
+        value,
+        label=label,
+        visibleMonths=visible_months,
+        minDays=min_days,
+        presets=presets,
+        class_name=class_name,
+    )
+
+
 def date_time_picker(
     key: str,
     *,
@@ -1812,6 +1889,7 @@ def _render_static_html(component: Component) -> str:
         "ToggleGroup",
         "Calendar",
         "DatePicker",
+        "DateRangeSlider",
         "DateTimePicker",
         "Progress",
     }:
