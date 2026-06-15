@@ -115,8 +115,12 @@ jobs:
         if: matrix.preinstallUv == true && runner.os == 'Windows'
         shell: pwsh
         run: |
-          (Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1).Content | Invoke-Expression
-          "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          $uvInstaller = (Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1).Content
+          if ($uvInstaller -is [byte[]]) {
+            $uvInstaller = [System.Text.Encoding]::UTF8.GetString($uvInstaller)
+          }
+          Invoke-Expression $uvInstaller
+          "$env:USERPROFILE\.local\bin", "$env:USERPROFILE\.cargo\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Install and run doctor
         if: runner.os != 'Windows'
@@ -195,17 +199,21 @@ jobs:
           switch ($env:INSTALL_METHOD) {
             "uv" {
               if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
-                (Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1).Content | Invoke-Expression
-                $env:PATH = "$env:USERPROFILE\.local\bin;$env:PATH"
+                $uvInstaller = (Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1).Content
+                if ($uvInstaller -is [byte[]]) {
+                  $uvInstaller = [System.Text.Encoding]::UTF8.GetString($uvInstaller)
+                }
+                Invoke-Expression $uvInstaller
+                $env:PATH = "$env:USERPROFILE\.local\bin;$env:USERPROFILE\.cargo\bin;$env:PATH"
               }
-              uv tool install --python 3.12 $orionWheel.FullName
+              uv tool install --python 3.12 $($orionWheel.FullName)
               $env:PATH = "$(uv tool dir --bin);$env:PATH"
             }
             "npm" {
-              npm install -g $npmTgz.FullName
+              npm install -g $($npmTgz.FullName)
             }
             "pip" {
-              python -m pip install --user $orionWheel.FullName
+              python -m pip install --user $($orionWheel.FullName)
               $userBase = python -m site --user-base
               $env:PATH = "$userBase\Scripts;$env:PATH"
             }
