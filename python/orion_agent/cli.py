@@ -17,8 +17,9 @@ import urllib.error
 import urllib.request
 import webbrowser
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .managed_packages import get_python_support, managed_runtime_packages
 
@@ -266,7 +267,11 @@ def ensure_app_bundle(assume_yes: bool) -> Path:
                 shutil.move(str(child), directory)
             extracted_root.rmdir()
     if not (directory / "server.js").exists():
-        raise SystemExit("Downloaded Orion app bundle did not contain server.js.")
+        raise SystemExit(
+            "Downloaded Orion app bundle did not contain server.js. "
+            "Run `orion doctor --json`, or reset cached data with "
+            "`orion uninstall --all --yes` and retry."
+        )
     return directory
 
 
@@ -517,7 +522,9 @@ def ensure_native_modules(node: str, app: Path) -> None:
             "Try one of the following:\n"
             "  1. Upgrade the launcher: pip install -U orion-notebook\n"
             "  2. Clear the cached app bundle: orion uninstall -y\n"
-            "  3. Retry: orion --yes\n"
+            "  3. Check diagnostics: orion doctor --json\n"
+            "  4. If the cache is broken, reset it: orion uninstall --all --yes\n"
+            "  5. Retry: orion --yes\n"
             "If the problem persists, report it at "
             "https://github.com/nicolasakf/Orion-app/issues\n"
             f"Details: {error}"
@@ -557,6 +564,467 @@ def start_orion_app(node: str, app: Path) -> tuple[subprocess.Popen[bytes], str]
 def app_bundle_archive() -> Path:
     """Return the cached GitHub app bundle archive for this version."""
     return runtime_dir() / "downloads" / f"orion-app-{VERSION}.tar.gz"
+
+
+def redact_path(value: str | Path | None) -> str | None:
+    """Redact the user's home directory from diagnostic paths."""
+    if value is None:
+        return None
+    text = str(value)
+    home = str(Path.home())
+    userprofile = os.environ.get("USERPROFILE")
+    replacements = [(home, "~")]
+    if userprofile:
+        replacements.append((userprofile, "%USERPROFILE%"))
+    for prefix, replacement in replacements:
+        if text.startswith(prefix):
+            return f"{replacement}{text[len(prefix):]}"
+    return text
+
+
+def path_summary() -> dict[str, Any]:
+    """Return a compact PATH summary without dumping the full environment."""
+    raw_path = os.environ.get("PATH") or os.environ.get("Path") or ""
+    entries = [entry for entry in raw_path.split(os.pathsep) if entry]
+    return {
+        "count": len(entries),
+        "entries": [redact_path(entry) for entry in entries[:12]],
+    }
+
+
+def command_status(command: str, args: list[str] | None = None) -> dict[str, Any]:
+    """Return availability and version information for one command."""
+    command_args = args or ["--version"]
+    status: dict[str, Any] = {
+        "available": False,
+        "command": " ".join([command, *command_args]),
+    }
+    resolved = shutil.which(command)
+    if resolved:
+        status["path"] = redact_path(resolved)
+
+    try:
+        result = subprocess.run(
+            [command, *command_args],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        status["error"] = str(error)
+        return status
+
+    status["available"] = result.returncode == 0
+    output = f"{result.stdout}{result.stderr}".strip()
+    if output:
+        first_line = output.splitlines()[0]
+        if result.returncode == 0:
+            status["version"] = first_line
+        else:
+            status["error"] = first_line
+    return status
+
+
+def detect_install_channel() -> str:
+    """Infer whether the Python launcher is running from uv or pip."""
+    prefix = str(Path(sys.prefix)).lower()
+    executable = str(Path(sys.executable)).lower()
+    if "uv" in prefix and "tool" in prefix:
+        return "uv"
+    if "uv" in executable and "tool" in executable:
+        return "uv"
+    return "pip"
+
+
+def detect_conda() -> dict[str, Any]:
+    """Return whether conda is visible in the current shell."""
+    return {
+        "detected": bool(
+            os.environ.get("CONDA_PREFIX")
+            or os.environ.get("CONDA_DEFAULT_ENV")
+            or shutil.which("conda")
+            or shutil.which("mamba")
+        ),
+        "prefix": redact_path(os.environ.get("CONDA_PREFIX")),
+        "environment": os.environ.get("CONDA_DEFAULT_ENV"),
+    }
+
+
+def writable_check(directory: Path) -> dict[str, Any]:
+    """Check whether Orion can write under its runtime directory."""
+    test_file = directory / ".doctor-write-test"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        test_file.write_text("ok\n", encoding="utf-8")
+        test_file.unlink()
+        return {"ok": True, "path": redact_path(directory)}
+    except OSError as error:
+        return {
+            "ok": False,
+            "path": redact_path(directory),
+            "error": str(error),
+        }
+
+
+def network_check(url: str) -> dict[str, Any]:
+    """Perform a small network reachability check for setup dependencies."""
+    try:
+        request = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return {"ok": 200 <= response.status < 400, "url": url, "status": response.status}
+    except Exception as error:
+        return {"ok": False, "url": url, "error": str(error)}
+
+
+def portable_node_status() -> dict[str, Any]:
+    """Return system and Orion-managed Node.js state."""
+    slug, _ext = node_platform_slug()
+    managed_root = runtime_dir() / "node" / NODE_VERSION
+    managed_node = managed_root / f"node-{NODE_VERSION}-{slug}"
+    node_path = managed_node / ("node.exe" if sys.platform == "win32" else "bin/node")
+    return {
+        "system": redact_path(system_node()),
+        "managedPath": redact_path(node_path),
+        "managedPresent": node_path.exists(),
+        "version": NODE_VERSION,
+    }
+
+
+def app_bundle_status() -> dict[str, Any]:
+    """Return the PyPI launcher's cached app bundle state."""
+    directory = app_dir()
+    archive = app_bundle_archive()
+    return {
+        "source": os.environ.get("ORION_APP_BUNDLE_URL", DEFAULT_APP_BUNDLE_URL),
+        "path": redact_path(directory),
+        "present": directory.exists(),
+        "serverJs": (directory / "server.js").exists(),
+        "archive": redact_path(archive),
+        "archivePresent": archive.exists(),
+    }
+
+
+def python_candidate_status(command: list[str]) -> dict[str, Any]:
+    """Inspect one Python candidate for diagnostics."""
+    status: dict[str, Any] = {
+        "command": command,
+        "available": False,
+        "supported": False,
+        "jupyter": False,
+    }
+    try:
+        result = subprocess.run(
+            [
+                *command,
+                "-c",
+                (
+                    "import json, sys; "
+                    "print(json.dumps({'executable': sys.executable, "
+                    "'version': list(sys.version_info[:3])}))"
+                ),
+            ],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        status["error"] = str(error)
+        return status
+
+    if result.returncode != 0:
+        status["error"] = (result.stderr or result.stdout).strip().splitlines()[:1]
+        return status
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        status["error"] = str(error)
+        return status
+
+    version = tuple(int(part) for part in data["version"][:3])
+    support = get_python_support(version)
+    executable = str(data["executable"])
+    status.update(
+        {
+            "available": True,
+            "supported": support is not None,
+            "support": support,
+            "executable": redact_path(executable),
+            "version": list(version),
+            "jupyter": has_jupyter(executable),
+        }
+    )
+    return status
+
+
+def python_status() -> dict[str, Any]:
+    """Return Python/Jupyter discovery state."""
+    seen: set[tuple[str, ...]] = set()
+    candidates: list[dict[str, Any]] = []
+    for command in python_discovery_candidates():
+        key = tuple(command)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(python_candidate_status(command))
+    return {
+        "candidates": candidates,
+        "managedVenvPython": redact_path(managed_venv_python()),
+        "managedVenvPresent": managed_venv_python().exists(),
+        "venvCreationPython": [redact_path(part) for part in resolve_venv_creation_python()],
+    }
+
+
+def jupyter_handoff_status() -> dict[str, Any]:
+    """Check a previous Jupyter handoff if it is still running."""
+    path = handoff_path()
+    if not path.exists():
+        return {"status": "not_checked", "source": "handoff"}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        base_url = str(data.get("baseUrl", ""))
+        token = str(data.get("token", ""))
+        api = jupyter_json(base_url, "api", token)
+        capabilities = {
+            "kernelspecs": isinstance(
+                jupyter_json(base_url, "api/kernelspecs", token).get("kernelspecs"),
+                dict,
+            ),
+            "sessions": isinstance(jupyter_json(base_url, "api/sessions", token), list),
+            "kernels": isinstance(jupyter_json(base_url, "api/kernels", token), list),
+            "contents": isinstance(jupyter_json(base_url, "api/contents", token), dict),
+            "terminals": isinstance(jupyter_json(base_url, "api/terminals", token), list),
+        }
+        missing = [name for name, ok in capabilities.items() if not ok]
+        return {
+            "status": "ready" if not missing else "failed",
+            "source": "handoff",
+            "baseUrl": base_url,
+            "jupyterVersion": str(
+                api.get("version")
+                or api.get("server_version")
+                or api.get("jupyter_server_version")
+                or "unknown"
+            ),
+            "capabilities": capabilities,
+            "missing": missing,
+        }
+    except Exception as error:
+        return {"status": "failed", "source": "handoff", "error": str(error)}
+
+
+@contextmanager
+def stdout_to_stderr(enabled: bool) -> Iterator[None]:
+    """Redirect stdout, including subprocess stdout, while JSON is being built."""
+    if not enabled:
+        yield
+        return
+
+    try:
+        sys.stdout.flush()
+        saved_stdout = os.dup(sys.stdout.fileno())
+        os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    except (AttributeError, OSError):
+        yield
+        return
+
+    try:
+        yield
+    finally:
+        sys.stdout.flush()
+        os.dup2(saved_stdout, sys.stdout.fileno())
+        os.close(saved_stdout)
+
+
+def run_setup_check() -> dict[str, Any]:
+    """Run first-run setup without starting the Orion app or browser."""
+    jupyter_proc: subprocess.Popen[bytes] | None = None
+    try:
+        app = ensure_app_bundle(True)
+        node = ensure_node(True)
+        ensure_native_modules(node, app)
+
+        jupyter_root = Path.home()
+        uses_existing_jupyter = has_jupyter(sys.executable)
+        python = sys.executable if uses_existing_jupyter else install_managed_jupyter(True)
+        try:
+            jupyter_proc, base_url, token, capabilities, version = start_jupyter(
+                python, jupyter_root
+            )
+        except JupyterStartError:
+            if not uses_existing_jupyter:
+                raise
+            python = install_managed_jupyter(True)
+            uses_existing_jupyter = False
+            jupyter_proc, base_url, token, capabilities, version = start_jupyter(
+                python, jupyter_root
+            )
+        write_handoff(
+            base_url,
+            token,
+            python,
+            jupyter_root,
+            capabilities,
+            version,
+            "existing" if uses_existing_jupyter else "managed",
+        )
+        return {
+            "status": "ready",
+            "source": "setup",
+            "baseUrl": base_url,
+            "jupyterVersion": version,
+            "capabilities": capabilities,
+        }
+    except Exception as error:
+        return {"status": "failed", "source": "setup", "error": str(error)}
+    finally:
+        if jupyter_proc is not None:
+            jupyter_proc.terminate()
+
+
+def build_doctor_report(setup: bool, json_output: bool) -> dict[str, Any]:
+    """Build a machine-readable Orion installation diagnostic report."""
+    app_status = app_bundle_status()
+    writable = writable_check(runtime_dir())
+    network = [
+        network_check("https://pypi.org/simple/orion-notebook/"),
+        network_check("https://nodejs.org/dist/"),
+        network_check(os.environ.get("ORION_APP_BUNDLE_URL", DEFAULT_APP_BUNDLE_URL)),
+    ]
+
+    with stdout_to_stderr(json_output):
+        jupyter = run_setup_check() if setup else jupyter_handoff_status()
+
+    app_status = app_bundle_status()
+    errors: list[str] = []
+    warnings: list[str] = []
+    if not writable["ok"]:
+        errors.append("Orion runtime directory is not writable.")
+    if setup and not app_status["serverJs"]:
+        errors.append("App bundle setup failed.")
+    if setup and jupyter["status"] != "ready":
+        errors.append("Jupyter setup check failed.")
+    if not setup and not app_status["serverJs"]:
+        warnings.append("App bundle has not been downloaded yet. Run `orion doctor --setup`.")
+    for check in network:
+        if not check["ok"]:
+            warnings.append(f"Network check failed for {check['url']}.")
+
+    report = {
+        "ok": not errors,
+        "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "version": VERSION,
+        "install": {
+            "channel": detect_install_channel(),
+            "executable": redact_path(sys.argv[0]),
+            "python": redact_path(sys.executable),
+        },
+        "system": {
+            "platform": sys.platform,
+            "os": platform.system(),
+            "release": platform.release(),
+            "machine": platform.machine(),
+            "shell": os.environ.get("SHELL") or os.environ.get("ComSpec"),
+        },
+        "paths": {
+            "orionHome": redact_path(orion_home()),
+            "runtime": redact_path(runtime_dir()),
+            "managedVenv": redact_path(runtime_dir() / "venv"),
+            "path": path_summary(),
+        },
+        "conda": detect_conda(),
+        "commands": {
+            "node": command_status("node"),
+            "npm": command_status("npm"),
+            "python": command_status("python"),
+            "python3": command_status("python3"),
+            "py": command_status("py", ["-3", "--version"]),
+            "pip": command_status("pip"),
+            "uv": command_status("uv"),
+        },
+        "appBundle": app_status,
+        "portableNode": portable_node_status(),
+        "python": python_status(),
+        "jupyter": jupyter,
+        "checks": {
+            "writable": writable,
+            "network": network,
+        },
+        "warnings": warnings,
+        "errors": errors,
+    }
+    return report
+
+
+def print_doctor_report(report: dict[str, Any]) -> None:
+    """Print a readable doctor report for terminal users."""
+    print("Orion doctor")
+    print(f"Version: {report['version']}")
+    print(f"Install channel: {report['install']['channel']}")
+    print(f"Platform: {report['system']['platform']} {report['system']['machine']}")
+    print(f"Orion home: {report['paths']['orionHome']}")
+    print("")
+    print(
+        "App bundle: "
+        f"{'ready' if report['appBundle']['serverJs'] else 'missing'} "
+        f"({report['appBundle']['path']})"
+    )
+    print(
+        "Portable Node: "
+        f"{'ready' if report['portableNode']['system'] or report['portableNode']['managedPresent'] else 'missing'}"
+    )
+    print(
+        "Managed runtime writable: "
+        f"{'yes' if report['checks']['writable']['ok'] else 'no'} "
+        f"({report['checks']['writable']['path']})"
+    )
+    ready_python = [
+        candidate
+        for candidate in report["python"]["candidates"]
+        if candidate.get("supported") and candidate.get("jupyter")
+    ]
+    print(f"Python ready installs: {len(ready_python)}")
+    print(f"Jupyter: {report['jupyter']['status']}")
+    if report["jupyter"].get("error"):
+        print(f"Jupyter error: {report['jupyter']['error']}")
+    print("")
+    print("Commands:")
+    for name, status in report["commands"].items():
+        value = status.get("version") if status.get("available") else "missing"
+        print(f"  {name}: {value}")
+    if report["warnings"]:
+        print("")
+        print("Warnings:")
+        for warning in report["warnings"]:
+            print(f"  - {warning}")
+    if report["errors"]:
+        print("")
+        print("Errors:")
+        for error in report["errors"]:
+            print(f"  - {error}")
+        print("")
+        print("Try `orion uninstall --all --yes`, then rerun `orion doctor --setup`.")
+
+
+def doctor_main(argv: list[str]) -> None:
+    """Run the Orion doctor subcommand."""
+    parser = argparse.ArgumentParser(description="Diagnose Orion installation state.")
+    parser.add_argument("--json", action="store_true", help="Print JSON diagnostics.")
+    parser.add_argument(
+        "--setup",
+        action="store_true",
+        help="Run first-run setup checks without opening the browser.",
+    )
+    args = parser.parse_args(argv)
+    report = build_doctor_report(args.setup, args.json)
+    if args.json:
+        print(json.dumps(report, indent=2))
+    else:
+        print_doctor_report(report)
+    if not report["ok"]:
+        raise SystemExit(1)
 
 
 def remove_path(path: Path) -> bool:
@@ -730,6 +1198,9 @@ def main() -> None:
         return
     if argv and argv[0] == "uninstall":
         uninstall_main(argv[1:])
+        return
+    if argv and argv[0] == "doctor":
+        doctor_main(argv[1:])
         return
     start_main(argv)
 

@@ -1,0 +1,253 @@
+name: Install Smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"
+
+jobs:
+  build-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Node dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build npm package and app bundle
+        run: npm run prepack
+
+      - name: Pack npm tarball
+        run: npm pack
+
+      - name: Install Python build tooling
+        run: python -m pip install --upgrade build
+
+      - name: Build orion-ui wheel
+        working-directory: python/orion-ui
+        run: python -m build
+
+      - name: Build orion-notebook wheel
+        working-directory: python
+        run: python -m build
+
+      - name: Upload install artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-artifacts
+          path: |
+            orion-notebook-*.tgz
+            dist/orion-app-*.tar.gz
+            python/dist/*
+            python/orion-ui/dist/*
+
+  smoke:
+    needs: build-artifacts
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            profile: default-managed
+            method: uv
+          - os: macos-14
+            profile: default-managed
+            method: uv
+          - os: windows-latest
+            profile: default-managed
+            method: uv
+          - os: windows-latest
+            profile: uv-present
+            method: uv
+            preinstallUv: true
+          - os: ubuntu-latest
+            profile: forced-npm
+            method: npm
+          - os: windows-latest
+            profile: forced-pip
+            method: pip
+          - os: windows-latest
+            profile: conda-like-managed
+            method: uv
+            condaLike: true
+    steps:
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download install artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: install-artifacts
+          path: ${{ runner.temp }}/install-artifacts
+
+      - name: Preinstall uv
+        if: matrix.preinstallUv == true && runner.os != 'Windows'
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Preinstall uv
+        if: matrix.preinstallUv == true && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          (Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1).Content | Invoke-Expression
+          "$env:USERPROFILE\.local\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Install and run doctor
+        if: runner.os != 'Windows'
+        env:
+          INSTALL_METHOD: ${{ matrix.method }}
+          CONDA_LIKE: ${{ matrix.condaLike }}
+          ORION_HOME_DIR: ${{ runner.temp }}/orion-home
+          ORION_NO_BROWSER: "1"
+        run: |
+          set -euo pipefail
+          artifact_dir="$RUNNER_TEMP/install-artifacts"
+          npm_tgz="$(find "$artifact_dir" -name 'orion-notebook-*.tgz' -print -quit)"
+          orion_wheel="$(find "$artifact_dir" -path '*/python/dist/orion_notebook-*.whl' -print -quit)"
+          ui_wheel="$(find "$artifact_dir" -path '*/python/orion-ui/dist/orion_ui-*.whl' -print -quit)"
+          app_bundle="$(find "$artifact_dir" -name 'orion-app-*.tar.gz' -print -quit)"
+
+          export ORION_APP_BUNDLE_URL="$(python -c 'from pathlib import Path; import sys; print(Path(sys.argv[1]).resolve().as_uri())' "$app_bundle")"
+          export ORION_UI_PACKAGE_SPEC="$ui_wheel"
+          if [ "${CONDA_LIKE:-}" = "true" ]; then
+            export CONDA_PREFIX="$RUNNER_TEMP/fake-conda"
+            export CONDA_DEFAULT_ENV="smoke"
+          fi
+
+          case "$INSTALL_METHOD" in
+            uv)
+              if ! command -v uv >/dev/null 2>&1; then
+                curl -LsSf https://astral.sh/uv/install.sh | sh
+                export PATH="$HOME/.local/bin:$PATH"
+              fi
+              uv tool install --python 3.12 "$orion_wheel"
+              export PATH="$(uv tool dir --bin):$PATH"
+              ;;
+            npm)
+              npm install -g "$npm_tgz"
+              ;;
+            pip)
+              python -m pip install --user "$orion_wheel"
+              export PATH="$(python -m site --user-base)/bin:$PATH"
+              ;;
+          esac
+
+          orion --version
+          orion doctor --setup --json > "$RUNNER_TEMP/doctor.json"
+          python - "$RUNNER_TEMP/doctor.json" <<'PY'
+          import json
+          import sys
+          report = json.load(open(sys.argv[1], encoding="utf-8"))
+          assert report["ok"], report
+          assert report["jupyter"]["status"] == "ready", report["jupyter"]
+          assert report["appBundle"]["serverJs"], report["appBundle"]
+          PY
+          orion uninstall --all --yes
+
+      - name: Install and run doctor
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          INSTALL_METHOD: ${{ matrix.method }}
+          CONDA_LIKE: ${{ matrix.condaLike }}
+          ORION_HOME_DIR: ${{ runner.temp }}\orion-home
+          ORION_NO_BROWSER: "1"
+        run: |
+          $artifactDir = Join-Path $env:RUNNER_TEMP "install-artifacts"
+          $npmTgz = Get-ChildItem $artifactDir -Recurse -Filter "orion-notebook-*.tgz" | Select-Object -First 1
+          $orionWheel = Get-ChildItem $artifactDir -Recurse -Filter "orion_notebook-*.whl" | Where-Object { $_.FullName -match "\\python\\dist\\" } | Select-Object -First 1
+          $uiWheel = Get-ChildItem $artifactDir -Recurse -Filter "orion_ui-*.whl" | Where-Object { $_.FullName -match "\\python\\orion-ui\\dist\\" } | Select-Object -First 1
+          $appBundle = Get-ChildItem $artifactDir -Recurse -Filter "orion-app-*.tar.gz" | Select-Object -First 1
+
+          $env:ORION_APP_BUNDLE_URL = ([System.Uri]$appBundle.FullName).AbsoluteUri
+          $env:ORION_UI_PACKAGE_SPEC = $uiWheel.FullName
+          if ($env:CONDA_LIKE -eq "true") {
+            $env:CONDA_PREFIX = Join-Path $env:RUNNER_TEMP "fake-conda"
+            $env:CONDA_DEFAULT_ENV = "smoke"
+          }
+
+          switch ($env:INSTALL_METHOD) {
+            "uv" {
+              if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+                (Invoke-WebRequest -UseBasicParsing https://astral.sh/uv/install.ps1).Content | Invoke-Expression
+                $env:PATH = "$env:USERPROFILE\.local\bin;$env:PATH"
+              }
+              uv tool install --python 3.12 $orionWheel.FullName
+              $env:PATH = "$(uv tool dir --bin);$env:PATH"
+            }
+            "npm" {
+              npm install -g $npmTgz.FullName
+            }
+            "pip" {
+              python -m pip install --user $orionWheel.FullName
+              $userBase = python -m site --user-base
+              $env:PATH = "$userBase\Scripts;$env:PATH"
+            }
+          }
+
+          orion --version
+          orion doctor --setup --json | Out-File -FilePath "$env:RUNNER_TEMP\doctor.json" -Encoding utf8
+          $report = Get-Content "$env:RUNNER_TEMP\doctor.json" -Raw | ConvertFrom-Json
+          if (-not $report.ok) { throw ($report | ConvertTo-Json -Depth 20) }
+          if ($report.jupyter.status -ne "ready") { throw ($report.jupyter | ConvertTo-Json -Depth 20) }
+          if (-not $report.appBundle.serverJs) { throw ($report.appBundle | ConvertTo-Json -Depth 20) }
+          orion uninstall --all --yes
+
+  public-installers:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Install via public script
+        if: runner.os != 'Windows'
+        env:
+          ORION_HOME_DIR: ${{ runner.temp }}/orion-public-home
+          ORION_NO_RUN: "1"
+        run: |
+          curl -fsSL https://www.orion-agent.ai/install.sh | bash
+          orion doctor --setup --json > "$RUNNER_TEMP/public-doctor.json"
+          python -c 'import json, os; report=json.load(open(os.environ["RUNNER_TEMP"] + "/public-doctor.json", encoding="utf-8")); assert report["ok"], report'
+          orion uninstall --all --yes
+
+      - name: Install via public script
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          ORION_HOME_DIR: ${{ runner.temp }}\orion-public-home
+          ORION_NO_RUN: "1"
+        run: |
+          powershell -ExecutionPolicy Bypass -c "iwr -useb https://www.orion-agent.ai/install.ps1 | iex"
+          orion doctor --setup --json | Out-File -FilePath "$env:RUNNER_TEMP\public-doctor.json" -Encoding utf8
+          $report = Get-Content "$env:RUNNER_TEMP\public-doctor.json" -Raw | ConvertFrom-Json
+          if (-not $report.ok) { throw ($report | ConvertTo-Json -Depth 20) }
+          orion uninstall --all --yes

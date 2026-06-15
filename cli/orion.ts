@@ -7,6 +7,7 @@ import {
 import type { StartedJupyterServer } from "../lib/cli/jupyter";
 import { readPackageVersion } from "../lib/cli/package-version";
 import { runConfigCommand } from "../lib/cli/config";
+import { runDoctorCommand } from "../lib/cli/doctor";
 import { runUninstall } from "../lib/cli/uninstall";
 
 interface CliOptions {
@@ -46,6 +47,7 @@ Options:
 function printUsage(): void {
   console.log(`Usage: orion [--yes] [--no-browser] [--here] [--app-only] [--pick-python]
        orion config [show|python ...]
+       orion doctor [--json] [--setup]
        orion uninstall [--yes] [--all]
 
 Starts a local Orion app, starts Jupyter Server, and opens Orion already connected.
@@ -61,6 +63,7 @@ Options:
 
 Commands:
   config         Show or change Orion CLI settings under ~/.orion/runtime.
+  doctor         Diagnose install, app bundle, Python/Jupyter, and network state.
   uninstall      Remove cached Orion data under ~/.orion before package uninstall.`);
 }
 
@@ -160,6 +163,11 @@ async function main(): Promise<void> {
     await runConfigCommand(argv.slice(1), {
       yes: argv.includes("--yes") || argv.includes("-y"),
     });
+    return;
+  }
+
+  if (command === "doctor") {
+    await runDoctorCommand(argv.slice(1));
     return;
   }
 

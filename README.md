@@ -32,19 +32,27 @@ Orion closes that gap. Built around a modern notebook IDE, it feeds the right co
 
 ## Quick start
 
-**Prerequisites:** The install script can bootstrap Orion with npm, pip, or uv. Python 3.8+ is still needed for notebook execution, but Orion can create a managed runtime for you.
+**Prerequisites:** The install script bootstraps Orion with a managed uv tool environment by default. Orion can create its own Python/Jupyter runtime for notebooks on first run.
 
 Running `orion` starts Jupyter, launches Orion locally, opens your browser, and auto-connects to the Jupyter server. All managed files live under `~/.orion` (Windows: `%USERPROFILE%\.orion`).
 
-### Install script (macOS / Linux)
+### Install script
+
+**macOS / Linux:**
 
 ```bash
 curl -fsSL https://www.orion-agent.ai/install.sh | bash
 ```
 
-The script installs `orion-notebook` via npm when Node.js 20+ is available, otherwise via pip. If neither path is available, it installs uv and uses uv-managed Python 3.12 for the launcher. Pin a version with `ORION_VERSION=0.5.1` or force a method with `ORION_INSTALL_METHOD=npm|pip|uv`.
+**Windows (PowerShell):**
 
-### Install via npm (recommended)
+```powershell
+powershell -ExecutionPolicy Bypass -c "iwr -useb https://www.orion-agent.ai/install.ps1 | iex"
+```
+
+The script installs `orion-notebook` with uv-managed Python 3.12 so the `orion` command is available across shells. Pin a version with `ORION_VERSION=0.9.0` or force an advanced method with `ORION_INSTALL_METHOD=npm|pip|uv`.
+
+### Install via npm (advanced)
 
 Both npm and PyPI use the package name **`orion-notebook`**:
 
@@ -61,6 +69,14 @@ npx orion-notebook
 
 The npm package ships the full Orion app bundle, so no separate app download is needed. You only need Node.js 20+ installed; Python 3.8+ is required for notebook execution.
 
+Use npm when you want Orion to use an existing Python or conda environment and remember that choice:
+
+```bash
+python -m pip install -U jupyter_server ipykernel orion-ui
+orion config python pick
+orion
+```
+
 **First run:** if Orion does not find a compatible Jupyter setup, it prompts to create an Orion-managed environment under `~/.orion/runtime/venv`. That step installs Jupyter into Orion's venv (not your global Python) and can take a few minutes. Approve automatically with:
 
 ```bash
@@ -70,7 +86,14 @@ orion --yes
 ### Install via pip
 
 ```bash
-pip install orion-notebook
+python -m pip install orion-notebook
+orion
+```
+
+Use pip when you want Orion installed inside one specific Python environment. If that same environment should run notebooks for Orion:
+
+```bash
+python -m pip install -U orion-notebook jupyter_server ipykernel orion-ui
 orion
 ```
 
@@ -87,6 +110,17 @@ orion --yes
 ```
 
 After the first successful setup, later runs are much faster.
+
+### Diagnose an install
+
+If setup fails or behaves differently across machines, run:
+
+```bash
+orion doctor --json
+orion doctor --setup --json
+```
+
+`doctor --setup` performs first-run setup checks without opening a browser, which is useful for CI and support reports.
 
 ### Uninstall
 

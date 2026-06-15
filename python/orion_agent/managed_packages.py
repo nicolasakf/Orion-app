@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 SupportTier = Literal["preferred", "legacy"]
@@ -26,5 +27,5 @@ def managed_runtime_packages(orion_version: str, support: SupportTier) -> list[s
         jupyter_server,
         "jupyter_server_terminals>=0.4,<1",
         "ipykernel>=6,<7",
-        f"orion-ui=={orion_version}",
+        os.environ.get("ORION_UI_PACKAGE_SPEC") or f"orion-ui=={orion_version}",
     ]

@@ -68,7 +68,8 @@ export async function startOrionAppServer(
   const serverPath = join(appDirectory, "server.js");
   if (!existsSync(serverPath)) {
     throw new Error(
-      `Orion app bundle was not found at ${serverPath}. Run the Orion packaging step before publishing the CLI.`
+      `Orion app bundle was not found at ${serverPath}. Reinstall orion-notebook, then run ` +
+        "`orion doctor --json` if the problem persists."
     );
   }
 

@@ -401,7 +401,7 @@ export function getManagedPackageSet(
       jupyterServer,
       "jupyter_server_terminals>=0.4,<1",
       "ipykernel>=6,<7",
-      `orion-ui==${orionVersion}`,
+      process.env.ORION_UI_PACKAGE_SPEC ?? `orion-ui==${orionVersion}`,
     ],
   };
 }
