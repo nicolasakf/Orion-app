@@ -15,7 +15,6 @@ import tarfile
 import time
 import urllib.error
 import urllib.request
-import venv
 import webbrowser
 import zipfile
 from pathlib import Path
@@ -24,13 +23,21 @@ from typing import Any
 from .managed_packages import get_python_support, managed_runtime_packages
 
 VERSION = "0.8.0"
-NODE_VERSION = "v22.12.0"
+NODE_VERSION = "v24.11.0"
 DEFAULT_APP_BUNDLE_URL = (
     f"https://github.com/nicolasakf/Orion-app/releases/download/"
     f"v{VERSION}/orion-app-{VERSION}.tar.gz"
 )
 DOWNLOAD_CHUNK_SIZE = 1024 * 256
 DOWNLOAD_PROGRESS_WIDTH = 28
+
+
+class JupyterStartError(Exception):
+    """Raised when Jupyter Server fails to start or lacks required APIs."""
+
+    def __init__(self, message: str, reason: str) -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 def orion_home() -> Path:
@@ -107,10 +114,26 @@ def system_node() -> str | None:
     return None
 
 
+def node_cpu_arch() -> str:
+    """Return the CPU architecture slug used for portable Node downloads."""
+    machine = platform.machine().lower()
+    if machine in {"arm64", "aarch64"}:
+        return "arm64"
+
+    if sys.platform == "win32":
+        # x64 Python can run under emulation on ARM64 Windows; honor the OS CPU.
+        native = os.environ.get("PROCESSOR_ARCHITEW6432") or os.environ.get(
+            "PROCESSOR_ARCHITECTURE", ""
+        )
+        if native.upper() == "ARM64":
+            return "arm64"
+
+    return "x64"
+
+
 def node_platform_slug() -> tuple[str, str]:
     """Return the Node distribution platform slug and archive extension."""
-    machine = platform.machine().lower()
-    arch = "arm64" if machine in {"arm64", "aarch64"} else "x64"
+    arch = node_cpu_arch()
     if sys.platform == "win32":
         return f"win-{arch}", "zip"
     if sys.platform == "darwin":
@@ -284,6 +307,71 @@ def sync_managed_runtime_packages(python: str) -> None:
     run_checked([python, "-m", "pip", "install", "--upgrade", "pip", *packages])
 
 
+def python_discovery_candidates() -> list[list[str]]:
+    """Return Python commands worth probing for managed venv creation."""
+    candidates: list[list[str]] = []
+
+    python_override = os.environ.get("PYTHON")
+    if python_override:
+        candidates.append([python_override])
+
+    if os.name == "nt" and shutil.which("py"):
+        candidates.append(["py", "-3"])
+    if shutil.which("python3"):
+        candidates.append(["python3"])
+    if shutil.which("python"):
+        candidates.append(["python"])
+
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        conda_python = (
+            Path(conda_prefix) / "Scripts" / "python.exe"
+            if os.name == "nt"
+            else Path(conda_prefix) / "bin" / "python"
+        )
+        if conda_python.exists():
+            candidates.insert(1 if python_override else 0, [str(conda_python)])
+
+    candidates.append([sys.executable])
+    return candidates
+
+
+def python_command_supported(command: list[str]) -> bool:
+    """Return whether a Python command supports Orion's managed runtime."""
+    try:
+        subprocess.run(
+            command
+            + ["-c", "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return True
+    except (OSError, subprocess.CalledProcessError):
+        return False
+
+
+def resolve_venv_creation_python() -> list[str]:
+    """Return the Python command used to create Orion's managed venv."""
+    seen: set[tuple[str, ...]] = set()
+    for candidate in python_discovery_candidates():
+        key = tuple(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if python_command_supported(candidate):
+            return candidate
+    return [sys.executable]
+
+
+def create_managed_venv() -> None:
+    """Create Orion's managed venv using a discovered host Python."""
+    runtime_dir().mkdir(parents=True, exist_ok=True)
+    venv_path = runtime_dir() / "venv"
+    host_python = resolve_venv_creation_python()
+    run_checked([*host_python, "-m", "venv", str(venv_path)])
+
+
 def install_managed_jupyter(assume_yes: bool) -> str:
     """Create/update Orion's managed venv and install Jupyter packages there."""
     py = managed_venv_python()
@@ -294,7 +382,7 @@ def install_managed_jupyter(assume_yes: bool) -> str:
         ):
             raise SystemExit("Setup declined. Install Jupyter or rerun `orion --yes`.")
         runtime_dir().mkdir(parents=True, exist_ok=True)
-        venv.EnvBuilder(with_pip=True).create(runtime_dir() / "venv")
+        create_managed_venv()
 
     sync_managed_runtime_packages(str(py))
     return str(py)
@@ -343,7 +431,10 @@ def start_jupyter(
     deadline = time.time() + 90
     while time.time() < deadline:
         if proc.poll() not in (None, 0):
-            raise SystemExit("Jupyter exited before it became ready.")
+            raise JupyterStartError(
+                "Jupyter exited before it became ready.",
+                "early_exit",
+            )
         try:
             api = jupyter_json(base_url, "api", token)
             break
@@ -351,7 +442,10 @@ def start_jupyter(
             time.sleep(0.3)
     else:
         proc.terminate()
-        raise SystemExit("Jupyter did not become ready before the timeout.")
+        raise JupyterStartError(
+            "Jupyter did not become ready before the timeout.",
+            "timeout",
+        )
 
     capabilities = {
         "kernelspecs": isinstance(jupyter_json(base_url, "api/kernelspecs", token).get("kernelspecs"), dict),
@@ -370,7 +464,10 @@ def start_jupyter(
     missing = [name for name in ("kernelspecs", "sessions", "kernels", "contents", "terminals") if not capabilities[name]]
     if missing:
         proc.terminate()
-        raise SystemExit(f"Jupyter is missing required APIs: {', '.join(missing)}")
+        raise JupyterStartError(
+            f"Jupyter is missing required APIs: {', '.join(missing)}",
+            "missing_apis",
+        )
     version = str(api.get("version") or api.get("server_version") or api.get("jupyter_server_version") or "unknown")
     return proc, base_url, token, capabilities, version
 
@@ -427,6 +524,18 @@ def ensure_native_modules(node: str, app: Path) -> None:
         ) from error
 
 
+def build_node_env(node: str) -> dict[str, str]:
+    """Return an environment with the active Node binary directory on PATH."""
+    node_directory = str(Path(node).parent)
+    path_separator = ";" if os.name == "nt" else ":"
+    existing_path = os.environ.get("PATH") or os.environ.get("Path") or ""
+    next_path = f"{node_directory}{path_separator}{existing_path}" if existing_path else node_directory
+    env = {**os.environ, "PATH": next_path}
+    if os.name == "nt":
+        env["Path"] = next_path
+    return env
+
+
 def start_orion_app(node: str, app: Path) -> tuple[subprocess.Popen[bytes], str]:
     """Start the local Orion Next server."""
     ensure_native_modules(node, app)
@@ -436,7 +545,7 @@ def start_orion_app(node: str, app: Path) -> tuple[subprocess.Popen[bytes], str]
             port = free_port()
 
     env = {
-        **os.environ,
+        **build_node_env(node),
         "HOSTNAME": "127.0.0.1",
         "NODE_ENV": "production",
         "PORT": str(port),
@@ -565,13 +674,24 @@ def start_main(argv: list[str]) -> None:
             jupyter_proc, base_url, token, capabilities, version = start_jupyter(
                 python, jupyter_root
             )
-        except SystemExit:
+        except JupyterStartError as error:
             if not uses_existing_jupyter:
-                raise
-            print(
-                "Existing Jupyter is not compatible with Orion. "
-                "Falling back to an Orion-managed runtime."
-            )
+                raise SystemExit(str(error)) from error
+            if error.reason == "missing_apis":
+                print(
+                    "Existing Jupyter is not compatible with Orion. "
+                    "Falling back to an Orion-managed runtime."
+                )
+            elif error.reason == "timeout":
+                print(
+                    "Existing Jupyter did not become ready in time. "
+                    "Falling back to an Orion-managed runtime."
+                )
+            else:
+                print(
+                    "Existing Jupyter failed to start. "
+                    "Falling back to an Orion-managed runtime."
+                )
             python = install_managed_jupyter(args.yes)
             uses_existing_jupyter = False
             jupyter_proc, base_url, token, capabilities, version = start_jupyter(
