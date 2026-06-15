@@ -7,8 +7,11 @@ import type {
   OrionStatement,
 } from "@/lib/chat/sqlite-adapter";
 
+/** Named bind values accepted by node:sqlite (mirrors SQLInputValue). */
+type SqlNamedParams = Record<string, null | number | bigint | string | NodeJS.ArrayBufferView>;
+
 /** Returns whether params are a single named-parameter binding object. */
-function isNamedBinding(params: unknown[]): params is [Record<string, unknown>] {
+function isNamedBinding(params: unknown[]): params is [SqlNamedParams] {
   if (params.length !== 1) {
     return false;
   }

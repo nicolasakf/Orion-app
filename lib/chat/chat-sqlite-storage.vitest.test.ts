@@ -28,6 +28,7 @@ import {
   updateCompactionSummary,
 } from "@/lib/chat/chat-sqlite-storage.server";
 import type { ChatWire } from "@/lib/chat/chat-types";
+import type { OrionDatabase } from "@/lib/chat/sqlite-adapter";
 
 let tempDirectory: string;
 
@@ -591,7 +592,7 @@ describe("SQLite chat storage", () => {
 });
 
 /** Returns true when a table exists in the test database. */
-function tableExists(db: Database.Database, name: string): boolean {
+function tableExists(db: OrionDatabase, name: string): boolean {
   return Boolean(
     db
       .prepare("select 1 from sqlite_master where type = 'table' and name = ?")
@@ -600,7 +601,7 @@ function tableExists(db: Database.Database, name: string): boolean {
 }
 
 /** Returns true when an index exists in the test database. */
-function indexExists(db: Database.Database, name: string): boolean {
+function indexExists(db: OrionDatabase, name: string): boolean {
   return Boolean(
     db
       .prepare("select 1 from sqlite_master where type = 'index' and name = ?")

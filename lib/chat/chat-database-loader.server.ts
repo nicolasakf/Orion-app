@@ -111,7 +111,7 @@ export function openChatDatabase(path: string): OrionDatabase | null {
   if (canLoadBetterSqlite3Module()) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const BetterSqlite3 = require("better-sqlite3") as typeof import("better-sqlite3").default;
+      const BetterSqlite3 = require("better-sqlite3") as typeof import("better-sqlite3");
       loadAttempted = true;
       selectedEngine = "better-sqlite3";
       return new BetterSqlite3(path) as OrionDatabase;
@@ -142,14 +142,14 @@ export function openChatDatabase(path: string): OrionDatabase | null {
  * Loads better-sqlite3 once, returning null when unavailable.
  * @deprecated Prefer probeChatStorageAvailability/openChatDatabase.
  */
-export function loadBetterSqlite3(): typeof import("better-sqlite3").default | null {
+export function loadBetterSqlite3(): typeof import("better-sqlite3") | null {
   if (!probeChatStorageAvailability() || selectedEngine !== "better-sqlite3") {
     return null;
   }
 
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    return require("better-sqlite3") as typeof import("better-sqlite3").default;
+    return require("better-sqlite3") as typeof import("better-sqlite3");
   } catch {
     markDegraded("better-sqlite3 could not be loaded on this machine.");
     return null;

@@ -4,6 +4,30 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.0] - 2026-06-14
+
+### Added
+
+- Chat: `node:sqlite` adapter with in-memory fallback when native SQLite is unavailable
+- CLI: download progress bar for app bundle extraction
+- CLI: improved platform support for Windows and ARM64
+- Cloud: unpublish notebooks from the publish dialog
+- Notebook: skeleton placeholder for queued cells awaiting execution
+- orion-ui: `DateRangeSlider` timeline control for interactive outputs
+
+### Fixed
+
+- Notebook: show kernel busy status while cells execute
+- Docs: append `.html` suffix to user documentation URLs
+- Python: move PyPI classifiers to `[project]` in `pyproject.toml`
+
+### Changed
+
+- Notebook: share queued output skeleton component in app view
+- Notebook: reuse execution info in cell status rendering
+
+[0.9.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.9.0
+
 ## [0.8.0] - 2026-06-12
 
 ### Added
