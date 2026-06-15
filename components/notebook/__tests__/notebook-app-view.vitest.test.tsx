@@ -4,7 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NotebookAppView } from "@/components/notebook/notebook-app-view";
 import { INSERT_CHAT_SKILL_EVENT } from "@/lib/chat/chat-composer-events";
-import { CellType, OutputType, type NotebookType } from "@/lib/types";
+import {
+  CellExecutionStatus,
+  CellType,
+  OutputType,
+  type NotebookType,
+} from "@/lib/types";
 
 const outputRendererMock = vi.hoisted(() => vi.fn());
 
@@ -102,6 +107,27 @@ describe("NotebookAppView", () => {
     expect(outputRendererMock).toHaveBeenCalledWith(
       expect.objectContaining({ cellIndex: 1, outputIndex: 0 }),
     );
+  });
+
+  it("shows a skeleton for selected outputs whose cell is queued", () => {
+    const notebook = makeNotebook();
+    notebook.cells[1]!.metadata = {
+      orion: {
+        id: "result",
+        app: { outputs: { "0": { enabled: true } } },
+        cellState: {
+          executionInfo: {
+            status: CellExecutionStatus.QUEUED,
+          },
+        },
+      },
+    };
+
+    render(<NotebookAppView notebook={notebook} />);
+
+    expect(screen.getByLabelText("Cell output queued")).toBeInTheDocument();
+    expect(screen.queryByTestId("output")).not.toBeInTheDocument();
+    expect(outputRendererMock).not.toHaveBeenCalled();
   });
 
   it("shows the empty state when no cells or outputs are selected", () => {

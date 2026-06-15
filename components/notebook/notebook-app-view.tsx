@@ -6,6 +6,7 @@ import { LayoutTemplate, Sparkles } from "lucide-react";
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
 import { OutputRenderer } from "@/components/notebook/output-renderer";
+import { QueuedOutputSkeleton } from "@/components/notebook/queued-output-skeleton";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -21,6 +22,7 @@ import {
 import { dispatchInsertChatSkill } from "@/lib/chat/chat-composer-events";
 import { cn } from "@/lib/utils";
 import {
+  CellExecutionStatus,
   CellType,
   type NotebookCellType,
   type NotebookOutputType,
@@ -48,6 +50,7 @@ type NotebookAppViewItem =
   }
   | {
     kind: "output";
+    cell: NotebookCellType;
     output: NotebookOutputType;
     cellIndex: number;
     outputIndex: number;
@@ -78,6 +81,7 @@ function getNotebookAppViewItems(
         ? [
           {
             kind: "output" as const,
+            cell,
             output,
             cellIndex,
             outputIndex,
@@ -195,23 +199,28 @@ export function NotebookAppView({
                 key={`output-${item.cellIndex}-${item.outputIndex}`}
                 className="jp-Cell jp-CodeCell"
               >
-                <OutputRenderer
-                  output={item.output}
-                  notebookMetadata={notebook.metadata}
-                  cellIndex={item.cellIndex}
-                  outputIndex={item.outputIndex}
-                  onMentionOutput={
-                    notebookPath ? handleMentionOutput : undefined
-                  }
-                  onToggleOutputAppView={
-                    onRemoveAppViewReference ? handleRemoveOutput : undefined
-                  }
-                  isInAppView
-                  onOrionUiStateChange={(key, value, outputId) =>
-                    onOrionUiStateChange?.(key, value, outputId)
-                  }
-                  onOrionUiAction={onOrionUiAction}
-                />
+                {item.cell.metadata?.orion?.cellState?.executionInfo
+                  ?.status === CellExecutionStatus.QUEUED ? (
+                  <QueuedOutputSkeleton />
+                ) : (
+                  <OutputRenderer
+                    output={item.output}
+                    notebookMetadata={notebook.metadata}
+                    cellIndex={item.cellIndex}
+                    outputIndex={item.outputIndex}
+                    onMentionOutput={
+                      notebookPath ? handleMentionOutput : undefined
+                    }
+                    onToggleOutputAppView={
+                      onRemoveAppViewReference ? handleRemoveOutput : undefined
+                    }
+                    isInAppView
+                    onOrionUiStateChange={(key, value, outputId) =>
+                      onOrionUiStateChange?.(key, value, outputId)
+                    }
+                    onOrionUiAction={onOrionUiAction}
+                  />
+                )}
               </div>
             ),
           )}

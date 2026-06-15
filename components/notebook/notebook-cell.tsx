@@ -9,7 +9,6 @@ import React, {
   memo,
 } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   CellType,
   OutputType,
@@ -20,6 +19,7 @@ import {
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import { MonacoEditor } from "@/components/monaco-editor";
 import { OutputRenderer } from "@/components/notebook/output-renderer";
+import { QueuedOutputSkeleton } from "@/components/notebook/queued-output-skeleton";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
 import {
   ChevronDown,
@@ -371,22 +371,6 @@ function StatusIndicator({ status }: { status: CellExecutionStatus }) {
   if (!icon) return null;
 
   return <div className="flex items-center">{icon}</div>;
-}
-
-/** Placeholder shown while a cell is waiting in Orion's execution queue. */
-function QueuedOutputSkeleton() {
-  return (
-    <div
-      className="border-t border-muted px-3 py-3"
-      aria-label="Cell output queued"
-    >
-      <div className="space-y-2">
-        <Skeleton className="h-3 w-2/5" />
-        <Skeleton className="h-3 w-4/5" />
-        <Skeleton className="h-3 w-3/5" />
-      </div>
-    </div>
-  );
 }
 
 /** Execution info: last run time and wall-clock duration (inline, no hover card). */
