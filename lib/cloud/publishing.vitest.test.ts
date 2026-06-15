@@ -5,6 +5,7 @@ import {
   downloadPublishedNotebookSource,
   listPublishedNotebooks,
   publishNotebookToCloud,
+  unpublishNotebookFromCloud,
   PublishNotebookResponseSchema,
   type PublishNotebookRequest,
 } from "@/lib/cloud/publishing";
@@ -126,6 +127,32 @@ describe("Orion cloud publishing API client", () => {
         request,
       }),
     ).rejects.toThrow();
+  });
+
+  it("deletes a published notebook with a Supabase bearer token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      unpublishNotebookFromCloud({
+        apiBaseUrl: "https://api.orion.local",
+        accessToken: "token-123",
+        publishId: response.id,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://api.orion.local/api/notebooks/${response.id}`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: "Bearer token-123",
+        },
+      },
+    );
   });
 
   it("validates the authenticated owner publish list response", async () => {

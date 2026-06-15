@@ -1,10 +1,20 @@
 "use client";
 
 import * as React from "react";
-import { Check, Copy, ExternalLink, Loader2, UploadCloud } from "lucide-react";
+import { Check, CloudOff, Copy, ExternalLink, Loader2, UploadCloud } from "lucide-react";
 import { toast } from "sonner";
 
 import { CloudAuthDialog } from "@/components/cloud/cloud-auth-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -22,6 +32,7 @@ import { ORION_USER_DOCS_PUBLISH_NOTEBOOKS_URL } from "@/lib/constants/user-docs
 import { getOrionCloudConfig } from "@/lib/cloud/config";
 import {
   listPublishedNotebooks,
+  unpublishNotebookFromCloud,
   type PublishNotebookResponse,
 } from "@/lib/cloud/publishing";
 import { useCloudUser } from "@/hooks/use-cloud-user";
@@ -61,6 +72,8 @@ export function NotebookPublishDialog({
   const [published, setPublished] = React.useState<PublishNotebookResponse[]>([]);
   const [result, setResult] = React.useState<PublishNotebookResponse | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const [unpublishing, setUnpublishing] = React.useState(false);
+  const [confirmUnpublishOpen, setConfirmUnpublishOpen] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
 
   React.useEffect(() => {
@@ -127,6 +140,33 @@ export function NotebookPublishDialog({
     await navigator.clipboard.writeText(result.url);
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  const handleUnpublish = async () => {
+    if (!configured || !cloudConfig || !accessToken || !publishId) return;
+
+    setUnpublishing(true);
+    try {
+      await unpublishNotebookFromCloud({
+        apiBaseUrl: cloudConfig.apiBaseUrl,
+        accessToken,
+        publishId,
+      });
+      setPublished((current) => current.filter((entry) => entry.id !== publishId));
+      if (result?.id === publishId) {
+        setResult(null);
+      }
+      setPublishId("");
+      setTitle(defaultTitle);
+      setDescription("");
+      setAllowSourceDownload(false);
+      setConfirmUnpublishOpen(false);
+      toast.success("Notebook unpublished.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to unpublish notebook.");
+    } finally {
+      setUnpublishing(false);
+    }
   };
 
   return (
@@ -212,41 +252,58 @@ export function NotebookPublishDialog({
               Allow viewers to download the source .ipynb
             </label>
             {result ? (
-              <div className="rounded-md border bg-muted/30 p-3 text-sm">
-                <div className="font-medium">Published</div>
-                <a
-                  href={result.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="mt-1 block truncate text-primary underline-offset-4 hover:underline"
+              <div className="flex items-center gap-2 rounded-md border bg-muted/30 p-3 text-sm">
+                <div className="flex min-w-0 flex-1 items-center">
+                  <a
+                    href={result.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex min-w-0 max-w-full items-center gap-1 text-primary underline-offset-4 hover:underline"
+                  >
+                    <span className="truncate">{result.url}</span>
+                    <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                  </a>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7 shrink-0"
+                  onClick={copyUrl}
+                  aria-label={copied ? "Link copied" : "Copy link"}
                 >
-                  {result.url}
-                </a>
+                  {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                </Button>
               </div>
             ) : null}
           </div>
 
-          <DialogFooter className="gap-2">
-            {result ? (
-              <>
-                <Button type="button" variant="outline" onClick={copyUrl}>
-                  {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                  Copy link
-                </Button>
-                <Button type="button" variant="outline" asChild>
-                  <a href={result.url} target="_blank" rel="noopener noreferrer">
-                    <ExternalLink className="h-4 w-4" />
-                    Open
-                  </a>
-                </Button>
-              </>
+          <DialogFooter className="flex-row flex-wrap items-center justify-end gap-2">
+            {publishId && user ? (
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => setConfirmUnpublishOpen(true)}
+                disabled={loading || unpublishing || !configured}
+              >
+                {unpublishing ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <CloudOff className="h-4 w-4" />
+                )}
+                Unpublish
+              </Button>
             ) : null}
             <Button
               type="button"
               onClick={handlePublish}
-              disabled={loading || !configured || (!!user && !title.trim())}
+              disabled={loading || unpublishing || !configured || (!!user && !title.trim())}
             >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UploadCloud className="h-4 w-4" />}
+              {loading ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <UploadCloud className="h-4 w-4" />
+              )}
               {user ? "Publish" : "Sign in to publish"}
             </Button>
           </DialogFooter>
@@ -257,6 +314,31 @@ export function NotebookPublishDialog({
         onOpenChange={setAuthOpen}
         onAuthenticated={refresh}
       />
+      <AlertDialog open={confirmUnpublishOpen} onOpenChange={setConfirmUnpublishOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Unpublish notebook?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The public page will be removed and the share link will stop working. You can publish
+              again later as a new notebook or update a different publication.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={unpublishing}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={unpublishing}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleUnpublish();
+              }}
+            >
+              {unpublishing ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Unpublish
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

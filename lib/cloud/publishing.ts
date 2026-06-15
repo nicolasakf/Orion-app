@@ -176,6 +176,46 @@ export async function publishNotebookToCloud({
   );
 }
 
+const UnpublishNotebookResponseSchema = z.object({
+  success: z.literal(true),
+});
+
+/** Soft-unpublishes a notebook from Orion Cloud. */
+export async function unpublishNotebookFromCloud(options: {
+  apiBaseUrl: string;
+  accessToken: string;
+  publishId: string;
+}): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `${options.apiBaseUrl}/api/notebooks/${encodeURIComponent(options.publishId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${options.accessToken}`,
+        },
+      },
+    );
+  } catch (error) {
+    throw createOrionApiFetchError(options.apiBaseUrl, error);
+  }
+
+  const json = (await response.json().catch(() => ({}))) as unknown;
+  if (!response.ok) {
+    const message =
+      typeof json === "object" &&
+      json !== null &&
+      "message" in json &&
+      typeof (json as { message?: unknown }).message === "string"
+        ? (json as { message: string }).message
+        : "Failed to unpublish notebook.";
+    throw new Error(message);
+  }
+
+  UnpublishNotebookResponseSchema.parse(json);
+}
+
 /** Lists existing cloud publishes for the signed-in user. */
 export async function listPublishedNotebooks(options: {
   apiBaseUrl: string;
