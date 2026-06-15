@@ -1,5 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
-
 import type {
   OrionDatabase,
   OrionPragmaOptions,
@@ -7,8 +5,18 @@ import type {
   OrionStatement,
 } from "@/lib/chat/sqlite-adapter";
 
+type NodeSqliteDatabaseSync = import("node:sqlite").DatabaseSync;
+type NodeSqliteStatement = ReturnType<NodeSqliteDatabaseSync["prepare"]>;
+
 /** Named bind values accepted by node:sqlite (mirrors SQLInputValue). */
 type SqlNamedParams = Record<string, null | number | bigint | string | NodeJS.ArrayBufferView>;
+
+/** Loads DatabaseSync lazily so Node versions without node:sqlite can import this module. */
+function getDatabaseSyncClass(): typeof import("node:sqlite").DatabaseSync {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const nodeSqlite = require("node:sqlite") as typeof import("node:sqlite");
+  return nodeSqlite.DatabaseSync;
+}
 
 /** Returns whether params are a single named-parameter binding object. */
 function isNamedBinding(params: unknown[]): params is [SqlNamedParams] {
@@ -21,10 +29,7 @@ function isNamedBinding(params: unknown[]): params is [SqlNamedParams] {
 }
 
 /** Binds and runs a node:sqlite statement with positional or named parameters. */
-function runStatement(
-  statement: ReturnType<DatabaseSync["prepare"]>,
-  params: unknown[]
-): OrionRunResult {
+function runStatement(statement: NodeSqliteStatement, params: unknown[]): OrionRunResult {
   const result = isNamedBinding(params)
     ? statement.run(params[0])
     : statement.run(...(params as Parameters<typeof statement.run>));
@@ -39,27 +44,21 @@ function runStatement(
 }
 
 /** Binds and reads one row from a node:sqlite statement. */
-function getStatement(
-  statement: ReturnType<DatabaseSync["prepare"]>,
-  params: unknown[]
-): unknown {
+function getStatement(statement: NodeSqliteStatement, params: unknown[]): unknown {
   return isNamedBinding(params)
     ? statement.get(params[0])
     : statement.get(...(params as Parameters<typeof statement.get>));
 }
 
 /** Binds and reads all rows from a node:sqlite statement. */
-function allStatement(
-  statement: ReturnType<DatabaseSync["prepare"]>,
-  params: unknown[]
-): unknown[] {
+function allStatement(statement: NodeSqliteStatement, params: unknown[]): unknown[] {
   return isNamedBinding(params)
     ? statement.all(params[0])
     : statement.all(...(params as Parameters<typeof statement.all>));
 }
 
 /** Wraps a node:sqlite StatementSync with Orion's statement interface. */
-function wrapStatement(statement: ReturnType<DatabaseSync["prepare"]>): OrionStatement {
+function wrapStatement(statement: NodeSqliteStatement): OrionStatement {
   return {
     run: (...params: unknown[]) => runStatement(statement, params),
     get: (...params: unknown[]) => getStatement(statement, params),
@@ -69,6 +68,7 @@ function wrapStatement(statement: ReturnType<DatabaseSync["prepare"]>): OrionSta
 
 /** Opens a persistent SQLite database backed by Node's built-in node:sqlite module. */
 export function createNodeSqliteDatabase(path: string): OrionDatabase {
+  const DatabaseSync = getDatabaseSyncClass();
   const db = new DatabaseSync(path, { allowBareNamedParameters: true });
 
   return {
@@ -119,8 +119,7 @@ export function createNodeSqliteDatabase(path: string): OrionDatabase {
 /** Returns whether Node's built-in node:sqlite module is available in this runtime. */
 export function isNodeSqliteModuleAvailable(): boolean {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require("node:sqlite");
+    getDatabaseSyncClass();
     return true;
   } catch {
     return false;

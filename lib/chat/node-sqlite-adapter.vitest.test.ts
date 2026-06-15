@@ -5,9 +5,14 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createNodeSqliteDatabase } from "@/lib/chat/node-sqlite-adapter.server";
+import {
+  createNodeSqliteDatabase,
+  isNodeSqliteModuleAvailable,
+} from "@/lib/chat/node-sqlite-adapter.server";
 
-describe("node:sqlite adapter", () => {
+const nodeSqliteAvailable = isNodeSqliteModuleAvailable();
+
+describe.skipIf(!nodeSqliteAvailable)("node:sqlite adapter", () => {
   let tempDirectory: string;
 
   afterEach(() => {
