@@ -6,9 +6,14 @@ import { join } from "path";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildNativeModuleEnv,
+  ensureBundledNativeModules,
+  isBuildToolchainError,
   isNativeModuleLoadError,
+  isNodeSqliteAvailable,
   resolveBetterSqlite3Directory,
   resolveNpmExecutable,
+  resolvePrebuildInstallScript,
 } from "@/lib/cli/ensure-native-modules";
 
 describe("ensure-native-modules", () => {
@@ -30,6 +35,16 @@ describe("ensure-native-modules", () => {
     expect(isNativeModuleLoadError("Error: module not found")).toBe(false);
   });
 
+  it("detects missing native build toolchain errors", () => {
+    expect(isBuildToolchainError("gyp ERR! find VS")).toBe(true);
+    expect(isBuildToolchainError("Could not find any Visual Studio installation")).toBe(
+      true
+    );
+    expect(isBuildToolchainError("prebuild-install warn install No prebuilt binaries")).toBe(
+      false
+    );
+  });
+
   it("falls back to npm on PATH when sibling npm is absent", () => {
     expect(resolveNpmExecutable("/tmp/orion-vitest-no-sibling-npm/node")).toBe(
       "npm"
@@ -46,6 +61,62 @@ describe("ensure-native-modules", () => {
       expect(resolveNpmExecutable(nodePath)).toBe(npmPath);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prepends the active Node binary and npm bins to PATH", () => {
+    const appDirectory = "/tmp/orion-app";
+    const nodeExecutable = join("/tmp", "portable-node", "node.exe");
+    const env = buildNativeModuleEnv(nodeExecutable, appDirectory);
+    const pathValue = env.PATH ?? "";
+
+    expect(pathValue.startsWith(join("/tmp", "portable-node"))).toBe(true);
+    expect(pathValue).toContain(join(appDirectory, "node_modules", ".bin"));
+    expect(pathValue).toContain(
+      join(appDirectory, "node_modules", "better-sqlite3", "node_modules", ".bin")
+    );
+    if (process.platform === "win32") {
+      expect(env.Path).toBe(pathValue);
+    }
+  });
+
+  it("resolves prebuild-install from the better-sqlite3 package tree", () => {
+    const appDirectory = join(tmpdir(), `orion-prebuild-${process.pid}`);
+    const prebuildDirectory = join(
+      appDirectory,
+      "node_modules",
+      "better-sqlite3",
+      "node_modules",
+      "prebuild-install"
+    );
+    mkdirSync(prebuildDirectory, { recursive: true });
+    const scriptPath = join(prebuildDirectory, "bin.js");
+    writeFileSync(scriptPath, "");
+
+    try {
+      expect(resolvePrebuildInstallScript(appDirectory)).toBe(scriptPath);
+    } finally {
+      rmSync(appDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("skips better-sqlite3 rebuild when node:sqlite is available", () => {
+    if (!isNodeSqliteAvailable()) {
+      return;
+    }
+
+    const appDirectory = join(tmpdir(), `orion-node-sqlite-skip-${process.pid}`);
+    mkdirSync(join(appDirectory, "node_modules", "better-sqlite3"), {
+      recursive: true,
+    });
+    writeFileSync(join(appDirectory, "server.js"), "module.exports = {};\n");
+
+    try {
+      expect(() => ensureBundledNativeModules(appDirectory)).not.toThrow();
+      expect(process.env.ORION_CHAT_STORAGE_DEGRADED).toBeUndefined();
+    } finally {
+      delete process.env.ORION_CHAT_STORAGE_DEGRADED;
+      rmSync(appDirectory, { recursive: true, force: true });
     }
   });
 });

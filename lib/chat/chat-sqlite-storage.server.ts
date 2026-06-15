@@ -1,13 +1,6 @@
 
 import { randomUUID } from "crypto";
 
-import Database from "better-sqlite3";
-
-import {
-  ChatWireSchema,
-  CompactionSummaryWireSchema,
-  type ChatWire,
-} from "@/lib/chat/chat-types";
 import {
   EditCheckpointSchema,
   EditCheckpointStatusSchema,
@@ -21,6 +14,39 @@ import {
   type RecordEditCheckpointTargetRequest,
   type UpdateEditCheckpointStatusRequest,
 } from "@/lib/agent/edit-checkpoints";
+import {
+  getChatStorageDegradedReason,
+  isChatStorageDegraded,
+  openChatDatabase,
+  probeChatStorageAvailability,
+  resetChatDatabaseLoader,
+} from "@/lib/chat/chat-database-loader.server";
+import {
+  ChatWireSchema,
+  CompactionSummaryWireSchema,
+  type ChatWire,
+} from "@/lib/chat/chat-types";
+import type { OrionDatabase } from "@/lib/chat/sqlite-adapter";
+import {
+  clearFallbackChats,
+  deleteFallbackChat,
+  getFallbackChat,
+  getFallbackChatCostSummary,
+  getFallbackChatMetas,
+  getFallbackChats,
+  getFallbackEditCheckpointByRequestId,
+  getFallbackEditCheckpointsForChat,
+  insertFallbackModelUsage,
+  interruptFallbackOpenEditCheckpoints,
+  recordFallbackEditCheckpointTarget,
+  resolveFallbackOrCreateChatSession,
+  resolveFallbackOrCreateModelRequest,
+  saveFallbackChat,
+  saveFallbackChats,
+  updateFallbackChatSessionStatus,
+  updateFallbackCompactionSummary,
+  updateFallbackEditCheckpointStatus,
+} from "@/lib/chat/chat-storage-fallback.server";
 import {
   ensureOrionDataDirectory,
   getOrionDatabasePath,
@@ -102,10 +128,18 @@ export interface ChatCostSummary {
 
 const CURRENT_SCHEMA_VERSION = 2;
 
-let database: Database.Database | null = null;
+let database: OrionDatabase | null = null;
+
+export { getChatStorageDegradedReason, isChatStorageDegraded };
+
+/** Returns whether chat APIs should use the in-memory fallback store. */
+function usingFallbackStorage(): boolean {
+  probeChatStorageAvailability();
+  return isChatStorageDegraded();
+}
 
 /** Creates the durable chat tables that existed before SQLite schema versioning. */
-function createBaseChatSchema(db: Database.Database): void {
+function createBaseChatSchema(db: OrionDatabase): void {
   db.exec(`
     create table if not exists chats (
       id text primary key,
@@ -144,7 +178,7 @@ function createBaseChatSchema(db: Database.Database): void {
 }
 
 /** Adds local analogs of the hosted usage tables and marks the DB as v1. */
-function migrateToVersion1(db: Database.Database): void {
+function migrateToVersion1(db: OrionDatabase): void {
   const migrate = db.transaction(() => {
     createBaseChatSchema(db);
     db.exec(`
@@ -203,7 +237,7 @@ function migrateToVersion1(db: Database.Database): void {
 }
 
 /** Adds request-scoped edit checkpoint tables. */
-function migrateToVersion2(db: Database.Database): void {
+function migrateToVersion2(db: OrionDatabase): void {
   const migrate = db.transaction(() => {
     createBaseChatSchema(db);
     db.exec(`
@@ -255,7 +289,7 @@ function migrateToVersion2(db: Database.Database): void {
 }
 
 /** Runs all pending local SQLite migrations in order. */
-function migrateDatabase(db: Database.Database): void {
+function migrateDatabase(db: OrionDatabase): void {
   const version = db.pragma("user_version", { simple: true }) as number;
   if (version > CURRENT_SCHEMA_VERSION) {
     throw new Error(
@@ -272,11 +306,24 @@ function migrateDatabase(db: Database.Database): void {
 }
 
 /** Opens Orion's local SQLite database and initializes the chat schema. */
-export async function getChatDatabase(): Promise<Database.Database> {
+export async function getChatDatabase(): Promise<OrionDatabase> {
+  if (usingFallbackStorage()) {
+    throw new Error(
+      getChatStorageDegradedReason() ?? "SQLite chat storage is unavailable on this machine."
+    );
+  }
+
   if (database) return database;
 
   await ensureOrionDataDirectory();
-  database = new Database(getOrionDatabasePath());
+  const opened = openChatDatabase(getOrionDatabasePath());
+  if (!opened) {
+    throw new Error(
+      getChatStorageDegradedReason() ?? "SQLite chat storage is unavailable on this machine."
+    );
+  }
+
+  database = opened;
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
   migrateDatabase(database);
@@ -288,10 +335,16 @@ export async function getChatDatabase(): Promise<Database.Database> {
 export function closeChatDatabase(): void {
   database?.close();
   database = null;
+  resetChatDatabaseLoader();
 }
 
 /** Saves one complete chat, replacing message and subagent rows atomically. */
 export async function saveChat(chat: ChatWire): Promise<void> {
+  if (usingFallbackStorage()) {
+    await saveFallbackChat(chat);
+    return;
+  }
+
   const parsed = ChatWireSchema.parse(chat);
   const db = await getChatDatabase();
   const transaction = db.transaction((nextChat: ChatWire) => {
@@ -361,6 +414,11 @@ export async function saveChat(chat: ChatWire): Promise<void> {
 
 /** Saves multiple chats to the local SQLite database. */
 export async function saveChats(chats: ChatWire[]): Promise<void> {
+  if (usingFallbackStorage()) {
+    await saveFallbackChats(chats);
+    return;
+  }
+
   for (const chat of chats) {
     await saveChat(chat);
   }
@@ -368,6 +426,10 @@ export async function saveChats(chats: ChatWire[]): Promise<void> {
 
 /** Returns all chats, newest first. */
 export async function getChats(): Promise<ChatWire[]> {
+  if (usingFallbackStorage()) {
+    return getFallbackChats();
+  }
+
   const metas = await getChatMetas();
   const chats = await Promise.all(
     metas.map((meta) => getChat(meta.id))
@@ -377,6 +439,10 @@ export async function getChats(): Promise<ChatWire[]> {
 
 /** Returns chat metadata with empty message arrays, newest first. */
 export async function getChatMetas(): Promise<ChatWire[]> {
+  if (usingFallbackStorage()) {
+    return getFallbackChatMetas();
+  }
+
   const db = await getChatDatabase();
   const rows = db
     .prepare("select * from chats order by updated_at desc")
@@ -398,6 +464,10 @@ export async function getChatMetas(): Promise<ChatWire[]> {
 
 /** Returns one complete chat by id. */
 export async function getChat(chatId: string): Promise<ChatWire | undefined> {
+  if (usingFallbackStorage()) {
+    return getFallbackChat(chatId);
+  }
+
   const db = await getChatDatabase();
   const row = db
     .prepare("select * from chats where id = ?")
@@ -434,12 +504,22 @@ export async function getChat(chatId: string): Promise<ChatWire | undefined> {
 
 /** Deletes one chat and its dependent message/session rows. */
 export async function deleteChat(chatId: string): Promise<void> {
+  if (usingFallbackStorage()) {
+    await deleteFallbackChat(chatId);
+    return;
+  }
+
   const db = await getChatDatabase();
   db.prepare("delete from chats where id = ?").run(chatId);
 }
 
 /** Deletes all local chat history from SQLite. */
 export async function clearChats(): Promise<void> {
+  if (usingFallbackStorage()) {
+    await clearFallbackChats();
+    return;
+  }
+
   const db = await getChatDatabase();
   db.prepare("delete from chats").run();
 }
@@ -449,6 +529,11 @@ export async function updateCompactionSummary(
   chatId: string,
   summary: ChatWire["compactionSummary"] | null
 ): Promise<void> {
+  if (usingFallbackStorage()) {
+    await updateFallbackCompactionSummary(chatId, summary);
+    return;
+  }
+
   const parsedSummary = summary
     ? CompactionSummaryWireSchema.parse(summary)
     : null;
@@ -504,7 +589,7 @@ function mapEditCheckpointRow(
 }
 
 /** Ensures a model_request exists for direct/local checkpoint writes. */
-function ensureModelRequestRow(db: Database.Database, requestId: string): void {
+function ensureModelRequestRow(db: OrionDatabase, requestId: string): void {
   db.prepare(
     `
       insert into model_request (id, chat_session_id, origin, created_at)
@@ -516,7 +601,7 @@ function ensureModelRequestRow(db: Database.Database, requestId: string): void {
 
 /** Ensures the request-scoped checkpoint row exists and returns its id. */
 function ensureEditCheckpoint(
-  db: Database.Database,
+  db: OrionDatabase,
   requestId: string,
   localChatId?: string
 ): string {
@@ -552,7 +637,7 @@ function ensureEditCheckpoint(
 
 /** Finds an existing target row for a coalescing key. */
 function getExistingCheckpointTarget(
-  db: Database.Database,
+  db: OrionDatabase,
   checkpointId: string,
   kind: EditCheckpointTargetKind,
   targetPath: string,
@@ -577,6 +662,10 @@ function getExistingCheckpointTarget(
 export async function recordEditCheckpointTarget(
   input: RecordEditCheckpointTargetRequest
 ): Promise<EditCheckpoint | null> {
+  if (usingFallbackStorage()) {
+    return recordFallbackEditCheckpointTarget(input);
+  }
+
   const parsed = RecordEditCheckpointTargetRequestSchema.parse(input);
   const db = await getChatDatabase();
   const transaction = db.transaction(
@@ -755,7 +844,7 @@ function coalesceEditCheckpointTarget(
 
 /** Synchronous checkpoint lookup used inside SQLite transactions. */
 function getEditCheckpointByRequestIdSync(
-  db: Database.Database,
+  db: OrionDatabase,
   requestId: string
 ): EditCheckpoint | null {
   const row = db
@@ -774,6 +863,10 @@ function getEditCheckpointByRequestIdSync(
 export async function getEditCheckpointByRequestId(
   requestId: string
 ): Promise<EditCheckpoint | null> {
+  if (usingFallbackStorage()) {
+    return getFallbackEditCheckpointByRequestId(requestId);
+  }
+
   const db = await getChatDatabase();
   return getEditCheckpointByRequestIdSync(db, requestId);
 }
@@ -782,6 +875,10 @@ export async function getEditCheckpointByRequestId(
 export async function getEditCheckpointsForChat(
   localChatId: string
 ): Promise<EditCheckpoint[]> {
+  if (usingFallbackStorage()) {
+    return getFallbackEditCheckpointsForChat(localChatId);
+  }
+
   const db = await getChatDatabase();
   const rows = db
     .prepare(
@@ -808,6 +905,10 @@ export async function updateEditCheckpointStatus(
   requestId: string,
   input: UpdateEditCheckpointStatusRequest
 ): Promise<EditCheckpoint | null> {
+  if (usingFallbackStorage()) {
+    return updateFallbackEditCheckpointStatus(requestId, input);
+  }
+
   const parsed = UpdateEditCheckpointStatusRequestSchema.parse(input);
   const db = await getChatDatabase();
   const status = EditCheckpointStatusSchema.parse(parsed.status);
@@ -826,6 +927,12 @@ export async function interruptOpenEditCheckpoints(options: {
   olderThanMs?: number;
   localChatId?: string;
 } = {}): Promise<number> {
+  if (usingFallbackStorage()) {
+    return interruptFallbackOpenEditCheckpoints({
+      olderThanMs: options.olderThanMs ?? 0,
+    });
+  }
+
   const db = await getChatDatabase();
   const olderThanMs = options.olderThanMs ?? 0;
   const cutoff = new Date(Date.now() - olderThanMs).toISOString();
@@ -856,6 +963,10 @@ export async function resolveOrCreateChatSession(
   localChatId: string | undefined,
   status: ChatSessionStatus = "processing"
 ): Promise<{ sessionId: string } | null> {
+  if (usingFallbackStorage()) {
+    return resolveFallbackOrCreateChatSession(localChatId, status);
+  }
+
   if (!localChatId) return null;
 
   const db = await getChatDatabase();
@@ -889,6 +1000,11 @@ export async function updateChatSessionStatus(
   sessionId: string,
   status: ChatSessionStatus
 ): Promise<void> {
+  if (usingFallbackStorage()) {
+    await updateFallbackChatSessionStatus(sessionId, status);
+    return;
+  }
+
   const db = await getChatDatabase();
   db.prepare(
     `
@@ -905,6 +1021,10 @@ export async function resolveOrCreateModelRequest(options: {
   origin: string;
   chatSessionId?: string | null;
 }): Promise<{ requestId: string }> {
+  if (usingFallbackStorage()) {
+    return resolveFallbackOrCreateModelRequest(options);
+  }
+
   const db = await getChatDatabase();
   const requestId = options.id ?? randomUUID();
   db.prepare(
@@ -926,6 +1046,11 @@ export async function resolveOrCreateModelRequest(options: {
 
 /** Inserts one local model usage row. */
 export async function insertModelUsage(usage: ModelUsageInsert): Promise<void> {
+  if (usingFallbackStorage()) {
+    await insertFallbackModelUsage(usage);
+    return;
+  }
+
   const db = await getChatDatabase();
   db.prepare(
     `
@@ -977,6 +1102,10 @@ export async function insertModelUsage(usage: ModelUsageInsert): Promise<void> {
 export async function getChatCostSummary(
   localChatId: string
 ): Promise<ChatCostSummary> {
+  if (usingFallbackStorage()) {
+    return getFallbackChatCostSummary(localChatId);
+  }
+
   const db = await getChatDatabase();
   const rows = db
     .prepare(

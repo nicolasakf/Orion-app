@@ -86,7 +86,9 @@ async function main() {
   await copyEnsureNativeModulesScript();
   smokeCheckEnsureNativeModulesScript();
 
-  console.log(`Orion app bundle prepared at ${bundleDir}`);
+  console.log(
+    `Orion app bundle prepared at ${bundleDir} (better-sqlite3 prebuilds download at first run when needed).`
+  );
 }
 
 main().catch((error) => {
