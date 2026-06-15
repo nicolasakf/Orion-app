@@ -8,7 +8,7 @@ description: Reference for Orion notebook metadata contract. Use when deciding w
 ## Full documentation
 
 For extended user guides and field summaries beyond this skill file, read:
-https://docs.orion-agent.ai/ai-assistant/builtin-skills/orion-metadata
+https://docs.orion-agent.ai/ai-assistant/builtin-skills/orion-metadata.html
 
 Use this skill to choose valid keys and value shapes for Orion metadata.
 

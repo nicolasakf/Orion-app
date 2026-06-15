@@ -65,7 +65,7 @@ Pin `orion-ui` to the same version as your Orion app when using managed runtimes
 
 - [Orion website](https://www.orion-agent.ai)
 - [User docs](https://docs.orion-agent.ai)
-- [Fix: orion_ui import error](https://docs.orion-agent.ai/troubleshooting/orion-ui-import-error)
+- [Fix: orion_ui import error](https://docs.orion-agent.ai/troubleshooting/orion-ui-import-error.html)
 - [orion-notebook on PyPI](https://pypi.org/project/orion-notebook/) (CLI launcher)
 
 ## License

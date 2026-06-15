@@ -8,7 +8,7 @@ description: Authors notebook-defined Orion sub-agents under `.agents/subagents/
 ## Full documentation
 
 For extended user guides, examples, and troubleshooting beyond this skill file, read:
-https://docs.orion-agent.ai/ai-assistant/builtin-skills/create-subagent
+https://docs.orion-agent.ai/ai-assistant/builtin-skills/create-subagent.html
 
 ## Role
 

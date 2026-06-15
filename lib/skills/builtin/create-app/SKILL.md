@@ -8,10 +8,10 @@ description: Creates or edits Orion notebook App View selections from notebook c
 ## Full documentation
 
 For extended user guides, layout patterns, and troubleshooting beyond this skill file, read:
-https://docs.orion-agent.ai/ai-assistant/builtin-skills/create-app
+https://docs.orion-agent.ai/ai-assistant/builtin-skills/create-app.html
 
 Also see:
-https://docs.orion-agent.ai/notebooks/app-view
+https://docs.orion-agent.ai/notebooks/app-view.html
 
 Use this skill when the deliverable is an Orion App View inside a notebook, not a separate web app.
 

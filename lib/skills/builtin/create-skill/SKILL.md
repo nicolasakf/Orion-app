@@ -9,7 +9,7 @@ disable-model-invocation: false
 ## Full documentation
 
 For extended user guides, examples, and troubleshooting beyond this skill file, read:
-https://docs.orion-agent.ai/ai-assistant/builtin-skills/create-skill
+https://docs.orion-agent.ai/ai-assistant/builtin-skills/create-skill.html
 
 ## Critical — you are the skill author, not the skill in disguise
 
