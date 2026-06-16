@@ -4,6 +4,18 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.9.1] - 2026-06-15
+
+### Added
+
+- CLI: `orion doctor` subcommand for install diagnostics (`--json`, `--setup`)
+
+### Fixed
+
+- CI: harden Windows `uv` install in install smoke workflow
+
+[0.9.1]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.9.1
+
 ## [0.9.0] - 2026-06-14
 
 ### Added
