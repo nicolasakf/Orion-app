@@ -10,6 +10,7 @@ import { parseFrontmatter } from "./parse-frontmatter";
 import type { SkillInfo } from "./types";
 
 import createAppRaw from "./builtin/create-app/SKILL.md";
+import createRuleRaw from "./builtin/create-rule/SKILL.md";
 import createSkillRaw from "./builtin/create-skill/SKILL.md";
 import createSubagentRaw from "./builtin/create-subagent/SKILL.md";
 import chatHistoryRaw from "./builtin/chat-history/SKILL.md";
@@ -34,6 +35,7 @@ function parseBuiltinSkill(raw: string): SkillInfo {
 
 export const BUILTIN_SKILLS: SkillInfo[] = [
   parseBuiltinSkill(createAppRaw),
+  parseBuiltinSkill(createRuleRaw),
   parseBuiltinSkill(createSkillRaw),
   parseBuiltinSkill(createSubagentRaw),
   parseBuiltinSkill(orionSettingsRaw),
