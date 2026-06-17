@@ -19,6 +19,7 @@
 
 import { BaseTool } from "./base-tool";
 import { NotebookManager } from "./notebook-manager";
+import { dispatchAgentNotebookExecutionEvent } from "@/lib/notebook/agent-notebook-events";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { CellExecutionStatus, OutputType } from "@/lib/types";
 import type { KernelSidecar } from "../kernel-sidecar";
@@ -140,7 +141,9 @@ export class ExecuteCellTool extends BaseTool {
         codeToExecute,
         timeoutMs,
         stream,
-        normalizedProgressIntervalMs
+        normalizedProgressIntervalMs,
+        path,
+        resolvedIndex
       );
       const { agentLog } = executionResult;
 
@@ -184,11 +187,19 @@ export class ExecuteCellTool extends BaseTool {
     code: string,
     timeoutMs: number,
     stream: boolean,
-    progressIntervalMs: number
+    progressIntervalMs: number,
+    notebookPath: string,
+    cellIndex: number
   ): Promise<AgentCellExecutionResult> {
     const kernelOutputs: CellOutput[] = [];
     const agentLog: string[] = [];
     const startTime = new Date();
+    dispatchAgentNotebookExecutionEvent({
+      type: "start",
+      notebookPath,
+      cellIndex,
+      startTime,
+    });
     let completed = false;
     let executionCount: number | null = null;
     let hasError = false;
@@ -205,6 +216,12 @@ export class ExecuteCellTool extends BaseTool {
           const count = msg.content?.execution_count as number | undefined;
           if (count != null) {
             executionCount = count;
+            dispatchAgentNotebookExecutionEvent({
+              type: "execution-count",
+              notebookPath,
+              cellIndex,
+              executionCount: count,
+            });
           }
           break;
         }
@@ -218,6 +235,12 @@ export class ExecuteCellTool extends BaseTool {
               name: (msg.content?.name as string) ?? "stdout",
               text: [textStr],
             });
+            dispatchAgentNotebookExecutionEvent({
+              type: "output",
+              notebookPath,
+              cellIndex,
+              output: kernelOutputs[kernelOutputs.length - 1]!,
+            });
             agentLog.push(`${prefix}${textStr}`);
             outputCount++;
           }
@@ -228,6 +251,12 @@ export class ExecuteCellTool extends BaseTool {
           const execCount = msg.content?.execution_count as number | undefined;
           if (execCount != null) {
             executionCount = execCount;
+            dispatchAgentNotebookExecutionEvent({
+              type: "execution-count",
+              notebookPath,
+              cellIndex,
+              executionCount: execCount,
+            });
           }
           if (data) {
             kernelOutputs.push({
@@ -235,6 +264,12 @@ export class ExecuteCellTool extends BaseTool {
               execution_count: execCount,
               data: this.normalizeOutputData(data),
               metadata: (msg.content?.metadata as Record<string, unknown>) ?? {},
+            });
+            dispatchAgentNotebookExecutionEvent({
+              type: "output",
+              notebookPath,
+              cellIndex,
+              output: kernelOutputs[kernelOutputs.length - 1]!,
             });
             this.appendDataToAgentLog(data, agentLog, prefix);
             outputCount++;
@@ -248,6 +283,12 @@ export class ExecuteCellTool extends BaseTool {
               output_type: OutputType.DISPLAY_DATA,
               data: this.normalizeOutputData(data),
               metadata: (msg.content?.metadata as Record<string, unknown>) ?? {},
+            });
+            dispatchAgentNotebookExecutionEvent({
+              type: "output",
+              notebookPath,
+              cellIndex,
+              output: kernelOutputs[kernelOutputs.length - 1]!,
             });
             this.appendDataToAgentLog(data, agentLog, prefix);
             outputCount++;
@@ -264,6 +305,12 @@ export class ExecuteCellTool extends BaseTool {
             evalue,
             traceback,
           });
+          dispatchAgentNotebookExecutionEvent({
+            type: "output",
+            notebookPath,
+            cellIndex,
+            output: kernelOutputs[kernelOutputs.length - 1]!,
+          });
           hasError = true;
           const truncated = traceback.slice(-MAX_TRACEBACK_LINES);
           agentLog.push(
@@ -276,6 +323,12 @@ export class ExecuteCellTool extends BaseTool {
           const count = msg.content?.execution_count as number | undefined;
           if (count != null) {
             executionCount = count;
+            dispatchAgentNotebookExecutionEvent({
+              type: "execution-count",
+              notebookPath,
+              cellIndex,
+              executionCount: count,
+            });
           }
           const status = msg.content?.status;
           if (status === "error" || status === "abort") {
@@ -349,7 +402,7 @@ export class ExecuteCellTool extends BaseTool {
     }
 
     const endTime = new Date();
-    return {
+    const result = {
       kernelOutputs,
       agentLog,
       executionCount,
@@ -358,6 +411,24 @@ export class ExecuteCellTool extends BaseTool {
       startTime,
       endTime,
     };
+    dispatchAgentNotebookExecutionEvent({
+      type: "complete",
+      notebookPath,
+      cellIndex,
+      executionInfo: {
+        status: result.success
+          ? CellExecutionStatus.SUCCESS
+          : CellExecutionStatus.ERROR,
+        startTime: result.startTime,
+        endTime: result.endTime,
+        duration: result.duration,
+        lastExecuted: result.endTime,
+        statistics: {
+          wallTime: result.duration,
+        },
+      },
+    });
+    return result;
   }
 
   /**

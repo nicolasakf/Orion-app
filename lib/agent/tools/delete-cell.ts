@@ -8,6 +8,11 @@
 
 import { BaseTool } from "./base-tool";
 import { hashCheckpointPayload } from "@/lib/agent/edit-checkpoints";
+import {
+  computeCellSourceDelta,
+  formatCellSourceDeltaDiffs,
+  formatCellSourceDeltaSummary,
+} from "@/lib/notebook/cell-source-diff";
 import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
@@ -118,6 +123,9 @@ export class DeleteCellTool extends BaseTool {
 
     // Build response
     const infoList: string[] = [];
+    const sourceDeltas = deletedCells.map((deleted) =>
+      computeCellSourceDelta(deleted.index, deleted.source, "")
+    );
     for (const deleted of deletedCells) {
       infoList.push(
         `Cell ${deleted.index} (${deleted.cellType}) deleted successfully.`
@@ -127,6 +135,10 @@ export class DeleteCellTool extends BaseTool {
         infoList.push("\n---\n");
       }
     }
+    infoList.push("");
+    infoList.push(formatCellSourceDeltaSummary(sourceDeltas));
+    infoList.push("");
+    infoList.push(formatCellSourceDeltaDiffs(sourceDeltas));
 
     return infoList.join("\n");
   }

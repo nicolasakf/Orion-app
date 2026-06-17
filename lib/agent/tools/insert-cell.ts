@@ -8,6 +8,11 @@
 
 import { BaseTool } from "./base-tool";
 import { hashCheckpointPayload } from "@/lib/agent/edit-checkpoints";
+import {
+  computeCellSourceDelta,
+  formatCellSourceDeltaDiffs,
+  formatCellSourceDeltaSummary,
+} from "@/lib/notebook/cell-source-diff";
 import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
@@ -59,6 +64,13 @@ export class InsertCellTool extends BaseTool {
         ? this.createCodeCell(cell.cellSource || "")
         : this.createMarkdownCell(cell.cellSource || "")
     );
+    const sourceDeltas = newCells.map((cell, offset) =>
+      computeCellSourceDelta(
+        actualIndex + offset,
+        "",
+        this.normalizeCellSource(cell.source)
+      )
+    );
 
     // Insert all cells at once (splice at actualIndex, insert 0 items to delete, add newCells)
     notebook.cells.splice(actualIndex, 0, ...newCells);
@@ -100,6 +112,10 @@ export class InsertCellTool extends BaseTool {
       `${count} cell${count === 1 ? "" : "s"} inserted successfully at index ${actualIndex}!`
     );
     infoList.push(`Notebook now has ${newTotalCells} cells`);
+    infoList.push("");
+    infoList.push(formatCellSourceDeltaSummary(sourceDeltas));
+    infoList.push("");
+    infoList.push(formatCellSourceDeltaDiffs(sourceDeltas));
 
     return infoList.join("\n");
   }

@@ -1147,6 +1147,9 @@ await runTest("append at -1 adds cell to end", async () => {
   const { tool, store } = makeInsertTool();
   const result = await tool.execute({ cells: [{ cellType: "code", cellSource: "new_cell = 1" }], startIndex: -1 });
   assertIncludes(result, "inserted successfully", "should confirm insertion");
+  assertIncludes(result, "Cell source changes:", "should include source delta section");
+  assertIncludes(result, "Cell 1: +1 -0 lines", "should include inserted-cell line delta");
+  assertIncludes(result, "Cell 1 diff:", "should include inserted-cell diff");
   const nb = store.get("nb.ipynb")!;
   assert(nb.cells.length === 2, "should have 2 cells");
   const lastCell = nb.cells[nb.cells.length - 1];
@@ -1218,6 +1221,9 @@ await runTest("deletes a single cell", async () => {
   const { tool, store } = makeDeleteTool();
   const result = await tool.execute({ cellIndices: [1], includeSource: false });
   assertIncludes(result, "deleted successfully", "should confirm deletion");
+  assertIncludes(result, "Cell source changes:", "should include source delta section");
+  assertIncludes(result, "Cell 1: +0 -1 lines", "should include deleted-cell line delta");
+  assertIncludes(result, "Cell 1 diff:", "should include deleted-cell diff");
   const nb = store.get("nb.ipynb")!;
   assert(nb.cells.length === 3, "should have 3 cells remaining");
   assert(nb.cells[1].source[0] === "y = 2", "cell 1 should now be former cell 2");
@@ -1317,6 +1323,7 @@ await runTest("generates diff showing changed lines", async () => {
     cells: [{ cellIndex: 1, newSource: "x = 1\ny = 20\nprint(x + y)" }],
   });
   assertIncludes(result, "diff", "result should mention diff");
+  assertIncludes(result, "Cell 1: +1 -1 lines", "should include source line delta");
   assertIncludes(result, "-y = 2", "diff should show removed line");
   assertIncludes(result, "+y = 20", "diff should show added line");
 });

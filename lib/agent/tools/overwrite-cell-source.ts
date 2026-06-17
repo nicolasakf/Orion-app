@@ -8,6 +8,12 @@
 
 import { BaseTool } from "./base-tool";
 import { hashCheckpointPayload } from "@/lib/agent/edit-checkpoints";
+import {
+  computeCellSourceDelta,
+  formatCellSourceDeltaDiffs,
+  formatCellSourceDeltaSummary,
+  type CellSourceDelta,
+} from "@/lib/notebook/cell-source-diff";
 import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
@@ -66,6 +72,7 @@ export class OverwriteCellSourceTool extends BaseTool {
       beforeCell: unknown;
       afterCell: unknown;
     }> = [];
+    const sourceDeltas: CellSourceDelta[] = [];
 
     for (const { cellIndex, newSource } of cells) {
       const cell = notebook.cells[cellIndex];
@@ -80,7 +87,8 @@ export class OverwriteCellSourceTool extends BaseTool {
         cell.execution_count = null;
       }
 
-      const diff = this.generateUnifiedDiff(oldSource, newSource);
+      const delta = computeCellSourceDelta(cellIndex, oldSource, newSource);
+      sourceDeltas.push(delta);
       if (cellId) {
         checkpointEntries.push({
           cellIndex,
@@ -92,12 +100,10 @@ export class OverwriteCellSourceTool extends BaseTool {
         });
       }
 
-      if (!diff.trim() || diff === "no changes detected") {
+      if (delta.diffText === "no changes detected") {
         messages.push(`Cell ${cellIndex} overwritten successfully - no changes detected`);
       } else {
-        messages.push(
-          `Cell ${cellIndex} overwritten successfully!\n\n\`\`\`diff\n${diff}\n\`\`\``
-        );
+        messages.push(`Cell ${cellIndex} overwritten successfully!`);
       }
     }
 
@@ -128,69 +134,10 @@ export class OverwriteCellSourceTool extends BaseTool {
       )
     );
 
-    return messages.join("\n\n---\n\n");
-  }
-
-  /**
-   * Generate a unified diff between old and new source strings.
-   *
-   * Implements a simplified unified diff format showing context
-   * around changed lines with +/- prefixes.
-   */
-  private generateUnifiedDiff(
-    oldSource: string,
-    newSource: string
-  ): string {
-    const oldLines = oldSource.split("\n");
-    const newLines = newSource.split("\n");
-
-    if (oldSource === newSource) {
-      return "no changes detected";
-    }
-
-    const diffLines: string[] = [];
-    diffLines.push("--- old");
-    diffLines.push("+++ new");
-
-    const maxLen = Math.max(oldLines.length, newLines.length);
-    let inHunk = false;
-    let hunkStart = -1;
-
-    for (let i = 0; i < maxLen; i++) {
-      const oldLine = i < oldLines.length ? oldLines[i] : undefined;
-      const newLine = i < newLines.length ? newLines[i] : undefined;
-
-      if (oldLine !== newLine) {
-        if (!inHunk) {
-          inHunk = true;
-          hunkStart = Math.max(0, i - 3);
-          for (let ctx = hunkStart; ctx < i; ctx++) {
-            if (ctx < oldLines.length) {
-              diffLines.push(` ${oldLines[ctx]}`);
-            }
-          }
-        }
-
-        if (oldLine !== undefined && newLine !== undefined) {
-          diffLines.push(`-${oldLine}`);
-          diffLines.push(`+${newLine}`);
-        } else if (oldLine !== undefined) {
-          diffLines.push(`-${oldLine}`);
-        } else if (newLine !== undefined) {
-          diffLines.push(`+${newLine}`);
-        }
-      } else if (inHunk) {
-        if (oldLine !== undefined) {
-          diffLines.push(` ${oldLine}`);
-        }
-
-        const linesAfterChange = i - hunkStart;
-        if (linesAfterChange > 6) {
-          inHunk = false;
-        }
-      }
-    }
-
-    return diffLines.length > 2 ? diffLines.join("\n") : "no changes detected";
+    return [
+      messages.join("\n\n---\n\n"),
+      formatCellSourceDeltaSummary(sourceDeltas),
+      formatCellSourceDeltaDiffs(sourceDeltas),
+    ].filter(Boolean).join("\n\n");
   }
 }

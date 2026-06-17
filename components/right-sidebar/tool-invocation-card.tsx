@@ -41,8 +41,10 @@ import {
 } from "./tool-invocation-helpers";
 import {
   cardDisplayTextForToolResult,
+  getNotebookCellSourceChanges,
   getToolResultDisplaySegments,
   IS_TOOL_CARD_DEV_OVERLAY,
+  type NotebookCellSourceChangeDisplay,
 } from "./tool-invocation-result-display";
 import { ScrollGradientOverlays, useScrollEdgeIndicators } from "./scroll-edge-gradient";
 
@@ -188,6 +190,32 @@ function useAwaitCommandCountdown(
   return shouldCountDown ? secondsLeft : null;
 }
 
+/** Compact per-cell source deltas shown while the full result remains collapsed. */
+function NotebookCellSourceChangeRows({
+  changes,
+}: {
+  changes: NotebookCellSourceChangeDisplay[];
+}) {
+  if (changes.length === 0) return null;
+
+  return (
+    <div className="ml-1 mt-0.5 flex flex-wrap gap-1">
+      {changes.map((change) => (
+        <div
+          key={change.cellIndex}
+          className="corner-squircle inline-flex items-center gap-1 rounded border border-border/50 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+        >
+          <span className="font-medium text-foreground">Cell {change.cellIndex}</span>
+          <span className="text-emerald-600 dark:text-emerald-400">
+            +{change.addedLines}
+          </span>
+          <span className="text-destructive">-{change.removedLines}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ============================================================================
 // Main component
 // ============================================================================
@@ -259,6 +287,7 @@ export function ToolInvocationCard({
   const devDisplaySegments = IS_TOOL_CARD_DEV_OVERLAY
     ? getToolResultDisplaySegments(toolName, fullResultText)
     : null;
+  const notebookCellSourceChanges = getNotebookCellSourceChanges(fullResultText);
   /** Scroll/size observer: in dev the expanded pre shows the full raw result. */
   const expandedScrollKey = IS_TOOL_CARD_DEV_OVERLAY ? fullResultText : cardResultText;
   const canExpand = !isPending && !!fullResultText;
@@ -388,6 +417,8 @@ export function ToolInvocationCard({
           </button>
         </div>
       )}
+
+      <NotebookCellSourceChangeRows changes={notebookCellSourceChanges} />
 
       {/* Expanded result */}
       {isExpanded && fullResultText && (

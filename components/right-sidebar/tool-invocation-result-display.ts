@@ -19,6 +19,47 @@ export type ToolResultDisplaySegment = {
   text: string;
 };
 
+export type NotebookCellSourceChangeDisplay = {
+  cellIndex: number;
+  addedLines: number;
+  removedLines: number;
+  diffText?: string;
+};
+
+/** Extracts the mutation-tool cell delta section from a tool result. */
+export function getNotebookCellSourceChanges(
+  fullResultText: string
+): NotebookCellSourceChangeDisplay[] {
+  if (!fullResultText || fullResultText.startsWith("[ERROR")) return [];
+
+  const summaryIndex = fullResultText.indexOf("Cell source changes:");
+  if (summaryIndex === -1) return [];
+
+  const afterSummary = fullResultText.slice(summaryIndex).split(/\r?\n/);
+  const changes: NotebookCellSourceChangeDisplay[] = [];
+  for (const line of afterSummary.slice(1)) {
+    if (!line.trim()) break;
+    const match = line.match(/^Cell (\d+): \+(\d+) -(\d+) lines$/);
+    if (!match) break;
+    changes.push({
+      cellIndex: Number(match[1]),
+      addedLines: Number(match[2]),
+      removedLines: Number(match[3]),
+    });
+  }
+
+  return changes.map((change) => {
+    const diffRe = new RegExp(
+      `Cell ${change.cellIndex} diff:\\n\\n\`\`\`diff\\n([\\s\\S]*?)\\n\`\`\``
+    );
+    const diffMatch = fullResultText.match(diffRe);
+    return {
+      ...change,
+      diffText: diffMatch?.[1],
+    };
+  });
+}
+
 function mergeAdjacentSegments(segments: ToolResultDisplaySegment[]): ToolResultDisplaySegment[] {
   const out: ToolResultDisplaySegment[] = [];
   for (const seg of segments) {

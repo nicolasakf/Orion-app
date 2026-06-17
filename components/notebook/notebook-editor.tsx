@@ -78,6 +78,10 @@ import {
   type ScrollToNotebookCellEventDetail,
 } from "@/lib/notebook/notebook-execution-events";
 import {
+  AGENT_NOTEBOOK_EXECUTION_EVENT_NAME,
+  type AgentNotebookExecutionEventDetail,
+} from "@/lib/notebook/agent-notebook-events";
+import {
   buildScreenNotebookExportHtml,
   downloadNotebookExport,
   downloadScreenNotebookHtml,
@@ -416,6 +420,8 @@ export function NotebookEditor({
 
   const cellRefs = useRef<Map<CellId, HTMLDivElement | null>>(new Map());
   const notebookRootRef = useRef<HTMLDivElement | null>(null);
+  const activeAgentExecutionCellsRef = useRef<Set<number>>(new Set());
+  const pendingAgentNotebookReloadRef = useRef(false);
   const mouseSelectionScrollSnapshotRef =
     useRef<ScrollPositionSnapshot | null>(null);
   const showSubagentOptions = isSubagentNotebookPath(filepath);
@@ -1512,37 +1518,45 @@ export function NotebookEditor({
     };
   }, []);
 
+  const reloadNotebookAfterAgentModification = useCallback(async () => {
+    if (!parentKernelService) {
+      return;
+    }
+
+    try {
+      const contentsManager = parentKernelService.getContentsManager();
+      const model = await contentsManager.get(filepath, { content: true });
+      const parsedNotebook = parseNotebook(JSON.stringify(model.content));
+
+      const withIds = ensureUniqueCellIds(parsedNotebook, createCellId);
+
+      setNotebook(withIds);
+      modifiedCellsRef.current = new Set();
+      pendingCellChangesRef.current = new Map();
+      cellComponentRefs.current = new Map();
+      cellRefs.current = new Map();
+      applySelectionState(singleCellSelection(getCellId(withIds.cells[0])));
+      markClean();
+    } catch (err) {
+      console.error(
+        "Failed to reload notebook after agent modification:",
+        err,
+      );
+    }
+  }, [applySelectionState, parentKernelService, filepath, markClean]);
+
   /**
    * Listen for agentNotebookModified events dispatched when the Orion agent
    * modifies the notebook via Jupyter's ContentsManager. Re-reads from
    * ContentsManager to sync the editor with the agent's changes.
    */
   useEffect(() => {
-    if (!parentKernelService) {
-      return;
-    }
-
-    const handleAgentModified = async () => {
-      try {
-        const contentsManager = parentKernelService.getContentsManager();
-        const model = await contentsManager.get(filepath, { content: true });
-        const parsedNotebook = parseNotebook(JSON.stringify(model.content));
-
-        const withIds = ensureUniqueCellIds(parsedNotebook, createCellId);
-
-        setNotebook(withIds);
-        modifiedCellsRef.current = new Set();
-        pendingCellChangesRef.current = new Map();
-        cellComponentRefs.current = new Map();
-        cellRefs.current = new Map();
-        applySelectionState(singleCellSelection(getCellId(withIds.cells[0])));
-        markClean();
-      } catch (err) {
-        console.error(
-          "Failed to reload notebook after agent modification:",
-          err,
-        );
+    const handleAgentModified = () => {
+      if (activeAgentExecutionCellsRef.current.size > 0) {
+        pendingAgentNotebookReloadRef.current = true;
+        return;
       }
+      void reloadNotebookAfterAgentModification();
     };
 
     window.addEventListener(
@@ -1555,7 +1569,99 @@ export function NotebookEditor({
         handleAgentModified as EventListener,
       );
     };
-  }, [applySelectionState, parentKernelService, filepath, markClean]);
+  }, [reloadNotebookAfterAgentModification]);
+
+  /** Applies live notebook output updates emitted by agent execute_cell. */
+  useEffect(() => {
+    const handleAgentExecution = (event: Event) => {
+      const detail = (event as CustomEvent<AgentNotebookExecutionEventDetail>)
+        .detail;
+      if (!detail || detail.notebookPath !== filepath) return;
+
+      if (detail.type === "start") {
+        activeAgentExecutionCellsRef.current.add(detail.cellIndex);
+        setNotebook((prev) => {
+          if (!prev || detail.cellIndex < 0 || detail.cellIndex >= prev.cells.length) {
+            return prev;
+          }
+          const newCells = prev.cells.slice();
+          const targetCell = {
+            ...newCells[detail.cellIndex],
+            outputs: [],
+            execution_count: null,
+          } as NotebookCellType;
+          newCells[detail.cellIndex] = targetCell;
+          return { ...prev, cells: newCells };
+        });
+        updateExecutionInfo(detail.cellIndex, {
+          status: CellExecutionStatus.RUNNING,
+          startTime: detail.startTime,
+        });
+        parentSetIsRunning?.(true);
+        return;
+      }
+
+      if (detail.type === "output") {
+        setNotebook((prev) => {
+          if (!prev || detail.cellIndex < 0 || detail.cellIndex >= prev.cells.length) {
+            return prev;
+          }
+          const newCells = prev.cells.slice();
+          const targetCell = { ...newCells[detail.cellIndex] } as NotebookCellType;
+          targetCell.outputs = [...(targetCell.outputs ?? []), detail.output];
+          newCells[detail.cellIndex] = targetCell;
+          return { ...prev, cells: newCells };
+        });
+        return;
+      }
+
+      if (detail.type === "execution-count") {
+        setNotebook((prev) => {
+          if (!prev || detail.cellIndex < 0 || detail.cellIndex >= prev.cells.length) {
+            return prev;
+          }
+          const newCells = prev.cells.slice();
+          const targetCell = { ...newCells[detail.cellIndex] } as NotebookCellType;
+          targetCell.execution_count = detail.executionCount;
+          newCells[detail.cellIndex] = targetCell;
+          return { ...prev, cells: newCells };
+        });
+        if (parentExecutionCountRef) {
+          parentExecutionCountRef.current = detail.executionCount;
+        }
+        return;
+      }
+
+      if (detail.type === "complete") {
+        updateExecutionInfo(detail.cellIndex, detail.executionInfo);
+        activeAgentExecutionCellsRef.current.delete(detail.cellIndex);
+        if (activeAgentExecutionCellsRef.current.size === 0) {
+          parentSetIsRunning?.(false);
+          if (pendingAgentNotebookReloadRef.current) {
+            pendingAgentNotebookReloadRef.current = false;
+            void reloadNotebookAfterAgentModification();
+          }
+        }
+      }
+    };
+
+    window.addEventListener(
+      AGENT_NOTEBOOK_EXECUTION_EVENT_NAME,
+      handleAgentExecution as EventListener,
+    );
+    return () => {
+      window.removeEventListener(
+        AGENT_NOTEBOOK_EXECUTION_EVENT_NAME,
+        handleAgentExecution as EventListener,
+      );
+    };
+  }, [
+    filepath,
+    parentExecutionCountRef,
+    parentSetIsRunning,
+    reloadNotebookAfterAgentModification,
+    updateExecutionInfo,
+  ]);
 
   /** Scrolls a rendered cell/output only when it is not fully visible. */
   const scrollElementIntoView = useCallback(
