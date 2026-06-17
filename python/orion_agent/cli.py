@@ -557,7 +557,12 @@ def start_orion_app(node: str, app: Path) -> tuple[subprocess.Popen[bytes], str]
         "NODE_ENV": "production",
         "PORT": str(port),
     }
-    proc = subprocess.Popen([node, str(app / "server.js")], cwd=app, env=env)
+    # Node's default 16 KiB header limit rejects browsers with large localhost cookie jars (HTTP 431).
+    proc = subprocess.Popen(
+        [node, "--max-http-header-size=65536", str(app / "server.js")],
+        cwd=app,
+        env=env,
+    )
     return proc, f"http://127.0.0.1:{port}"
 
 
@@ -1044,6 +1049,7 @@ def run_uninstall(assume_yes: bool, remove_all: bool) -> None:
         home = orion_home()
         if not home.exists():
             print("Nothing to remove.")
+            run_package_uninstall()
             return
         if not confirm(
             f"Remove all Orion data under {home}? "
@@ -1053,7 +1059,7 @@ def run_uninstall(assume_yes: bool, remove_all: bool) -> None:
             raise SystemExit("Uninstall declined.")
         shutil.rmtree(home)
         print(f"Removed:\n  - {home}")
-        print_package_uninstall_hint()
+        run_package_uninstall()
         return
 
     targets = [app_dir(), app_bundle_archive()]
@@ -1061,7 +1067,7 @@ def run_uninstall(assume_yes: bool, remove_all: bool) -> None:
     if not existing:
         print("Nothing to remove.")
         print("Expected locations were already absent.")
-        print_package_uninstall_hint()
+        run_package_uninstall()
         return
 
     if not confirm(
@@ -1083,16 +1089,110 @@ def run_uninstall(assume_yes: bool, remove_all: bool) -> None:
     else:
         print("Nothing to remove.")
 
-    print_package_uninstall_hint()
+    run_package_uninstall()
 
 
-def print_package_uninstall_hint() -> None:
-    """Print how to remove the installed npm, pip, or uv package."""
+PACKAGE_NAME = "orion-notebook"
+
+
+def _defer_shell(command: str) -> None:
+    """Run a shell command after this process exits so self-uninstall can succeed."""
+    if sys.platform == "win32":
+        subprocess.Popen(
+            ["cmd", "/c", f"timeout /t 2 /nobreak >nul & {command}"],
+            creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+            close_fds=True,
+        )
+        return
+    subprocess.Popen(
+        ["sh", "-c", f"sleep 2 && {command}"],
+        start_new_session=True,
+        close_fds=True,
+    )
+
+
+def _is_not_installed_output(output: str) -> bool:
+    """Return whether uninstall output indicates the package was not installed."""
+    lower = output.lower()
+    return any(
+        phrase in lower
+        for phrase in (
+            "not installed",
+            "cannot uninstall",
+            "no such package",
+            "is not installed",
+            "skipping",
+        )
+    )
+
+
+def _run_sync(command: list[str]) -> tuple[bool, str]:
+    """Run a command synchronously and return success plus combined output."""
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    output = f"{result.stdout}{result.stderr}".strip()
+    return result.returncode == 0, output
+
+
+def run_package_uninstall() -> None:
+    """Remove orion-notebook from npm, pip, and uv when present."""
+    running_from = detect_install_channel()
+    removed: list[str] = []
+    deferred: list[str] = []
+    errors: list[tuple[str, str]] = []
+
+    npm = shutil.which("npm")
+    if npm:
+        if running_from == "npm":
+            _defer_shell(f'"{npm}" uninstall -g {PACKAGE_NAME}')
+            deferred.append("npm")
+        else:
+            ok, output = _run_sync([npm, "uninstall", "-g", PACKAGE_NAME])
+            if ok:
+                removed.append("npm")
+            elif not _is_not_installed_output(output):
+                errors.append(("npm", output.splitlines()[0] if output else "npm uninstall failed"))
+
+    python = shutil.which("python3") or shutil.which("python")
+    if python:
+        pip_args = [python, "-m", "pip", "uninstall", "-y", PACKAGE_NAME]
+        if running_from == "pip":
+            _defer_shell(" ".join(f'"{part}"' if " " in part else part for part in pip_args))
+            deferred.append("pip")
+        else:
+            ok, output = _run_sync(pip_args)
+            if ok:
+                removed.append("pip")
+            elif not _is_not_installed_output(output):
+                errors.append(("pip", output.splitlines()[0] if output else "pip uninstall failed"))
+
+    uv = shutil.which("uv")
+    if uv:
+        uv_args = [uv, "tool", "uninstall", PACKAGE_NAME]
+        if running_from == "uv":
+            _defer_shell(" ".join(f'"{part}"' if " " in part else part for part in uv_args))
+            deferred.append("uv")
+        else:
+            ok, output = _run_sync(uv_args)
+            if ok:
+                removed.append("uv")
+            elif not _is_not_installed_output(output):
+                errors.append(("uv", output.splitlines()[0] if output else "uv tool uninstall failed"))
+
     print("")
-    print("To remove the installed package, run:")
-    print("  npm uninstall -g orion-notebook")
-    print("  pip uninstall orion-notebook")
-    print("  uv tool uninstall orion-notebook")
+    for channel in removed:
+        print(f"Removed orion-notebook ({channel}).")
+    for channel in deferred:
+        print(f"Removing orion-notebook ({channel}) after exit...")
+    for channel, message in errors:
+        print(f"Could not remove orion-notebook ({channel}): {message}")
+    if not removed and not deferred and not errors:
+        print("No orion-notebook package installation found to remove.")
 
 
 def uninstall_main(argv: list[str]) -> None:

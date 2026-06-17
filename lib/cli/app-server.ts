@@ -12,6 +12,9 @@ export interface StartedOrionApp {
   dispose: () => void;
 }
 
+/** Node's default 16 KiB header limit rejects browsers with large localhost cookie jars (HTTP 431). */
+export const ORION_MAX_HTTP_HEADER_SIZE = 65_536;
+
 /** Returns the app bundle directory for an npm-installed Orion CLI. */
 export function resolveBundledAppDirectory(fromDirectory = __dirname): string {
   // Compiled CLI lives at dist/cli/lib/cli; the app bundle sits at dist/orion-app.
@@ -80,7 +83,7 @@ export async function startOrionAppServer(
     port = await findFreePort();
   }
 
-  const proc = spawn(process.execPath, [serverPath], {
+  const proc = spawn(process.execPath, [`--max-http-header-size=${ORION_MAX_HTTP_HEADER_SIZE}`, serverPath], {
     cwd: appDirectory,
     stdio: "inherit",
     env: {

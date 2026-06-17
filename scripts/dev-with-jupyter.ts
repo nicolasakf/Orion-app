@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "child_process";
 import { existsSync } from "fs";
 import { resolve } from "path";
 
-import { keepAliveUntilExit } from "../lib/cli/app-server";
+import { keepAliveUntilExit, ORION_MAX_HTTP_HEADER_SIZE } from "../lib/cli/app-server";
 import {
   bootstrapJupyter,
   resolveJupyterRootDirectory,
@@ -56,11 +56,15 @@ function startNextDevServer(): ChildProcess {
     );
   }
 
-  return spawn(process.execPath, [nextEntrypoint, "dev", "-p", "3001", "--turbopack"], {
-    cwd: process.cwd(),
-    stdio: "inherit",
-    env: process.env,
-  });
+  return spawn(
+    process.execPath,
+    [`--max-http-header-size=${ORION_MAX_HTTP_HEADER_SIZE}`, nextEntrypoint, "dev", "-p", "3001", "--turbopack"],
+    {
+      cwd: process.cwd(),
+      stdio: "inherit",
+      env: process.env,
+    }
+  );
 }
 
 /** Boots Jupyter and the Next.js dev server together. */

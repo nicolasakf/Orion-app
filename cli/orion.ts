@@ -9,6 +9,10 @@ import { readPackageVersion } from "../lib/cli/package-version";
 import { runConfigCommand } from "../lib/cli/config";
 import { runDoctorCommand } from "../lib/cli/doctor";
 import { runUninstall } from "../lib/cli/uninstall";
+import {
+  printPackageUninstallResult,
+  runPackageUninstall,
+} from "../lib/cli/uninstall-package";
 
 interface CliOptions {
   yes: boolean;
@@ -36,7 +40,7 @@ function printUninstallUsage(): void {
 Removes Orion-managed data under ~/.orion.
 
 By default, removes the pip-downloaded app bundle and cached GitHub archive
-for this package version. Does not remove the npm/pip package itself.
+for this package version, then uninstalls the orion-notebook package.
 
 Options:
   -y, --yes   Approve removal prompts.
@@ -93,10 +97,7 @@ async function runUninstallCommand(argv: string[]): Promise<void> {
   }
 
   console.log("");
-  console.log("To remove the installed package, run:");
-  console.log("  npm uninstall -g orion-notebook");
-  console.log("  pip uninstall orion-notebook");
-  console.log("  uv tool uninstall orion-notebook");
+  printPackageUninstallResult(runPackageUninstall({ runningFrom: "npm" }));
 }
 
 /** Boots the local Orion app and optionally Jupyter services. */
