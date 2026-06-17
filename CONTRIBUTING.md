@@ -203,10 +203,11 @@ pip install -e python/
 orion --yes
 ```
 
-Optional environment:
+Optional local Orion-api dev override (dev only — not used by `next build`):
 
 ```bash
-NEXT_PUBLIC_APP_URL=http://localhost:3001
+# .env.development.local
+NEXT_PUBLIC_ORION_API_BASE_URL=http://localhost:3002
 ```
 
 ## Tests And Checks
