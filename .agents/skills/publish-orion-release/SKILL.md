@@ -1,6 +1,6 @@
 ---
 name: publish-orion-release
-description: Publishes an Orion release end-to-end — version bump, build, push release prep, wait for GitHub checks/install smoke, tag, GitHub release, npm/PyPI publish via scripts/publish-release.sh (NPM_TOKEN + PyPI token in ~/.zprofile), sync version tags in Orion-api and Orion-docs, then post-release verification. Use when the user asks to publish a release, ship a version, bump and publish orion-notebook or orion-ui, or cut a new npm/PyPI release.
+description: Publishes an Orion release end-to-end — version bump, build, push release prep, wait for GitHub checks/install smoke (skippable when CI already passed on the pre-bump commit), tag, GitHub release, npm/PyPI publish via scripts/publish-release.sh (NPM_TOKEN + PyPI token in ~/.zprofile), sync version tags in Orion-api and Orion-docs, then post-release verification. Use when the user asks to publish a release, ship a version, bump and publish orion-notebook or orion-ui, or cut a new npm/PyPI release.
 ---
 
 # Publish Orion Release
@@ -29,7 +29,7 @@ Detailed reference: [CONTRIBUTING.md — Publishing The CLI](../../../CONTRIBUTI
 
 ## Automated workflow
 
-**Phase 1 — Prepare and gate:** pre-flight → version bump → commit → build → push release prep → wait for GitHub checks, especially `Install Smoke` → tag/push → GitHub release → build PyPI artifacts.
+**Phase 1 — Prepare and gate:** pre-flight → version bump → commit → build → push release prep → wait for GitHub checks (skip if pre-validated — see **Step 5**) → tag/push → GitHub release → build PyPI artifacts.
 
 **Phase 1b — Sync sibling repos:** bump version markers in `Orion-api` and `Orion-docs`, commit, tag `v<version>`, push (no GitHub releases).
 
@@ -60,7 +60,7 @@ Agent shells may not load `~/.zprofile` automatically. The publish script source
 - `gh` authenticated (`gh auth status`)
 - Publish credentials in environment (`bash scripts/publish-release.sh --check`)
 - Node.js 20+, Python 3.8+ locally for build/test
-- Passing GitHub checks on the release prep commit before tagging or publishing, especially the cross-OS `Install Smoke` workflow
+- Passing GitHub checks before tagging or publishing, especially the cross-OS `Install Smoke` workflow — on the release prep commit **or** on the parent commit when the release prep commit is version-only (see **Step 5**)
 
 Pre-flight runs `bash scripts/publish-release.sh --check` (validates `NPM_TOKEN`, PyPI token, and `npm whoami`).
 
@@ -104,7 +104,7 @@ Phase 1 — Prepare and gate
 - [ ] 5. Commit release prep
 - [ ] 6. Build and smoke-test npm package
 - [ ] 7. Push release prep branch/main
-- [ ] 8. Wait for GitHub checks to pass (`Install Smoke` is required)
+- [ ] 8. Wait for GitHub checks to pass (`Install Smoke` is required), or skip if pre-validated (Step 5)
 - [ ] 9. Tag and push `v<version>`
 - [ ] 10. GitHub release + app bundle asset
 - [ ] 11. Build PyPI artifacts (twine check only)
@@ -215,9 +215,29 @@ git push origin main
 
 Use the branch the user specifies if not `main`.
 
-After pushing, wait for the GitHub checks on the exact release prep commit to pass before creating the release tag or publishing packages. The `Install Smoke` workflow is a release gate because it installs Orion across Windows, macOS, and Linux using the public installer paths and artifact overrides.
+After pushing, wait for the GitHub checks on the release prep commit to pass before creating the release tag or publishing packages — **unless** the pre-validated skip applies (below). The `Install Smoke` workflow is a release gate because it installs Orion across Windows, macOS, and Linux using the public installer paths and artifact overrides.
 
-Preferred check:
+#### Pre-validated skip (do not wait again)
+
+Skip the wait when **all** of the following are true:
+
+1. The release prep commit is **version-only** — its diff is limited to version files and `CHANGELOG.md` (a `chore(release): v<x.y.z>` commit with no code, workflow, or installer changes).
+2. **CI** and **Install Smoke** already completed **successfully** on the parent commit (the last functional commit before the release prep commit), or the user explicitly confirms those checks passed on that commit.
+3. No substantive commits since that validated parent are missing from the release (the release prep commit is the only new commit since validation).
+
+Verify the parent commit passed both workflows:
+
+```bash
+PARENT=$(git rev-parse HEAD^)
+gh run list --commit "$PARENT" --json name,conclusion,status \
+  --jq '.[] | select(.name == "CI" or .name == "Install Smoke") | "\(.name): \(.status) \(.conclusion)"'
+```
+
+Both must show `completed success`. If either is missing, pending, or failed, **do not skip** — wait for checks on the release prep commit instead.
+
+When the skip applies, push the release prep commit and proceed directly to Step 6 (tag). Note in the release summary that checks were pre-validated on the parent commit.
+
+#### Standard wait (default when skip does not apply)
 
 ```bash
 gh run list --branch main --limit 10
@@ -451,7 +471,7 @@ Remove release temp files: `CHANGELOG-excerpt.md`, local `npm pack` tarballs, an
 1. Version bump + CHANGELOG commit in **Orion-app** (all version files, including `orion-ui`)
 2. `npm run prepack` and local sanity checks
 3. Push the release prep commit to GitHub
-4. Wait for required GitHub checks on that commit, especially `Install Smoke`
+4. Wait for required GitHub checks on that commit, especially `Install Smoke` — or skip if pre-validated on the parent commit (Step 5)
 5. Tag + push **Orion-app**
 6. **GitHub release with app bundle** ← `orion-notebook` PyPI depends on this
 7. Build PyPI artifacts for **`orion-ui`** and **`orion-notebook`**
@@ -461,7 +481,7 @@ Remove release temp files: `CHANGELOG-excerpt.md`, local `npm pack` tarballs, an
 
 Publishing `orion-notebook` to PyPI before the GitHub release asset exists will break first-run `pip install orion-notebook` users. Publishing `orion-notebook` before `orion-ui` will break managed runtime venv sync on first startup.
 
-Publishing npm/PyPI before the release prep commit passes GitHub checks can ship broken installers to users. Treat failed `Install Smoke` jobs as release blockers unless the user explicitly approves an emergency override.
+Publishing npm/PyPI before required GitHub checks pass can ship broken installers to users. Treat failed `Install Smoke` jobs as release blockers unless the user explicitly approves an emergency override. The Step 5 pre-validated skip is safe only when the release prep commit is version-only and CI + Install Smoke already succeeded on its parent; do not skip if the release prep commit changes code, workflows, or installers.
 
 Sibling repo sync (step 8) can run in parallel with PyPI artifact build (step 7) if time is tight, but must finish before Phase 3 verification.
 
