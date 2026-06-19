@@ -96,6 +96,8 @@ jobs:
 
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      NEXT_TELEMETRY_DISABLED: "1"
+      NODE_OPTIONS: "--max-old-space-size=6144"
       ORION_DESKTOP_TARGET: ${{ matrix.target }}
       ORION_HOME_DIR: ${{ github.workspace }}/.orion-desktop-home
       CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
@@ -132,6 +134,11 @@ jobs:
         working-directory: python/orion-ui
 
       - name: Prepare desktop package inputs
+        env:
+          APPDATA: ${{ github.workspace }}/.appdata
+          HOME: ${{ github.workspace }}
+          LOCALAPPDATA: ${{ github.workspace }}/.localappdata
+          USERPROFILE: ${{ github.workspace }}
         run: npm run prepack:desktop
 
       - name: Package macOS app
