@@ -32,6 +32,10 @@ import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
 import { DANGEROUS_TOOLS } from "@/lib/agent/tool-approval";
 import {
+  SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+  type ScrollToNotebookCellEventDetail,
+} from "@/lib/notebook/notebook-execution-events";
+import {
   safeArgs,
   getToolMeta,
   getToolLabel,
@@ -198,19 +202,31 @@ function NotebookCellSourceChangeRows({
 }) {
   if (changes.length === 0) return null;
 
+  const navigateToCell = (cellIndex: number) => {
+    window.dispatchEvent(
+      new CustomEvent<ScrollToNotebookCellEventDetail>(
+        SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+        { detail: { cellIndex } }
+      )
+    );
+  };
+
   return (
     <div className="ml-1 mt-0.5 flex flex-wrap gap-1">
       {changes.map((change) => (
-        <div
+        <button
+          type="button"
           key={change.cellIndex}
-          className="corner-squircle inline-flex items-center gap-1 rounded border border-border/50 px-1.5 py-0.5 text-[10px] text-muted-foreground"
+          className="corner-squircle inline-flex items-center gap-1 rounded border border-border/50 px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:border-border hover:bg-accent hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          onClick={() => navigateToCell(change.cellIndex)}
+          aria-label={`Go to notebook cell ${change.cellIndex}`}
         >
-          <span className="font-medium text-foreground">Cell {change.cellIndex}</span>
+          <span className="font-medium">Cell {change.cellIndex}</span>
           <span className="text-emerald-600 dark:text-emerald-400">
             +{change.addedLines}
           </span>
           <span className="text-destructive">-{change.removedLines}</span>
-        </div>
+        </button>
       ))}
     </div>
   );

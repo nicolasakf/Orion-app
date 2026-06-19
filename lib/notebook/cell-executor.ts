@@ -1,4 +1,5 @@
 import type { KernelService } from "@/lib/kernel/kernel-service";
+import { OutputType } from "@/lib/types";
 import type { NotebookOutputType } from "@/lib/types";
 
 /**
@@ -42,6 +43,16 @@ export interface ExecuteCellOptions {
   onOutput?: OnOutputCallback;
   /** Optional callback when the kernel assigns an execution count. */
   onExecutionCount?: OnExecutionCountCallback;
+  /** Max execution time in milliseconds. Omit for no timeout. */
+  timeoutMs?: number;
+  /** Interrupt the kernel when `timeoutMs` elapses. Defaults to false. */
+  interruptOnTimeout?: boolean;
+  /** Optional callback while a timed execution is still running. */
+  onProgress?: (progress: { elapsedMs: number; outputCount: number }) => void;
+  /** Progress callback cadence in milliseconds. Defaults to 1000. */
+  progressIntervalMs?: number;
+  /** Optional callback when execution times out. */
+  onTimeout?: (elapsedMs: number) => void;
 }
 
 /**
@@ -72,6 +83,21 @@ export interface RunCellsOptions {
    * Called after each cell finishes executing (success or failure).
    */
   onCellComplete?: (index: number, result: CellExecutionResult) => void;
+  /** Called immediately before a cell starts; may throw to stop that cell. */
+  beforeCell?: (index: number) => Promise<void> | void;
+  /** Max execution time per cell in milliseconds. Omit for no timeout. */
+  timeoutMs?: number;
+  /** Interrupt the kernel when `timeoutMs` elapses. Defaults to false. */
+  interruptOnTimeout?: boolean;
+  /** Called while a timed cell execution is still running. */
+  onCellProgress?: (
+    index: number,
+    progress: { elapsedMs: number; outputCount: number }
+  ) => void;
+  /** Progress callback cadence in milliseconds. Defaults to 1000. */
+  progressIntervalMs?: number;
+  /** Called when a cell execution times out. */
+  onCellTimeout?: (index: number, elapsedMs: number) => void;
 }
 
 /**
@@ -99,29 +125,31 @@ export function mapMessageToOutput(msg: any): NotebookOutputType | null {
   switch (msgType) {
     case "stream":
       return {
-        output_type: "stream" as any,
-        name: content.name,
-        text: Array.isArray(content.text) ? content.text : [content.text],
+        output_type: OutputType.STREAM,
+        name: content.name ?? "stdout",
+        text: Array.isArray(content.text)
+          ? content.text
+          : [content.text ?? ""],
       };
 
     case "execute_result":
       return {
-        output_type: "execute_result" as any,
+        output_type: OutputType.EXECUTE_RESULT,
         execution_count: content.execution_count,
-        data: content.data,
+        data: normalizeOutputData(content.data),
         metadata: content.metadata || {},
       };
 
     case "display_data":
       return {
-        output_type: "display_data" as any,
-        data: content.data,
+        output_type: OutputType.DISPLAY_DATA,
+        data: normalizeOutputData(content.data),
         metadata: content.metadata || {},
       };
 
     case "error":
       return {
-        output_type: "error" as any,
+        output_type: OutputType.ERROR,
         ename: content.ename,
         evalue: content.evalue,
         traceback: content.traceback,
@@ -130,6 +158,34 @@ export function mapMessageToOutput(msg: any): NotebookOutputType | null {
     default:
       return null;
   }
+}
+
+/**
+ * Normalize kernel output data to nbformat-compatible structures.
+ * Text MIME values become string arrays while binary image payloads stay strings.
+ */
+function normalizeOutputData(
+  data: Record<string, unknown> | undefined
+): NotebookOutputType["data"] {
+  if (!data) return undefined;
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (
+      key === "image/png" ||
+      key === "image/jpeg" ||
+      key === "image/svg+xml"
+    ) {
+      result[key] = typeof value === "string" ? value : String(value);
+    } else if (Array.isArray(value)) {
+      result[key] = value;
+    } else if (typeof value === "string") {
+      result[key] = [value];
+    } else {
+      result[key] = value;
+    }
+  }
+  return result as NotebookOutputType["data"];
 }
 
 // ---------------------------------------------------------------------------
@@ -147,11 +203,23 @@ export function mapMessageToOutput(msg: any): NotebookOutputType | null {
 export async function executeSingleCell(
   options: ExecuteCellOptions
 ): Promise<CellExecutionResult> {
-  const { kernelService, source, onOutput, onExecutionCount } = options;
+  const {
+    kernelService,
+    source,
+    onOutput,
+    onExecutionCount,
+    timeoutMs,
+    interruptOnTimeout = false,
+    onProgress,
+    progressIntervalMs = 1000,
+    onTimeout,
+  } = options;
 
   const outputs: NotebookOutputType[] = [];
   let executionCount: number | null = null;
   let hasError = false;
+  let completed = false;
+  let timedOut = false;
 
   const startTime = new Date();
 
@@ -189,7 +257,66 @@ export async function executeSingleCell(
     }
   });
 
-  await future.done;
+  const executionPromise = future.done.then(() => {
+    completed = true;
+  });
+
+  let progressTimer: ReturnType<typeof setInterval> | null = null;
+  if (onProgress) {
+    progressTimer = setInterval(() => {
+      if (!completed) {
+        onProgress({
+          elapsedMs: Date.now() - startTime.getTime(),
+          outputCount: outputs.length,
+        });
+      }
+    }, progressIntervalMs);
+  }
+
+  const timeoutPromise =
+    timeoutMs == null
+      ? null
+      : new Promise<void>((_, reject) => {
+          const timeoutHandle = setTimeout(() => {
+            if (!completed) {
+              reject(new Error("timeout"));
+            }
+          }, timeoutMs);
+
+          executionPromise.finally(() => {
+            clearTimeout(timeoutHandle);
+          });
+        });
+
+  try {
+    if (timeoutPromise) {
+      await Promise.race([executionPromise, timeoutPromise]);
+    } else {
+      await executionPromise;
+    }
+  } catch (error) {
+    completed = true;
+    if (error instanceof Error && error.message === "timeout") {
+      timedOut = true;
+      hasError = true;
+      onTimeout?.(Date.now() - startTime.getTime());
+      if (interruptOnTimeout) {
+        try {
+          await kernelService.interrupt();
+        } catch {
+          // The timeout itself is the execution result; interrupt failure should
+          // not hide the original timed-out cell state from callers.
+        }
+      }
+    } else {
+      hasError = true;
+      throw error;
+    }
+  } finally {
+    if (progressTimer !== null) {
+      clearInterval(progressTimer);
+    }
+  }
 
   const endTime = new Date();
   const duration = endTime.getTime() - startTime.getTime();
@@ -197,7 +324,7 @@ export async function executeSingleCell(
   return {
     outputs,
     executionCount,
-    success: !hasError,
+    success: !hasError && !timedOut,
     duration,
     startTime,
     endTime,
@@ -229,6 +356,12 @@ export async function runCells(
     onCellOutput,
     onCellExecutionCount,
     onCellComplete,
+    beforeCell,
+    timeoutMs,
+    interruptOnTimeout = false,
+    onCellProgress,
+    progressIntervalMs,
+    onCellTimeout,
   } = options;
 
   const results = new Map<number, CellExecutionResult>();
@@ -242,14 +375,24 @@ export async function runCells(
     onCellExecutionCount ? (count: number) => onCellExecutionCount(idx, count) : undefined;
 
   for (const { index, source } of cells) {
-    onCellStart?.(index);
-
     try {
+      await beforeCell?.(index);
+      onCellStart?.(index);
+
       const result = await executeSingleCell({
         kernelService,
         source,
         onOutput: makeOutputCb(index),
         onExecutionCount: makeExecCountCb(index),
+        timeoutMs,
+        interruptOnTimeout,
+        onProgress: onCellProgress
+          ? (progress) => onCellProgress(index, progress)
+          : undefined,
+        progressIntervalMs,
+        onTimeout: onCellTimeout
+          ? (elapsedMs) => onCellTimeout(index, elapsedMs)
+          : undefined,
       });
 
       results.set(index, result);

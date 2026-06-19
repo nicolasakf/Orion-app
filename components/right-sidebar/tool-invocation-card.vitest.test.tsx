@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ToolInvocationCard } from "./tool-invocation-card";
+import { SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME } from "@/lib/notebook/notebook-execution-events";
 
 describe("ToolInvocationCard", () => {
   beforeAll(() => {
@@ -61,5 +62,42 @@ describe("ToolInvocationCard", () => {
 
     expect(screen.getByText(/-x = 1/)).toBeInTheDocument();
     expect(screen.getByText(/\+x = 2/)).toBeInTheDocument();
+  });
+
+  it("dispatches notebook cell navigation when a source delta chip is clicked", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    render(
+      <ToolInvocationCard
+        toolName="delete_cell"
+        args={{ cellIndices: [3] }}
+        result={[
+          "Cell 3 (code) deleted successfully.",
+          "",
+          "Cell source changes:",
+          "Cell 3: +0 -2 lines",
+          "",
+          "Cell 3 diff:",
+          "",
+          "```diff",
+          "--- old",
+          "+++ new",
+          "-a = 1",
+          "-b = 2",
+          "```",
+        ].join("\n")}
+        state="output-available"
+      />
+    );
+
+    dispatchSpy.mockClear();
+    fireEvent.click(screen.getByLabelText("Go to notebook cell 3"));
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+        detail: { cellIndex: 3 },
+      })
+    );
+    dispatchSpy.mockRestore();
   });
 });

@@ -5,6 +5,11 @@ export const AGENT_NOTEBOOK_EXECUTION_EVENT_NAME =
 
 export type AgentNotebookExecutionEventDetail =
   | {
+      type: "queued";
+      notebookPath: string;
+      cellIndices: number[];
+    }
+  | {
       type: "start";
       notebookPath: string;
       cellIndex: number;

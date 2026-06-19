@@ -20,6 +20,10 @@
 import { BaseTool } from "./base-tool";
 import { NotebookManager } from "./notebook-manager";
 import { dispatchAgentNotebookExecutionEvent } from "@/lib/notebook/agent-notebook-events";
+import {
+  runCells,
+  type CellExecutionResult,
+} from "@/lib/notebook/cell-executor";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { CellExecutionStatus, OutputType } from "@/lib/types";
 import type { KernelSidecar } from "../kernel-sidecar";
@@ -39,14 +43,9 @@ function isMutableRecord(value: unknown): value is MutableRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-interface AgentCellExecutionResult {
+interface AgentCellExecutionResult extends CellExecutionResult {
   kernelOutputs: CellOutput[];
   agentLog: string[];
-  executionCount: number | null;
-  success: boolean;
-  duration: number;
-  startTime: Date;
-  endTime: Date;
 }
 
 export class ExecuteCellTool extends BaseTool {
@@ -96,6 +95,7 @@ export class ExecuteCellTool extends BaseTool {
     const multiCell = cellIndices.length > 1;
     const allOutput: string[] = [];
     const notebook = await this.readNotebook(path);
+    const cellsToRun: { index: number; source: string }[] = [];
 
     for (const cellIndex of cellIndices) {
       const totalCells = notebook.cells.length;
@@ -126,25 +126,125 @@ export class ExecuteCellTool extends BaseTool {
         continue;
       }
 
-      // Wait for kernel to be idle before each cell
-      try {
-        await this.waitForKernelIdle(30000);
-      } catch (error) {
-        allOutput.push(
-          `[Cell ${resolvedIndex}] Cannot execute: ${error instanceof Error ? error.message : String(error)}`
-        );
-        break;
-      }
+      cellsToRun.push({ index: resolvedIndex, source: codeToExecute });
+    }
 
-      // Execute the code, capturing kernel outputs and agent log separately
-      const executionResult = await this.executeForCell(
-        codeToExecute,
-        timeoutMs,
-        stream,
-        normalizedProgressIntervalMs,
-        path,
-        resolvedIndex
-      );
+    if (cellsToRun.length > 0) {
+      dispatchAgentNotebookExecutionEvent({
+        type: "queued",
+        notebookPath: path,
+        cellIndices: cellsToRun.map((cell) => cell.index),
+      });
+    }
+
+    const agentLogs = new Map<number, string[]>();
+    const cellStartTimes = new Map<number, Date>();
+    const results = new Map<number, AgentCellExecutionResult>();
+
+    await runCells({
+      kernelService: this.kernelService,
+      cells: cellsToRun,
+      stopOnError: false,
+      timeoutMs,
+      interruptOnTimeout: true,
+      progressIntervalMs: normalizedProgressIntervalMs,
+
+      beforeCell: async (resolvedIndex) => {
+        try {
+          await this.waitForKernelIdle(30000);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          agentLogs.set(resolvedIndex, [
+            `[Cell ${resolvedIndex}] Cannot execute: ${message}`,
+          ]);
+          throw error;
+        }
+      },
+
+      onCellStart: (resolvedIndex) => {
+        const startTime = new Date();
+        cellStartTimes.set(resolvedIndex, startTime);
+        agentLogs.set(resolvedIndex, []);
+        dispatchAgentNotebookExecutionEvent({
+          type: "start",
+          notebookPath: path,
+          cellIndex: resolvedIndex,
+          startTime,
+        });
+      },
+
+      onCellExecutionCount: (resolvedIndex, executionCount) => {
+        dispatchAgentNotebookExecutionEvent({
+          type: "execution-count",
+          notebookPath: path,
+          cellIndex: resolvedIndex,
+          executionCount,
+        });
+      },
+
+      onCellOutput: (resolvedIndex, output) => {
+        const log = agentLogs.get(resolvedIndex) ?? [];
+        const elapsed = this.getElapsedSeconds(cellStartTimes.get(resolvedIndex));
+        const prefix = stream ? `[${elapsed}s] ` : "";
+        this.appendOutputToAgentLog(output, log, prefix);
+        agentLogs.set(resolvedIndex, log);
+        dispatchAgentNotebookExecutionEvent({
+          type: "output",
+          notebookPath: path,
+          cellIndex: resolvedIndex,
+          output,
+        });
+      },
+
+      onCellProgress: stream
+        ? (resolvedIndex, progress) => {
+            const log = agentLogs.get(resolvedIndex) ?? [];
+            log.push(
+              `[PROGRESS: ${(progress.elapsedMs / 1000).toFixed(1)}s elapsed, ${progress.outputCount} outputs so far]`
+            );
+            agentLogs.set(resolvedIndex, log);
+          }
+        : undefined,
+
+      onCellTimeout: (resolvedIndex, elapsedMs) => {
+        const log = agentLogs.get(resolvedIndex) ?? [];
+        log.push(
+          `[TIMEOUT at ${(elapsedMs / 1000).toFixed(1)}s: Cancelling execution]`
+        );
+        log.push("[Sent interrupt signal to kernel]");
+        agentLogs.set(resolvedIndex, log);
+      },
+
+      onCellComplete: (resolvedIndex, result) => {
+        const log = agentLogs.get(resolvedIndex) ?? [];
+        if (stream) {
+          log.push(`[COMPLETED in ${(result.duration / 1000).toFixed(1)}s]`);
+        }
+        const executionResult: AgentCellExecutionResult = {
+          ...result,
+          kernelOutputs: result.outputs,
+          agentLog: log,
+        };
+        results.set(resolvedIndex, executionResult);
+        dispatchAgentNotebookExecutionEvent({
+          type: "complete",
+          notebookPath: path,
+          cellIndex: resolvedIndex,
+          executionInfo: this.buildExecutionInfo(executionResult),
+        });
+      },
+    });
+
+    for (const { index: resolvedIndex } of cellsToRun) {
+      const executionResult = results.get(resolvedIndex);
+      if (!executionResult) {
+        const missingLog = agentLogs.get(resolvedIndex);
+        if (missingLog?.length) {
+          allOutput.push(...missingLog);
+        }
+        continue;
+      }
       const { agentLog } = executionResult;
 
       // Write only kernel outputs back to the notebook file
@@ -176,297 +276,30 @@ export class ExecuteCellTool extends BaseTool {
   }
 
   /**
-   * Execute code and capture outputs in two forms:
-   * - kernelOutputs: proper nbformat CellOutput structures for writing to the notebook.
-   *   Contains only what the kernel actually produced (stream, execute_result,
-   *   display_data, error). Never contains agent-generated status or control strings.
-   * - agentLog: human-readable strings for the LLM, which may also include
-   *   progress updates, timeout notices, and completion status.
-   */
-  private async executeForCell(
-    code: string,
-    timeoutMs: number,
-    stream: boolean,
-    progressIntervalMs: number,
-    notebookPath: string,
-    cellIndex: number
-  ): Promise<AgentCellExecutionResult> {
-    const kernelOutputs: CellOutput[] = [];
-    const agentLog: string[] = [];
-    const startTime = new Date();
-    dispatchAgentNotebookExecutionEvent({
-      type: "start",
-      notebookPath,
-      cellIndex,
-      startTime,
-    });
-    let completed = false;
-    let executionCount: number | null = null;
-    let hasError = false;
-    let timedOut = false;
-    let outputCount = 0;
-
-    const executionFuture = await this.kernelService.execute(code, (msg) => {
-      const msgType = msg.header?.msg_type;
-      const elapsed = ((Date.now() - startTime.getTime()) / 1000).toFixed(1);
-      const prefix = stream ? `[${elapsed}s] ` : "";
-
-      switch (msgType) {
-        case "execute_input": {
-          const count = msg.content?.execution_count as number | undefined;
-          if (count != null) {
-            executionCount = count;
-            dispatchAgentNotebookExecutionEvent({
-              type: "execution-count",
-              notebookPath,
-              cellIndex,
-              executionCount: count,
-            });
-          }
-          break;
-        }
-        case "stream": {
-          const text = msg.content?.text;
-          if (text) {
-            const textStr =
-              typeof text === "string" ? text : (text as string[]).join("");
-            kernelOutputs.push({
-              output_type: OutputType.STREAM,
-              name: (msg.content?.name as string) ?? "stdout",
-              text: [textStr],
-            });
-            dispatchAgentNotebookExecutionEvent({
-              type: "output",
-              notebookPath,
-              cellIndex,
-              output: kernelOutputs[kernelOutputs.length - 1]!,
-            });
-            agentLog.push(`${prefix}${textStr}`);
-            outputCount++;
-          }
-          break;
-        }
-        case "execute_result": {
-          const data = msg.content?.data as Record<string, unknown> | undefined;
-          const execCount = msg.content?.execution_count as number | undefined;
-          if (execCount != null) {
-            executionCount = execCount;
-            dispatchAgentNotebookExecutionEvent({
-              type: "execution-count",
-              notebookPath,
-              cellIndex,
-              executionCount: execCount,
-            });
-          }
-          if (data) {
-            kernelOutputs.push({
-              output_type: OutputType.EXECUTE_RESULT,
-              execution_count: execCount,
-              data: this.normalizeOutputData(data),
-              metadata: (msg.content?.metadata as Record<string, unknown>) ?? {},
-            });
-            dispatchAgentNotebookExecutionEvent({
-              type: "output",
-              notebookPath,
-              cellIndex,
-              output: kernelOutputs[kernelOutputs.length - 1]!,
-            });
-            this.appendDataToAgentLog(data, agentLog, prefix);
-            outputCount++;
-          }
-          break;
-        }
-        case "display_data": {
-          const data = msg.content?.data as Record<string, unknown> | undefined;
-          if (data) {
-            kernelOutputs.push({
-              output_type: OutputType.DISPLAY_DATA,
-              data: this.normalizeOutputData(data),
-              metadata: (msg.content?.metadata as Record<string, unknown>) ?? {},
-            });
-            dispatchAgentNotebookExecutionEvent({
-              type: "output",
-              notebookPath,
-              cellIndex,
-              output: kernelOutputs[kernelOutputs.length - 1]!,
-            });
-            this.appendDataToAgentLog(data, agentLog, prefix);
-            outputCount++;
-          }
-          break;
-        }
-        case "error": {
-          const ename = (msg.content?.ename as string) || "Error";
-          const evalue = (msg.content?.evalue as string) || "";
-          const traceback = (msg.content?.traceback as string[]) || [];
-          kernelOutputs.push({
-            output_type: OutputType.ERROR,
-            ename,
-            evalue,
-            traceback,
-          });
-          dispatchAgentNotebookExecutionEvent({
-            type: "output",
-            notebookPath,
-            cellIndex,
-            output: kernelOutputs[kernelOutputs.length - 1]!,
-          });
-          hasError = true;
-          const truncated = traceback.slice(-MAX_TRACEBACK_LINES);
-          agentLog.push(
-            `${prefix}[ERROR: ${ename}: ${evalue}]\n${truncated.join("\n")}`
-          );
-          outputCount++;
-          break;
-        }
-        case "execute_reply": {
-          const count = msg.content?.execution_count as number | undefined;
-          if (count != null) {
-            executionCount = count;
-            dispatchAgentNotebookExecutionEvent({
-              type: "execution-count",
-              notebookPath,
-              cellIndex,
-              executionCount: count,
-            });
-          }
-          const status = msg.content?.status;
-          if (status === "error" || status === "abort") {
-            hasError = true;
-          }
-          completed = true;
-          break;
-        }
-      }
-    });
-
-    const executionPromise = executionFuture.done.then(() => {
-      completed = true;
-    });
-
-    // Emit periodic progress updates to the agent log only (not the notebook)
-    let progressTimer: ReturnType<typeof setInterval> | null = null;
-    if (stream) {
-      progressTimer = setInterval(() => {
-        if (!completed) {
-          const elapsed = ((Date.now() - startTime.getTime()) / 1000).toFixed(1);
-          agentLog.push(
-            `[PROGRESS: ${elapsed}s elapsed, ${outputCount} outputs so far]`
-          );
-        }
-      }, progressIntervalMs);
-    }
-
-    // Race between execution and timeout
-    const timeoutPromise = new Promise<void>((_, reject) => {
-      const timeoutHandle = setTimeout(() => {
-        if (!completed) {
-          reject(new Error("timeout"));
-        }
-      }, timeoutMs);
-
-      executionPromise.finally(() => {
-        clearTimeout(timeoutHandle);
-      });
-    });
-
-    try {
-      await Promise.race([executionPromise, timeoutPromise]);
-      completed = true;
-      if (stream) {
-        const elapsed = ((Date.now() - startTime.getTime()) / 1000).toFixed(1);
-        agentLog.push(`[COMPLETED in ${elapsed}s]`);
-      }
-    } catch (error) {
-      completed = true;
-      if (error instanceof Error && error.message === "timeout") {
-        timedOut = true;
-        const elapsed = ((Date.now() - startTime.getTime()) / 1000).toFixed(1);
-        agentLog.push(`[TIMEOUT at ${elapsed}s: Cancelling execution]`);
-        try {
-          await this.kernelService.interrupt();
-          agentLog.push("[Sent interrupt signal to kernel]");
-        } catch {
-          agentLog.push("[Failed to interrupt kernel]");
-        }
-      } else {
-        hasError = true;
-        agentLog.push(
-          `[ERROR: ${error instanceof Error ? error.message : String(error)}]`
-        );
-      }
-    } finally {
-      if (progressTimer !== null) {
-        clearInterval(progressTimer);
-      }
-    }
-
-    const endTime = new Date();
-    const result = {
-      kernelOutputs,
-      agentLog,
-      executionCount,
-      success: !hasError && !timedOut,
-      duration: endTime.getTime() - startTime.getTime(),
-      startTime,
-      endTime,
-    };
-    dispatchAgentNotebookExecutionEvent({
-      type: "complete",
-      notebookPath,
-      cellIndex,
-      executionInfo: {
-        status: result.success
-          ? CellExecutionStatus.SUCCESS
-          : CellExecutionStatus.ERROR,
-        startTime: result.startTime,
-        endTime: result.endTime,
-        duration: result.duration,
-        lastExecuted: result.endTime,
-        statistics: {
-          wallTime: result.duration,
-        },
-      },
-    });
-    return result;
-  }
-
-  /**
-   * Normalize kernel output data to nbformat-compatible structure.
-   * Kernel messages may send text-type fields as plain strings; nbformat
-   * expects string arrays. Binary fields (image/png etc.) stay as strings.
-   */
-  private normalizeOutputData(
-    data: Record<string, unknown>
-  ): CellOutput["data"] {
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(data)) {
-      if (
-        key === "image/png" ||
-        key === "image/jpeg" ||
-        key === "image/svg+xml"
-      ) {
-        // Binary/base64 data stays as a single string
-        result[key] = typeof value === "string" ? value : String(value);
-      } else if (Array.isArray(value)) {
-        result[key] = value;
-      } else if (typeof value === "string") {
-        result[key] = [value];
-      } else {
-        result[key] = value;
-      }
-    }
-    return result as CellOutput["data"];
-  }
-
-  /**
    * Append the human-readable portion of kernel output data to the agent log.
    */
-  private appendDataToAgentLog(
-    data: Record<string, unknown>,
+  private appendOutputToAgentLog(
+    output: CellOutput,
     agentLog: string[],
     prefix: string
   ): void {
+    if (output.output_type === "stream") {
+      const text = Array.isArray(output.text)
+        ? output.text.join("")
+        : (output.text ?? "");
+      if (text) agentLog.push(`${prefix}${text}`);
+      return;
+    }
+
+    if (output.output_type === "error") {
+      const traceback = (output.traceback ?? []).slice(-MAX_TRACEBACK_LINES);
+      agentLog.push(
+        `${prefix}[ERROR: ${output.ename ?? "Error"}: ${output.evalue ?? ""}]\n${traceback.join("\n")}`
+      );
+      return;
+    }
+
+    const data = output.data ?? {};
     if (data["text/plain"]) {
       const plain = data["text/plain"];
       const textStr = Array.isArray(plain)
@@ -482,6 +315,33 @@ export class ExecuteCellTool extends BaseTool {
     } else if (data["text/html"]) {
       agentLog.push(`${prefix}[HTML output]`);
     }
+  }
+
+  /** Builds Orion execution metadata from a shared cell execution result. */
+  private buildExecutionInfo(
+    executionResult: Pick<
+      AgentCellExecutionResult,
+      "success" | "startTime" | "endTime" | "duration"
+    >
+  ) {
+    return {
+      status: executionResult.success
+        ? CellExecutionStatus.SUCCESS
+        : CellExecutionStatus.ERROR,
+      startTime: executionResult.startTime,
+      endTime: executionResult.endTime,
+      duration: executionResult.duration,
+      lastExecuted: executionResult.endTime,
+      statistics: {
+        wallTime: executionResult.duration,
+      },
+    };
+  }
+
+  /** Returns elapsed seconds for streamed log prefixes. */
+  private getElapsedSeconds(startTime: Date | undefined): string {
+    if (!startTime) return "0.0";
+    return ((Date.now() - startTime.getTime()) / 1000).toFixed(1);
   }
 
   /**
@@ -529,18 +389,7 @@ export class ExecuteCellTool extends BaseTool {
         ...orion,
         cellState: {
           ...cellState,
-          executionInfo: {
-            status: executionResult.success
-              ? CellExecutionStatus.SUCCESS
-              : CellExecutionStatus.ERROR,
-            startTime: executionResult.startTime,
-            endTime: executionResult.endTime,
-            duration: executionResult.duration,
-            lastExecuted: executionResult.endTime,
-            statistics: {
-              wallTime: executionResult.duration,
-            },
-          },
+          executionInfo: this.buildExecutionInfo(executionResult),
         },
       },
     };

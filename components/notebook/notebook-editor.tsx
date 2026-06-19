@@ -1578,6 +1578,11 @@ export function NotebookEditor({
         .detail;
       if (!detail || detail.notebookPath !== filepath) return;
 
+      if (detail.type === "queued") {
+        markCellsQueued(detail.cellIndices);
+        return;
+      }
+
       if (detail.type === "start") {
         activeAgentExecutionCellsRef.current.add(detail.cellIndex);
         setNotebook((prev) => {
@@ -1657,6 +1662,7 @@ export function NotebookEditor({
     };
   }, [
     filepath,
+    markCellsQueued,
     parentExecutionCountRef,
     parentSetIsRunning,
     reloadNotebookAfterAgentModification,
