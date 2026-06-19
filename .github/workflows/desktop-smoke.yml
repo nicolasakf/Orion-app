@@ -15,10 +15,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             target: darwin-arm64
             builder: mac
-          - os: macos-13
+          - os: macos-15-intel
             target: darwin-x64
             builder: mac
           - os: windows-latest
@@ -28,7 +28,7 @@ jobs:
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       ORION_DESKTOP_TARGET: ${{ matrix.target }}
-      ORION_HOME_DIR: ${{ runner.temp }}/orion-desktop-home
+      ORION_HOME_DIR: ${{ github.workspace }}/.orion-desktop-home
 
     steps:
       - name: Checkout
@@ -37,7 +37,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Setup Python
@@ -84,4 +84,3 @@ jobs:
           if (-not $report.ok) { throw ($report | ConvertTo-Json -Depth 20) }
           if (-not $report.app.url.StartsWith("http://127.0.0.1:")) { throw ($report | ConvertTo-Json -Depth 20) }
           if ($report.jupyter.source -ne "managed") { throw ($report | ConvertTo-Json -Depth 20) }
-

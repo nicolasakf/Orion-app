@@ -19,7 +19,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: npm
 
       - name: Install Node dependencies
@@ -68,7 +68,7 @@ jobs:
           - os: ubuntu-latest
             profile: default-managed
             method: uv
-          - os: macos-14
+          - os: macos-15
             profile: default-managed
             method: uv
           - os: windows-latest
@@ -92,7 +92,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Setup Python
         uses: actions/setup-python@v5
