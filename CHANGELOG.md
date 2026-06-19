@@ -4,6 +4,27 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.0] - 2026-06-19
+
+### Added
+
+- Desktop: Electron app with bundled Node/Python runtimes, auto-updater, and macOS notarization
+- Desktop: release/smoke CI workflows and installer upload script
+- Notebook: stream agent cell execution with live output and source diffs on tool cards
+- Agent: `create-rule` built-in skill for authoring workspace `AGENTS.md` and `CLAUDE.md` rules
+
+### Fixed
+
+- CLI: prevent HTTP 431 by raising `--max-http-header-size` for bundled app, dev server, and Python launcher
+- CLI: run npm/pip/uv uninstall during `orion uninstall` with deferred self-removal
+- Terminal: fix panel sizing when the bottom sidebar is collapsed
+
+### Changed
+
+- Notebook: route agent `execute_cell` through shared `runCells` with queued/start/progress events
+
+[0.10.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.10.0
+
 ## [0.9.1] - 2026-06-15
 
 ### Added

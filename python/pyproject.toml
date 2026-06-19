@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "orion-notebook"
-version = "0.9.1"
+version = "0.10.0"
 description = "Local Orion CLI launcher for notebooks and Jupyter"
 readme = "README.md"
 requires-python = ">=3.8"
