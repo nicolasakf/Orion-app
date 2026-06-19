@@ -43,18 +43,6 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
 
-      - name: Ensure GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag="${{ steps.version.outputs.tag }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            exit 0
-          fi
-          gh release create "$tag" --title "$tag" --notes "Desktop installers and app bundle for $tag."
-
   app-bundle:
     needs: release-info
     runs-on: ubuntu-latest
@@ -75,15 +63,12 @@ jobs:
       - name: Build app bundle archive
         run: npm run prepack
 
-      - name: Upload app bundle to release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          gh release upload "${{ needs.release-info.outputs.tag }}" \
-            "dist/orion-app-${{ needs.release-info.outputs.version }}.tar.gz" \
-            --clobber
+      - name: Upload app bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-bundle
+          path: dist/orion-app-${{ needs.release-info.outputs.version }}.tar.gz
+          if-no-files-found: error
 
   desktop:
     needs: release-info
@@ -215,9 +200,60 @@ jobs:
           } | Out-File -FilePath "dist\release-assets\SHA256SUMS-${{ matrix.target }}.txt" -Encoding utf8
 
       - name: Upload desktop assets to release
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}
+          path: dist/release-assets/*
+          if-no-files-found: error
+
+  publish-release:
+    needs:
+      - release-info
+      - app-bundle
+      - desktop
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/release-assets
+          merge-multiple: true
+
+      - name: Verify release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.release-info.outputs.version }}"
+          required=(
+            "orion-app-${version}.tar.gz"
+            "Orion-${version}-mac-arm64.dmg"
+            "Orion-${version}-mac-arm64.zip"
+            "Orion-${version}-mac-x64.dmg"
+            "Orion-${version}-mac-x64.zip"
+            "Orion-Setup-${version}-win-x64.exe"
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ ! -f "dist/release-assets/${name}" ]]; then
+              missing+=("${name}")
+            fi
+          done
+          if ((${#missing[@]} > 0)); then
+            printf 'Missing required release assets:\n' >&2
+            printf '  %s\n' "${missing[@]}" >&2
+            find dist/release-assets -maxdepth 1 -type f -print >&2
+            exit 1
+          fi
+
+      - name: Publish complete GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          gh release upload "${{ needs.release-info.outputs.tag }}" dist/release-assets/* --clobber
+          tag="${{ needs.release-info.outputs.tag }}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --notes "Desktop installers and app bundle for $tag."
+          fi
+          gh release upload "$tag" dist/release-assets/* --clobber
