@@ -162,7 +162,7 @@ jobs:
           Copy-Item "dist\electron\Orion-Setup-${{ needs.release-info.outputs.version }}-win-x64.exe" dist\release-assets\
           Copy-Item "dist\electron\latest.yml" "dist\release-assets\${{ matrix.updateChannel }}.yml"
           Get-ChildItem dist\electron -Filter "*.blockmap" | Copy-Item -Destination dist\release-assets\
-          Get-ChildItem dist\release-assets -File | ForEach-Object {
+          Get-ChildItem dist\release-assets -File | Where-Object { $_.Name -notlike "SHA256SUMS-*.txt" } | ForEach-Object {
             $hash = Get-FileHash $_.FullName -Algorithm SHA256
             "$($hash.Hash.ToLower())  $($_.Name)"
           } | Out-File -FilePath "dist\release-assets\SHA256SUMS-${{ matrix.target }}.txt" -Encoding utf8
