@@ -100,14 +100,6 @@ jobs:
       NODE_OPTIONS: "--max-old-space-size=6144"
       ORION_DESKTOP_TARGET: ${{ matrix.target }}
       ORION_HOME_DIR: ${{ github.workspace }}/.orion-desktop-home
-      CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
-      CSC_KEY_PASSWORD: ${{ secrets.MACOS_CSC_KEY_PASSWORD }}
-      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-      WIN_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
-      WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -143,7 +135,7 @@ jobs:
 
       - name: Package macOS app
         if: matrix.builder == 'mac'
-        run: npx electron-builder --mac dmg zip --publish never
+        run: npx electron-builder --mac dmg zip --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false
 
       - name: Package Windows app
         if: matrix.builder == 'win'
