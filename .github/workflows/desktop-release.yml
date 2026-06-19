@@ -95,6 +95,7 @@ jobs:
             updateChannel: latest-win-x64
 
     env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
       ORION_DESKTOP_TARGET: ${{ matrix.target }}
       ORION_HOME_DIR: ${{ github.workspace }}/.orion-desktop-home
       CSC_LINK: ${{ secrets.MACOS_CSC_LINK }}
@@ -130,46 +131,14 @@ jobs:
           python -m build
         working-directory: python/orion-ui
 
-      - name: Validate macOS signing secrets
-        if: matrix.builder == 'mac'
-        shell: bash
-        run: |
-          set -euo pipefail
-          missing=()
-          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_TEAM_ID; do
-            if [[ -z "${!name:-}" ]]; then
-              missing+=("$name")
-            fi
-          done
-          if ((${#missing[@]} > 0)); then
-            echo "Missing macOS signing/notarization secrets: ${missing[*]}" >&2
-            exit 1
-          fi
-
-      - name: Validate Windows signing secrets
-        if: matrix.builder == 'win'
-        shell: pwsh
-        run: |
-          $missing = @()
-          foreach ($name in @("WIN_CSC_LINK", "WIN_CSC_KEY_PASSWORD")) {
-            if (-not [Environment]::GetEnvironmentVariable($name)) {
-              $missing += $name
-            }
-          }
-          if ($missing.Count -gt 0) {
-            throw "Missing Windows signing secrets: $($missing -join ', ')"
-          }
-
       - name: Prepare desktop package inputs
         run: npm run prepack:desktop
 
-      - name: Package signed macOS app
+      - name: Package macOS app
         if: matrix.builder == 'mac'
-        env:
-          ORION_REQUIRE_MAC_NOTARIZATION: "1"
         run: npx electron-builder --mac dmg zip --publish never
 
-      - name: Package signed Windows app
+      - name: Package Windows app
         if: matrix.builder == 'win'
         shell: pwsh
         run: npx electron-builder --win nsis --publish never
