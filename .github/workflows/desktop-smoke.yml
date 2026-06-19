@@ -1,0 +1,87 @@
+name: Desktop Smoke
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  desktop:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: darwin-arm64
+            builder: mac
+          - os: macos-13
+            target: darwin-x64
+            builder: mac
+          - os: windows-latest
+            target: win32-x64
+            builder: win
+
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      ORION_DESKTOP_TARGET: ${{ matrix.target }}
+      ORION_HOME_DIR: ${{ runner.temp }}/orion-desktop-home
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Node dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build orion-ui wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+        working-directory: python/orion-ui
+
+      - name: Prepare desktop package inputs
+        run: npm run prepack:desktop
+
+      - name: Package macOS app
+        if: matrix.builder == 'mac'
+        run: npx electron-builder --mac dmg zip
+
+      - name: Package Windows app
+        if: matrix.builder == 'win'
+        shell: pwsh
+        run: npx electron-builder --win nsis
+
+      - name: Smoke packaged macOS app
+        if: matrix.builder == 'mac'
+        run: |
+          set -euo pipefail
+          app_path="$(find dist/electron -name Orion.app -type d -print -quit)"
+          "$app_path/Contents/MacOS/Orion" --smoke > "$RUNNER_TEMP/desktop-smoke.json"
+          python -c 'import json, os; report=json.load(open(os.environ["RUNNER_TEMP"] + "/desktop-smoke.json", encoding="utf-8")); assert report["ok"], report; assert report["app"]["url"].startswith("http://127.0.0.1:"), report; assert report["jupyter"]["source"] == "managed", report'
+
+      - name: Smoke packaged Windows app
+        if: matrix.builder == 'win'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist\electron -Recurse -Filter Orion.exe | Where-Object { $_.FullName -match "win-unpacked" } | Select-Object -First 1
+          & $exe.FullName --smoke | Out-File -FilePath "$env:RUNNER_TEMP\desktop-smoke.json" -Encoding utf8
+          $report = Get-Content "$env:RUNNER_TEMP\desktop-smoke.json" -Raw | ConvertFrom-Json
+          if (-not $report.ok) { throw ($report | ConvertTo-Json -Depth 20) }
+          if (-not $report.app.url.StartsWith("http://127.0.0.1:")) { throw ($report | ConvertTo-Json -Depth 20) }
+          if ($report.jupyter.source -ne "managed") { throw ($report | ConvertTo-Json -Depth 20) }
+

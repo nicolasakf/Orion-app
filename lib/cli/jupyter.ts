@@ -182,7 +182,41 @@ export function resolveDefaultJupyterRootDirectory(): string {
   return os.homedir();
 }
 
-/** Starts Jupyter Server with token auth and waits for GET /api to respond. */
+/** Upper bound on captured Jupyter output retained for failure diagnostics. */
+const MAX_JUPYTER_LOG_BYTES = 8_000;
+
+/**
+ * Subscribes to a Jupyter child's stdout/stderr and returns a reader for the
+ * most recent output. Draining the pipes also prevents the child from blocking
+ * on a full OS pipe buffer when it logs verbosely (common on Windows startup).
+ */
+function trackJupyterOutput(proc: ChildProcess): () => string {
+  let buffer = "";
+  const append = (data: Buffer | string): void => {
+    buffer += typeof data === "string" ? data : data.toString("utf8");
+    if (buffer.length > MAX_JUPYTER_LOG_BYTES) {
+      buffer = buffer.slice(buffer.length - MAX_JUPYTER_LOG_BYTES);
+    }
+  };
+  proc.stdout?.on("data", append);
+  proc.stderr?.on("data", append);
+  return () => buffer.trim();
+}
+
+/** Appends captured Jupyter output to a failure message when any is available. */
+function withJupyterOutput(message: string, output: string): string {
+  return output ? `${message}\n\nRecent Jupyter output:\n${output}` : message;
+}
+
+/**
+ * Starts Jupyter Server with token auth and waits for GET /api to respond.
+ *
+ * Captures the child's stdout/stderr and listens for the `error` event so that
+ * a failed launch surfaces an actionable message instead of either a generic
+ * timeout or an uncaught `error` event that crashes the CLI before the app
+ * server starts (a frequent Windows failure mode where command resolution and
+ * process launching are more fragile than on POSIX).
+ */
 export async function startJupyterServer(
   pythonCommand: string,
   pythonArgsPrefix: string[] = [],
@@ -206,14 +240,40 @@ export async function startJupyterServer(
 
   const proc = spawn(pythonCommand, args, {
     cwd,
-    stdio: "ignore",
+    stdio: ["ignore", "pipe", "pipe"],
     env: process.env,
+    windowsHide: true,
+  });
+
+  const readOutput = trackJupyterOutput(proc);
+
+  // Without this listener a spawn failure (e.g. ENOENT/EINVAL on Windows) is
+  // emitted as an unhandled `error` event that crashes the process. A holder
+  // object keeps the captured error visible to the loop below (a plain `let`
+  // assigned only inside the callback is narrowed away to `never`).
+  const launch: { error: Error | null } = { error: null };
+  proc.on("error", (error: Error) => {
+    launch.error = error;
   });
 
   const deadline = Date.now() + readyTimeoutMs;
   while (Date.now() < deadline) {
+    if (launch.error) {
+      throw new Error(
+        withJupyterOutput(
+          `Could not start Jupyter with ${pythonCommand}: ${launch.error.message}`,
+          readOutput()
+        )
+      );
+    }
+
     if (proc.exitCode !== null && proc.exitCode !== 0) {
-      throw new Error(`Jupyter exited before it became ready (code ${proc.exitCode}).`);
+      throw new Error(
+        withJupyterOutput(
+          `Jupyter exited before it became ready (code ${proc.exitCode}).`,
+          readOutput()
+        )
+      );
     }
 
     try {
@@ -243,7 +303,12 @@ export async function startJupyterServer(
   if (!proc.killed) {
     proc.kill("SIGTERM");
   }
-  throw new Error("Jupyter did not become ready before the timeout.");
+  throw new Error(
+    withJupyterOutput(
+      "Jupyter did not become ready before the timeout.",
+      readOutput()
+    )
+  );
 }
 
 /** Saves the local CLI handoff file consumed by the Orion app. */

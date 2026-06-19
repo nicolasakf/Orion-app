@@ -2573,6 +2573,13 @@ export default function Page() {
     );
   }
 
+  const editorPanelDefaultSize = bottomSidebarCollapsed
+    ? 100
+    : verticalPanelSizes[0];
+  const terminalPanelDefaultSize = bottomSidebarCollapsed
+    ? 0
+    : verticalPanelSizes[1];
+
   return (
     <OpenSettingsProvider>
       <NotebookViewModeProvider>
@@ -2647,7 +2654,10 @@ export default function Page() {
                     onLayout={handleVerticalLayout}
                   >
                     {/* Top Panel - Toolbar and Editor */}
-                    <ResizablePanel defaultSize={verticalPanelSizes[0]} minSize={30}>
+                    <ResizablePanel
+                      defaultSize={editorPanelDefaultSize}
+                      minSize={30}
+                    >
                       <div className="flex flex-col h-full">
                         {/* Unified Toolbar */}
                         <div
@@ -2868,8 +2878,9 @@ export default function Page() {
                     {/* Bottom Panel - Terminal */}
                     <ResizablePanel
                       ref={bottomPanelRef}
-                      defaultSize={verticalPanelSizes[1]}
+                      defaultSize={terminalPanelDefaultSize}
                       minSize={20}
+                      collapsedSize={0}
                       collapsible={true}
                       onCollapse={handleBottomCollapse}
                       onExpand={handleBottomExpand}

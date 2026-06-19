@@ -12,6 +12,7 @@
   },
   "license": "Apache-2.0",
   "private": false,
+  "main": "desktop/electron-main.cjs",
   "bin": {
     "orion": "dist/cli/cli/orion.js"
   },
@@ -28,6 +29,7 @@
   },
   "scripts": {
     "dev": "next dev -p 3001 --turbopack",
+    "dev:desktop": "tsx scripts/dev-electron.ts",
     "dev:notebook": "tsx scripts/dev-with-jupyter.ts",
     "build": "next build",
     "start": "next start -p 3001",
@@ -36,9 +38,14 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "build:cli": "tsc -p tsconfig.cli.json",
+    "build:desktop-main": "tsc -p tsconfig.desktop.json",
     "prepare:app-bundle": "node scripts/prepare-app-bundle.mjs",
+    "prepare:desktop-runtime": "node scripts/prepare-desktop-runtime.mjs",
     "archive:app-bundle": "node scripts/archive-app-bundle.mjs",
     "prepack": "npm run build && npm run build:cli && npm run prepare:app-bundle && npm run archive:app-bundle",
+    "prepack:desktop": "npm run build && npm run build:cli && npm run build:desktop-main && npm run prepare:app-bundle && npm run prepare:desktop-runtime",
+    "dist:desktop:mac": "npm run prepack:desktop && electron-builder --mac dmg zip",
+    "dist:desktop:win": "npm run prepack:desktop && electron-builder --win nsis",
     "postinstall": "node scripts/postinstall.mjs",
     "package:npm": "npm pack --dry-run"
   },
@@ -99,6 +106,7 @@
     "cmdk": "1.0.4",
     "date-fns": "4.1.0",
     "dotenv": "^16.5.0",
+    "electron-updater": "^6.8.9",
     "embla-carousel-react": "8.5.1",
     "gray-matter": "^4.0.3",
     "input-otp": "1.4.1",
@@ -151,6 +159,8 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.2",
     "@vitest/coverage-v8": "^4.1.6",
+    "electron": "^39.8.10",
+    "electron-builder": "^25.1.8",
     "jsdom": "^29.1.1",
     "postcss": "^8",
     "tailwindcss": "^3.4.17",
@@ -161,5 +171,69 @@
   "overrides": {
     "postcss": "$postcss",
     "sanitize-html": "2.17.4"
+  },
+  "build": {
+    "appId": "ai.orion.notebook",
+    "productName": "Orion",
+    "artifactName": "Orion-${version}-${os}-${arch}.${ext}",
+    "directories": {
+      "output": "dist/electron"
+    },
+    "asar": true,
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://github.com/nicolasakf/Orion-app/releases/latest/download"
+      }
+    ],
+    "afterSign": "scripts/notarize-mac.cjs",
+    "files": [
+      "desktop/electron-main.cjs",
+      "dist/desktop/**/*",
+      "package.json",
+      "LICENSE",
+      "NOTICE"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/orion-app",
+        "to": "orion-app"
+      },
+      {
+        "from": "dist/desktop-runtime/node",
+        "to": "runtime/node"
+      },
+      {
+        "from": "dist/desktop-runtime/python",
+        "to": "runtime/python"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "desktop/build/icons/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "desktop/build/entitlements.mac.plist",
+      "entitlementsInherit": "desktop/build/entitlements.mac.plist",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "desktop/build/icons/icon.ico",
+      "artifactName": "Orion-Setup-${version}-win-${arch}.${ext}",
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Orion"
+    }
   }
 }

@@ -12,6 +12,13 @@ export interface StartedOrionApp {
   dispose: () => void;
 }
 
+export interface StartOrionAppServerOptions {
+  requestedPort?: number;
+  readyTimeoutMs?: number;
+  appDirectory?: string;
+  nodeExecutable?: string;
+}
+
 /** Node's default 16 KiB header limit rejects browsers with large localhost cookie jars (HTTP 431). */
 export const ORION_MAX_HTTP_HEADER_SIZE = 65_536;
 
@@ -64,10 +71,13 @@ async function isServerReady(url: string, timeoutMs = 3_000): Promise<boolean> {
 
 /** Starts the packaged Next standalone server on port 3001 or a free fallback. */
 export async function startOrionAppServer(
-  requestedPort = Number(process.env.ORION_PORT ?? "3001"),
-  readyTimeoutMs = 60_000
+  options: StartOrionAppServerOptions = {}
 ): Promise<StartedOrionApp> {
-  const appDirectory = resolveOrionAppDirectory();
+  const requestedPort =
+    options.requestedPort ?? Number(process.env.ORION_PORT ?? "3001");
+  const readyTimeoutMs = options.readyTimeoutMs ?? 60_000;
+  const appDirectory = options.appDirectory ?? resolveOrionAppDirectory();
+  const nodeExecutable = options.nodeExecutable ?? process.execPath;
   const serverPath = join(appDirectory, "server.js");
   if (!existsSync(serverPath)) {
     throw new Error(
@@ -76,14 +86,14 @@ export async function startOrionAppServer(
     );
   }
 
-  ensureBundledNativeModules(appDirectory);
+  ensureBundledNativeModules(appDirectory, nodeExecutable);
 
   let port = requestedPort;
   if (await isServerReady(`http://127.0.0.1:${port}`)) {
     port = await findFreePort();
   }
 
-  const proc = spawn(process.execPath, [`--max-http-header-size=${ORION_MAX_HTTP_HEADER_SIZE}`, serverPath], {
+  const proc = spawn(nodeExecutable, [`--max-http-header-size=${ORION_MAX_HTTP_HEADER_SIZE}`, serverPath], {
     cwd: appDirectory,
     stdio: "inherit",
     env: {

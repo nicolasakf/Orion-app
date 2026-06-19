@@ -210,6 +210,30 @@ Optional local Orion-api dev override (dev only — not used by `next build`):
 NEXT_PUBLIC_ORION_API_BASE_URL=http://localhost:3002
 ```
 
+### Publish desktop installers
+
+The `Desktop Release` GitHub Actions workflow builds the public desktop installers and uploads them to the matching `v<version>` GitHub Release:
+
+- macOS Apple Silicon: `Orion-<version>-mac-arm64.dmg` and `.zip`
+- macOS Intel: `Orion-<version>-mac-x64.dmg` and `.zip`
+- Windows x64: `Orion-Setup-<version>-win-x64.exe`
+- update metadata and blockmaps for the desktop auto-updater
+
+Before publishing public website downloads, configure these repository secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `MACOS_CSC_LINK` | Apple Developer ID Application certificate, usually base64-encoded `.p12` |
+| `MACOS_CSC_KEY_PASSWORD` | Password for the macOS signing certificate |
+| `APPLE_API_KEY` | App Store Connect API key file content or path used for notarization |
+| `APPLE_API_KEY_ID` | App Store Connect API key id |
+| `APPLE_API_ISSUER` | App Store Connect issuer id |
+| `APPLE_TEAM_ID` | Apple Developer Team ID |
+| `WINDOWS_CSC_LINK` | Windows Authenticode code-signing certificate, usually base64-encoded `.p12`/`.pfx` |
+| `WINDOWS_CSC_KEY_PASSWORD` | Password for the Windows signing certificate |
+
+Run the workflow manually with an optional version input, or push a `v<version>` tag. macOS release jobs set `ORION_REQUIRE_MAC_NOTARIZATION=1`, so public release builds fail fast when notarization credentials are missing.
+
 ## Tests And Checks
 
 ```bash

@@ -12,7 +12,9 @@ from orion_agent.cli import (
     node_cpu_arch,
     node_platform_slug,
     python_discovery_candidates,
+    resolve_existing_jupyter_python,
     resolve_venv_creation_python,
+    start_jupyter,
 )
 
 
@@ -71,6 +73,26 @@ class ManagedRuntimePythonTests(unittest.TestCase):
         ):
             self.assertEqual(resolve_venv_creation_python(), [sys.executable])
 
+    def test_resolve_existing_jupyter_python_uses_discovered_interpreter(
+        self,
+    ) -> None:
+        candidates = [["py", "-3"], [sys.executable]]
+
+        with patch(
+            "orion_agent.cli.python_discovery_candidates",
+            return_value=candidates,
+        ), patch(
+            "orion_agent.cli.has_jupyter_command",
+            side_effect=lambda command: command == ["py", "-3"],
+        ), patch(
+            "orion_agent.cli.inspect_python_executable",
+            return_value="C:\\Python311\\python.exe",
+        ):
+            self.assertEqual(
+                resolve_existing_jupyter_python(),
+                "C:\\Python311\\python.exe",
+            )
+
 
 class JupyterStartErrorTests(unittest.TestCase):
     """Tests for structured Jupyter startup failures."""
@@ -79,6 +101,17 @@ class JupyterStartErrorTests(unittest.TestCase):
         error = JupyterStartError("missing apis", "missing_apis")
         self.assertEqual(error.reason, "missing_apis")
         self.assertEqual(str(error), "missing apis")
+
+    def test_start_jupyter_wraps_spawn_failures(self) -> None:
+        with patch("orion_agent.cli.free_port", return_value=12345), patch(
+            "orion_agent.cli.subprocess.Popen",
+            side_effect=OSError("blocked"),
+        ):
+            with self.assertRaises(JupyterStartError) as context:
+                start_jupyter("C:\\Python311\\python.exe")
+
+        self.assertEqual(context.exception.reason, "spawn_failed")
+        self.assertIn("Could not start Jupyter", str(context.exception))
 
 
 if __name__ == "__main__":

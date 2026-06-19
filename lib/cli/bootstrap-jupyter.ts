@@ -116,7 +116,7 @@ async function startManagedJupyter(
 }
 
 /** Starts Jupyter for the resolved Python choice. */
-async function startJupyterForChoice(
+export async function startJupyterForChoice(
   choice: PythonSelectionChoice,
   options: BootstrapJupyterOptions,
   jupyterRoot: string,
@@ -142,18 +142,12 @@ async function startJupyterForChoice(
   return startExistingJupyter(choice.runtime, options, jupyterRoot, report);
 }
 
-/** Bootstraps Jupyter and writes the Orion app handoff file. */
-export async function bootstrapJupyter(
-  options: BootstrapJupyterOptions,
+/** Writes the local launcher handoff file for a started Jupyter server. */
+export async function saveJupyterHandoffForChoice(
+  server: StartedJupyterServer,
+  choice: PythonSelectionChoice,
   jupyterRoot: string
-): Promise<StartedJupyterServer> {
-  await ensureRuntimeDirectory();
-  const report = await buildPythonInstallationReport();
-  const choice = await resolvePythonChoice(report, {
-    assumeYes: options.yes,
-    forcePrompt: options.pickPython,
-  });
-  const server = await startJupyterForChoice(choice, options, jupyterRoot, report);
+): Promise<void> {
   const capabilities = await checkJupyterCapabilities(server.baseUrl, server.token);
   await savePythonPreference(choice);
   await saveJupyterConnectionHandoff({
@@ -166,5 +160,20 @@ export async function bootstrapJupyter(
     capabilities: capabilities.capabilities,
     createdAt: new Date().toISOString(),
   });
+}
+
+/** Bootstraps Jupyter and writes the Orion app handoff file. */
+export async function bootstrapJupyter(
+  options: BootstrapJupyterOptions,
+  jupyterRoot: string
+): Promise<StartedJupyterServer> {
+  await ensureRuntimeDirectory();
+  const report = await buildPythonInstallationReport();
+  const choice = await resolvePythonChoice(report, {
+    assumeYes: options.yes,
+    forcePrompt: options.pickPython,
+  });
+  const server = await startJupyterForChoice(choice, options, jupyterRoot, report);
+  await saveJupyterHandoffForChoice(server, choice, jupyterRoot);
   return server;
 }

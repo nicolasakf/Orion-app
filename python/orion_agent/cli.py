@@ -12,6 +12,7 @@ import socket
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -277,9 +278,14 @@ def ensure_app_bundle(assume_yes: bool) -> Path:
 
 def has_jupyter(python: str) -> bool:
     """Return whether a Python executable can import Jupyter Server."""
+    return has_jupyter_command([python])
+
+
+def has_jupyter_command(command: list[str]) -> bool:
+    """Return whether a Python command can import Jupyter Server."""
     try:
         subprocess.run(
-            [python, "-c", "import jupyter_server"],
+            [*command, "-c", "import jupyter_server"],
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -287,6 +293,50 @@ def has_jupyter(python: str) -> bool:
         return True
     except (OSError, subprocess.CalledProcessError):
         return False
+
+
+def inspect_python_executable(command: list[str]) -> str | None:
+    """Return the concrete Python executable for a command, if it can be inspected."""
+    try:
+        result = subprocess.run(
+            [
+                *command,
+                "-c",
+                "import json, sys; print(json.dumps({'executable': sys.executable}))",
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+    executable = data.get("executable")
+    return executable if isinstance(executable, str) and executable else None
+
+
+def resolve_existing_jupyter_python() -> str | None:
+    """Return a discovered Python executable that can start Jupyter Server."""
+    seen: set[tuple[str, ...]] = set()
+    seen_executables: set[str] = set()
+    for command in python_discovery_candidates():
+        key = tuple(command)
+        if key in seen:
+            continue
+        seen.add(key)
+        if not has_jupyter_command(command):
+            continue
+        executable = inspect_python_executable(command) or command[0]
+        if executable in seen_executables:
+            continue
+        seen_executables.add(executable)
+        return executable
+    return None
 
 
 def venv_python_support(python: str) -> str:
@@ -408,6 +458,30 @@ def jupyter_json(base_url: str, endpoint: str, token: str) -> Any:
         return json.loads(response.read().decode("utf-8"))
 
 
+def read_process_log_tail(log: Any, limit: int = 4000) -> str:
+    """Return the tail of a temporary process log without assuming text encoding."""
+    try:
+        log.flush()
+        size = log.tell()
+        log.seek(max(0, size - limit))
+        data = log.read()
+    except OSError:
+        return ""
+    if isinstance(data, str):
+        return data.strip()
+    return data.decode("utf-8", errors="replace").strip()
+
+
+def jupyter_start_message(message: str, log: Any | None = None) -> str:
+    """Append recent Jupyter output to a startup failure message when available."""
+    if log is None:
+        return message
+    tail = read_process_log_tail(log)
+    if not tail:
+        return message
+    return f"{message}\n\nRecent Jupyter output:\n{tail}"
+
+
 def start_jupyter(
     python: str,
     cwd: Path | None = None,
@@ -416,28 +490,41 @@ def start_jupyter(
     port = free_port()
     token = secrets.token_hex(24)
     base_url = f"http://127.0.0.1:{port}/"
-    proc = subprocess.Popen(
-        [
-            python,
-            "-m",
-            "jupyter_server",
-            "--no-browser",
-            "--ip=127.0.0.1",
-            f"--port={port}",
-            f"--ServerApp.token={token}",
-            "--ServerApp.allow_origin=*",
-            "--ServerApp.disable_check_xsrf=True",
-        ],
-        cwd=cwd or Path.home(),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    log = tempfile.TemporaryFile()
+    try:
+        proc = subprocess.Popen(
+            [
+                python,
+                "-m",
+                "jupyter_server",
+                "--no-browser",
+                "--ip=127.0.0.1",
+                f"--port={port}",
+                f"--ServerApp.token={token}",
+                "--ServerApp.allow_origin=*",
+                "--ServerApp.disable_check_xsrf=True",
+            ],
+            cwd=cwd or Path.home(),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+    except OSError as error:
+        log.close()
+        raise JupyterStartError(
+            f"Could not start Jupyter with {python}: {error}",
+            "spawn_failed",
+        ) from error
 
     deadline = time.time() + 90
     while time.time() < deadline:
-        if proc.poll() not in (None, 0):
-            raise JupyterStartError(
+        if proc.poll() is not None:
+            message = jupyter_start_message(
                 "Jupyter exited before it became ready.",
+                log,
+            )
+            log.close()
+            raise JupyterStartError(
+                message,
                 "early_exit",
             )
         try:
@@ -447,8 +534,13 @@ def start_jupyter(
             time.sleep(0.3)
     else:
         proc.terminate()
-        raise JupyterStartError(
+        message = jupyter_start_message(
             "Jupyter did not become ready before the timeout.",
+            log,
+        )
+        log.close()
+        raise JupyterStartError(
+            message,
             "timeout",
         )
 
@@ -469,11 +561,17 @@ def start_jupyter(
     missing = [name for name in ("kernelspecs", "sessions", "kernels", "contents", "terminals") if not capabilities[name]]
     if missing:
         proc.terminate()
-        raise JupyterStartError(
+        message = jupyter_start_message(
             f"Jupyter is missing required APIs: {', '.join(missing)}",
+            log,
+        )
+        log.close()
+        raise JupyterStartError(
+            message,
             "missing_apis",
         )
     version = str(api.get("version") or api.get("server_version") or api.get("jupyter_server_version") or "unknown")
+    log.close()
     return proc, base_url, token, capabilities, version
 
 
@@ -852,8 +950,9 @@ def run_setup_check() -> dict[str, Any]:
         ensure_native_modules(node, app)
 
         jupyter_root = Path.home()
-        uses_existing_jupyter = has_jupyter(sys.executable)
-        python = sys.executable if uses_existing_jupyter else install_managed_jupyter(True)
+        existing_python = resolve_existing_jupyter_python()
+        uses_existing_jupyter = existing_python is not None
+        python = existing_python if existing_python is not None else install_managed_jupyter(True)
         try:
             jupyter_proc, base_url, token, capabilities, version = start_jupyter(
                 python, jupyter_root
@@ -1236,8 +1335,9 @@ def start_main(argv: list[str]) -> None:
         print("Starting Orion app server only (--app-only)...")
     else:
         jupyter_root = Path.cwd() if args.here else Path.home()
-        uses_existing_jupyter = has_jupyter(sys.executable)
-        python = sys.executable if uses_existing_jupyter else install_managed_jupyter(args.yes)
+        existing_python = resolve_existing_jupyter_python()
+        uses_existing_jupyter = existing_python is not None
+        python = existing_python if existing_python is not None else install_managed_jupyter(args.yes)
         try:
             jupyter_proc, base_url, token, capabilities, version = start_jupyter(
                 python, jupyter_root
