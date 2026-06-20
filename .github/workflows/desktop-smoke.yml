@@ -27,6 +27,8 @@ jobs:
 
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      NEXT_TELEMETRY_DISABLED: "1"
+      NODE_OPTIONS: "--max-old-space-size=6144"
       ORION_DESKTOP_TARGET: ${{ matrix.target }}
       ORION_HOME_DIR: ${{ github.workspace }}/.orion-desktop-home
 
@@ -55,6 +57,11 @@ jobs:
         working-directory: python/orion-ui
 
       - name: Prepare desktop package inputs
+        env:
+          APPDATA: ${{ github.workspace }}/.appdata
+          HOME: ${{ github.workspace }}
+          LOCALAPPDATA: ${{ github.workspace }}/.localappdata
+          USERPROFILE: ${{ github.workspace }}
         run: npm run prepack:desktop
 
       - name: Package macOS app
@@ -71,7 +78,7 @@ jobs:
         run: |
           set -euo pipefail
           app_path="$(find dist/electron -name Orion.app -type d -print -quit)"
-          "$app_path/Contents/MacOS/Orion" --smoke > "$RUNNER_TEMP/desktop-smoke.json"
+          "$app_path/Contents/MacOS/Orion" --smoke 2>"$RUNNER_TEMP/desktop-smoke.stderr" > "$RUNNER_TEMP/desktop-smoke.json"
           python -c 'import json, os; report=json.load(open(os.environ["RUNNER_TEMP"] + "/desktop-smoke.json", encoding="utf-8")); assert report["ok"], report; assert report["app"]["url"].startswith("http://127.0.0.1:"), report; assert report["cloud"]["configured"], report; assert report["jupyter"]["source"] == "managed", report'
 
       - name: Smoke packaged Windows app
@@ -79,7 +86,7 @@ jobs:
         shell: pwsh
         run: |
           $exe = Get-ChildItem dist\electron -Recurse -Filter Orion.exe | Where-Object { $_.FullName -match "win-unpacked" } | Select-Object -First 1
-          & $exe.FullName --smoke | Out-File -FilePath "$env:RUNNER_TEMP\desktop-smoke.json" -Encoding utf8
+          & $exe.FullName --smoke 2>$env:RUNNER_TEMP\desktop-smoke.stderr | Out-File -FilePath "$env:RUNNER_TEMP\desktop-smoke.json" -Encoding utf8NoBOM
           $report = Get-Content "$env:RUNNER_TEMP\desktop-smoke.json" -Raw | ConvertFrom-Json
           if (-not $report.ok) { throw ($report | ConvertTo-Json -Depth 20) }
           if (-not $report.app.url.StartsWith("http://127.0.0.1:")) { throw ($report | ConvertTo-Json -Depth 20) }
