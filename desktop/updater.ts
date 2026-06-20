@@ -2,7 +2,12 @@ import { app, dialog } from "electron";
 import { autoUpdater } from "electron-updater";
 
 const DEFAULT_UPDATE_URL = "https://github.com/nicolasakf/Orion-app/releases/latest/download";
-const UPDATE_CHECK_DELAY_MS = 4_000;
+export const UPDATE_CHECK_DELAY_MS = 4_000;
+export const DAILY_UPDATE_CHECK_INTERVAL_MS = 86_400_000;
+
+let configured = false;
+let checkInFlight: Promise<unknown> | null = null;
+let dailyInterval: NodeJS.Timeout | null = null;
 
 /** Returns the per-platform update channel published by the desktop release workflow. */
 export function resolveDesktopUpdateChannel(
@@ -26,11 +31,74 @@ export function shouldCheckForDesktopUpdates(
   return packaged && env.ORION_DESKTOP_DISABLE_UPDATES !== "1";
 }
 
-/** Configures a quiet, user-confirmed update flow for packaged desktop builds. */
-export function configureDesktopAutoUpdates(): void {
+/** Checks GitHub release metadata for a newer Orion desktop build. */
+export async function checkForDesktopUpdates(options: { manual?: boolean } = {}): Promise<void> {
   if (!shouldCheckForDesktopUpdates()) {
     return;
   }
+
+  if (checkInFlight) {
+    if (options.manual) {
+      await dialog.showMessageBox({
+        type: "info",
+        title: "Checking for updates",
+        message: "An update check is already in progress.",
+        buttons: ["OK"],
+      });
+    }
+    return;
+  }
+
+  try {
+    checkInFlight = autoUpdater.checkForUpdates();
+    const result = await checkInFlight;
+    if (
+      options.manual &&
+      result &&
+      typeof result === "object" &&
+      "isUpdateAvailable" in result &&
+      !(result as { isUpdateAvailable: boolean }).isUpdateAvailable
+    ) {
+      await dialog.showMessageBox({
+        type: "info",
+        title: "No updates",
+        message: "You're up to date.",
+        detail: `Orion ${app.getVersion()} is the latest version.`,
+        buttons: ["OK"],
+      });
+    }
+  } catch (error) {
+    if (options.manual) {
+      const message = error instanceof Error ? error.message : String(error);
+      await dialog.showMessageBox({
+        type: "error",
+        title: "Update check failed",
+        message: "Could not check for updates.",
+        detail: message,
+        buttons: ["OK"],
+      });
+    } else {
+      console.warn("Orion desktop update check failed:", error);
+    }
+  } finally {
+    checkInFlight = null;
+  }
+}
+
+/** Stops the daily background update check schedule. */
+export function stopDesktopAutoUpdateSchedule(): void {
+  if (dailyInterval) {
+    clearInterval(dailyInterval);
+    dailyInterval = null;
+  }
+}
+
+/** Configures a quiet, user-confirmed update flow for packaged desktop builds. */
+export function configureDesktopAutoUpdates(): void {
+  if (!shouldCheckForDesktopUpdates() || configured) {
+    return;
+  }
+  configured = true;
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -81,6 +149,10 @@ export function configureDesktopAutoUpdates(): void {
   });
 
   setTimeout(() => {
-    void autoUpdater.checkForUpdates();
+    void checkForDesktopUpdates();
   }, UPDATE_CHECK_DELAY_MS);
+
+  dailyInterval = setInterval(() => {
+    void checkForDesktopUpdates();
+  }, DAILY_UPDATE_CHECK_INTERVAL_MS);
 }

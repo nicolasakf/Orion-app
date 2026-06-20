@@ -2,7 +2,13 @@ import { app, BrowserWindow, dialog } from "electron";
 
 import { parseDesktopOptions } from "../lib/desktop/options";
 import { runDesktopSmoke, startDesktopSession, type DesktopSession } from "../lib/desktop/launcher";
-import { configureDesktopAutoUpdates } from "./updater";
+import { setupDesktopApplicationMenu } from "./menu";
+import {
+  checkForDesktopUpdates,
+  configureDesktopAutoUpdates,
+  shouldCheckForDesktopUpdates,
+  stopDesktopAutoUpdateSchedule,
+} from "./updater";
 
 let session: DesktopSession | null = null;
 let mainWindow: BrowserWindow | null = null;
@@ -65,7 +71,13 @@ async function boot(): Promise<void> {
     resourceOptions: { resourcesPath: process.resourcesPath },
   });
   await createWindow(session.url);
-  configureDesktopAutoUpdates();
+
+  if (shouldCheckForDesktopUpdates()) {
+    configureDesktopAutoUpdates();
+    setupDesktopApplicationMenu(() => {
+      void checkForDesktopUpdates({ manual: true });
+    });
+  }
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
@@ -95,6 +107,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  stopDesktopAutoUpdateSchedule();
   session?.dispose();
   session = null;
 });

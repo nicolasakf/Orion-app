@@ -1,23 +1,52 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { showMessageBox, checkForUpdates } = vi.hoisted(() => ({
+  showMessageBox: vi.fn().mockResolvedValue({ response: 0 }),
+  checkForUpdates: vi.fn(),
+}));
 
 vi.mock("electron", () => ({
-  app: { isPackaged: true },
-  dialog: { showMessageBox: vi.fn() },
+  app: {
+    isPackaged: true,
+    getVersion: () => "0.10.1",
+  },
+  dialog: { showMessageBox },
 }));
 
 vi.mock("electron-updater", () => ({
   autoUpdater: {
+    autoDownload: false,
+    autoInstallOnAppQuit: false,
     setFeedURL: vi.fn(),
-    checkForUpdates: vi.fn(),
+    checkForUpdates,
     downloadUpdate: vi.fn(),
     quitAndInstall: vi.fn(),
     on: vi.fn(),
   },
 }));
 
-import { resolveDesktopUpdateChannel, shouldCheckForDesktopUpdates } from "./updater";
+import {
+  checkForDesktopUpdates,
+  configureDesktopAutoUpdates,
+  DAILY_UPDATE_CHECK_INTERVAL_MS,
+  resolveDesktopUpdateChannel,
+  shouldCheckForDesktopUpdates,
+  stopDesktopAutoUpdateSchedule,
+} from "./updater";
 
 describe("desktop updater policy", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    checkForUpdates.mockReset();
+    checkForUpdates.mockResolvedValue({ isUpdateAvailable: false });
+    showMessageBox.mockClear();
+  });
+
+  afterEach(() => {
+    stopDesktopAutoUpdateSchedule();
+    vi.useRealTimers();
+  });
+
   it("uses separate macOS channels for Apple Silicon and Intel builds", () => {
     expect(resolveDesktopUpdateChannel("darwin", "arm64")).toBe("latest-arm64");
     expect(resolveDesktopUpdateChannel("darwin", "x64")).toBe("latest-x64");
@@ -31,5 +60,40 @@ describe("desktop updater policy", () => {
     expect(shouldCheckForDesktopUpdates(true, {})).toBe(true);
     expect(shouldCheckForDesktopUpdates(false, {})).toBe(false);
     expect(shouldCheckForDesktopUpdates(true, { ORION_DESKTOP_DISABLE_UPDATES: "1" })).toBe(false);
+  });
+
+  it("checks once on startup and again every 24 hours", async () => {
+    configureDesktopAutoUpdates();
+    expect(checkForUpdates).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(checkForUpdates).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(DAILY_UPDATE_CHECK_INTERVAL_MS);
+    expect(checkForUpdates).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows an up-to-date dialog for manual checks with no update", async () => {
+    await checkForDesktopUpdates({ manual: true });
+
+    expect(showMessageBox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "No updates",
+        message: "You're up to date.",
+      })
+    );
+  });
+
+  it("shows an error dialog when a manual check fails", async () => {
+    checkForUpdates.mockRejectedValueOnce(new Error("network offline"));
+
+    await checkForDesktopUpdates({ manual: true });
+
+    expect(showMessageBox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "error",
+        title: "Update check failed",
+      })
+    );
   });
 });
