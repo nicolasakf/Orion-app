@@ -31,7 +31,7 @@
     "dev": "next dev -p 3001 --turbopack",
     "dev:desktop": "tsx scripts/dev-electron.ts",
     "dev:notebook": "tsx scripts/dev-with-jupyter.ts",
-    "build": "next build",
+    "build": "node scripts/ensure-build-env.mjs && next build && node scripts/verify-orion-cloud-bundle.mjs",
     "start": "next start -p 3001",
     "lint": "next lint",
     "test": "vitest run",

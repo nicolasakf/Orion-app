@@ -72,7 +72,7 @@ jobs:
           set -euo pipefail
           app_path="$(find dist/electron -name Orion.app -type d -print -quit)"
           "$app_path/Contents/MacOS/Orion" --smoke > "$RUNNER_TEMP/desktop-smoke.json"
-          python -c 'import json, os; report=json.load(open(os.environ["RUNNER_TEMP"] + "/desktop-smoke.json", encoding="utf-8")); assert report["ok"], report; assert report["app"]["url"].startswith("http://127.0.0.1:"), report; assert report["jupyter"]["source"] == "managed", report'
+          python -c 'import json, os; report=json.load(open(os.environ["RUNNER_TEMP"] + "/desktop-smoke.json", encoding="utf-8")); assert report["ok"], report; assert report["app"]["url"].startswith("http://127.0.0.1:"), report; assert report["cloud"]["configured"], report; assert report["jupyter"]["source"] == "managed", report'
 
       - name: Smoke packaged Windows app
         if: matrix.builder == 'win'
@@ -83,4 +83,5 @@ jobs:
           $report = Get-Content "$env:RUNNER_TEMP\desktop-smoke.json" -Raw | ConvertFrom-Json
           if (-not $report.ok) { throw ($report | ConvertTo-Json -Depth 20) }
           if (-not $report.app.url.StartsWith("http://127.0.0.1:")) { throw ($report | ConvertTo-Json -Depth 20) }
+          if (-not $report.cloud.configured) { throw ($report | ConvertTo-Json -Depth 20) }
           if ($report.jupyter.source -ne "managed") { throw ($report | ConvertTo-Json -Depth 20) }

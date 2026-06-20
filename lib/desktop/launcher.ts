@@ -24,6 +24,7 @@ import {
 } from "../cli/python-selection";
 import type { PythonInstallationReport } from "../cli/python";
 import type { LauncherJupyterConnection } from "../kernel/launcher-connection";
+import { isOrionCloudConfiguredInAppBundle } from "./cloud-bundle";
 import type { DesktopOptions } from "./options";
 import {
   assertDesktopRuntimePresent,
@@ -46,6 +47,9 @@ export interface DesktopSmokeReport {
   app: {
     url: string;
     port: number;
+  };
+  cloud: {
+    configured: boolean;
   };
   jupyter: null | {
     baseUrl: string;
@@ -257,6 +261,8 @@ export async function startDesktopSession(
 export async function runDesktopSmoke(
   launchOptions: DesktopLaunchOptions
 ): Promise<DesktopSmokeReport> {
+  const paths = resolveDesktopRuntimePaths(launchOptions.resourceOptions);
+  const devUrl = normalizeDesktopDevUrl(launchOptions.devUrl);
   const session = await startDesktopSession(launchOptions);
   try {
     return {
@@ -265,11 +271,14 @@ export async function runDesktopSmoke(
         url: session.url,
         port: session.app?.port ?? Number(new URL(session.url).port || "0"),
       },
+      cloud: {
+        configured: devUrl ? true : isOrionCloudConfiguredInAppBundle(paths.appDirectory),
+      },
       jupyter: session.jupyter
         ? {
             baseUrl: session.jupyter.baseUrl,
             pythonPath: session.jupyter.pythonPath,
-            source: session.jupyter.pythonPath === resolveDesktopRuntimePaths(launchOptions.resourceOptions).pythonExecutable
+            source: session.jupyter.pythonPath === paths.pythonExecutable
               ? "managed"
               : "existing",
           }
