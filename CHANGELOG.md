@@ -4,6 +4,14 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.1] - 2026-06-19
+
+### Fixed
+
+- Desktop: embed Orion Cloud config in CI-built Windows and macOS installers so sign-in and notebook publish work
+
+[0.10.1]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.10.1
+
 ## [0.10.0] - 2026-06-19
 
 ### Added
