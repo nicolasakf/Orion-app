@@ -169,6 +169,7 @@ export function rebuildBetterSqlite3(
       stdio: "pipe",
       encoding: "utf8",
       shell: process.platform === "win32",
+      windowsHide: true,
       env,
     }
   );

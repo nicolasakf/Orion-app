@@ -240,6 +240,7 @@ export async function startDesktopSession(
     app = await startOrionAppServer({
       appDirectory: paths.appDirectory,
       nodeExecutable: paths.nodeExecutable,
+      hideSubprocess: true,
     });
   } catch (error) {
     jupyter?.dispose();
