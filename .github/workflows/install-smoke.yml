@@ -254,7 +254,8 @@ jobs:
           ORION_HOME_DIR: ${{ runner.temp }}\orion-public-home
           ORION_NO_RUN: "1"
         run: |
-          powershell -ExecutionPolicy Bypass -c "iwr -useb https://www.orion-agent.ai/install.ps1 | iex"
+          # Run in this shell so install.ps1 PATH updates persist for orion doctor.
+          iwr -useb https://www.orion-agent.ai/install.ps1 | iex
           orion doctor --setup --json | Out-File -FilePath "$env:RUNNER_TEMP\public-doctor.json" -Encoding utf8
           $report = Get-Content "$env:RUNNER_TEMP\public-doctor.json" -Raw | ConvertFrom-Json
           if (-not $report.ok) { throw ($report | ConvertTo-Json -Depth 20) }
