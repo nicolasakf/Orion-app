@@ -13,17 +13,7 @@ jobs:
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: macos-15
-            target: darwin-arm64
-            builder: mac
-          - os: macos-15-intel
-            target: darwin-x64
-            builder: mac
-          - os: windows-latest
-            target: win32-x64
-            builder: win
+      matrix: ${{ fromJSON(github.event_name == 'pull_request' && '{"include":[{"os":"macos-15","target":"darwin-arm64","builder":"mac"},{"os":"windows-latest","target":"win32-x64","builder":"win"}]}' || '{"include":[{"os":"macos-15","target":"darwin-arm64","builder":"mac"},{"os":"macos-15-intel","target":"darwin-x64","builder":"mac"},{"os":"windows-latest","target":"win32-x64","builder":"win"}]}') }}
 
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -56,6 +46,18 @@ jobs:
           python -m build
         working-directory: python/orion-ui
 
+      - name: Cache desktop runtime downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist/desktop-runtime/downloads
+            ~/.cache/pip
+            ~/Library/Caches/pip
+            ~\AppData\Local\pip\Cache
+          key: desktop-runtime-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('scripts/prepare-desktop-runtime.mjs', 'python/orion-ui/pyproject.toml', 'python/orion-ui/orion_ui/**') }}
+          restore-keys: |
+            desktop-runtime-${{ runner.os }}-${{ matrix.target }}-
+
       - name: Prepare desktop package inputs
         env:
           APPDATA: ${{ github.workspace }}/.appdata
@@ -66,12 +68,12 @@ jobs:
 
       - name: Package macOS app
         if: matrix.builder == 'mac'
-        run: npx electron-builder --mac dmg zip
+        run: npx electron-builder --mac dir --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false
 
       - name: Package Windows app
         if: matrix.builder == 'win'
         shell: pwsh
-        run: npx electron-builder --win nsis
+        run: npx electron-builder --win dir --publish never
 
       - name: Smoke packaged macOS app
         if: matrix.builder == 'mac'

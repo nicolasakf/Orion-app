@@ -71,7 +71,9 @@ jobs:
           if-no-files-found: error
 
   desktop:
-    needs: release-info
+    needs:
+      - release-info
+      - app-bundle
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -125,13 +127,38 @@ jobs:
           python -m build
         working-directory: python/orion-ui
 
+      - name: Download app bundle artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-bundle
+          path: dist
+
+      - name: Extract app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/orion-app
+          tar -xzf "dist/orion-app-${{ needs.release-info.outputs.version }}.tar.gz" -C dist/orion-app
+
+      - name: Cache desktop runtime downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist/desktop-runtime/downloads
+            ~/.cache/pip
+            ~/Library/Caches/pip
+            ~\AppData\Local\pip\Cache
+          key: desktop-runtime-${{ runner.os }}-${{ matrix.target }}-${{ hashFiles('scripts/prepare-desktop-runtime.mjs', 'python/orion-ui/pyproject.toml', 'python/orion-ui/orion_ui/**') }}
+          restore-keys: |
+            desktop-runtime-${{ runner.os }}-${{ matrix.target }}-
+
       - name: Prepare desktop package inputs
         env:
           APPDATA: ${{ github.workspace }}/.appdata
           HOME: ${{ github.workspace }}
           LOCALAPPDATA: ${{ github.workspace }}/.localappdata
           USERPROFILE: ${{ github.workspace }}
-        run: npm run prepack:desktop
+        run: npm run build:desktop-main && npm run prepare:desktop-runtime
 
       - name: Package macOS app
         if: matrix.builder == 'mac'
