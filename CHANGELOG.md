@@ -4,6 +4,22 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.10.2] - 2026-06-21
+
+### Added
+
+- Desktop: daily update checks on startup and every 24 hours, plus manual **Check for Updates** menu action
+- Updates: unified in-app update flow with settings menu/sidebar controls and API route
+- CLI: `orion update` subcommand and startup update prompts for npm and PyPI launchers
+
+### Fixed
+
+- Desktop: hide the Next.js server subprocess on Windows so no terminal window appears
+- CI: run `install.ps1` in the same shell on Windows install smoke
+- CI: reuse app-bundle artifact in desktop release, cache runtime downloads, and trim smoke matrix on PRs
+
+[0.10.2]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.10.2
+
 ## [0.10.1] - 2026-06-19
 
 ### Fixed
