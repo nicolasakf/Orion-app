@@ -32,6 +32,7 @@ DEFAULT_APP_BUNDLE_URL = (
 )
 DOWNLOAD_CHUNK_SIZE = 1024 * 256
 DOWNLOAD_PROGRESS_WIDTH = 28
+PYPI_LATEST_URL = "https://pypi.org/pypi/orion-notebook/json"
 
 
 class JupyterStartError(Exception):
@@ -77,6 +78,48 @@ def confirm(message: str, assume_yes: bool) -> bool:
         return False
     answer = input(f"{message} [y/N] ").strip().lower()
     return answer in {"y", "yes"}
+
+
+def parse_stable_version(value: str) -> tuple[int, int, int]:
+    """Parse a stable three-part semantic version."""
+    normalized = value[1:] if value.startswith("v") else value
+    parts = normalized.split(".")
+    if len(parts) != 3 or any(not part.isdigit() for part in parts):
+        raise ValueError(f"Invalid stable version: {value}")
+    return tuple(int(part) for part in parts)  # type: ignore[return-value]
+
+
+def check_pypi_update(current_version: str = VERSION) -> str | None:
+    """Return the latest PyPI version when it is newer than the launcher."""
+    request = urllib.request.Request(PYPI_LATEST_URL, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(request, timeout=5) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    latest = payload.get("info", {}).get("version") if isinstance(payload, dict) else None
+    if not isinstance(latest, str):
+        raise ValueError("PyPI response did not include info.version.")
+    return latest if parse_stable_version(latest) > parse_stable_version(current_version) else None
+
+
+def update_install_command(channel: str) -> list[str]:
+    """Build the package-manager command for the active Python install channel."""
+    if channel == "uv":
+        uv = shutil.which("uv")
+        if not uv:
+            raise RuntimeError("uv was not found on PATH.")
+        return [uv, "tool", "upgrade", PACKAGE_NAME]
+    return [sys.executable, "-m", "pip", "install", "--upgrade", PACKAGE_NAME]
+
+
+def run_update_command() -> bool:
+    """Install the latest PyPI launcher release and report whether it changed."""
+    latest = check_pypi_update()
+    if latest is None:
+        print(f"Orion {VERSION} is already up to date.")
+        return False
+    print(f"Updating Orion {VERSION} to {latest}...")
+    run_checked(update_install_command(detect_install_channel()))
+    print(f"Orion {latest} installed. Run orion again to start the new version.")
+    return True
 
 
 def run_checked(command: list[str], cwd: Path | None = None) -> None:
@@ -654,6 +697,14 @@ def start_orion_app(node: str, app: Path) -> tuple[subprocess.Popen[bytes], str]
         "HOSTNAME": "127.0.0.1",
         "NODE_ENV": "production",
         "PORT": str(port),
+        "ORION_LAUNCH_MODE": "cli",
+        "ORION_INSTALL_CHANNEL": detect_install_channel(),
+        "ORION_CURRENT_VERSION": VERSION,
+        "ORION_LAUNCHER_EXECUTABLE": (
+            shutil.which("uv") or "uv"
+            if detect_install_channel() == "uv"
+            else sys.executable
+        ),
     }
     # Node's default 16 KiB header limit rejects browsers with large localhost cookie jars (HTTP 431).
     proc = subprocess.Popen(
@@ -1327,6 +1378,22 @@ def start_main(argv: list[str]) -> None:
     )
     args = parser.parse_args(argv)
 
+    latest = None
+    try:
+        latest = check_pypi_update()
+    except Exception as error:
+        print(f"Could not check for Orion updates; continuing startup. {error}", file=sys.stderr)
+    if latest and confirm(
+        f"Orion {latest} is available. Update before starting?", args.yes
+    ):
+        print(f"Updating Orion {VERSION} to {latest}...")
+        try:
+            run_checked(update_install_command(detect_install_channel()))
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise SystemExit(f"Orion update failed: {error}") from error
+        print(f"Orion {latest} installed. Run orion again to start the new version.")
+        return
+
     app = ensure_app_bundle(args.yes)
     node = ensure_node(args.yes)
     jupyter_proc: subprocess.Popen[bytes] | None = None
@@ -1401,6 +1468,12 @@ def main() -> None:
         return
     if argv and argv[0] == "doctor":
         doctor_main(argv[1:])
+        return
+    if argv and argv[0] == "update":
+        try:
+            run_update_command()
+        except Exception as error:
+            raise SystemExit(f"Orion update failed: {error}") from error
         return
     start_main(argv)
 

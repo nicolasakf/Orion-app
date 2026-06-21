@@ -1,6 +1,6 @@
 "use client";
 
-import { LogOut, Moon, Settings, Sun, User } from "lucide-react";
+import { Download, Loader2, LogOut, Moon, RefreshCw, Settings, Sun, User } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -25,6 +25,7 @@ import { useOpenSettings } from "@/contexts/open-settings-context";
 import { useCloudUser } from "@/hooks/use-cloud-user";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import { createOrionCloudSupabaseClient } from "@/lib/cloud/supabase-client";
+import { useOrionUpdate } from "@/components/update-provider";
 
 const ORION_LOGO_SRC = {
   dark: "/assets/Orion%20Logo_White.svg",
@@ -48,6 +49,8 @@ export function SettingsMenu(props: ButtonProps) {
   const { setTheme, resolvedTheme } = useTheme();
   const [authOpen, setAuthOpen] = useState(false);
   const { configured, user, loading, refresh } = useCloudUser();
+  const { state: updateState, updateAvailable, checkForUpdates, performUpdate } =
+    useOrionUpdate();
   const {
     open: isSettingsDialogOpen,
     onOpenChange: setIsSettingsDialogOpen,
@@ -95,7 +98,7 @@ export function SettingsMenu(props: ButtonProps) {
           <ToolbarButton
             variant="ghost"
             size="icon"
-            className="h-8 w-8"
+            className="relative h-8 w-8"
             toolTipLabel="Account & settings"
             toolTipShortcut={[[CmdOrCtrl, AltOrOption, ","]]}
             {...props}
@@ -113,6 +116,12 @@ export function SettingsMenu(props: ButtonProps) {
               draggable={false}
             />
             <span className="sr-only">Account & settings</span>
+            {updateAvailable ? (
+              <span
+                aria-label="Orion update available"
+                className="absolute right-0.5 top-0.5 size-2 rounded-full bg-blue-500 ring-2 ring-background"
+              />
+            ) : null}
           </ToolbarButton>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-fit">
@@ -178,6 +187,37 @@ export function SettingsMenu(props: ButtonProps) {
             )}
           </DropdownMenuGroup>
           <DropdownMenuSeparator />
+          {updateState.supported ? (
+            <DropdownMenuGroup>
+              <DropdownMenuItem
+                disabled={["checking", "downloading", "installing"].includes(updateState.status)}
+                onSelect={() => {
+                  if (updateAvailable) void performUpdate();
+                  else void checkForUpdates(true);
+                }}
+              >
+                {["checking", "downloading", "installing"].includes(updateState.status) ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : updateAvailable ? (
+                  <Download className="h-4 w-4" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" />
+                )}
+                {updateState.status === "downloaded"
+                  ? "Restart and update"
+                  : updateState.status === "downloading"
+                    ? `Downloading${updateState.progress === undefined ? "" : ` ${Math.round(updateState.progress)}%`}`
+                    : updateState.status === "installing"
+                      ? "Updating Orion..."
+                      : updateState.status === "checking"
+                        ? "Checking for updates..."
+                        : updateState.status === "available"
+                          ? `Update to ${updateState.latestVersion}`
+                          : "Check for updates"}
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          ) : null}
+          {updateState.supported ? <DropdownMenuSeparator /> : null}
           <DropdownMenuGroup>
             <DropdownMenuItem onClick={() => setIsSettingsDialogOpen(true)}>
               <Settings className="h-4 w-4" />

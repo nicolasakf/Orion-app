@@ -10,6 +10,12 @@ import { runConfigCommand } from "../lib/cli/config";
 import { runDoctorCommand } from "../lib/cli/doctor";
 import { runUninstall } from "../lib/cli/uninstall";
 import {
+  checkNpmUpdate,
+  confirmCliUpdate,
+  installLatestNpmVersion,
+  runNpmUpdateCommand,
+} from "../lib/cli/update";
+import {
   printPackageUninstallResult,
   runPackageUninstall,
 } from "../lib/cli/uninstall-package";
@@ -52,6 +58,7 @@ function printUsage(): void {
   console.log(`Usage: orion [--yes] [--no-browser] [--here] [--app-only] [--pick-python]
        orion config [show|python ...]
        orion doctor [--json] [--setup]
+       orion update
        orion uninstall [--yes] [--all]
 
 Starts a local Orion app, starts Jupyter Server, and opens Orion already connected.
@@ -68,6 +75,7 @@ Options:
 Commands:
   config         Show or change Orion CLI settings under ~/.orion/runtime.
   doctor         Diagnose install, app bundle, Python/Jupyter, and network state.
+  update         Install the latest Orion release and exit.
   uninstall      Remove cached Orion data under ~/.orion before package uninstall.`);
 }
 
@@ -106,6 +114,32 @@ async function runStartCommand(argv: string[]): Promise<void> {
   if (options.noBrowser) {
     process.env.ORION_NO_BROWSER = "1";
   }
+
+  const currentVersion = readPackageVersion();
+  let latestVersion: string | null = null;
+  try {
+    latestVersion = await checkNpmUpdate(currentVersion);
+  } catch (error) {
+    console.warn(
+      `Could not check for Orion updates; continuing startup. ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (
+    latestVersion &&
+    (await confirmCliUpdate(
+      `Orion ${latestVersion} is available. Update before starting?`,
+      options.yes
+    ))
+  ) {
+    console.log(`Updating Orion ${currentVersion} to ${latestVersion}...`);
+    installLatestNpmVersion();
+    console.log(`Orion ${latestVersion} installed. Run orion again to start the new version.`);
+    return;
+  }
+
+  process.env.ORION_LAUNCH_MODE = "cli";
+  process.env.ORION_INSTALL_CHANNEL = "npm";
+  process.env.ORION_CURRENT_VERSION = currentVersion;
 
   console.log("Starting Orion...");
   let jupyter: StartedJupyterServer | null = null;
@@ -169,6 +203,11 @@ async function main(): Promise<void> {
 
   if (command === "doctor") {
     await runDoctorCommand(argv.slice(1));
+    return;
+  }
+
+  if (command === "update") {
+    await runNpmUpdateCommand(readPackageVersion());
     return;
   }
 

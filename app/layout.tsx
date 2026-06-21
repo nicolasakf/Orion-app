@@ -4,6 +4,7 @@ import './globals.css'
 import { ThemeProvider } from '@/components/theme-provider'
 import { SettingsProvider } from '@/components/settings/settings-provider'
 import { Toaster } from '@/components/ui/sonner'
+import { UpdateProvider } from '@/components/update-provider'
 
 const saira = Saira({
   subsets: ['latin'],
@@ -41,8 +42,12 @@ export default async function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
-          <SettingsProvider>{children}</SettingsProvider>
-          <Toaster />
+          <SettingsProvider>
+            <UpdateProvider>
+              {children}
+              <Toaster />
+            </UpdateProvider>
+          </SettingsProvider>
         </ThemeProvider>
       </body>
     </html>

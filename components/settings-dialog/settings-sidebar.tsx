@@ -10,6 +10,9 @@ import {
   Bot,
   BookOpen,
   User,
+  Download,
+  Loader2,
+  RefreshCw,
 } from "lucide-react";
 import {
   Sidebar,
@@ -30,6 +33,7 @@ import {
 } from "@/components/settings-dialog/types";
 import { ORION_USER_DOCS_URL } from "@/lib/constants/user-docs";
 import { cn } from "@/lib/utils";
+import { useOrionUpdate } from "@/components/update-provider";
 
 const SETTINGS_NAV_BASE: { id: SettingsTab; title: string; icon: React.ElementType }[] = [
   { id: "account", title: "Account", icon: User },
@@ -59,6 +63,8 @@ export function SettingsSidebar({
   className,
   ...props
 }: SettingsSidebarProps) {
+  const { state: updateState, updateAvailable, checkForUpdates, performUpdate } =
+    useOrionUpdate();
   const settingsNav = SETTINGS_NAV_BASE.filter((item) => {
     if (item.id === "account" && !showAccountTab) return false;
     return true;
@@ -128,6 +134,39 @@ export function SettingsSidebar({
         </SidebarGroup>
         <SidebarGroup className="mt-auto">
           <SidebarMenu>
+            {updateState.supported ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  className="cursor-pointer"
+                  disabled={["checking", "downloading", "installing"].includes(updateState.status)}
+                  onClick={() => {
+                    if (updateAvailable) void performUpdate();
+                    else void checkForUpdates(true);
+                  }}
+                >
+                  {["checking", "downloading", "installing"].includes(updateState.status) ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : updateAvailable ? (
+                    <Download className="h-4 w-4" />
+                  ) : (
+                    <RefreshCw className="h-4 w-4" />
+                  )}
+                  <span>
+                    {updateState.status === "downloaded"
+                      ? "Restart and update"
+                      : updateState.status === "available"
+                        ? `Update to ${updateState.latestVersion}`
+                        : updateState.status === "downloading"
+                          ? `Downloading${updateState.progress === undefined ? "" : ` ${Math.round(updateState.progress)}%`}`
+                          : updateState.status === "installing"
+                            ? "Updating Orion..."
+                            : updateState.status === "checking"
+                              ? "Checking for updates..."
+                              : "Check for updates"}
+                  </span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
             <SidebarMenuItem>
               <SidebarMenuButton asChild className="cursor-pointer">
                 <a

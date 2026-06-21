@@ -122,6 +122,16 @@ orion doctor --setup --json
 
 `doctor --setup` performs first-run setup checks without opening a browser, which is useful for CI and support reports.
 
+### Update Orion
+
+Orion checks for stable updates before starting and again while the app is open. To update explicitly through the package manager that installed Orion, run:
+
+```bash
+orion update
+```
+
+After a CLI update, run `orion` again. Desktop updates download in the app and ask before restarting.
+
 ### Uninstall
 
 `pip uninstall` and `npm uninstall` remove the launcher only. To also remove cached Orion data (especially the pip-downloaded app bundle under `~/.orion/app/<version>/`), run:

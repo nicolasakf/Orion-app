@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { showMessageBox, checkForUpdates } = vi.hoisted(() => ({
-  showMessageBox: vi.fn().mockResolvedValue({ response: 0 }),
+const { checkForUpdates } = vi.hoisted(() => ({
   checkForUpdates: vi.fn(),
 }));
 
@@ -10,7 +9,6 @@ vi.mock("electron", () => ({
     isPackaged: true,
     getVersion: () => "0.10.1",
   },
-  dialog: { showMessageBox },
 }));
 
 vi.mock("electron-updater", () => ({
@@ -39,7 +37,6 @@ describe("desktop updater policy", () => {
     vi.useFakeTimers();
     checkForUpdates.mockReset();
     checkForUpdates.mockResolvedValue({ isUpdateAvailable: false });
-    showMessageBox.mockClear();
   });
 
   afterEach(() => {
@@ -73,27 +70,14 @@ describe("desktop updater policy", () => {
     expect(checkForUpdates).toHaveBeenCalledTimes(2);
   });
 
-  it("shows an up-to-date dialog for manual checks with no update", async () => {
-    await checkForDesktopUpdates({ manual: true });
-
-    expect(showMessageBox).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "No updates",
-        message: "You're up to date.",
-      })
-    );
+  it("publishes an up-to-date state when no update exists", async () => {
+    const state = await checkForDesktopUpdates();
+    expect(state).toEqual(expect.objectContaining({ status: "current", latestVersion: "0.10.1" }));
   });
 
-  it("shows an error dialog when a manual check fails", async () => {
+  it("publishes an error state when a check fails", async () => {
     checkForUpdates.mockRejectedValueOnce(new Error("network offline"));
-
-    await checkForDesktopUpdates({ manual: true });
-
-    expect(showMessageBox).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "error",
-        title: "Update check failed",
-      })
-    );
+    const state = await checkForDesktopUpdates();
+    expect(state).toEqual(expect.objectContaining({ status: "error", error: "network offline" }));
   });
 });

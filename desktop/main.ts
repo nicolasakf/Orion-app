@@ -1,4 +1,6 @@
-import { app, BrowserWindow, dialog } from "electron";
+import { join } from "path";
+
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
 
 import { parseDesktopOptions } from "../lib/desktop/options";
 import { runDesktopSmoke, startDesktopSession, type DesktopSession } from "../lib/desktop/launcher";
@@ -6,8 +8,12 @@ import { setupDesktopApplicationMenu } from "./menu";
 import {
   checkForDesktopUpdates,
   configureDesktopAutoUpdates,
+  downloadDesktopUpdate,
+  getDesktopUpdateState,
+  restartAndInstallDesktopUpdate,
   shouldCheckForDesktopUpdates,
   stopDesktopAutoUpdateSchedule,
+  subscribeToDesktopUpdates,
 } from "./updater";
 
 let session: DesktopSession | null = null;
@@ -33,10 +39,24 @@ async function createWindow(url: string): Promise<void> {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: join(__dirname, "preload.js"),
     },
   });
 
   await mainWindow.loadURL(url);
+}
+
+/** Registers the narrow updater IPC surface exposed by the sandboxed preload. */
+function setupUpdaterIpc(): void {
+  ipcMain.handle("orion:update:get-state", () => getDesktopUpdateState());
+  ipcMain.handle("orion:update:check", () => checkForDesktopUpdates());
+  ipcMain.handle("orion:update:download", () => downloadDesktopUpdate());
+  ipcMain.handle("orion:update:restart", () => restartAndInstallDesktopUpdate());
+  subscribeToDesktopUpdates((nextState) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("orion:update:state", nextState);
+    }
+  });
 }
 
 /** Reports a startup error through both stderr and a native desktop dialog. */
@@ -75,7 +95,7 @@ async function boot(): Promise<void> {
   if (shouldCheckForDesktopUpdates()) {
     configureDesktopAutoUpdates();
     setupDesktopApplicationMenu(() => {
-      void checkForDesktopUpdates({ manual: true });
+      mainWindow?.webContents.send("orion:update:manual-check");
     });
   }
 }
@@ -96,6 +116,7 @@ if (!gotSingleInstanceLock) {
 }
 
 app.whenReady().then(() => {
+  setupUpdaterIpc();
   void boot().catch((error) => {
     reportStartupError(error);
     app.quit();
