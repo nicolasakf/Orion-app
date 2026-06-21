@@ -132,30 +132,6 @@ orion update
 
 After a CLI update, run `orion` again. Desktop updates download in the app and ask before restarting.
 
-### Uninstall
-
-`pip uninstall` and `npm uninstall` remove the launcher only. To also remove cached Orion data (especially the pip-downloaded app bundle under `~/.orion/app/<version>/`), run:
-
-```bash
-orion uninstall --yes
-```
-
-Remove everything under `~/.orion` (Jupyter venv, portable Node, all cached app versions):
-
-```bash
-orion uninstall --all --yes
-```
-
-Then remove the package:
-
-```bash
-pip uninstall orion-notebook
-# or
-npm uninstall -g orion-notebook
-# or
-uv tool uninstall orion-notebook
-```
-
 ### Adding yourAPI Keys
 
 Open Orion in your browser, then go to **Settings → Providers** to add your API keys.
@@ -213,6 +189,30 @@ node dist/cli/cli/orion.js
 ```
 
 See [Contributing](./CONTRIBUTING.md#setup) for more development details and [CLI development](./CONTRIBUTING.md#cli-development) for flags, publishing, and local CLI testing.
+
+### Uninstall
+
+`pip uninstall` and `npm uninstall` remove the launcher only. To also remove cached Orion data (especially the pip-downloaded app bundle under `~/.orion/app/<version>/`), run:
+
+```bash
+orion uninstall --yes
+```
+
+Remove everything under `~/.orion` (Jupyter venv, portable Node, all cached app versions):
+
+```bash
+orion uninstall --all --yes
+```
+
+Then remove the package:
+
+```bash
+pip uninstall orion-notebook
+# or
+npm uninstall -g orion-notebook
+# or
+uv tool uninstall orion-notebook
+```
 
 ## Links
 
