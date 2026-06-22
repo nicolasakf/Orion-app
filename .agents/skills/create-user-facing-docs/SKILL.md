@@ -41,6 +41,7 @@ Use this shape unless the topic clearly needs something else:
 
 ## Technical content
 
+- **External links to docs.orion-agent.ai** (from Orion-app, Orion-website, skills, or README files) must include the **`.html`** suffix — for example `https://docs.orion-agent.ai/getting-started/install.html`. Static hosting does not rewrite clean paths. In TypeScript, use `orionUserDocsPage()` from `lib/constants/user-docs.ts` (Orion-app) or `orionDocsPage()` from `lib/orion-install.ts` (Orion-website). Relative links like `/getting-started/install` are fine **inside** Orion-docs markdown (VitePress client routing).
 - Prefer **exact settings** (config keys, file names, menu paths) verified against current upstream docs when possible.
 - **POSIX and Windows (NT)** — whenever instructions depend on **filesystem paths**, **shell**, or **OS-specific commands**, give both:
   - **POSIX** (macOS/Linux): e.g. `~/.jupyter/`, forward slashes, `$HOME` in shell examples when useful.
