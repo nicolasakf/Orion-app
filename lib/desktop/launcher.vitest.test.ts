@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   chooseDesktopJupyterMode,
+  createBundledPythonEnvironment,
   createBundledDesktopJupyterHandoff,
   normalizeDesktopDevUrl,
   requiresPackagedAppRuntime,
@@ -19,6 +20,13 @@ const baseOptions = {
 };
 
 describe("desktop launcher policy", () => {
+  it("prevents bundled Python from modifying the signed application bundle", () => {
+    expect(createBundledPythonEnvironment({ PATH: "/usr/bin" })).toEqual({
+      PATH: "/usr/bin",
+      PYTHONDONTWRITEBYTECODE: "1",
+    });
+  });
+
   it("defaults to bundled Python when no saved existing preference is ready", () => {
     expect(chooseDesktopJupyterMode(baseOptions, false)).toBe("bundled");
   });

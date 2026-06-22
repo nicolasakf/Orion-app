@@ -162,6 +162,8 @@ jobs:
 
       - name: Package macOS app
         if: matrix.builder == 'mac'
+        env:
+          ORION_ADHOC_MAC_SIGNING: "1"
         run: npx electron-builder --mac dmg zip --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false
 
       - name: Package Windows app

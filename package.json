@@ -45,6 +45,7 @@
     "prepack": "npm run build && npm run build:cli && npm run prepare:app-bundle && npm run archive:app-bundle",
     "prepack:desktop": "npm run build && npm run build:cli && npm run build:desktop-main && npm run prepare:app-bundle && npm run prepare:desktop-runtime",
     "dist:desktop:mac": "npm run prepack:desktop && electron-builder --mac dmg zip",
+    "dist:desktop:mac:adhoc": "npm run prepack:desktop && ORION_ADHOC_MAC_SIGNING=1 electron-builder --mac dmg zip --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false",
     "dist:desktop:win": "npm run prepack:desktop && electron-builder --win nsis",
     "postinstall": "node scripts/postinstall.mjs",
     "package:npm": "npm pack --dry-run"
@@ -186,6 +187,7 @@
         "url": "https://github.com/nicolasakf/Orion-app/releases/latest/download"
       }
     ],
+    "afterPack": "scripts/sign-mac-adhoc.cjs",
     "afterSign": "scripts/notarize-mac.cjs",
     "files": [
       "desktop/electron-main.cjs",

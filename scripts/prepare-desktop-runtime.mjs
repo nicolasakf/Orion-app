@@ -139,7 +139,7 @@ async function prepareNode(asset) {
   const extracted = await findExtractedRoot(extractDir, "node");
   const destination = join(runtimeDir, "node");
   await rm(destination, { recursive: true, force: true });
-  await cp(extracted, destination, { recursive: true });
+  await cp(extracted, destination, { recursive: true, verbatimSymlinks: true });
   await rm(extractDir, { recursive: true, force: true });
   return destination;
 }
@@ -152,7 +152,7 @@ async function preparePython(asset) {
   const extracted = await findExtractedRoot(extractDir, "python");
   const destination = join(runtimeDir, "python");
   await rm(destination, { recursive: true, force: true });
-  await cp(extracted, destination, { recursive: true });
+  await cp(extracted, destination, { recursive: true, verbatimSymlinks: true });
   await normalizePythonLauncherLinks(destination);
   await rm(extractDir, { recursive: true, force: true });
   return destination;
@@ -231,6 +231,7 @@ async function main() {
     await rm(runtimeDir, { recursive: true, force: true });
     await cp(resolve(process.env.ORION_DESKTOP_RUNTIME_SOURCE_DIR), runtimeDir, {
       recursive: true,
+      verbatimSymlinks: true,
     });
     return;
   }

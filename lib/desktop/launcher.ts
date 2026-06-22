@@ -101,6 +101,16 @@ export function createBundledDesktopJupyterHandoff(
   };
 }
 
+/** Prevents bundled Python from writing bytecode into the signed application bundle. */
+export function createBundledPythonEnvironment(
+  env: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    PYTHONDONTWRITEBYTECODE: "1",
+  };
+}
+
 /** Normalizes and validates a local development URL for the Electron shell. */
 export function normalizeDesktopDevUrl(devUrl: string | undefined): string | null {
   if (!devUrl) {
@@ -146,7 +156,13 @@ export async function startBundledDesktopJupyter(
     );
   }
 
-  const server = await startJupyterServer(paths.pythonExecutable, [], jupyterRoot);
+  const server = await startJupyterServer(
+    paths.pythonExecutable,
+    [],
+    jupyterRoot,
+    90_000,
+    createBundledPythonEnvironment()
+  );
   const capabilities = await checkJupyterCapabilities(server.baseUrl, server.token);
   if (!capabilities.ok) {
     server.dispose();

@@ -221,7 +221,8 @@ export async function startJupyterServer(
   pythonCommand: string,
   pythonArgsPrefix: string[] = [],
   cwd = resolveDefaultJupyterRootDirectory(),
-  readyTimeoutMs = 90_000
+  readyTimeoutMs = 90_000,
+  env: NodeJS.ProcessEnv = process.env
 ): Promise<StartedJupyterServer> {
   const port = await findFreePort();
   const token = randomBytes(24).toString("hex");
@@ -241,7 +242,7 @@ export async function startJupyterServer(
   const proc = spawn(pythonCommand, args, {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
-    env: process.env,
+    env,
     windowsHide: true,
   });
 
