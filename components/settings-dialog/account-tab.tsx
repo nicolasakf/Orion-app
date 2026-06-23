@@ -8,7 +8,6 @@ import { RoleCombobox } from "@/components/settings-dialog/role-combobox";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
 import { createOrionCloudSupabaseClient } from "@/lib/cloud/supabase-client";
 
 interface AccountTabProps {
@@ -22,9 +21,6 @@ export function AccountTab({ onClose, onSignedOut }: AccountTabProps) {
   const [firstName, setFirstName] = React.useState("");
   const [lastName, setLastName] = React.useState("");
   const [role, setRole] = React.useState("");
-  const [oldPassword, setOldPassword] = React.useState("");
-  const [newPassword, setNewPassword] = React.useState("");
-  const [confirmPassword, setConfirmPassword] = React.useState("");
   const [isLoading, setIsLoading] = React.useState(true);
   const [isSaving, setIsSaving] = React.useState(false);
   const debouncedSave = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -156,60 +152,6 @@ export function AccountTab({ onClose, onSignedOut }: AccountTabProps) {
     onClose?.();
   }, [onClose, onSignedOut, supabase]);
 
-  /** Changes the password after verifying the user's current password. */
-  const handleChangePassword = React.useCallback(
-    async (event: React.FormEvent) => {
-      event.preventDefault();
-      if (!supabase) {
-        toast.error("Orion Cloud is not configured for this local app.");
-        return;
-      }
-      if (!oldPassword.trim()) {
-        toast.error("Please enter your current password");
-        return;
-      }
-      if (newPassword !== confirmPassword) {
-        toast.error("New passwords do not match");
-        return;
-      }
-      if (newPassword.length < 6) {
-        toast.error("Password must be at least 6 characters");
-        return;
-      }
-
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user?.email) {
-        toast.error("Unable to verify identity");
-        return;
-      }
-
-      const { error: signInError } = await supabase.auth.signInWithPassword({
-        email: user.email,
-        password: oldPassword,
-      });
-      if (signInError) {
-        toast.error("Current password is incorrect");
-        return;
-      }
-
-      const { error } = await supabase.auth.updateUser({
-        password: newPassword,
-      });
-      if (error) {
-        toast.error(error.message);
-        return;
-      }
-
-      toast.success("Password updated successfully");
-      setOldPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-    },
-    [confirmPassword, newPassword, oldPassword, supabase],
-  );
-
   if (isLoading) {
     return (
       <div className="flex flex-col gap-8 p-6">
@@ -262,45 +204,6 @@ export function AccountTab({ onClose, onSignedOut }: AccountTabProps) {
           <LogOut className="mr-2 h-4 w-4" />
           Sign out
         </Button>
-      </div>
-
-      <Separator />
-
-      <div className="space-y-6">
-        <h2 className="text-lg font-semibold">Change password</h2>
-        <form onSubmit={handleChangePassword} className="max-w-md space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="oldPassword">Old password</Label>
-            <Input
-              id="oldPassword"
-              type="password"
-              value={oldPassword}
-              onChange={(event) => setOldPassword(event.target.value)}
-              placeholder="Enter your current password"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="newPassword">New password</Label>
-            <Input
-              id="newPassword"
-              type="password"
-              value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
-              placeholder="Enter your new password"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="confirmPassword">Confirm new password</Label>
-            <Input
-              id="confirmPassword"
-              type="password"
-              value={confirmPassword}
-              onChange={(event) => setConfirmPassword(event.target.value)}
-              placeholder="Confirm your new password"
-            />
-          </div>
-          <Button type="submit">Update password</Button>
-        </form>
       </div>
     </div>
   );
