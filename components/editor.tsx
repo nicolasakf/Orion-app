@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { EmptyEditorCard } from "@/components/empty-editor-card";
+import { EditorLargeFileWarningCard } from "@/components/editor-large-file-warning-card";
 import { WelcomeInstructionsCard } from "@/components/welcome-instructions-card";
 import {
   Dialog,
@@ -15,6 +16,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { resolveOrionEditorDefinition } from "@/components/editors/editor-definitions";
 import { useTextFileModel } from "@/components/editors/use-text-file-model";
+import { LARGE_FILE_WARNING_THRESHOLD_BYTES } from "@/lib/editor/large-file-warning";
+import { isUserSettingsEditorPath } from "@/lib/settings/user-settings-editor-path";
 import type { KernelStatus, KernelInfo, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type {
@@ -63,6 +66,10 @@ interface EditorProps {
    * Called when opening a file fails so the parent can restore the previous selection.
    */
   onFileLoadError?: (failedFilepath: string) => boolean | void;
+  /**
+   * Called when the user cancels an editor open before the file content loads.
+   */
+  onFileOpenCancel?: (filepath: string) => void;
   /** True when a workspace folder is selected in the Files panel (not merely connected). */
   hasWorkspace?: boolean;
   hasServerConnection?: boolean;
@@ -106,6 +113,7 @@ export function Editor({
   onTextSaveHandlerChange,
   onNotebookSaveHandlerChange,
   onFileLoadError,
+  onFileOpenCancel,
   hasWorkspace = false,
   hasServerConnection = false,
   onConnectServer,
@@ -122,15 +130,123 @@ export function Editor({
   });
   const isTextBackedEditor =
     activeEditor?.id === "text" || activeEditor?.id === "markdown";
+  const [confirmedLargeFileKeys, setConfirmedLargeFileKeys] = useState<
+    Set<string>
+  >(() => new Set());
+  const [largeFileWarning, setLargeFileWarning] = useState<{
+    filepath: string;
+    sizeBytes: number;
+  } | null>(null);
+  const [clearedLargeFileKeys, setClearedLargeFileKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const activeFileKey = filepath
+    ? `${filepath}\u0000${openNotebookAsText ? "text" : "native"}`
+    : null;
+  const shouldCheckFileSize =
+    !!filepath &&
+    !!activeEditor &&
+    !!kernelService &&
+    !isUserSettingsEditorPath(filepath) &&
+    (activeFileKey ? !confirmedLargeFileKeys.has(activeFileKey) : false);
+  const shouldBlockEditorForLargeFile =
+    !!filepath && largeFileWarning?.filepath === filepath;
+  const isWaitingForFileSizeCheck =
+    shouldCheckFileSize &&
+    !!activeFileKey &&
+    !clearedLargeFileKeys.has(activeFileKey) &&
+    !shouldBlockEditorForLargeFile;
+  const shouldGateEditorForFileSize =
+    shouldBlockEditorForLargeFile || isWaitingForFileSizeCheck;
 
   const textFileModel = useTextFileModel({
-    filepath: isTextBackedEditor ? filepath : null,
+    filepath:
+      isTextBackedEditor && !shouldGateEditorForFileSize ? filepath : null,
     openNotebookAsText,
     kernelService,
     onUnsavedChangesChange,
     onFileLoadError,
   });
   const saveTextFile = textFileModel.saveFile;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!shouldCheckFileSize || !filepath || !kernelService) {
+      setLargeFileWarning((current) =>
+        current?.filepath === filepath ? current : null,
+      );
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const checkFileSize = async () => {
+      try {
+        const contentsManager = kernelService.getContentsManager();
+        const model = await contentsManager.get(filepath, { content: false });
+        if (cancelled) return;
+
+        const size =
+          typeof model.size === "number" && Number.isFinite(model.size)
+            ? model.size
+            : null;
+        if (size !== null && size >= LARGE_FILE_WARNING_THRESHOLD_BYTES) {
+          setLargeFileWarning({ filepath, sizeBytes: size });
+          return;
+        }
+        if (activeFileKey) {
+          setClearedLargeFileKeys((current) => {
+            const next = new Set(current);
+            next.add(activeFileKey);
+            return next;
+          });
+        }
+        setLargeFileWarning((current) =>
+          current?.filepath === filepath ? null : current,
+        );
+      } catch (error) {
+        console.warn("Failed to check file size before opening editor:", error);
+        if (!cancelled) {
+          if (activeFileKey) {
+            setClearedLargeFileKeys((current) => {
+              const next = new Set(current);
+              next.add(activeFileKey);
+              return next;
+            });
+          }
+          setLargeFileWarning((current) =>
+            current?.filepath === filepath ? null : current,
+          );
+        }
+      }
+    };
+
+    void checkFileSize();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeFileKey, filepath, kernelService, shouldCheckFileSize]);
+
+  /** Confirms that this large file should be loaded into the editor. */
+  const handleOpenLargeFileAnyway = () => {
+    if (!activeFileKey) return;
+    setConfirmedLargeFileKeys((current) => {
+      const next = new Set(current);
+      next.add(activeFileKey);
+      return next;
+    });
+    setLargeFileWarning(null);
+  };
+
+  /** Cancels opening the selected large file before loading content. */
+  const handleCancelLargeFileOpen = () => {
+    if (filepath) {
+      onFileOpenCancel?.(filepath);
+    }
+    setLargeFileWarning(null);
+  };
 
   useEffect(() => {
     onTextSnapshotGetterChange?.(
@@ -179,7 +295,18 @@ export function Editor({
 
   const ActiveEditor = activeEditor?.Editor;
   const editorContent =
-    filepath && ActiveEditor ? (
+    filepath && shouldBlockEditorForLargeFile && largeFileWarning ? (
+      <EditorLargeFileWarningCard
+        filepath={largeFileWarning.filepath}
+        sizeBytes={largeFileWarning.sizeBytes}
+        onOpenAnyway={handleOpenLargeFileAnyway}
+        onCancel={handleCancelLargeFileOpen}
+      />
+    ) : filepath && isWaitingForFileSizeCheck ? (
+      <div className="flex min-h-0 flex-1 items-center justify-center bg-sidebar p-4 text-sm text-muted-foreground">
+        Checking file size...
+      </div>
+    ) : filepath && ActiveEditor ? (
       <ActiveEditor
         filepath={filepath}
         openNotebookAsText={openNotebookAsText}
