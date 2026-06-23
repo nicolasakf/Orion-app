@@ -48,6 +48,11 @@ import {
   getStoredKernelConnections,
   removeKernelConnection,
 } from "@/lib/kernel/kernel-storage";
+import {
+  buildKernelConnectionUrl,
+  getKernelConnectionSearchTerms,
+  isOrionManagedConnectionLabel,
+} from "@/lib/kernel/connection-url";
 import { cn } from "@/lib/utils";
 
 interface KernelSpec {
@@ -183,8 +188,13 @@ export function KernelConnectionDialog({
       // Auto-populate with most recent connection if available
       if (connections.length > 0) {
         const mostRecent = connections[0];
-        setUrl(mostRecent.baseUrl);
-        setToken(mostRecent.token || "");
+        setUrl(
+          buildKernelConnectionUrl(
+            mostRecent.baseUrl,
+            mostRecent.token || undefined,
+          ),
+        );
+        setToken("");
       }
     }
   }, [open]);
@@ -237,13 +247,13 @@ export function KernelConnectionDialog({
             <Label htmlFor="jupyter-url" className="text-xs">
               Server URL
             </Label>
-            <div className="flex">
+            <div className="flex w-full overflow-hidden rounded-md border border-input bg-background shadow-sm focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 focus-within:ring-offset-background">
               <Input
                 id="jupyter-url"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder="http://127.0.0.1:8888"
-                className="rounded-r-none border-r-0 h-9 text-sm focus-visible:ring-0 focus-visible:ring-offset-0"
+                className="min-w-0 flex-1 rounded-none border-0 h-9 text-sm shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleConnect();
                 }}
@@ -255,14 +265,16 @@ export function KernelConnectionDialog({
               >
                 <PopoverTrigger asChild>
                   <Button
-                    variant="outline"
+                    type="button"
+                    variant="ghost"
                     size="sm"
-                    className="rounded-l-none border-l-0 px-2.5 shrink-0 h-9"
+                    aria-label="Saved connections"
+                    className="h-9 shrink-0 rounded-none border-0 px-2.5 shadow-none hover:bg-transparent"
                   >
                     <ChevronDown className="h-3.5 w-3.5" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-72 p-0" align="end">
+                <PopoverContent className="w-80 p-0" align="end">
                   <Command>
                     <CommandInput placeholder="Saved connections..." className="h-8" />
                     <CommandEmpty>
@@ -272,32 +284,54 @@ export function KernelConnectionDialog({
                     </CommandEmpty>
                     <CommandList className="max-h-48">
                       <CommandGroup>
-                        {storedConnections.map((connection) => (
-                          <CommandItem
-                            key={connection.id}
-                            value={connection.displayName || connection.baseUrl}
-                            onSelect={() => {
-                              setUrl(connection.baseUrl);
-                              setToken(connection.token || "");
-                              setUrlDropdownOpen(false);
-                            }}
-                            className="flex items-center justify-between gap-2 py-1.5"
-                          >
-                            <span className="truncate text-sm">
-                              {connection.displayName || connection.baseUrl}
-                            </span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-6 w-6 p-0 shrink-0 opacity-60 hover:opacity-100"
-                              onClick={(e) =>
-                                handleDeleteConnection(connection.id, e)
-                              }
+                        {storedConnections.map((connection) => {
+                          const fullUrl = buildKernelConnectionUrl(
+                            connection.baseUrl,
+                            connection.token || undefined,
+                          );
+                          const managedLabel = isOrionManagedConnectionLabel(
+                            connection.displayName,
+                          )
+                            ? connection.displayName
+                            : undefined;
+
+                          return (
+                            <CommandItem
+                              key={connection.id}
+                              value={connection.id}
+                              keywords={getKernelConnectionSearchTerms(
+                                connection.baseUrl,
+                                connection.token || undefined,
+                                connection.displayName,
+                              )}
+                              onSelect={() => {
+                                setUrl(fullUrl);
+                                setToken("");
+                                setUrlDropdownOpen(false);
+                              }}
+                              className="flex items-center justify-between gap-2 py-2"
                             >
-                              <X className="h-3 w-3" />
-                            </Button>
-                          </CommandItem>
-                        ))}
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-sm">{fullUrl}</div>
+                                {managedLabel ? (
+                                  <div className="truncate text-xs text-muted-foreground">
+                                    {managedLabel}
+                                  </div>
+                                ) : null}
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 w-6 p-0 shrink-0 opacity-60 hover:opacity-100"
+                                onClick={(e) =>
+                                  handleDeleteConnection(connection.id, e)
+                                }
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </CommandItem>
+                          );
+                        })}
                       </CommandGroup>
                     </CommandList>
                   </Command>
