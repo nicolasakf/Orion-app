@@ -4,6 +4,18 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.1] - 2026-06-23
+
+### Fixed
+
+- Desktop: return install state from the in-app updater, enable quit-time update install on macOS, and surface download/restart errors in the UI
+
+### Changed
+
+- CI: publish macOS Intel desktop releases independently from Apple Silicon builds
+
+[0.11.1]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.11.1
+
 ## [0.11.0] - 2026-06-23
 
 ### Added
