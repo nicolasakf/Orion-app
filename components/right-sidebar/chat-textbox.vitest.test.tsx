@@ -190,7 +190,7 @@ describe("ChatTextbox generation state", () => {
     const { rerender } = render(<ChatTextbox {...props} />);
 
     expect(
-      screen.getByPlaceholderText("Queue a message · Enter to add")
+      screen.getByPlaceholderText("Queue a message")
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Stop generation" }));
