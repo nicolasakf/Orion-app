@@ -1345,6 +1345,41 @@ def run_package_uninstall() -> None:
         print("No orion-notebook package installation found to remove.")
 
 
+def print_usage() -> None:
+    """Print top-level Orion CLI usage for pip/uv installs."""
+    print(
+        """Usage: orion [--yes] [--no-browser] [--here] [--app-only]
+       orion doctor [--json] [--setup]
+       orion update
+       orion uninstall [--yes] [--all]
+
+Starts a local Orion app, starts Jupyter Server, and opens Orion already connected.
+
+Commands:
+  (default)      Start Orion locally (options below apply to this command).
+  doctor         Diagnose install, app bundle, Python/Jupyter, and network state.
+  update         Install the latest Orion release and exit.
+  uninstall      Remove cached Orion data under ~/.orion before package uninstall.
+
+Options (default command):
+  -V, --version  Print the Orion CLI version and exit.
+  -y, --yes      Approve Orion-managed setup prompts.
+  --no-browser   Start services without opening a browser.
+  --here         Start Jupyter from the current directory instead of ~.
+  --app-only     Start only the Orion app (skip Jupyter). Connect to an existing
+                 Jupyter server from the UI, or use a prior handoff file."""
+    )
+
+
+def print_update_usage() -> None:
+    """Print usage for the Orion update subcommand."""
+    print(
+        """Usage: orion update
+
+Install the latest Orion release from PyPI (or uv tool) and exit."""
+    )
+
+
 def uninstall_main(argv: list[str]) -> None:
     """Run the Orion uninstall subcommand."""
     parser = argparse.ArgumentParser(description="Remove Orion-managed cache data.")
@@ -1470,10 +1505,16 @@ def main() -> None:
         doctor_main(argv[1:])
         return
     if argv and argv[0] == "update":
+        if "--help" in argv[1:] or "-h" in argv[1:]:
+            print_update_usage()
+            return
         try:
             run_update_command()
         except Exception as error:
             raise SystemExit(f"Orion update failed: {error}") from error
+        return
+    if "--help" in argv or "-h" in argv:
+        print_usage()
         return
     start_main(argv)
 

@@ -1,7 +1,9 @@
 import { NextRequest } from "next/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { buildInstallCommand, GET, POST } from "./route";
+import { buildInstallCommand } from "@/lib/update/install-command.server";
+
+import { GET, POST } from "./route";
 
 describe("CLI update API", () => {
   beforeEach(() => {

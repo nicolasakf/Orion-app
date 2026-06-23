@@ -63,20 +63,21 @@ function printUsage(): void {
 
 Starts a local Orion app, starts Jupyter Server, and opens Orion already connected.
 
-Options:
+Commands:
+  (default)      Start Orion locally (options below apply to this command).
+  config         Show or change Orion CLI settings under ~/.orion/runtime.
+  doctor         Diagnose install, app bundle, Python/Jupyter, and network state.
+  update         Install the latest Orion release and exit.
+  uninstall      Remove cached Orion data under ~/.orion before package uninstall.
+
+Options (default command):
   -V, --version  Print the Orion CLI version and exit.
   -y, --yes       Approve Orion-managed setup prompts.
   --no-browser   Start services without opening a browser.
   --here         Start Jupyter from the current directory instead of ~.
   --app-only     Start only the Orion app (skip Jupyter). Connect to an existing
                  Jupyter server from the UI, or use a prior handoff file.
-  --pick-python  Ignore the saved Python preference and show the selection menu.
-
-Commands:
-  config         Show or change Orion CLI settings under ~/.orion/runtime.
-  doctor         Diagnose install, app bundle, Python/Jupyter, and network state.
-  update         Install the latest Orion release and exit.
-  uninstall      Remove cached Orion data under ~/.orion before package uninstall.`);
+  --pick-python  Ignore the saved Python preference and show the selection menu.`);
 }
 
 /** Removes Orion-managed cache data under ~/.orion. */
@@ -207,6 +208,12 @@ async function main(): Promise<void> {
   }
 
   if (command === "update") {
+    if (argv.slice(1).includes("--help") || argv.slice(1).includes("-h")) {
+      console.log(`Usage: orion update
+
+Install the latest Orion release from npm and exit.`);
+      return;
+    }
     await runNpmUpdateCommand(readPackageVersion());
     return;
   }
