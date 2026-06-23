@@ -1,8 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { checkForUpdates } = vi.hoisted(() => ({
-  checkForUpdates: vi.fn(),
-}));
+const { autoUpdaterMock, checkForUpdates, updateHandlers } = vi.hoisted(() => {
+  type UpdateHandler = (...args: unknown[]) => void;
+  const updateHandlers = new Map<string, UpdateHandler>();
+  const checkForUpdates = vi.fn();
+  const autoUpdaterMock = {
+    autoDownload: true,
+    autoInstallOnAppQuit: false,
+    setFeedURL: vi.fn(),
+    checkForUpdates,
+    downloadUpdate: vi.fn(),
+    quitAndInstall: vi.fn(),
+    on: vi.fn((event: string, handler: UpdateHandler) => {
+      updateHandlers.set(event, handler);
+    }),
+  };
+
+  return { autoUpdaterMock, checkForUpdates, updateHandlers };
+});
 
 vi.mock("electron", () => ({
   app: {
@@ -12,21 +27,14 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("electron-updater", () => ({
-  autoUpdater: {
-    autoDownload: false,
-    autoInstallOnAppQuit: false,
-    setFeedURL: vi.fn(),
-    checkForUpdates,
-    downloadUpdate: vi.fn(),
-    quitAndInstall: vi.fn(),
-    on: vi.fn(),
-  },
+  autoUpdater: autoUpdaterMock,
 }));
 
 import {
   checkForDesktopUpdates,
   configureDesktopAutoUpdates,
   DAILY_UPDATE_CHECK_INTERVAL_MS,
+  restartAndInstallDesktopUpdate,
   resolveDesktopUpdateChannel,
   shouldCheckForDesktopUpdates,
   stopDesktopAutoUpdateSchedule,
@@ -35,6 +43,10 @@ import {
 describe("desktop updater policy", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    autoUpdaterMock.autoDownload = true;
+    autoUpdaterMock.autoInstallOnAppQuit = false;
+    autoUpdaterMock.quitAndInstall.mockClear();
+    updateHandlers.clear();
     checkForUpdates.mockReset();
     checkForUpdates.mockResolvedValue({ isUpdateAvailable: false });
   });
@@ -61,6 +73,8 @@ describe("desktop updater policy", () => {
 
   it("checks once on startup and again every 24 hours", async () => {
     configureDesktopAutoUpdates();
+    expect(autoUpdaterMock.autoDownload).toBe(false);
+    expect(autoUpdaterMock.autoInstallOnAppQuit).toBe(true);
     expect(checkForUpdates).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(4_000);
@@ -68,6 +82,12 @@ describe("desktop updater policy", () => {
 
     await vi.advanceTimersByTimeAsync(DAILY_UPDATE_CHECK_INTERVAL_MS);
     expect(checkForUpdates).toHaveBeenCalledTimes(2);
+
+    updateHandlers.get("update-downloaded")?.({ version: "0.11.0" });
+    expect(restartAndInstallDesktopUpdate()).toEqual(
+      expect.objectContaining({ status: "installing", latestVersion: "0.11.0" })
+    );
+    expect(autoUpdaterMock.quitAndInstall).toHaveBeenCalledWith(false, true);
   });
 
   it("publishes an up-to-date state when no update exists", async () => {

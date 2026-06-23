@@ -4,7 +4,7 @@ interface OrionDesktopUpdaterBridge {
   getState: () => Promise<OrionUpdateState>;
   check: () => Promise<OrionUpdateState>;
   download: () => Promise<OrionUpdateState>;
-  restartAndInstall: () => Promise<void>;
+  restartAndInstall: () => Promise<OrionUpdateState>;
   onStateChange: (listener: (state: OrionUpdateState) => void) => () => void;
   onManualCheck: (listener: () => void) => () => void;
 }

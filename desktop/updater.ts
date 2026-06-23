@@ -97,8 +97,21 @@ export async function downloadDesktopUpdate(): Promise<OrionUpdateState> {
 }
 
 /** Restarts Orion and installs a previously downloaded update. */
-export function restartAndInstallDesktopUpdate(): void {
-  if (state.status === "downloaded") autoUpdater.quitAndInstall(false, true);
+export function restartAndInstallDesktopUpdate(): OrionUpdateState {
+  if (state.status !== "downloaded") {
+    return setState({
+      status: "error",
+      error: "No downloaded Orion update is ready to install.",
+    });
+  }
+
+  setState({ status: "installing", error: undefined });
+  try {
+    autoUpdater.quitAndInstall(false, true);
+  } catch (error) {
+    setState({ status: "error", error: error instanceof Error ? error.message : String(error) });
+  }
+  return state;
 }
 
 /** Stops the daily background update check schedule. */
@@ -114,7 +127,9 @@ export function configureDesktopAutoUpdates(): void {
   setState({ supported: true, status: "idle" });
 
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = false;
+  // Downloads are still user-initiated; this lets a downloaded update stage correctly on macOS
+  // and finish if the user quits Orion after choosing to update.
+  autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.setFeedURL({
     provider: "generic",
     url: process.env.ORION_DESKTOP_UPDATE_URL ?? DEFAULT_UPDATE_URL,

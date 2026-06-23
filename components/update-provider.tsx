@@ -61,9 +61,14 @@ export function UpdateProvider({ children }: { children: React.ReactNode }) {
     try {
       if (bridge) {
         if (current.status === "downloaded") {
-          await bridge.restartAndInstall();
+          const nextState = await bridge.restartAndInstall();
+          setState(nextState);
+          if (nextState.status === "error") {
+            throw new Error(nextState.error ?? "Update restart failed.");
+          }
         } else {
           const nextState = await bridge.download();
+          setState(nextState);
           if (nextState.status === "error") {
             throw new Error(nextState.error ?? "Update download failed.");
           }
