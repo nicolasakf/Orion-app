@@ -9,9 +9,14 @@ interface OrionDesktopUpdaterBridge {
   onManualCheck: (listener: () => void) => () => void;
 }
 
+interface OrionDesktopShellBridge {
+  setWindowBackgroundColor: (color: string) => Promise<void>;
+}
+
 declare global {
   interface Window {
     orionDesktopUpdater?: OrionDesktopUpdaterBridge;
+    orionDesktopShell?: OrionDesktopShellBridge;
   }
 }
 

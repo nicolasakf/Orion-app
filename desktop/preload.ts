@@ -18,3 +18,8 @@ contextBridge.exposeInMainWorld("orionDesktopUpdater", {
     return () => ipcRenderer.removeListener("orion:update:manual-check", handler);
   },
 });
+
+contextBridge.exposeInMainWorld("orionDesktopShell", {
+  setWindowBackgroundColor: (color: string): Promise<void> =>
+    ipcRenderer.invoke("orion:shell:set-background-color", color),
+});

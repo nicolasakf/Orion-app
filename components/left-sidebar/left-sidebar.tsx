@@ -41,7 +41,7 @@ import { NoKernelPrompt } from "@/components/common/no-kernel-prompt";
 import { ToolbarButton } from "@/components/common/toolbar-button";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import { useJupyterShellReady } from "@/hooks/use-jupyter-shell-ready";
-import { usePlatformOs } from "@/hooks/use-platform";
+import { useIsDesktopApp, usePlatformOs } from "@/hooks/use-platform";
 import { Separator } from "@/components/ui/separator";
 import type { NotebookMinimapSection } from "@/components/notebook/notebook-minimap";
 import {
@@ -394,6 +394,9 @@ export function LeftSidebar({
    * Derived from browser platform detection.
    */
   const platformOs = usePlatformOs();
+  const isDesktopApp = useIsDesktopApp();
+  const shouldStackBelowMacWindowControls =
+    isDesktopApp && platformOs === "macos";
   const revealLabel =
     platformOs === "macos"
       ? "Reveal in Finder"
@@ -750,7 +753,18 @@ export function LeftSidebar({
       {...props}
     >
       {!mobileFilesOnly && (
-        <div className="sticky top-0 z-30 flex h-14 w-full min-w-0 shrink-0 items-center gap-1 bg-sidebar px-2">
+        <div
+          className={cn(
+            "sticky top-0 z-30 flex h-14 w-full min-w-0 shrink-0 items-center gap-1 bg-sidebar px-2",
+            shouldStackBelowMacWindowControls && "h-20 items-end pb-2"
+          )}
+        >
+          {shouldStackBelowMacWindowControls && (
+            <div
+              aria-hidden="true"
+              className="electron-window-drag absolute left-24 right-2 top-0 h-10"
+            />
+          )}
           {SIDEBAR_TAB_VIEWS.map((view) => (
             <ToolbarButton
               key={view.id}

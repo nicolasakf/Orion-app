@@ -19,6 +19,11 @@ import {
 let session: DesktopSession | null = null;
 let mainWindow: BrowserWindow | null = null;
 
+/** Returns true for the six-digit hex colors Orion sends from the renderer. */
+function isHexWindowBackgroundColor(color: unknown): color is string {
+  return typeof color === "string" && /^#[0-9a-fA-F]{6}$/.test(color);
+}
+
 /** Returns the dev server URL for local `npx electron .` runs, or an explicit packaged override. */
 function resolveDesktopDevUrl(): string | undefined {
   if (process.env.ORION_DESKTOP_DEV_URL) {
@@ -35,6 +40,8 @@ async function createWindow(url: string): Promise<void> {
     minWidth: 960,
     minHeight: 640,
     title: "Orion",
+    backgroundColor: "#131316",
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const } : {}),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -44,6 +51,16 @@ async function createWindow(url: string): Promise<void> {
   });
 
   await mainWindow.loadURL(url);
+}
+
+/** Registers shell appearance controls exposed by the sandboxed preload. */
+function setupShellIpc(): void {
+  ipcMain.handle("orion:shell:set-background-color", (_event, color: unknown) => {
+    if (!isHexWindowBackgroundColor(color)) {
+      throw new Error("Invalid Electron window background color.");
+    }
+    mainWindow?.setBackgroundColor(color);
+  });
 }
 
 /** Registers the narrow updater IPC surface exposed by the sandboxed preload. */
@@ -116,6 +133,7 @@ if (!gotSingleInstanceLock) {
 }
 
 app.whenReady().then(() => {
+  setupShellIpc();
   setupUpdaterIpc();
   void boot().catch((error) => {
     reportStartupError(error);

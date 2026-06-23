@@ -34,6 +34,19 @@ export function useIsMac() {
 }
 
 /**
+ * Returns true when Orion is running in the Electron desktop shell.
+ */
+export function useIsDesktopApp(): boolean {
+  const [isDesktopApp, setIsDesktopApp] = useState(false);
+
+  useEffect(() => {
+    setIsDesktopApp(Boolean(window.orionDesktopUpdater));
+  }, []);
+
+  return isDesktopApp;
+}
+
+/**
  * Returns the browser-detected OS family.
  * Useful for client-side UI decisions that vary by platform.
  */
