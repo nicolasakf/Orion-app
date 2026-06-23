@@ -85,11 +85,6 @@ jobs:
             arch: arm64
             builder: mac
             updateChannel: latest-arm64
-          - os: macos-15-intel
-            target: darwin-x64
-            arch: x64
-            builder: mac
-            updateChannel: latest-x64
           - os: windows-latest
             target: win32-x64
             arch: x64
@@ -203,6 +198,98 @@ jobs:
           path: dist/release-assets/*
           if-no-files-found: error
 
+  desktop-intel:
+    needs:
+      - release-info
+      - app-bundle
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      NEXT_TELEMETRY_DISABLED: "1"
+      NODE_OPTIONS: "--max-old-space-size=6144"
+      ORION_DESKTOP_TARGET: darwin-x64
+      ORION_HOME_DIR: ${{ github.workspace }}/.orion-desktop-home
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Node dependencies
+        run: npm ci --legacy-peer-deps
+
+      - name: Build orion-ui wheel
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+        working-directory: python/orion-ui
+
+      - name: Download app bundle artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-bundle
+          path: dist
+
+      - name: Extract app bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/orion-app
+          tar -xzf "dist/orion-app-${{ needs.release-info.outputs.version }}.tar.gz" -C dist/orion-app
+
+      - name: Cache desktop runtime downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            dist/desktop-runtime/downloads
+            ~/.cache/pip
+            ~/Library/Caches/pip
+          key: desktop-runtime-${{ runner.os }}-darwin-x64-${{ hashFiles('scripts/prepare-desktop-runtime.mjs', 'python/orion-ui/pyproject.toml', 'python/orion-ui/orion_ui/**') }}
+          restore-keys: |
+            desktop-runtime-${{ runner.os }}-darwin-x64-
+
+      - name: Prepare desktop package inputs
+        env:
+          APPDATA: ${{ github.workspace }}/.appdata
+          HOME: ${{ github.workspace }}
+          LOCALAPPDATA: ${{ github.workspace }}/.localappdata
+          USERPROFILE: ${{ github.workspace }}
+        run: npm run build:desktop-main && npm run prepare:desktop-runtime
+
+      - name: Package macOS app
+        env:
+          ORION_ADHOC_MAC_SIGNING: "1"
+        run: npx electron-builder --mac dmg zip --publish never -c.mac.identity=null -c.mac.hardenedRuntime=false
+
+      - name: Prepare macOS release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/release-assets
+          cp dist/electron/Orion-${{ needs.release-info.outputs.version }}-mac-x64.dmg dist/release-assets/
+          cp dist/electron/Orion-${{ needs.release-info.outputs.version }}-mac-x64.zip dist/release-assets/
+          cp dist/electron/latest-mac.yml dist/release-assets/latest-x64-mac.yml
+          find dist/electron -maxdepth 1 -type f -name "*.blockmap" -exec cp {} dist/release-assets/ \;
+          (cd dist/release-assets && shasum -a 256 * > SHA256SUMS-darwin-x64.txt)
+
+      - name: Upload desktop assets to release
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-darwin-x64
+          path: dist/release-assets/*
+          if-no-files-found: error
+
   publish-release:
     needs:
       - release-info
@@ -226,8 +313,6 @@ jobs:
             "orion-app-${version}.tar.gz"
             "Orion-${version}-mac-arm64.dmg"
             "Orion-${version}-mac-arm64.zip"
-            "Orion-${version}-mac-x64.dmg"
-            "Orion-${version}-mac-x64.zip"
             "Orion-Setup-${version}-win-x64.exe"
           )
           missing=()
@@ -252,6 +337,54 @@ jobs:
           set -euo pipefail
           tag="${{ needs.release-info.outputs.tag }}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
-            gh release create "$tag" --title "$tag" --notes "Desktop installers and app bundle for $tag."
+            gh release create "$tag" --title "$tag" --notes "Desktop installers and app bundle for $tag. macOS Intel builds are uploaded separately when ready."
           fi
+          gh release upload "$tag" dist/release-assets/* --clobber
+
+  publish-intel-release:
+    needs:
+      - release-info
+      - desktop-intel
+      - publish-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download Intel desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-darwin-x64
+          path: dist/release-assets
+
+      - name: Verify Intel release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.release-info.outputs.version }}"
+          required=(
+            "Orion-${version}-mac-x64.dmg"
+            "Orion-${version}-mac-x64.zip"
+            "latest-x64-mac.yml"
+            "SHA256SUMS-darwin-x64.txt"
+          )
+          missing=()
+          for name in "${required[@]}"; do
+            if [[ ! -f "dist/release-assets/${name}" ]]; then
+              missing+=("${name}")
+            fi
+          done
+          if ((${#missing[@]} > 0)); then
+            printf 'Missing required Intel release assets:\n' >&2
+            printf '  %s\n' "${missing[@]}" >&2
+            find dist/release-assets -maxdepth 1 -type f -print >&2
+            exit 1
+          fi
+
+      - name: Upload Intel assets to GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ needs.release-info.outputs.tag }}"
           gh release upload "$tag" dist/release-assets/* --clobber
