@@ -22,7 +22,7 @@ function readBuiltinSkills() {
 describe("built-in skills", () => {
   it("includes core Orion built-in skills", () => {
     expect(readBuiltinSkills().map((skill) => skill.name)).toEqual(
-      expect.arrayContaining(["create-app", "create-rule", "orion-settings", "chat-history"])
+      expect.arrayContaining(["create-app", "create-rule", "orion-settings", "chat-history", "deep-eda"])
     );
   });
 
@@ -32,5 +32,12 @@ describe("built-in skills", () => {
       expect(skill.description ?? "").not.toBe("");
       expect(skill.content.length).toBeGreaterThan(0);
     }
+  });
+
+  it("makes Matplotlib raster evidence the deep-EDA visualization default", () => {
+    const skill = readBuiltinSkills().find((candidate) => candidate.name === "deep-eda");
+    expect(skill?.content).toContain("matplotlib.pyplot as plt");
+    expect(skill?.content).toContain("Do not use Plotly");
+    expect(skill?.content).toContain("no PNG/JPEG plot");
   });
 });
