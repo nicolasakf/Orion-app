@@ -3,6 +3,7 @@ const nextConfig = {
   devIndicators: false,
   output: "standalone",
   outputFileTracingRoot: import.meta.dirname,
+  serverExternalPackages: ["better-sqlite3"],
   turbopack: {
     root: import.meta.dirname,
     rules: {

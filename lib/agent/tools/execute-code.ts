@@ -12,6 +12,7 @@ import type { KernelService } from "@/lib/kernel/kernel-service";
 import { stripAnsi } from "@/lib/shell/terminal-executor";
 import type { KernelSidecar } from "../kernel-sidecar";
 import type { ExecuteCodeParams } from "./types";
+import type { ExecutionToolResult } from "../deep-eda";
 
 export class ExecuteCodeTool extends BaseTool {
   private notebookManager: NotebookManager;
@@ -32,7 +33,7 @@ export class ExecuteCodeTool extends BaseTool {
    * @param params.timeoutSeconds - Maximum execution time (default: 60)
    * @returns Collected output text
    */
-  async execute(params: ExecuteCodeParams): Promise<string> {
+  async execute(params: ExecuteCodeParams): Promise<string | ExecutionToolResult> {
     const { code, timeoutSeconds } = params;
 
     if (!code || !code.trim()) {
@@ -62,13 +63,14 @@ export class ExecuteCodeTool extends BaseTool {
     const timeoutMs = timeoutSeconds * 1000;
 
     try {
-      const outputs = await this.executeCode(code, timeoutMs);
+      const result = await this.executeCode(code, timeoutMs);
 
-      if (outputs.length === 0) {
+      if (result.outputs.length === 0 && result.visuals.length === 0) {
         return "[No output generated]";
       }
 
-      return stripAnsi(outputs.join("\n"));
+      const text = stripAnsi(result.outputs.join("\n") || "[Raster output generated]");
+      return result.visuals.length > 0 ? { text, visuals: result.visuals } : text;
     } catch (error) {
       return `[ERROR] ${error instanceof Error ? error.message : String(error)}]`;
     }

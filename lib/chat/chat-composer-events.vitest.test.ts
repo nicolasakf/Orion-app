@@ -55,4 +55,23 @@ describe("dispatchInsertChatSkill", () => {
       message: "Build a dashboard",
     });
   });
+
+  it("includes newChat when requested", () => {
+    const events: Event[] = [];
+    const listener = (event: Event) => {
+      events.push(event);
+    };
+
+    window.addEventListener(INSERT_CHAT_SKILL_EVENT, listener);
+    try {
+      dispatchInsertChatSkill("orion-settings", undefined, { newChat: true });
+    } finally {
+      window.removeEventListener(INSERT_CHAT_SKILL_EVENT, listener);
+    }
+
+    expect(getInsertChatSkillDetail(events[0]!)).toEqual({
+      skillName: "orion-settings",
+      newChat: true,
+    });
+  });
 });

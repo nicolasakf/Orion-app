@@ -13,8 +13,20 @@ type SqlNamedParams = Record<string, null | number | bigint | string | NodeJS.Ar
 
 /** Loads DatabaseSync lazily so Node versions without node:sqlite can import this module. */
 function getDatabaseSyncClass(): typeof import("node:sqlite").DatabaseSync {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const nodeSqlite = require("node:sqlite") as typeof import("node:sqlite");
+  const getBuiltinModule = (
+    process as NodeJS.Process & {
+      getBuiltinModule?: (specifier: string) => unknown;
+    }
+  ).getBuiltinModule;
+  if (!getBuiltinModule) {
+    throw new Error("This Node.js runtime does not expose node:sqlite.");
+  }
+  const nodeSqlite = getBuiltinModule("node:sqlite") as
+    | typeof import("node:sqlite")
+    | undefined;
+  if (!nodeSqlite?.DatabaseSync) {
+    throw new Error("This Node.js runtime does not provide node:sqlite DatabaseSync.");
+  }
   return nodeSqlite.DatabaseSync;
 }
 

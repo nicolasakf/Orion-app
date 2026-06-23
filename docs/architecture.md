@@ -76,7 +76,7 @@ orion/
 │   ├── settings/
 │   │   ├── schema.ts             # Zod schema for settings and workspace overrides
 │   │   ├── defaults.ts
-│   │   └── user-storage.ts       # Client facade for local file settings + browser-only credentials
+│   │   └── user-storage.ts       # Client facade for settings + credential summaries
 │   └── credentials/
 │       └── chatgpt-oauth.ts      # ChatGPT OAuth device flow client
 │
@@ -94,13 +94,14 @@ A typical chat turn:
 Browser (RightSidebar)
   │
   │  POST /api/chat
-  │  { messages, provider, model, userCredential, agentContext }
+  │  { messages, provider, model, agentContext }
   │
   ▼
 app/api/chat/route.ts
   ├─ Validates model/provider against MODEL_CATALOG
   ├─ Rejects missing credential with a clear setup error
-  ├─ ModelGateway.create(userCredential) → provider model instance
+  ├─ Resolve credential from ~/.orion/credentials.json
+  ├─ ModelGateway.create(resolvedCredential) → provider model instance
   ├─ ContextManager injects notebook state, workspace, skills, subagents
   └─ streamText() → Server-Sent Events back to browser
 
@@ -132,7 +133,7 @@ Key invariant: **the server never executes tools**. `tool-schemas.ts` defines sc
 
 ## BYOK Credentials
 
-Three credential types are supported, all stored in browser-only storage:
+Three credential types are supported. Complete records are stored server-side in `~/.orion/credentials.json` (or under `ORION_HOME_DIR`) with owner-only permissions where supported:
 
 | Type | How to configure |
 |---|---|
@@ -140,7 +141,7 @@ Three credential types are supported, all stored in browser-only storage:
 | ChatGPT OAuth | Settings → Providers → Connect ChatGPT (device flow via `/api/credentials/oauth/`) |
 | Local endpoint | Settings → Providers → configure Ollama or LM Studio with a base URL and model ID |
 
-The selected credential is sent as `userCredential` in every `/api/chat` request. The server creates the provider model from that credential; no server-side API keys are used.
+The browser receives only safe configured-state summaries. Chat, compaction, title-generation, and sub-agent requests identify the `provider` and `model`; the local server resolves the credential and refreshes expiring ChatGPT OAuth tokens before creating the provider model.
 
 ## Local Storage
 
@@ -149,7 +150,7 @@ The selected credential is sent as `userCredential` in every `/api/chat` request
 | SQLite | Chat history, messages, compaction summaries, subagent sessions | `~/.orion/orion.db` via `lib/chat/chat-sqlite-storage.server.ts` |
 | JSON file | Non-secret user settings, pinned models, workspace prefs | `~/.orion/settings.json` via `lib/settings/user-file-storage.server.ts` |
 | Workspace JSON file | Workspace-level settings overrides | `<workspace>/.orion/settings.json` via Jupyter ContentsManager |
-| Browser-only storage | Provider credentials | `lib/settings/user-storage.ts` |
+| JSON file | Provider credentials | `~/.orion/credentials.json` via `lib/credentials/provider-credential-store.server.ts` |
 | `localStorage` | Last Jupyter kernel config | `lib/kernel/kernel-storage.ts` |
 
 The React app still calls client-side storage facades, but durable user reads/writes go through private Next API routes so only the local server process accesses `~/.orion`. Workspace settings are read through the connected Jupyter server and override user-level settings.
@@ -212,4 +213,4 @@ Compaction uses the same BYOK credential and model as the active chat session.
 
 All settings are defined in `lib/settings/schema.ts` as a Zod schema. The `useOrionSettings` hook provides typed read/write access to settings from any component. Settings are versioned (`SETTINGS_SCHEMA_VERSION`); migrations run in `lib/settings/migrations.ts`.
 
-User settings live in `~/.orion/settings.json`. Workspace settings overrides live in `<workspace>/.orion/settings.json` and override user settings. Provider credentials are merged into the in-memory settings object from browser-only storage; they are never written to settings files and are never sent to the server except as part of the `userCredential` field in `/api/chat` requests.
+User settings live in `~/.orion/settings.json`. Workspace settings overrides live in `<workspace>/.orion/settings.json` and override user settings. Provider credentials live in `~/.orion/credentials.json`; settings files, settings exports, workspace overrides, and settings backups must remain credential-free. Treat the credential file as sensitive: agents must not inspect, print, summarize, or expose it. Local same-user processes can still read it, so file permissions are defense-in-depth rather than a hard security boundary.

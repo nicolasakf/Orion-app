@@ -1044,7 +1044,7 @@ await runTest("read_cell large Orion metadata uses compact fallback", async () =
 
 console.log("\n--- ExecuteCellTool ---");
 
-function makeExecuteCellTool(streamText: string): {
+function makeExecuteCellTool(streamText: string, imageData?: string): {
   tool: ExecuteCellTool;
   store: Map<string, NotebookType>;
 } {
@@ -1076,6 +1076,12 @@ function makeExecuteCellTool(streamText: string): {
       header: { msg_type: "stream" },
       content: { name: "stdout", text: streamText },
     });
+    if (imageData) {
+      onMessage({
+        header: { msg_type: "display_data" },
+        content: { data: { "image/png": imageData }, metadata: {} },
+      });
+    }
     onMessage({
       header: { msg_type: "execute_reply" },
       content: {},
@@ -1096,7 +1102,7 @@ await runTest("execute_cell applies aggregate guardrail for oversized output", a
     stream: false,
     progressInterval: 1000,
   });
-  const text = result.join("\n");
+  const text = Array.isArray(result) ? result.join("\n") : result.text;
   assertIncludes(text, "Content is too large to read safely", "should trigger compact fallback");
 });
 
@@ -1127,6 +1133,21 @@ await runTest("execute_cell writes Orion execution info metadata", async () => {
     executionInfo?.statistics?.wallTime === executionInfo?.duration,
     "should store wall time statistic"
   );
+});
+
+await runTest("execute_cell returns structured PNG output for immediate inspection", async () => {
+  const { tool } = makeExecuteCellTool("", "cG5n");
+  const result = await tool.execute({
+    cellIndices: [0],
+    timeoutSeconds: 10,
+    stream: false,
+    progressInterval: 1000,
+  });
+  assert(!Array.isArray(result), "PNG execution should return a structured result");
+  const structured = result as Exclude<typeof result, string[]>;
+  assert(structured.visuals.length === 1, "should expose one inspectable visual");
+  assert(structured.visuals[0].mimeType === "image/png", "should preserve PNG MIME type");
+  assert(structured.visuals[0].data === "cG5n", "should preserve the generated raster bytes");
 });
 
 // ============================================================================

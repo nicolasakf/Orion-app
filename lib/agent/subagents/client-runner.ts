@@ -132,7 +132,6 @@ async function fetchSubagentStep(
       subagentStepIndex: stepIndex,
       // No chatSessionId, availableSkills, or forcedSkillName — sub-agent
       // steps use isolated message history; chatId is only for logging/DB linkage.
-      ...(options.userCredential !== undefined && { userCredential: options.userCredential }),
     }),
     signal: options.abortSignal,
   });

@@ -13,6 +13,7 @@ import {
   Download,
   Loader2,
   RefreshCw,
+  Sparkles,
 } from "lucide-react";
 import {
   Sidebar,
@@ -27,10 +28,17 @@ import {
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import {
   AGENT_SETTINGS_SECTIONS,
   type AgentSettingsSection,
   type SettingsTab,
 } from "@/components/settings-dialog/types";
+import { useOpenSettings } from "@/contexts/open-settings-context";
+import { dispatchInsertChatSkill } from "@/lib/chat/chat-composer-events";
 import { ORION_USER_DOCS_URL } from "@/lib/constants/user-docs";
 import { cn } from "@/lib/utils";
 import { useOrionUpdate } from "@/components/update-provider";
@@ -63,12 +71,18 @@ export function SettingsSidebar({
   className,
   ...props
 }: SettingsSidebarProps) {
+  const { onOpenChange } = useOpenSettings();
   const { state: updateState, updateAvailable, checkForUpdates, performUpdate } =
     useOrionUpdate();
   const settingsNav = SETTINGS_NAV_BASE.filter((item) => {
     if (item.id === "account" && !showAccountTab) return false;
     return true;
   });
+
+  const handleAskOrion = React.useCallback(() => {
+    onOpenChange(false);
+    dispatchInsertChatSkill("orion-settings", undefined, { newChat: true });
+  }, [onOpenChange]);
 
   return (
     <Sidebar
@@ -168,6 +182,23 @@ export function SettingsSidebar({
               </SidebarMenuItem>
             ) : null}
             <SidebarMenuItem>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <SidebarMenuButton
+                    type="button"
+                    className="cursor-pointer"
+                    onClick={handleAskOrion}
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    Ask Orion
+                  </SidebarMenuButton>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
+                  This is just one of the ways you can ask the Orion agent to change settings for you
+                </TooltipContent>
+              </Tooltip>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
               <SidebarMenuButton asChild className="cursor-pointer">
                 <a
                   href={ORION_USER_DOCS_URL}
@@ -175,7 +206,7 @@ export function SettingsSidebar({
                   rel="noreferrer"
                 >
                   <ExternalLink className="h-4 w-4" />
-                  Help
+                  Docs
                 </a>
               </SidebarMenuButton>
             </SidebarMenuItem>

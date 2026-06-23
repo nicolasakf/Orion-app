@@ -52,6 +52,7 @@ import {
   type SubagentDefinition,
 } from "@/lib/agent/subagents";
 import { detectClientPlatformOs, isJupyterServerHostLocal } from "@/lib/utils";
+import { guardExecutionToolResult, isExecutionToolResult } from "./deep-eda";
 
 // ============================================================================
 // Types
@@ -810,7 +811,7 @@ export function AssistantProvider({
           }
         };
 
-        let result: string | string[];
+        let result: string | string[] | object;
 
         switch (toolName) {
           case "list_kernels":
@@ -881,8 +882,26 @@ export function AssistantProvider({
             return { error: `Unknown tool: ${toolName}` };
         }
 
+        if (isExecutionToolResult(result)) {
+          // Preserve raster bytes until RightSidebar applies the selected model's
+          // image capability and configured preview budget.
+          const finalResult = guardExecutionToolResult(result, Number.POSITIVE_INFINITY);
+          const durationMs = Date.now() - startMs;
+          logToolResult({
+            requestId,
+            toolName,
+            params,
+            result: finalResult.text,
+            durationMs,
+          }, chatIdRef.current);
+          if (MODIFYING_TOOLS.has(toolName)) {
+            onAgentNotebookChangeRef.current?.();
+          }
+          return finalResult;
+        }
+
         const finalResult = guardToolResult(
-          Array.isArray(result) ? result.join("\n") : result
+          Array.isArray(result) ? result.join("\n") : String(result)
         ) as string;
         const durationMs = Date.now() - startMs;
 

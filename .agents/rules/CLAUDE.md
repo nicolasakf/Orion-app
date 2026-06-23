@@ -1,5 +1,9 @@
 # Orion Development Guidelines
 
+## Agent behavior
+
+- **Examine the codebase before answering** the user, even when the conversation is discussion-only (questions, reviews, architecture, or planning) and no code changes are requested. Search and read relevant files so answers reflect what the repo actually does rather than assumptions or generic advice.
+
 ## Development Workflow
 
 - **DO NOT** run `npm run dev`, `npm run build`, `npm run start`, etc. unless explicitly requested by the user. You can run lint and tsc/tsx commands to check for errors and fix them.
@@ -28,6 +32,10 @@
 
 - Document all functions/methods/classes when creating/editing them
 - Exception: Simple functions with no args/return can have brief 1-2 line comments
+
+## Settings dialog UI
+
+- When adding or editing options in the settings dialog, explain each setting with the **info icon + tooltip** pattern from `components/settings-dialog/settings-info-label.tsx` (`SettingsInfoLabel`, `SettingsInfoSectionTitle`, or the shared fields in `settings-form-fields.tsx`). Do not use inline helper paragraphs under controls unless the user asks for a different layout.
 
 ## Prompts & agent instructions (avoid redundancy)
 

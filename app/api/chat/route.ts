@@ -7,6 +7,7 @@ import {
   GatewayConfigError,
 } from "@/lib/agent/model-gateway";
 import type { CredentialMode, ProviderId } from "@/lib/agent/model-gateway-types";
+import { resolveProviderCredentialForModel } from "@/lib/credentials/provider-credential-store.server";
 import { getModelCatalogEntry, isKnownProvider } from "@/lib/agent/model-catalog";
 import { getMergedModelCatalogEntry } from "@/lib/agent/model-catalog.server";
 import { isProviderSupported, getProviderAdapter } from "@/lib/agent/providers/registry";
@@ -33,32 +34,6 @@ import {
   updateChatSessionStatus,
 } from "@/lib/chat/chat-sqlite-storage.server";
 
-// ── Zod schema for user-provided credentials (BYOK or ChatGPT OAuth) ──────────
-// Must mirror ProviderCredentialSchema in lib/settings/schema.ts.
-const UserCredentialSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("api_key"), apiKey: z.string().min(1), baseUrl: z.string().optional() }),
-  z.object({
-    type: z.literal("chatgpt_oauth"),
-    accessToken: z.string().min(1),
-    refreshToken: z.string().min(1),
-    expiresAt: z.number(),
-    accountId: z.string().optional(),
-  }),
-  z.object({
-    type: z.literal("local_endpoint"),
-    baseUrl: z.string().min(1),
-    modelId: z.string().min(1),
-    label: z.string().optional(),
-    models: z.array(
-      z.object({
-        modelId: z.string().min(1),
-        label: z.string().optional(),
-        enabled: z.boolean().optional(),
-      })
-    ).optional(),
-    apiKey: z.string().optional(),
-  }),
-]);
 import {
   buildAgentSystemPrompt,
   buildAskModeSystemPrompt,
@@ -87,6 +62,12 @@ import {
   type ResolvedChatReference,
 } from "@/lib/chat/chat-references";
 import { normalizeInlineDataUrlFileParts } from "@/lib/agent/model-message-files";
+import {
+  DeepEdaStateSnapshotSchema,
+  getDeepEdaPhase,
+  summarizeDeepEdaState,
+} from "@/lib/agent/deep-eda";
+import { resolveImplicitForcedSkillNames } from "@/lib/agent/implicit-skills";
 
 /** Standard request duration limit in seconds */
 export const maxDuration = 300;
@@ -200,14 +181,20 @@ export async function POST(req: Request) {
     subagentDevLogInstance?: number;
     /** 0-based step within a subagent run; used to avoid repeating session banners in one log file. */
     subagentStepIndex?: number;
-    /** User-provided credential for BYOK or ChatGPT OAuth mode. */
-    userCredential?: unknown;
     /** For origin === "compaction": text of a prior compaction summary to extend. */
     previousSummaryText?: string;
     /** Communication style preset for the agent's response narration. */
     agentCommunicationStyle?: unknown;
     /** Custom communication instructions; overrides preset when non-empty. */
     agentCustomCommunicationStyle?: unknown;
+    /** True while the user-approved exhaustive EDA controller is active. */
+    deepEdaActive?: boolean;
+    /** Current investigation ledger for the active exhaustive EDA run. */
+    deepEdaState?: unknown;
+    /** Agent-generated raster outputs that must be inspected before any other action. */
+    pendingVisualInspectionIds?: string[];
+    /** Inspected raster outputs that require a corrected replacement before finishing. */
+    visualRevisionRequiredIds?: string[];
   };
 
   try {
@@ -252,11 +239,28 @@ export async function POST(req: Request) {
     clientPlatformOs: clientPlatformOsRaw,
     subagentDevLogInstance: subagentDevLogInstanceRaw,
     subagentStepIndex: subagentStepIndexRaw,
-    userCredential: rawUserCredential,
     previousSummaryText,
     agentCommunicationStyle: rawAgentCommunicationStyle,
     agentCustomCommunicationStyle: rawAgentCustomCommunicationStyle,
+    deepEdaActive: deepEdaActiveRaw,
+    deepEdaState: deepEdaStateRaw,
+    pendingVisualInspectionIds: pendingVisualInspectionIdsRaw,
+    visualRevisionRequiredIds: visualRevisionRequiredIdsRaw,
   } = body;
+
+  const deepEdaActive = deepEdaActiveRaw === true;
+  const parsedDeepEdaState = DeepEdaStateSnapshotSchema.safeParse(deepEdaStateRaw);
+  const deepEdaState = parsedDeepEdaState.success ? parsedDeepEdaState.data : undefined;
+  const pendingVisualInspectionIds = Array.isArray(pendingVisualInspectionIdsRaw)
+    ? pendingVisualInspectionIdsRaw.filter(
+        (value): value is string => typeof value === "string" && value.length > 0
+      )
+    : [];
+  const visualRevisionRequiredIds = Array.isArray(visualRevisionRequiredIdsRaw)
+    ? visualRevisionRequiredIdsRaw.filter(
+        (value): value is string => typeof value === "string" && value.length > 0
+      )
+    : [];
 
   const agentCommunicationStyle: AgentCommunicationStyle =
     AgentCommunicationStyleSchema.parse(rawAgentCommunicationStyle);
@@ -265,36 +269,7 @@ export async function POST(req: Request) {
       ? rawAgentCustomCommunicationStyle.trim()
       : "";
 
-  // Validate user credential if provided and convert to CredentialMode.
-  let resolvedCredential: CredentialMode | undefined;
-  if (rawUserCredential !== undefined) {
-    const parsed = UserCredentialSchema.safeParse(rawUserCredential);
-    if (!parsed.success) {
-      return new Response(
-        JSON.stringify({ title: "Invalid Credential", message: "The provided credential is malformed." }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
-    }
-    const cred = parsed.data;
-    if (cred.type === "api_key") {
-      resolvedCredential = { type: "byok", apiKey: cred.apiKey, baseUrl: cred.baseUrl };
-    } else if (cred.type === "chatgpt_oauth") {
-      resolvedCredential = {
-        type: "chatgpt_oauth",
-        accessToken: cred.accessToken,
-        accountId: cred.accountId,
-      };
-    } else {
-      resolvedCredential = {
-        type: "local_endpoint",
-        baseUrl: cred.baseUrl,
-        modelId: cred.modelId,
-        label: cred.label,
-        models: cred.models,
-        apiKey: cred.apiKey,
-      };
-    }
-  }
+  const resolvedCredential = await resolveProviderCredentialForModel(providerId, modelId);
 
   const jupyterServerIsLocal =
     typeof jupyterServerIsLocalRaw === "boolean" ? jupyterServerIsLocalRaw : undefined;
@@ -369,7 +344,7 @@ export async function POST(req: Request) {
     typeof forcedSkillNameRaw === "string" && forcedSkillNameRaw.trim().length > 0
       ? forcedSkillNameRaw.trim()
       : undefined;
-  const forcedSkillNames = Array.from(
+  const explicitForcedSkillNames = Array.from(
     new Set([
       ...(forcedSkillName ? [forcedSkillName] : []),
       ...((Array.isArray(forcedSkillNamesRaw) ? forcedSkillNamesRaw : [])
@@ -377,13 +352,21 @@ export async function POST(req: Request) {
         .filter((name) => name.length > 0)),
     ])
   );
+  const implicitForcedSkillNames = resolveImplicitForcedSkillNames({
+    notebookPath,
+    activeFilePath,
+    origin,
+  });
+  const forcedSkillNames = Array.from(
+    new Set([...explicitForcedSkillNames, ...implicitForcedSkillNames])
+  );
   const forcedSubagentName =
     typeof forcedSubagentNameRaw === "string" && forcedSubagentNameRaw.trim().length > 0
       ? forcedSubagentNameRaw.trim()
       : undefined;
   const allowsForcedToolSelection = agentMode || rawInteractionMode === "Edit";
 
-  if (forcedSkillNames.length > 0 && !allowsForcedToolSelection) {
+  if (explicitForcedSkillNames.length > 0 && !allowsForcedToolSelection) {
     return new Response(
       JSON.stringify({
         title: "Invalid Request",
@@ -403,9 +386,9 @@ export async function POST(req: Request) {
     );
   }
 
-  if (forcedSkillNames.length > 0) {
+  if (explicitForcedSkillNames.length > 0) {
     const advertised = new Set((availableSkills ?? []).map((skill) => skill.name));
-    const missingSkillName = forcedSkillNames.find((skillName) => !advertised.has(skillName));
+    const missingSkillName = explicitForcedSkillNames.find((skillName) => !advertised.has(skillName));
     if (missingSkillName) {
       return new Response(
         JSON.stringify({
@@ -932,6 +915,7 @@ export async function POST(req: Request) {
           subagent: subagentPrompt,
           envContext,
           agentRules,
+          forcedSkillNames: missingForcedSkillNames,
         });
       } else {
         agentSystemPrompt = buildAgentSystemPrompt({
@@ -986,6 +970,18 @@ export async function POST(req: Request) {
         enableSubagents,
       });
     }
+    if (deepEdaActive && effectiveMode === "Agent" && agentSystemPrompt) {
+      const deepEdaPhase = getDeepEdaPhase({
+        active: true,
+        state: deepEdaState,
+        pendingVisualIds: pendingVisualInspectionIds,
+        revisionRequiredIds: visualRevisionRequiredIds,
+      });
+      const activationInstruction = missingForcedSkillNames.includes("deep-eda")
+        ? "Activation is already complete. Load the required deep-EDA skill in this step; after it returns, do not load it again and do not call `begin_deep_eda`."
+        : "Activation and skill loading are already complete. Do not call `begin_deep_eda` and do not reload the deep-EDA skill.";
+      agentSystemPrompt += `\n\n## Active Deep EDA Controller\n\nPhase: \`${deepEdaPhase}\`. ${activationInstruction} Take the next concrete analytical action after any required skill load. Orion will continue the run after prose-only turns, but prose cannot complete it. Finish only when \`complete_deep_eda\` is accepted.\n\n${summarizeDeepEdaState(deepEdaState)}`;
+    }
     // Process request through the gateway (injects agent system prompt into messages)
     const { model, messages: processedMessages, providerOptions } = gateway.processRequest({
       messages,
@@ -1017,16 +1013,38 @@ export async function POST(req: Request) {
           : "none",
     });
 
-    const toolsForMode = getToolsForInteractionMode(effectiveInteractionModeConfig);
     const missingForcedSkillName = missingForcedSkillNames[0];
     const shouldForceLoadSkill = !!missingForcedSkillName;
     const shouldForceDelegate =
       !!(enableSubagents && forcedSubagentName && !hasDelegatedSubagentInHistory(forcedSubagentName));
+    const deepEdaPhase = getDeepEdaPhase({
+      active: deepEdaActive,
+      state: deepEdaState,
+      pendingVisualIds: pendingVisualInspectionIds,
+      revisionRequiredIds: visualRevisionRequiredIds,
+    });
+    const toolsForMode = Object.fromEntries(
+      Object.entries(getToolsForInteractionMode(effectiveInteractionModeConfig)).filter(([toolName]) => {
+        if (effectiveMode !== "Agent") return true;
+        if (toolName === "load_skill" && deepEdaActive && !shouldForceLoadSkill) return false;
+        if (toolName === "begin_deep_eda") return !deepEdaActive;
+        if (toolName === "record_visual_inspection") {
+          return pendingVisualInspectionIds.length > 0;
+        }
+        if (toolName === "update_deep_eda_state") return deepEdaActive;
+        if (toolName === "complete_deep_eda") return deepEdaPhase === "synthesizing";
+        return true;
+      })
+    ) as ReturnType<typeof getToolsForInteractionMode>;
     const forcedToolChoice = shouldForceDelegate
       ? { type: "tool" as const, toolName: "delegate" as const }
       : shouldForceLoadSkill
         ? { type: "tool" as const, toolName: "load_skill" as const }
-        : "auto";
+        : pendingVisualInspectionIds.length > 0 && effectiveMode === "Agent"
+          ? { type: "tool" as const, toolName: "record_visual_inspection" as const }
+          : visualRevisionRequiredIds.length > 0 && !deepEdaActive && effectiveMode === "Agent"
+            ? "required" as const
+            : "auto";
 
     logLLMCall({
       fileId,

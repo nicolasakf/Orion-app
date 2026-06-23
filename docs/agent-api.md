@@ -7,10 +7,9 @@
 - `messages`
 - `provider`
 - `model`
-- `userCredential`
 - optional agent context such as active notebook path, workspace directory, available skills, and available sub-agents
 
-`userCredential` is required for normal chat and compaction. It may be an API key credential or a ChatGPT OAuth credential.
+Provider credentials are resolved server-side from `~/.orion/credentials.json` using the requested `provider` and `model`. Chat, compaction, title-generation, and sub-agent requests must not include API keys or OAuth tokens.
 
 ## Model Validation
 
@@ -64,4 +63,4 @@ Sub-agents can optionally declare a model in Orion metadata. If omitted, they in
 
 ## ChatGPT OAuth
 
-The ChatGPT OAuth device flow is available without app login. The start, poll, and refresh routes operate on local credentials and return tokens to the browser settings flow.
+The ChatGPT OAuth device flow is available without app login. The start and poll routes operate on local credentials; successful polling persists tokens directly to `~/.orion/credentials.json` and returns only a sanitized configured-state summary to the browser.

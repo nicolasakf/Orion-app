@@ -54,6 +54,10 @@ const TOOL_LABELS: Record<OrionToolName, string> = {
   web_search: "Web search",
   delegate: "Delegate",
   load_skill: "Load skill",
+  begin_deep_eda: "Begin deep EDA",
+  record_visual_inspection: "Record visual inspection",
+  update_deep_eda_state: "Update deep EDA state",
+  complete_deep_eda: "Complete deep EDA",
 };
 
 const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
@@ -80,6 +84,15 @@ const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
   {
     label: "Web and Extensions",
     tools: ["web_fetch", "web_search", "load_skill", "delegate"],
+  },
+  {
+    label: "Agent loop control",
+    tools: [
+      "begin_deep_eda",
+      "record_visual_inspection",
+      "update_deep_eda_state",
+      "complete_deep_eda",
+    ],
   },
 ];
 

@@ -1,6 +1,16 @@
 "use client";
 
-import { Download, Loader2, LogOut, Moon, RefreshCw, Settings, Sun, User } from "lucide-react";
+import {
+  Download,
+  Loader2,
+  LogOut,
+  Moon,
+  RefreshCw,
+  Scan,
+  Settings,
+  Sun,
+  User,
+} from "lucide-react";
 import { useTheme } from "next-themes";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -25,6 +35,7 @@ import { useOpenSettings } from "@/contexts/open-settings-context";
 import { useCloudUser } from "@/hooks/use-cloud-user";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import { createOrionCloudSupabaseClient } from "@/lib/cloud/supabase-client";
+import { cn } from "@/lib/utils";
 import { useOrionUpdate } from "@/components/update-provider";
 
 const ORION_LOGO_SRC = {
@@ -44,7 +55,58 @@ function getInitialsFromEmail(email: string | undefined): string {
   return local.slice(0, 2).toUpperCase();
 }
 
-export function SettingsMenu(props: ButtonProps) {
+interface SettingsMenuProps extends ButtonProps {
+  isFocusMode: boolean;
+  onToggleFocusMode: () => void;
+}
+
+const menuSwitchClassName =
+  "h-4 w-8 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input [&>span]:h-3 [&>span]:w-3 [&>span]:data-[state=checked]:translate-x-4";
+
+/** Focus mode button and theme toggle shown beside sign-in / sign-out in the account menu. */
+function AccountMenuToggles({
+  isFocusMode,
+  onToggleFocusMode,
+  isDarkTheme,
+  onThemeToggle,
+}: {
+  isFocusMode: boolean;
+  onToggleFocusMode: () => void;
+  isDarkTheme: boolean;
+  onThemeToggle: (checked: boolean) => void;
+}) {
+  return (
+    <div className="ml-4 flex items-center gap-3">
+      <ToolbarButton
+        onClick={onToggleFocusMode}
+        aria-pressed={isFocusMode}
+        className={cn(
+          isFocusMode && "bg-accent text-foreground hover:bg-accent",
+        )}
+        toolTipLabel={isFocusMode ? "Exit Focus Mode" : "Enter Focus Mode"}
+        toolTipShortcut={[[AltOrOption, "Z"]]}
+      >
+        <Scan className="h-4 w-4" />
+      </ToolbarButton>
+      <div className="flex items-center gap-1.5">
+        <Sun className="h-3.5 w-3.5 text-muted-foreground" />
+        <Switch
+          checked={isDarkTheme}
+          onCheckedChange={onThemeToggle}
+          className={menuSwitchClassName}
+          aria-label={isDarkTheme ? "Switch to light theme" : "Switch to dark theme"}
+        />
+        <Moon className="h-3.5 w-3.5 text-muted-foreground" />
+      </div>
+    </div>
+  );
+}
+
+export function SettingsMenu({
+  isFocusMode,
+  onToggleFocusMode,
+  ...props
+}: SettingsMenuProps) {
   const { setUserSettings } = useOrionSettings();
   const { setTheme, resolvedTheme } = useTheme();
   const [authOpen, setAuthOpen] = useState(false);
@@ -153,15 +215,12 @@ export function SettingsMenu(props: ButtonProps) {
                     <LogOut className="h-3 w-4" />
                     Sign Out
                   </Button>
-                  <div className="ml-4 flex items-center gap-1.5">
-                    <Sun className="h-3.5 w-3.5 text-muted-foreground" />
-                    <Switch
-                      checked={resolvedTheme === "dark"}
-                      onCheckedChange={handleThemeToggle}
-                      className="h-4 w-8 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input [&>span]:h-3 [&>span]:w-3 [&>span]:data-[state=checked]:translate-x-4"
-                    />
-                    <Moon className="h-3.5 w-3.5 text-muted-foreground" />
-                  </div>
+                  <AccountMenuToggles
+                    isFocusMode={isFocusMode}
+                    onToggleFocusMode={onToggleFocusMode}
+                    isDarkTheme={resolvedTheme === "dark"}
+                    onThemeToggle={handleThemeToggle}
+                  />
                 </div>
               </>
             ) : (
@@ -174,15 +233,12 @@ export function SettingsMenu(props: ButtonProps) {
                   <User className="h-3 w-4" />
                   Sign In
                 </Button>
-                <div className="ml-4 flex items-center gap-1.5">
-                  <Sun className="h-3.5 w-3.5 text-muted-foreground" />
-                  <Switch
-                    checked={resolvedTheme === "dark"}
-                    onCheckedChange={handleThemeToggle}
-                    className="h-4 w-8 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input [&>span]:h-3 [&>span]:w-3 [&>span]:data-[state=checked]:translate-x-4"
-                  />
-                  <Moon className="h-3.5 w-3.5 text-muted-foreground" />
-                </div>
+                <AccountMenuToggles
+                  isFocusMode={isFocusMode}
+                  onToggleFocusMode={onToggleFocusMode}
+                  isDarkTheme={resolvedTheme === "dark"}
+                  onThemeToggle={handleThemeToggle}
+                />
               </div>
             )}
           </DropdownMenuGroup>

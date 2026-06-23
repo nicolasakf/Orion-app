@@ -1,12 +1,14 @@
 import { buildRulesPromptSection, type AgentRule } from "@/lib/agent/rules";
+import { buildRequiredSkillsPromptSection } from "@/lib/agent/implicit-skills";
 import type { SubagentPromptPayload } from "./types";
 
 export function buildSubagentSystemPrompt(options: {
   subagent: SubagentPromptPayload;
   envContext?: string;
   agentRules?: AgentRule[];
+  forcedSkillNames?: string[];
 }): string {
-  const { subagent, envContext, agentRules } = options;
+  const { subagent, envContext, agentRules, forcedSkillNames } = options;
   const tripleBacktick = "```";
   const fencedSystemPrompt = `${tripleBacktick}markdown\n${subagent.systemPrompt}\n${tripleBacktick}`;
   const rulesSection = buildRulesPromptSection(agentRules);
@@ -35,6 +37,7 @@ The content below defines your **task and goals** for this sub-agent role (noteb
 
 ${fencedSystemPrompt}`,
     rulesSection,
+    buildRequiredSkillsPromptSection(forcedSkillNames ?? []),
     `## Runtime Instructions
 
 - First, call \`use_notebook\` with \`notebookPath: "${subagent.tmpNotebookPath}"\`, \`notebookName: "${subagent.name}"\`, and \`mode: "connect"\`.

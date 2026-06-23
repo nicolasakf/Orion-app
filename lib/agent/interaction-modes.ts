@@ -210,10 +210,19 @@ export function resolveInteractionModeConfig(options: {
 
 /** Build the AI SDK tool object for a resolved mode. */
 export function getToolsForInteractionMode(mode: InteractionModeConfig): Partial<typeof orionTools> {
+  const requiredAgentControlTools: OrionToolName[] =
+    mode.baseMode === "Agent"
+      ? [
+          "begin_deep_eda",
+          "record_visual_inspection",
+          "update_deep_eda_state",
+          "complete_deep_eda",
+        ]
+      : [];
+  const toolNames = Array.from(new Set([...mode.toolNames, ...requiredAgentControlTools]));
   return Object.fromEntries(
-    mode.toolNames
+    toolNames
       .filter(isOrionToolName)
       .map((toolName) => [toolName, orionTools[toolName]])
   ) as Partial<typeof orionTools>;
 }
-

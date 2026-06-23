@@ -136,6 +136,10 @@ export const TOOL_META: Record<OrionToolName, ToolMeta> = {
   read_cell_output: { labelPending: "Reading output", labelDone: "Read output", icon: Eye },
   load_skill: { labelPending: "Loading skill", labelDone: "Loaded skill", icon: Brain },
   delegate: { labelPending: "Running sub-agent", labelDone: "Sub-agent finished", icon: Bot },
+  begin_deep_eda: { labelPending: "Starting deep EDA", labelDone: "Deep EDA ready", icon: Brain },
+  record_visual_inspection: { labelPending: "Inspecting visual", labelDone: "Inspected visual", icon: Eye },
+  update_deep_eda_state: { labelPending: "Updating EDA ledger", labelDone: "Updated EDA ledger", icon: Brain },
+  complete_deep_eda: { labelPending: "Checking EDA completion", labelDone: "Checked EDA completion", icon: Brain },
 };
 
 /** Fallback for unknown tool names */

@@ -897,7 +897,7 @@ export function ChatTextbox({
       : isImmediateSlashChipActive && slashChip
         ? `Press Enter to run ${slashChip.label}`
         : isLoading
-          ? "Queue a message · Enter to add"
+          ? "Queue a message"
           : "Type a message · / for commands · @ for mentions";
 
   React.useEffect(() => {
@@ -1772,7 +1772,7 @@ export function ChatTextbox({
                     {selectedLlm && (
                       <ProviderLogo
                         providerId={selectedLlm.provider}
-                        className="h-3.5 w-3.5 shrink-0"
+                        className="h-3.5 w-3.5 shrink-0 text-current"
                       />
                     )}
                     <span className="truncate">

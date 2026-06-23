@@ -139,12 +139,6 @@ export interface RunSubagentOptions {
   abortSignal?: AbortSignal;
 
   /**
-   * User-provided credential (BYOK or ChatGPT OAuth) forwarded from the parent request.
-   * Subagents always use the same user-supplied credential path as the parent chat.
-   */
-  userCredential?: unknown;
-
-  /**
    * Parent UI chat id — sent to `/api/chat` for dev logs and observability.
    * Does not merge sub-agent messages into the parent chat.
    */

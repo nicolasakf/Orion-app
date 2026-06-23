@@ -20,6 +20,7 @@ import type {
   EditCheckpointContext,
   EditCheckpointRecorder,
 } from "../edit-checkpoint-recorder";
+import type { AgentVisualOutput } from "../deep-eda";
 import {
   guardToolText,
   TOOL_OUTPUT_TEXT_CHAR_BUDGET,
@@ -30,6 +31,12 @@ interface NotebookReadResult {
   notebook: NotebookDocument;
   source: "jupyter-contents" | OpenDocumentSnapshotSource;
   dirty: boolean;
+}
+
+/** Raw text and raster outputs collected from ephemeral kernel execution. */
+interface KernelExecutionCollection {
+  outputs: string[];
+  visuals: AgentVisualOutput[];
 }
 
 // ============================================================================
@@ -392,8 +399,9 @@ export abstract class BaseTool {
   protected async executeCode(
     code: string,
     timeoutMs: number = 60000
-  ): Promise<string[]> {
+  ): Promise<KernelExecutionCollection> {
     const outputs: string[] = [];
+    const visuals: AgentVisualOutput[] = [];
     let completed = false;
 
     const executionFuture = await this.kernelService.execute(code, (msg) => {
@@ -415,6 +423,20 @@ export abstract class BaseTool {
             outputs.push(typeof plain === "string" ? plain : plain.join(""));
           } else if (data?.["image/png"]) {
             outputs.push("[Image: PNG]");
+          } else if (data?.["image/jpeg"]) {
+            outputs.push("[Image: JPEG]");
+          }
+          for (const mimeType of ["image/png", "image/jpeg"] as const) {
+            const raw = data?.[mimeType];
+            if (typeof raw !== "string") continue;
+            visuals.push({
+              visualId: crypto.randomUUID(),
+              mimeType,
+              data: raw.replace(/\s/g, ""),
+              source: "execute_code",
+              outputIndex: visuals.length,
+              byteLength: Math.floor((raw.replace(/\s/g, "").length * 3) / 4),
+            });
           }
           break;
         }
@@ -468,9 +490,9 @@ export abstract class BaseTool {
 
     const joined = outputs.join("\n");
     if (joined.length > BaseTool.MAX_OUTPUT_CHARS) {
-      return [this.truncateOutput(joined)];
+      return { outputs: [this.truncateOutput(joined)], visuals };
     }
-    return outputs;
+    return { outputs, visuals };
   }
 
   // ============================================================================

@@ -18,12 +18,10 @@ export interface CompactionApiResult {
  * @param messages - The subset of messages to summarize (older turns only).
  * @param previousSummaryText - If a prior summary exists, pass it here so the
  *   server can extend it rather than re-summarize from scratch.
- * @param userCredential - BYOK / ChatGPT OAuth credential forwarded as-is.
  */
 export async function callCompactionApi(
   messages: UIMessage[],
   previousSummaryText?: string,
-  userCredential?: unknown,
   model?: string,
   provider?: ProviderId,
   chatId?: string
@@ -35,7 +33,6 @@ export async function callCompactionApi(
     ...(provider && { provider }),
     ...(chatId && { chatId }),
     ...(previousSummaryText && { previousSummaryText }),
-    ...(userCredential !== undefined && { userCredential }),
   };
 
   const response = await fetch("/api/chat", {

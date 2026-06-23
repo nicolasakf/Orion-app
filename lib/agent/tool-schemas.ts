@@ -18,6 +18,42 @@ import { tool } from "ai";
 import { z } from "zod";
 
 import { EditOrionMetadataParamsSchema } from "./tools/edit-orion-metadata-schema";
+import {
+  DEEP_EDA_COVERAGE_AREAS,
+  type ExecutionToolResult,
+} from "./deep-eda";
+
+/** Converts structured execution output into text plus raster model input. */
+function executionResultToModelOutput({ output }: { output: unknown }) {
+  if (typeof output === "string") {
+    return { type: "text" as const, value: output };
+  }
+  const result = output as Partial<ExecutionToolResult>;
+  const parts: Array<
+    | { type: "text"; text: string }
+    | { type: "image-data"; data: string; mediaType: string }
+  > = [];
+  if (typeof result.text === "string") {
+    parts.push({ type: "text", text: result.text });
+  }
+  for (const visual of result.visuals ?? []) {
+    parts.push({
+      type: "text",
+      text: `Raster output ${visual.visualId} (${visual.mimeType}) must be inspected before continuing.`,
+    });
+    if (visual.data) {
+      parts.push({ type: "image-data", data: visual.data, mediaType: visual.mimeType });
+    } else if (visual.visualInspectionUnavailableReason) {
+      parts.push({
+        type: "text",
+        text: `Visual inspection unavailable: ${visual.visualInspectionUnavailableReason}. Run supporting numeric checks and record the limitation.`,
+      });
+    }
+  }
+  return parts.length > 0
+    ? { type: "content" as const, value: parts }
+    : { type: "text" as const, value: "[No output generated]" };
+}
 
 export const orionTools = {
   // ============================================================================
@@ -247,6 +283,7 @@ export const orionTools = {
           "When stream is true, how often (in ms) to emit progress updates (250–10000)."
         ),
     }),
+    toModelOutput: executionResultToModelOutput,
   }),
 
   read_cell_output: tool({
@@ -313,6 +350,82 @@ export const orionTools = {
         .min(1)
         .max(600)
         .describe("Maximum execution time in seconds."),
+    }),
+    toModelOutput: executionResultToModelOutput,
+  }),
+
+  // ============================================================================
+  // Agent Loop Control
+  // ============================================================================
+
+  begin_deep_eda: tool({
+    description:
+      "Request activation of the exhaustive deep-EDA loop. Call this before doing deep EDA after loading the deep-eda skill. Slash-command activation is already approved; model-selected activation requires user confirmation.",
+    inputSchema: z.object({
+      objective: z.string().min(1).describe("The user's explicit exhaustive EDA objective."),
+    }),
+  }),
+
+  record_visual_inspection: tool({
+    description:
+      "Record the required sanity inspection for every pending agent-generated PNG/JPEG. Cover every visual ID named in the execution result before taking another action.",
+    inputSchema: z.object({
+      inspections: z.array(
+        z.object({
+          visualId: z.string().min(1),
+          description: z.string().min(1),
+          verdict: z.enum(["valid", "questionable", "invalid", "unavailable"]),
+          issues: z.array(z.string()),
+          disposition: z.enum(["accept", "revise", "cannot_validate"]),
+          supportingChecks: z.array(z.string()).describe(
+            "Numeric or structural checks supporting the verdict. Required when verdict is unavailable; otherwise pass an empty array when none were needed."
+          ),
+          supersedesVisualId: z.string().describe(
+            "Visual ID corrected by this output. Pass an empty string when this is not a replacement inspection."
+          ),
+        })
+      ).min(1),
+    }),
+  }),
+
+  update_deep_eda_state: tool({
+    description:
+      "Incrementally update Orion's active deep-EDA ledger. Send only changed coverage entries, new findings, questions to add/update, and question IDs to resolve. Use empty arrays for unchanged sections.",
+    inputSchema: z.object({
+      coverageUpdates: z.array(
+        z.object({
+          area: z.enum(DEEP_EDA_COVERAGE_AREAS),
+          status: z.enum(["pending", "in_progress", "complete", "not_applicable"]),
+          evidenceRefs: z.array(z.string()),
+          rationale: z.string(),
+        })
+      ),
+      findingsToAdd: z.array(
+        z.object({
+          claim: z.string(),
+          evidenceRefs: z.array(z.string()).min(1),
+          confidence: z.enum(["low", "medium", "high"]),
+        })
+      ),
+      openQuestionsUpsert: z.array(
+        z.object({
+          id: z.string(),
+          question: z.string(),
+          priority: z.enum(["low", "medium", "high"]),
+          nextAction: z.string(),
+        })
+      ),
+      resolvedQuestionIds: z.array(z.string().min(1)),
+    }),
+  }),
+
+  complete_deep_eda: tool({
+    description:
+      "Propose completion of the active deep-EDA loop. Orion accepts only when coverage and evidence are complete, at least one PNG/JPEG plot and all raster outputs are inspected, no high-priority question remains, and notebook synthesis cells are provided.",
+    inputSchema: z.object({
+      completionRationale: z.string().min(1),
+      synthesisCellIndices: z.array(z.number().int().min(0)).min(1),
+      remainingLimitations: z.array(z.string()),
     }),
   }),
 
@@ -516,6 +629,10 @@ export function isOrionToolName(value: unknown): value is OrionToolName {
  */
 export const NO_DEPENDENCY_TOOLS: ReadonlySet<OrionToolName> = new Set<OrionToolName>([
   "load_skill",
+  "begin_deep_eda",
+  "record_visual_inspection",
+  "update_deep_eda_state",
+  "complete_deep_eda",
   "web_fetch",
   "web_search",
   // delegate spawns a client-side sub-agent and does not need a Jupyter server or
@@ -578,6 +695,10 @@ const EDIT_MODE_EXCLUDED: ReadonlySet<OrionToolName> = new Set<OrionToolName>([
   "execute_cell",
   "execute_code",
   "restart_notebook",
+  "begin_deep_eda",
+  "record_visual_inspection",
+  "update_deep_eda_state",
+  "complete_deep_eda",
 ]);
 
 /**

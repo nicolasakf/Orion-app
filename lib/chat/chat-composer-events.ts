@@ -6,6 +6,13 @@ export interface InsertChatSkillDetail {
   skillName: string;
   /** Optional message body to place after the skill token. */
   message?: string;
+  /** When true, start a fresh chat session before inserting the skill token. */
+  newChat?: boolean;
+}
+
+export interface InsertChatSkillOptions {
+  /** When true, start a fresh chat session before inserting the skill token. */
+  newChat?: boolean;
 }
 
 /**
@@ -50,6 +57,7 @@ export function dispatchOpenChatSidebar(): void {
 export function dispatchInsertChatSkill(
   skillName: string,
   message?: string,
+  options?: InsertChatSkillOptions,
 ): void {
   dispatchOpenChatSidebar();
   window.dispatchEvent(
@@ -57,6 +65,7 @@ export function dispatchInsertChatSkill(
       detail: {
         skillName,
         ...(message !== undefined ? { message } : {}),
+        ...(options?.newChat ? { newChat: true } : {}),
       },
     }),
   );
@@ -75,5 +84,6 @@ export function getInsertChatSkillDetail(
   return {
     skillName: detail.skillName,
     ...(typeof detail.message === "string" ? { message: detail.message } : {}),
+    ...(detail.newChat === true ? { newChat: true } : {}),
   };
 }

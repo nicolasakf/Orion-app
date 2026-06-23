@@ -21,8 +21,8 @@ export function SettingsFileTab() {
         <h2 className="text-lg font-semibold">Settings JSON</h2>
         <p className="text-sm text-muted-foreground">
           Edit Orion&apos;s user settings file directly in the editor. Provider
-          credentials are stored in the browser and are not written to this
-          file.
+          credentials are stored separately in ~/.orion/credentials.json and
+          are not written to this file.
         </p>
       </div>
 

@@ -57,7 +57,6 @@ export async function compactConversation(
     chatId: string;
     retentionTurns?: number;
     previousSummary?: CompactionSummary;
-    userCredential?: unknown;
     model: string;
     provider: ProviderId;
   }
@@ -80,7 +79,6 @@ export async function compactConversation(
   const { summaryText, tokensUsed } = await callCompactionApi(
     toSummarize,
     opts.previousSummary?.text,
-    opts.userCredential,
     opts.model,
     opts.provider,
     opts.chatId

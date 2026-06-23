@@ -482,7 +482,7 @@ async function main() {
 
       assert(Array.isArray(result), "should return array of outputs");
       // Should have some output from the print statement
-      const outputText = result.join("\n");
+      const outputText = Array.isArray(result) ? result.join("\n") : result.text;
       assertIncludes(outputText, "42", "should contain the computed value");
     });
 
@@ -494,7 +494,7 @@ async function main() {
 
       assert(typeof result === "string", "should return string");
       // Should contain Python version info
-      assert(result.length > 0, "should have some output");
+      assert(typeof result === "string" && result.length > 0, "should have some output");
     });
 
     await runTest("DeleteCellTool: delete a cell", async () => {

@@ -1,6 +1,6 @@
 ---
 name: orion-ui
-description: Builds Orion-native notebook UI outputs with the Python `orion_ui` package. Use when the user asks for interactive notebook UI features like plotly charts, sliders, selects, buttons, etc.
+description: Builds Orion-native notebook UI outputs with the Python `orion_ui` package. Auto-loaded for notebook work; use when the user asks for interactive notebook UI features like plotly charts, sliders, selects, buttons, etc.
 ---
 
 # Orion UI notebook components
@@ -134,8 +134,19 @@ ui.select("model", options, default_value="option A", value="option A")
 Charts:
 
 - Use Plotly, Altair, Vega-Lite, or existing notebook chart libraries for charts.
-- For Plotly styling, call `ui.theme.plotly()` before creating figures.
+- **Plotly theme (required):** Call `ui.theme.plotly()` once per kernel session (for example in a setup cell) before creating Plotly figures. It registers the Orion template and sets it as Plotly's default, so all later figures in that session inherit Orion styling automatically. Skip this only when the user explicitly asks for a different Plotly theme or custom styling.
 - Do not build a custom charting system with Orion UI primitives.
+
+Example:
+
+```python
+import orion_ui as ui
+import plotly.express as px
+
+ui.theme.plotly()
+
+px.line(df, x="date", y="value")
+```
 
 ## Button actions
 
@@ -194,4 +205,5 @@ cd python/orion-ui && python -m pip install -e .
 - Later cells read values with `ui.get()` or `ui.state()`.
 - Button `execute_cells` actions reference real Orion cell ids.
 - The UI uses Orion components for controls and existing plotting libraries for charts.
+- Plotly work calls `ui.theme.plotly()` once per kernel session unless the user explicitly requested different styling.
 - App View metadata references the rendered `orion_ui` output instead of recreating controls directly in metadata.

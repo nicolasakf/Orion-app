@@ -33,6 +33,7 @@ import type {
   NotebookDocument,
   CellOutput,
 } from "./types";
+import type { AgentVisualOutput, ExecutionToolResult } from "../deep-eda";
 
 /** Max traceback lines to include in the agent log */
 const MAX_TRACEBACK_LINES = 30;
@@ -73,7 +74,7 @@ export class ExecuteCellTool extends BaseTool {
    * @param params.progressInterval - Milliseconds between progress updates when stream is true (clamped 250–10000)
    * @returns Array of output strings for the LLM
    */
-  async execute(params: ExecuteCellParams): Promise<string[]> {
+  async execute(params: ExecuteCellParams): Promise<string[] | ExecutionToolResult> {
     const { cellIndices, timeoutSeconds, stream, progressInterval } = params;
     const normalizedProgressIntervalMs = Math.min(
       Math.max(progressInterval, 250),
@@ -94,6 +95,7 @@ export class ExecuteCellTool extends BaseTool {
     const timeoutMs = timeoutSeconds * 1000;
     const multiCell = cellIndices.length > 1;
     const allOutput: string[] = [];
+    const visuals: AgentVisualOutput[] = [];
     const notebook = await this.readNotebook(path);
     const cellsToRun: { index: number; source: string }[] = [];
 
@@ -247,6 +249,25 @@ export class ExecuteCellTool extends BaseTool {
       }
       const { agentLog } = executionResult;
 
+      executionResult.kernelOutputs.forEach((output, outputIndex) => {
+        const data = output.data ?? {};
+        for (const mimeType of ["image/png", "image/jpeg"] as const) {
+          const value = data[mimeType];
+          const raw = Array.isArray(value) ? value.join("") : value;
+          if (typeof raw !== "string") continue;
+          const normalized = raw.replace(/\s/g, "");
+          visuals.push({
+            visualId: crypto.randomUUID(),
+            mimeType,
+            data: normalized,
+            source: "execute_cell",
+            cellIndex: resolvedIndex,
+            outputIndex,
+            byteLength: Math.floor((normalized.length * 3) / 4),
+          });
+        }
+      });
+
       // Write only kernel outputs back to the notebook file
       try {
         await this.writeExecutionResultToNotebook(
@@ -272,7 +293,11 @@ export class ExecuteCellTool extends BaseTool {
     const finalOutput = allOutput.length > 0 ? allOutput : ["[No output generated]"];
     const joined = finalOutput.join("\n");
     const guarded = this.truncateOutput(joined);
-    return guarded === joined ? finalOutput : [guarded];
+    const textOutput = guarded === joined ? finalOutput : [guarded];
+    if (visuals.length > 0) {
+      return { text: textOutput.join("\n"), visuals };
+    }
+    return textOutput;
   }
 
   /**
@@ -310,6 +335,8 @@ export class ExecuteCellTool extends BaseTool {
       agentLog.push(`${prefix}${textStr}`);
     } else if (data["image/png"]) {
       agentLog.push(`${prefix}[Image: PNG]`);
+    } else if (data["image/jpeg"]) {
+      agentLog.push(`${prefix}[Image: JPEG]`);
     } else if (data["image/svg+xml"]) {
       agentLog.push(`${prefix}[Image: SVG]`);
     } else if (data["text/html"]) {

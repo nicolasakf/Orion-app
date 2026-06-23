@@ -37,7 +37,7 @@ import {
   insertSkillIntoComposerInput,
 } from "@/lib/chat/chat-composer-events";
 import { compactConversation } from "@/lib/agent/context-manager";
-import { buildWirePayload } from "@/lib/agent/context-optimizer";
+import { buildWirePayload, stripInspectedRasterData } from "@/lib/agent/context-optimizer";
 import { resolveModelDisplayLabel } from "@/lib/agent/model-display-label";
 import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
 import {
@@ -45,7 +45,6 @@ import {
   encodeLocalModelCatalogId,
   isLocalProvider,
   normalizeLocalEndpointModels,
-  resolveLocalRuntimeModelId,
 } from "@/lib/agent/local-provider-models";
 import {
   estimateMessageTokens,
@@ -62,9 +61,18 @@ import {
 } from "@/lib/agent/interaction-modes";
 import { isReadOnlyBashBlocked } from "@/lib/agent/read-only-bash-guard";
 import { restoreEditCheckpoint } from "@/lib/agent/edit-checkpoint-restore";
+import {
+  applyDeepEdaStateUpdate,
+  createInitialDeepEdaState,
+  isExecutionToolResult,
+  prepareExecutionToolResultForModel,
+  validateDeepEdaCompletion,
+  type DeepEdaStateSnapshot,
+  type DeepEdaStateUpdate,
+} from "@/lib/agent/deep-eda";
 import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
 import { needsApproval } from "@/lib/agent/tool-approval";
-import type { ProviderCredential, ToolApprovalMode } from "@/lib/settings/schema";
+import type { ToolApprovalMode } from "@/lib/settings/schema";
 import { DEFAULT_TITLE_GENERATION_MODEL_ID } from "@/lib/settings/defaults";
 import type { KernelStatus, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
@@ -567,6 +575,18 @@ interface DelegateToolOutput {
   reconnected: boolean;
 }
 
+interface DeepEdaRuntimeSession {
+  active: boolean;
+  activation: "slash" | "confirmed-natural-language" | null;
+  objective: string;
+  state: DeepEdaStateSnapshot;
+}
+
+interface PendingDeepEdaConfirmation {
+  objective: string;
+  resolve: (approved: boolean) => void;
+}
+
 const CURRENT_CHAT_SESSION_KEY = "orion:currentChatId";
 
 /** Reads the last selected chat for the current browser tab. */
@@ -664,6 +684,7 @@ export function RightSidebar({
   const [editingState, setEditingState] = useState<EditingState | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sidebarRootRef = useRef<HTMLDivElement>(null);
+  const createNewChatRef = useRef<() => void>(() => {});
   const [models, setModels] = useState<LLM[]>([]);
   const [modelRows, setModelRows] = useState<ModelCatalogEntry[]>([]);
   const [modelsCatalogLoaded, setModelsCatalogLoaded] = useState(false);
@@ -1032,18 +1053,12 @@ export function RightSidebar({
       return;
     }
 
-    const titleCredential = await refreshCredentialForProviderIfNeeded(
-      titleGenerationModel.provider,
-      titleGenerationModel.value
-    );
-
     const bodyPayload = {
       messages: [{ role: "user", content: titlePrompt }],
       provider: titleGenerationModel.provider,
       model: titleGenerationModel.value,
       chatId,
       origin: "title_generation",
-      userCredential: titleCredential,
     };
 
     try {
@@ -1557,6 +1572,19 @@ export function RightSidebar({
    */
   const subagentRunIndexRef = useRef<Map<string, number>>(new Map());
   const activeSubagentRunToolCallsRef = useRef<Set<string>>(new Set());
+  const deepEdaSessionRef = useRef<DeepEdaRuntimeSession>({
+    active: false,
+    activation: null,
+    objective: "",
+    state: createInitialDeepEdaState(),
+  });
+  const pendingVisualIdsRef = useRef<Set<string>>(new Set());
+  const visualRevisionRequiredIdsRef = useRef<Set<string>>(new Set());
+  const visualInspectionRecordsRef = useRef<Map<string, Record<string, unknown>>>(new Map());
+  const lastDeepEdaUpdateFingerprintRef = useRef<string | null>(null);
+  const pendingDeepEdaConfirmationRef = useRef<PendingDeepEdaConfirmation | null>(null);
+  const [deepEdaActive, setDeepEdaActive] = useState(false);
+  const [deepEdaConfirmationOpen, setDeepEdaConfirmationOpen] = useState(false);
   const forcedSubagentForCurrentTurnRef = useRef<string | null>(null);
 
   // Manual input state — v6 useChat no longer manages input
@@ -1899,100 +1927,6 @@ export function RightSidebar({
     };
   }, [addDraftReference]);
 
-  const getCredentialForModel = useCallback(
-    (
-      provider: LLM["provider"] | undefined,
-      modelId: string | undefined
-    ): ProviderCredential | undefined => {
-      if (!provider) return undefined;
-      const credential = effectiveSettings.providers?.credentials?.[provider] ?? undefined;
-      if (credential?.type !== "local_endpoint" || !modelId) {
-        return credential;
-      }
-
-      const runtimeModelId = isLocalProvider(provider)
-        ? resolveLocalRuntimeModelId(provider, modelId, credential)
-        : modelId;
-      if (!runtimeModelId) return credential;
-
-      const configuredModel = isLocalProvider(provider)
-        ? normalizeLocalEndpointModels(provider, credential).find(
-            (model) => model.modelId === runtimeModelId
-          )
-        : credential.models?.find((model) => model.modelId === runtimeModelId);
-
-      return {
-        ...credential,
-        modelId: runtimeModelId,
-        label: configuredModel?.label ?? getLocalModelLabel(provider, runtimeModelId) ?? runtimeModelId,
-      };
-    },
-    [effectiveSettings.providers?.credentials]
-  );
-
-  // User credential for the currently selected provider (BYOK, OAuth, or local endpoint).
-  // Local endpoint credentials are resolved to the selected runtime model.
-  const userCredential = getCredentialForModel(modelInfo?.provider, apiModelId);
-
-  /**
-   * Refresh a provider's ChatGPT OAuth access token if needed. BYOK credentials
-   * and providers without credentials are returned as-is.
-   */
-  const refreshCredentialForProviderIfNeeded = useCallback(async (
-    provider: LLM["provider"] | undefined,
-    modelId?: string
-  ): Promise<ProviderCredential | undefined> => {
-    if (!provider) return undefined;
-    const credential = getCredentialForModel(provider, modelId);
-    if (credential?.type !== "chatgpt_oauth") return credential;
-
-    // Refresh 60 seconds before expiry to avoid races.
-    const shouldRefresh = credential.expiresAt < Date.now() + 60_000;
-    if (!shouldRefresh) return credential;
-
-    try {
-      const res = await fetch("/api/credentials/oauth/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refreshToken: credential.refreshToken }),
-      });
-      if (!res.ok) throw new Error("Refresh request failed");
-
-      const data = await res.json() as {
-        accessToken: string;
-        refreshToken: string;
-        expiresAt: number;
-        accountId?: string;
-      };
-
-      const refreshed = {
-        type: "chatgpt_oauth" as const,
-        accessToken: data.accessToken,
-        refreshToken: data.refreshToken,
-        expiresAt: data.expiresAt,
-        ...(data.accountId && { accountId: data.accountId }),
-      };
-
-      // Persist refreshed tokens in settings so subsequent requests use them.
-      setUserSettings((current) => ({
-        ...current,
-        providers: {
-          ...current.providers,
-          credentials: {
-            ...current.providers?.credentials,
-            [provider]: refreshed,
-          },
-        },
-      }));
-
-      return refreshed;
-    } catch {
-      // If refresh fails, try with the existing (possibly expired) token.
-      // The server will return a 401 which will be shown to the user.
-      return credential;
-    }
-  }, [getCredentialForModel, setUserSettings]);
-
   const agentCommunicationStyle = effectiveSettings.chat.communicationStyle;
   const agentCustomCommunicationStyle = effectiveSettings.chat.customCommunicationStyle;
   const interactionModeConfigs = React.useMemo(
@@ -2037,9 +1971,14 @@ export function RightSidebar({
         serverInfo: assistant?.serverInfo ?? undefined,
         jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
         clientPlatformOs,
-        userCredential,
         agentCommunicationStyle,
         agentCustomCommunicationStyle,
+        deepEdaActive: deepEdaSessionRef.current.active,
+        deepEdaState: deepEdaSessionRef.current.active
+          ? deepEdaSessionRef.current.state
+          : undefined,
+        pendingVisualInspectionIds: Array.from(pendingVisualIdsRef.current),
+        visualRevisionRequiredIds: Array.from(visualRevisionRequiredIdsRef.current),
         ...overrides,
       };
     },
@@ -2059,13 +1998,65 @@ export function RightSidebar({
       modelSettingsMap,
       resolvedInteractionModeConfig,
       selectedModel,
-      userCredential,
       workspaceDirectory,
     ]
   );
 
   // Ref for dynamic body values — read by the transport function at send time
   const bodyRef = useRef<Record<string, unknown>>(buildChatRequestBody());
+
+  /** Synchronize client loop state before useChat schedules its next request. */
+  const syncAgentLoopRequestBody = useCallback(() => {
+    bodyRef.current = {
+      ...bodyRef.current,
+      deepEdaActive: deepEdaSessionRef.current.active,
+      deepEdaState: deepEdaSessionRef.current.active
+        ? deepEdaSessionRef.current.state
+        : undefined,
+      pendingVisualInspectionIds: Array.from(pendingVisualIdsRef.current),
+      visualRevisionRequiredIds: Array.from(visualRevisionRequiredIdsRef.current),
+    };
+  }, []);
+
+  /** Starts a fresh exhaustive EDA ledger after explicit user approval. */
+  const activateDeepEda = useCallback(
+    (activation: DeepEdaRuntimeSession["activation"], objective: string) => {
+      pendingVisualIdsRef.current.clear();
+      visualRevisionRequiredIdsRef.current.clear();
+      visualInspectionRecordsRef.current.clear();
+      deepEdaSessionRef.current = {
+        active: true,
+        activation,
+        objective,
+        state: createInitialDeepEdaState(),
+      };
+      lastDeepEdaUpdateFingerprintRef.current = null;
+      setDeepEdaActive(true);
+      syncAgentLoopRequestBody();
+    },
+    [syncAgentLoopRequestBody]
+  );
+
+  /** Ends the active EDA controller without altering durable notebook work. */
+  const deactivateDeepEda = useCallback(() => {
+    deepEdaSessionRef.current = {
+      active: false,
+      activation: null,
+      objective: "",
+      state: createInitialDeepEdaState(),
+    };
+    lastDeepEdaUpdateFingerprintRef.current = null;
+    setDeepEdaActive(false);
+    syncAgentLoopRequestBody();
+  }, [syncAgentLoopRequestBody]);
+
+  /** Resolves the one-time confirmation used for model-selected deep EDA. */
+  const resolveDeepEdaConfirmation = useCallback((approved: boolean) => {
+    const pending = pendingDeepEdaConfirmationRef.current;
+    pendingDeepEdaConfirmationRef.current = null;
+    setDeepEdaConfirmationOpen(false);
+    pending?.resolve(approved);
+  }, []);
 
   // Keep bodyRef in sync with latest values
   useEffect(() => {
@@ -2103,7 +2094,14 @@ export function RightSidebar({
     // Streaming can arrive at 50+ chunks/sec; throttle UI state commits so
     // markdown/tool rendering does not monopolize the main thread.
     experimental_throttle: 50,
-    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
+    sendAutomaticallyWhen: ({ messages: currentMessages }) => {
+      if (lastAssistantMessageIsCompleteWithToolCalls({ messages: currentMessages })) return true;
+      if (!deepEdaSessionRef.current.active || stopRequestedRef.current) return false;
+      const lastMessage = currentMessages.at(-1);
+      if (lastMessage?.role !== "assistant") return false;
+      const hasToolPart = lastMessage.parts.some((part) => part.type.startsWith("tool-"));
+      return !hasToolPart;
+    },
     onFinish: ({ messages: finalMessages }) => {
       const persistId = effectiveChatIdRef.current;
       if (!persistId) return;
@@ -2115,7 +2113,8 @@ export function RightSidebar({
         : -1;
       const checkpointUserMessageId =
         checkpointUserMessageIndex >= 0 ? finalMessages[checkpointUserMessageIndex]?.id : undefined;
-      const newChatMessages: ChatMessage[] = finalMessages.map((m, messageIndex) => {
+      const persistedMessages = stripInspectedRasterData(finalMessages);
+      const newChatMessages: ChatMessage[] = persistedMessages.map((m, messageIndex) => {
         const messageForStorage = stripSessionOnlyFileParts(m);
         const existing = chatForPersist?.messages.find((msg) => msg.id === m.id);
         const references = parseChatMessageReferences(m.metadata);
@@ -2177,7 +2176,6 @@ export function RightSidebar({
         compactConversation(currentMessages, {
           chatId,
           previousSummary: prevSummary,
-          userCredential,
           model: apiModelId,
           provider: modelInfo.provider,
           retentionTurns: 2,
@@ -2226,7 +2224,9 @@ export function RightSidebar({
   const addToolOutputRef = useRef(addToolOutput);
 
   const hasPendingToolCalls = React.useMemo(() => {
-    const modeUsesTools = resolvedInteractionModeConfig.toolNames.length > 0;
+    const modeUsesTools =
+      resolvedInteractionModeConfig.toolNames.length > 0 ||
+      resolvedInteractionModeConfig.baseMode === "Agent";
     if (!modeUsesTools) return false;
 
     return messages.some((msg) =>
@@ -2237,7 +2237,7 @@ export function RightSidebar({
           part.state === "input-available"
       )
     );
-  }, [messages, resolvedInteractionModeConfig.toolNames.length]);
+  }, [messages, resolvedInteractionModeConfig.baseMode, resolvedInteractionModeConfig.toolNames.length]);
 
   /**
    * True while the agent is mid-turn: streaming, executing tools, or waiting for
@@ -2300,9 +2300,14 @@ export function RightSidebar({
       );
       if (!skillAvailable) return;
 
-      setInput((current) =>
-        insertSkillIntoComposerInput(current, detail.skillName, detail.message),
-      );
+      if (detail.newChat) {
+        createNewChatRef.current();
+        setInput(insertSkillIntoComposerInput("", detail.skillName, detail.message));
+      } else {
+        setInput((current) =>
+          insertSkillIntoComposerInput(current, detail.skillName, detail.message),
+        );
+      }
       const focusComposer = () => textareaRef.current?.focus();
       focusComposer();
       window.setTimeout(focusComposer, 0);
@@ -2343,7 +2348,6 @@ export function RightSidebar({
       const result = await compactConversation(messagesRef.current, {
         chatId: effectiveChatId,
         previousSummary: currentChat?.compactionSummary,
-        userCredential,
         model: apiModelId,
         provider: modelInfo.provider,
         ...opts,
@@ -2370,7 +2374,7 @@ export function RightSidebar({
       compactionInFlightRef.current = false;
       setIsCompacting(false);
     }
-  }, [effectiveChatId, currentChat?.compactionSummary, userCredential, selectedModel, modelInfo?.provider, setChats]);
+  }, [effectiveChatId, currentChat?.compactionSummary, selectedModel, modelInfo?.provider, setChats]);
 
   /** Fetches recorded usage for this chat and renders it as a temporary assistant row. */
   const showCostSummary = useCallback(async (options?: { refresh?: boolean }): Promise<void> => {
@@ -2541,6 +2545,28 @@ export function RightSidebar({
     [activeNotebookPath, kernelService, refreshCheckpointStatuses]
   );
 
+  /** Applies model-specific raster preview handling and arms the inspection gate. */
+  const prepareAgentToolResult = useCallback(
+    async (result: unknown): Promise<unknown> => {
+      if (!isExecutionToolResult(result)) return result;
+      const prepared = await prepareExecutionToolResultForModel({
+        result,
+        supportsImageInput: modelInfo?.supportsImageInput === true,
+        imageMaxBase64Chars: effectiveSettings.agent.toolOutput.imageBase64CharBudget,
+      });
+      for (const visual of prepared.visuals) {
+        pendingVisualIdsRef.current.add(visual.visualId);
+      }
+      syncAgentLoopRequestBody();
+      return prepared;
+    },
+    [
+      effectiveSettings.agent.toolOutput.imageBase64CharBudget,
+      modelInfo?.supportsImageInput,
+      syncAgentLoopRequestBody,
+    ]
+  );
+
   const enqueueToolExecution = useCallback(
     (toolCallId: string, toolName: OrionToolName, args: Record<string, unknown>) => {
       if (!assistant) return;
@@ -2553,6 +2579,176 @@ export function RightSidebar({
               result: CANCELLED_TOOL_RESULT,
             });
             markToolEnded(toolCallId);
+            return;
+          }
+
+          const finishControlTool = (result: unknown) => {
+            trackedToolCallsRef.current.set(toolCallId, { status: "completed", result });
+            if (!stopRequestedRef.current) {
+              addTimedToolOutput({ tool: toolName, toolCallId, output: result });
+            }
+          };
+
+          if (toolName === "begin_deep_eda") {
+            const objective = typeof args.objective === "string" ? args.objective.trim() : "";
+            if (deepEdaSessionRef.current.active) {
+              finishControlTool({
+                active: true,
+                alreadyActive: true,
+                doNotCallAgain: true,
+                instruction: "The run is already active. Take the next concrete analytical action.",
+              });
+              return;
+            }
+
+            const approved = await new Promise<boolean>((resolve) => {
+              pendingDeepEdaConfirmationRef.current = { objective, resolve };
+              setDeepEdaConfirmationOpen(true);
+            });
+            if (!approved) {
+              finishControlTool({ active: false, declinedByUser: true });
+              return;
+            }
+            activateDeepEda("confirmed-natural-language", objective);
+            finishControlTool({ active: true, activation: "confirmed-natural-language" });
+            return;
+          }
+
+          if (toolName === "record_visual_inspection") {
+            const inspections = Array.isArray(args.inspections)
+              ? args.inspections.filter(
+                  (inspection): inspection is Record<string, unknown> =>
+                    typeof inspection === "object" && inspection !== null
+                )
+              : [];
+            const submittedIds = new Set(
+              inspections
+                .map((inspection) => inspection.visualId)
+                .filter((visualId): visualId is string => typeof visualId === "string")
+            );
+            const missingIds = Array.from(pendingVisualIdsRef.current).filter(
+              (visualId) => !submittedIds.has(visualId)
+            );
+            if (missingIds.length > 0) {
+              finishControlTool({
+                accepted: false,
+                error: `Inspection must cover every pending raster output: ${missingIds.join(", ")}.`,
+              });
+              return;
+            }
+            const unavailableWithoutChecks = inspections.filter(
+              (inspection) =>
+                inspection.verdict === "unavailable" &&
+                (!Array.isArray(inspection.supportingChecks) || inspection.supportingChecks.length === 0)
+            );
+            if (unavailableWithoutChecks.length > 0) {
+              finishControlTool({
+                accepted: false,
+                error: "Unavailable visual inspections require supporting numeric or structural checks.",
+              });
+              return;
+            }
+
+            for (const inspection of inspections) {
+              const visualId = inspection.visualId;
+              if (typeof visualId !== "string" || !pendingVisualIdsRef.current.has(visualId)) {
+                continue;
+              }
+              visualInspectionRecordsRef.current.set(visualId, inspection);
+              pendingVisualIdsRef.current.delete(visualId);
+              if (inspection.disposition === "revise") {
+                visualRevisionRequiredIdsRef.current.add(visualId);
+              }
+              const supersedesVisualId = inspection.supersedesVisualId;
+              if (
+                typeof supersedesVisualId === "string" &&
+                supersedesVisualId.length > 0 &&
+                inspection.verdict === "valid" &&
+                inspection.disposition === "accept"
+              ) {
+                visualRevisionRequiredIdsRef.current.delete(supersedesVisualId);
+              }
+            }
+            syncAgentLoopRequestBody();
+            finishControlTool({
+              accepted: true,
+              inspectedVisualIds: Array.from(submittedIds),
+              revisionRequiredVisualIds: Array.from(visualRevisionRequiredIdsRef.current),
+              instruction:
+                inspections.some((inspection) => inspection.disposition === "revise")
+                  ? "Revise and regenerate the questionable or invalid visual before finishing."
+                  : "Visual sanity checks recorded. Continue with the user's requested scope.",
+            });
+            return;
+          }
+
+          if (toolName === "update_deep_eda_state") {
+            if (!deepEdaSessionRef.current.active) {
+              finishControlTool({ error: "No deep-EDA session is active." });
+              return;
+            }
+            const update = args as unknown as DeepEdaStateUpdate;
+            const fingerprint = JSON.stringify(update);
+            if (lastDeepEdaUpdateFingerprintRef.current === fingerprint) {
+              finishControlTool({
+                accepted: false,
+                duplicate: true,
+                instruction: "This ledger update was already applied. Gather new evidence or take the next analytical action.",
+              });
+              return;
+            }
+            deepEdaSessionRef.current = {
+              ...deepEdaSessionRef.current,
+              state: applyDeepEdaStateUpdate(deepEdaSessionRef.current.state, update),
+            };
+            lastDeepEdaUpdateFingerprintRef.current = fingerprint;
+            syncAgentLoopRequestBody();
+            finishControlTool({
+              accepted: true,
+              ledgerUpdated: true,
+              instruction: "Ledger increment merged. Continue with the highest-value unresolved analysis.",
+            });
+            return;
+          }
+
+          if (toolName === "complete_deep_eda") {
+            if (!deepEdaSessionRef.current.active) {
+              finishControlTool({ error: "No deep-EDA session is active." });
+              return;
+            }
+            const synthesisCellIndices = Array.isArray(args.synthesisCellIndices)
+              ? args.synthesisCellIndices.filter(
+                  (value): value is number => Number.isInteger(value) && Number(value) >= 0
+                )
+              : [];
+            const missingRequirements = validateDeepEdaCompletion({
+              state: deepEdaSessionRef.current.state,
+              pendingVisualIds: Array.from(pendingVisualIdsRef.current),
+              unresolvedVisualRevisionIds: Array.from(visualRevisionRequiredIdsRef.current),
+              inspectedVisualCount: visualInspectionRecordsRef.current.size,
+              synthesisCellIndices,
+            });
+            if (synthesisCellIndices.length > 0) {
+              const synthesisRead = await assistant.executeToolCall("read_cell", {
+                cellIndices: synthesisCellIndices,
+                includeOutputs: false,
+                includeOrionMetadata: false,
+              });
+              const synthesisText = typeof synthesisRead === "string" ? synthesisRead : "";
+              for (const cellIndex of synthesisCellIndices) {
+                if (!synthesisText.includes(`=====Cell ${cellIndex} | type: markdown |`)) {
+                  missingRequirements.push(
+                    `Synthesis cell ${cellIndex} is missing or is not a markdown cell.`
+                  );
+                }
+              }
+            }
+            if (missingRequirements.length > 0) {
+              finishControlTool({ accepted: false, missingRequirements });
+              return;
+            }
+            deactivateDeepEda();
+            finishControlTool({ accepted: true, deepEdaComplete: true });
             return;
           }
 
@@ -2652,11 +2848,6 @@ export function RightSidebar({
               failDelegate(modelResolution.errorText);
               return;
             }
-            const effectiveUserCredential = await refreshCredentialForProviderIfNeeded(
-              modelResolution.providerId,
-              modelResolution.modelId
-            );
-
             const existingSubagentSessions = currentChat?.subagentSessions ?? {};
             const existingMaxInstance = Object.values(existingSubagentSessions)
               .filter((session) => session.subagentType === subagentType)
@@ -2749,7 +2940,6 @@ export function RightSidebar({
                 onToolEnd: markToolEnded,
                 createTmpNotebookCopy: assistant.createTmpSubagentNotebookCopy,
                 abortSignal: abortController.signal,
-                userCredential: effectiveUserCredential,
                 onTmpNotebookPath: (tmpNotebookPath) => {
                   writeSubagentSession({
                     status: "running",
@@ -2837,11 +3027,12 @@ export function RightSidebar({
 
           // ---- all other tools: delegate to AssistantProvider -------------
           try {
-            const result = await assistant.executeToolCall(toolName, args, {
+            const rawResult = await assistant.executeToolCall(toolName, args, {
               modelRequestId: modelRequestIdRef.current,
               chatId: effectiveChatIdRef.current,
               toolCallId,
             });
+            const result = await prepareAgentToolResult(rawResult);
             trackedToolCallsRef.current.set(toolCallId, { status: "completed", result });
             if (stopRequestedRef.current) {
               return;
@@ -2879,17 +3070,22 @@ export function RightSidebar({
       currentChat?.subagentSessions,
       clientPlatformOs,
       modelsWithAccess,
-      refreshCredentialForProviderIfNeeded,
       addTimedToolOutput,
       markToolStarted,
       markToolEnded,
       setChats,
+      activateDeepEda,
+      deactivateDeepEda,
+      prepareAgentToolResult,
+      syncAgentLoopRequestBody,
     ]
   );
 
   // Tool execution loop — fires whenever messages update with pending tool calls
   useEffect(() => {
-    const modeUsesTools = resolvedInteractionModeConfig.toolNames.length > 0;
+    const modeUsesTools =
+      resolvedInteractionModeConfig.toolNames.length > 0 ||
+      resolvedInteractionModeConfig.baseMode === "Agent";
     if (!modeUsesTools || !assistant?.toolsReady) return;
 
     for (const msg of messages) {
@@ -3011,11 +3207,12 @@ export function RightSidebar({
               }
               if (!assistant) return;
               try {
-                const toolResult = await assistant.executeToolCall(toolNameTyped, inv.input, {
+                const rawToolResult = await assistant.executeToolCall(toolNameTyped, inv.input, {
                   modelRequestId: modelRequestIdRef.current,
                   chatId: effectiveChatIdRef.current,
                   toolCallId: inv.toolCallId,
                 });
+                const toolResult = await prepareAgentToolResult(rawToolResult);
                 trackedToolCallsRef.current.set(inv.toolCallId, { status: "completed", result: toolResult });
                 if (!stopRequestedRef.current) {
                   addTimedToolOutput({ tool: toolNameTyped, toolCallId: inv.toolCallId, output: toolResult });
@@ -3041,6 +3238,7 @@ export function RightSidebar({
   }, [
     messages,
     resolvedInteractionModeConfig.bashPolicy,
+    resolvedInteractionModeConfig.baseMode,
     resolvedInteractionModeConfig.toolNames.length,
     assistant,
     kernelStatus,
@@ -3049,6 +3247,7 @@ export function RightSidebar({
     toolApprovalMode,
     markToolStarted,
     addTimedToolOutput,
+    prepareAgentToolResult,
   ]);
 
   // When the Jupyter server connects (toolsReady), flush server-only tool calls that were
@@ -3256,7 +3455,6 @@ export function RightSidebar({
     setMessageQueue([]);
   };
 
-  const createNewChatRef = useRef(createNewChat);
   createNewChatRef.current = createNewChat;
 
   const setHistoryPopoverOpenRef = useRef(setIsHistoryPopoverOpen);
@@ -3454,12 +3652,6 @@ export function RightSidebar({
       }
       setEphemeralCostMessage(null);
 
-      // Refresh OAuth token if needed before sending
-      const freshCredential = await refreshCredentialForProviderIfNeeded(
-        modelInfo?.provider,
-        apiModelId
-      );
-
       // Pre-send context budget check: auto-compact if the estimated wire payload
       // exceeds COMPACTION_AUTO_THRESHOLD × cap before sending.
       if (!compactionInFlightRef.current) {
@@ -3474,11 +3666,10 @@ export function RightSidebar({
         }
       }
 
-      // Update bodyRef with fresh credential before sending.
+      // Update bodyRef with the request id before sending.
       bodyRef.current = {
         ...bodyRef.current,
         modelRequestId,
-        userCredential: freshCredential,
       };
 
       await sendMessage(
@@ -3490,7 +3681,7 @@ export function RightSidebar({
             : {}),
         },
         {
-          body: buildChatRequestBody({ modelRequestId, userCredential: freshCredential }),
+          body: buildChatRequestBody({ modelRequestId }),
         }
       );
     },
@@ -3504,7 +3695,6 @@ export function RightSidebar({
       selectedModel,
       isInputLocked,
       buildChatRequestBody,
-      refreshCredentialForProviderIfNeeded,
       runCompaction,
       getModel,
       beginAgentTurn,
@@ -3594,11 +3784,19 @@ export function RightSidebar({
         assistant?.availableSkills.some((skill) => skill.name === skillName)
       );
       if (allSelectedSkillsAvailable && !isInputLocked) {
+        const activatesDeepEda = selectedSkills.skillNames.includes("deep-eda");
+        if (activatesDeepEda && resolvedInteractionModeConfig.baseMode !== "Agent") {
+          toast.error("Deep EDA is available only in Agent mode.");
+          return;
+        }
         beginAgentTurn();
         const modelRequestId = crypto.randomUUID();
         modelRequestIdRef.current = modelRequestId;
         const plainUserText =
           selectedSkills.message || formatApplySkillsRequest(selectedSkills.skillNames);
+        if (activatesDeepEda) {
+          activateDeepEda("slash", plainUserText);
+        }
 
         clearComposer();
         setEphemeralCostMessage(null);
@@ -3611,6 +3809,7 @@ export function RightSidebar({
             body: buildChatRequestBody({
               modelRequestId,
               forcedSkillNames: selectedSkills.skillNames,
+              ...(activatesDeepEda ? { deepEdaActive: true } : {}),
             }),
           }
         );
@@ -3981,8 +4180,23 @@ export function RightSidebar({
     pendingApprovalToolCallsRef.current.clear();
     setPendingApprovalIds(new Set());
 
+    pendingVisualIdsRef.current.clear();
+    visualRevisionRequiredIdsRef.current.clear();
+    visualInspectionRecordsRef.current.clear();
+    resolveDeepEdaConfirmation(false);
+    deactivateDeepEda();
+
     stop();
-  }, [chats, markToolEnded, selectedModel, setChats, setMessages, stop]);
+  }, [
+    chats,
+    deactivateDeepEda,
+    markToolEnded,
+    resolveDeepEdaConfirmation,
+    selectedModel,
+    setChats,
+    setMessages,
+    stop,
+  ]);
 
   /** Handles confirmation from the stop-and-switch dialog */
   const handleStopConfirm = useCallback(() => {
@@ -4165,6 +4379,13 @@ export function RightSidebar({
             onExportTranscript={handleExportTranscript}
           />
 
+          {deepEdaActive ? (
+            <div className="mx-2 mb-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-900 dark:text-violet-100">
+              <span className="font-semibold">Deep EDA active.</span>{" "}
+              Orion will continue until its evidence and coverage checks pass or you press Stop.
+            </div>
+          ) : null}
+
           <ChatBody
             key="main-chat-body"
             viewKey={`main:${effectiveChatId ?? "no-chat"}`}
@@ -4251,6 +4472,40 @@ export function RightSidebar({
         onOpenChange={setAutoRunConfirmOpen}
         onConfirm={handleAutoRunConfirm}
       />
+
+      <AlertDialog
+        open={deepEdaConfirmationOpen}
+        onOpenChange={(open) => {
+          if (!open) resolveDeepEdaConfirmation(false);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Start exhaustive deep EDA?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The agent requested the deep-EDA skill for
+              {pendingDeepEdaConfirmationRef.current?.objective
+                ? ` “${pendingDeepEdaConfirmationRef.current.objective}”`
+                : " this task"}
+              . It will continue without an automatic iteration limit until its completion checks pass or you press Stop.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              onClick={() => resolveDeepEdaConfirmation(false)}
+              shortcut="Escape"
+            >
+              Keep it bounded
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => resolveDeepEdaConfirmation(true)}
+              shortcut="Enter"
+            >
+              Start deep EDA
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={stopConfirmAction !== null}

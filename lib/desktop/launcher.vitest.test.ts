@@ -21,7 +21,8 @@ const baseOptions = {
 
 describe("desktop launcher policy", () => {
   it("prevents bundled Python from modifying the signed application bundle", () => {
-    expect(createBundledPythonEnvironment({ PATH: "/usr/bin" })).toEqual({
+    expect(createBundledPythonEnvironment({ NODE_ENV: "test", PATH: "/usr/bin" })).toEqual({
+      NODE_ENV: "test",
       PATH: "/usr/bin",
       PYTHONDONTWRITEBYTECODE: "1",
     });

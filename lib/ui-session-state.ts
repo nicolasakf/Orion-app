@@ -27,6 +27,9 @@ export const DEFAULT_PANEL_LAYOUT_STATE: PanelLayoutState = {
   vertical: [70, 30],
 };
 
+/** Default when no tab session value exists: hide code cell inputs (presentation mode). */
+export const DEFAULT_NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS = true;
+
 /**
  * Reads transient app-shell panel visibility from the current browser tab.
  */
@@ -147,17 +150,17 @@ export function savePanelLayoutState(state: PanelLayoutState): void {
  */
 export function loadNotebookPresentationHideAllCellInputs(): boolean {
   if (typeof window === "undefined") {
-    return false;
+    return DEFAULT_NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS;
   }
 
   try {
     const raw = window.sessionStorage.getItem(
       NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS_SESSION_KEY
     );
-    if (!raw) return false;
+    if (!raw) return DEFAULT_NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS;
     return JSON.parse(raw) === true;
   } catch {
-    return false;
+    return DEFAULT_NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS;
   }
 }
 

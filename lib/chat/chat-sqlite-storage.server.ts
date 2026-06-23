@@ -324,6 +324,7 @@ export async function getChatDatabase(): Promise<OrionDatabase> {
   }
 
   database = opened;
+  database.pragma("busy_timeout = 5000");
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
   migrateDatabase(database);

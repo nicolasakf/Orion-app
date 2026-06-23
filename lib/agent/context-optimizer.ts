@@ -76,6 +76,69 @@ function stubOutput(output: unknown, toolName: string): string {
   return stub;
 }
 
+/** Collect visual IDs from accepted record_visual_inspection calls. */
+function collectInspectedVisualIds(messages: UIMessage[]): Set<string> {
+  const inspected = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if (part.type !== "tool-record_visual_inspection") continue;
+      const record = part as unknown as Record<string, unknown>;
+      const output = record.output;
+      if (
+        typeof output !== "object" ||
+        output === null ||
+        (output as Record<string, unknown>).accepted !== true
+      ) {
+        continue;
+      }
+      const input = record.input;
+      if (typeof input !== "object" || input === null) continue;
+      const inspections = (input as Record<string, unknown>).inspections;
+      if (!Array.isArray(inspections)) continue;
+      for (const inspection of inspections) {
+        if (typeof inspection !== "object" || inspection === null) continue;
+        const visualId = (inspection as Record<string, unknown>).visualId;
+        if (typeof visualId === "string") inspected.add(visualId);
+      }
+    }
+  }
+  return inspected;
+}
+
+/** Remove raster bytes once the agent has persisted a structured inspection. */
+export function stripInspectedRasterData(messages: UIMessage[]): UIMessage[] {
+  const inspected = collectInspectedVisualIds(messages);
+  if (inspected.size === 0) return messages;
+
+  return messages.map((message) => ({
+    ...message,
+    parts: message.parts.map((part) => {
+      if (!isOutputAvailableToolPart(part)) return part;
+      const toolPart = part as unknown as Record<string, unknown>;
+      const output = toolPart.output;
+      if (typeof output !== "object" || output === null || Array.isArray(output)) return part;
+      const visuals = (output as Record<string, unknown>).visuals;
+      if (!Array.isArray(visuals)) return part;
+      let changed = false;
+      const nextVisuals = visuals.map((visual) => {
+        if (typeof visual !== "object" || visual === null) return visual;
+        const record = visual as Record<string, unknown>;
+        if (typeof record.visualId !== "string" || !inspected.has(record.visualId)) return visual;
+        if (!("data" in record)) return visual;
+        changed = true;
+        const { data: _data, ...withoutData } = record;
+        return {
+          ...withoutData,
+          visualInspectionUnavailableReason: "raw preview removed after structured inspection",
+        };
+      });
+      return changed
+        ? ({ ...part, output: { ...(output as Record<string, unknown>), visuals: nextVisuals } } as typeof part)
+        : part;
+    }),
+  })) as UIMessage[];
+}
+
 /**
  * Return the 0-based index of the first message that should be kept verbatim
  * (everything before this index is "old" and gets optimized).
@@ -112,11 +175,12 @@ export function optimizeMessagesForWire(
   messages: UIMessage[],
   opts?: { retentionTurns?: number }
 ): UIMessage[] {
+  const withoutInspectedRasterData = stripInspectedRasterData(messages);
   const retention = opts?.retentionTurns ?? OPTIMIZER_RETENTION_TURNS;
-  const cutoffIdx = findRetentionCutoff(messages, retention);
-  if (cutoffIdx <= 0) return messages;
+  const cutoffIdx = findRetentionCutoff(withoutInspectedRasterData, retention);
+  if (cutoffIdx <= 0) return withoutInspectedRasterData;
 
-  return messages.map((msg, idx) => {
+  return withoutInspectedRasterData.map((msg, idx) => {
     if (idx >= cutoffIdx) return msg;
 
     const hasOldToolParts = msg.parts.some(isOutputAvailableToolPart);

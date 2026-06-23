@@ -57,12 +57,36 @@ async function parseJsonResponse(response: Response): Promise<unknown> {
   return body;
 }
 
+/** Retries idempotent chat reads across brief route compilation or SQLite busy windows. */
+async function fetchChatJsonWithRetry(url: string, attempts = 3): Promise<unknown> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, { method: "GET" });
+      if (!response.ok && response.status < 500) {
+        return await parseJsonResponse(response);
+      }
+      if (response.ok) {
+        return await parseJsonResponse(response);
+      }
+      lastError = await parseJsonResponse(response).catch((error) => error);
+    } catch (error) {
+      lastError = error;
+    }
+
+    if (attempt < attempts - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Failed to read chats.");
+}
+
 /** Client-side chat storage facade backed by Orion's local chat API. */
 class ChatStorage {
   /** Get all chats with full message history. */
   async getChats(): Promise<Chat[]> {
-    const response = await fetch(CHATS_API_PATH, { method: "GET" });
-    const raw = await parseJsonResponse(response);
+    const raw = await fetchChatJsonWithRetry(CHATS_API_PATH);
     const parsed = ChatWireSchema.array().safeParse(
       raw && typeof raw === "object" && "chats" in raw
         ? (raw as { chats: unknown }).chats
@@ -79,10 +103,7 @@ class ChatStorage {
    * UI can render without loading every long conversation body.
    */
   async getChatMetas(): Promise<Chat[]> {
-    const response = await fetch(`${CHATS_API_PATH}?metadataOnly=true`, {
-      method: "GET",
-    });
-    const raw = await parseJsonResponse(response);
+    const raw = await fetchChatJsonWithRetry(`${CHATS_API_PATH}?metadataOnly=true`);
     const parsed = ChatWireSchema.array().safeParse(
       raw && typeof raw === "object" && "chats" in raw
         ? (raw as { chats: unknown }).chats

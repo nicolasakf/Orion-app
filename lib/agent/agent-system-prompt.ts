@@ -12,6 +12,7 @@ import type { JupyterServerInfo } from "@/lib/kernel/kernel-service";
 import { formatPlatformOsForPrompt, type PlatformOS } from "@/lib/utils";
 import { filterDiscoverableSubagents } from "@/lib/agent/subagents/discovery";
 import { filterModelInvocableSkills } from "@/lib/skills/discovery";
+import { buildRequiredSkillsPromptSection } from "@/lib/agent/implicit-skills";
 import { buildRulesPromptSection, type AgentRule } from "@/lib/agent/rules";
 import type { AgentCommunicationStyle } from "@/lib/settings/schema";
 export { buildSubagentSystemPrompt } from "@/lib/agent/subagents";
@@ -370,15 +371,8 @@ ${skillLines}`);
       : [];
 
   if (requiredSkillNames.length > 0) {
-    const skillList = requiredSkillNames.map((name) => `\`${name}\``).join(", ");
-    const loadLines = requiredSkillNames
-      .map((name) => `- You MUST call \`load_skill\` with \`name: "${name}"\`.`)
-      .join("\n");
-    sections.push(`## Active Skill Requirement
-
-The user explicitly selected the ${skillList} skill${requiredSkillNames.length === 1 ? "" : "s"} for this turn.
-${loadLines}
-- Load the selected skill${requiredSkillNames.length === 1 ? "" : "s"} before doing any other work.`);
+    const requiredSkillsSection = buildRequiredSkillsPromptSection(requiredSkillNames);
+    if (requiredSkillsSection) sections.push(requiredSkillsSection);
   }
 
   if (forcedSubagentName) {
@@ -527,15 +521,8 @@ ${skillLines}`);
       : [];
 
   if (requiredSkillNames.length > 0) {
-    const skillList = requiredSkillNames.map((name) => `\`${name}\``).join(", ");
-    const loadLines = requiredSkillNames
-      .map((name) => `- You MUST call \`load_skill\` with \`name: "${name}"\`.`)
-      .join("\n");
-    sections.push(`## Active Skill Requirement
-
-The user explicitly selected the ${skillList} skill${requiredSkillNames.length === 1 ? "" : "s"} for this turn.
-${loadLines}
-- Load the selected skill${requiredSkillNames.length === 1 ? "" : "s"} before doing any other work.`);
+    const requiredSkillsSection = buildRequiredSkillsPromptSection(requiredSkillNames);
+    if (requiredSkillsSection) sections.push(requiredSkillsSection);
   }
 
   if (options?.forcedSubagentName) {

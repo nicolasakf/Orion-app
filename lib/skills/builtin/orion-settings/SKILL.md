@@ -25,7 +25,7 @@ Settings merge in this order:
 
 Workspace settings override user-level settings. A workspace settings file is read through Jupyter's ContentsManager at `.orion/settings.json` relative to the active workspace.
 
-Provider credentials are browser-only. Do not write API keys, ChatGPT OAuth tokens, local endpoint bearer tokens, or Jupyter tokens into user or workspace settings files. If a settings file contains `providers.credentials`, remove or ignore it.
+Provider credentials live in `~/.orion/credentials.json` (or under `ORION_HOME_DIR`). Do not inspect, print, expose, or copy that file. Do not write API keys, ChatGPT OAuth tokens, local endpoint bearer tokens, or Jupyter tokens into user or workspace settings files. If a settings file contains `providers.credentials`, remove or ignore it.
 
 Partial JSON is merged with built-in defaults on load. Workspace overrides may be **deep partial** (only changed keys).
 
@@ -365,7 +365,7 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 
 | Field | Type | Allowed values | Default | Description |
 | --- | --- | --- | --- | --- |
-| `credentials` | object | Map of provider ID → credential object | `{}` | **Do not write to JSON files.** Browser-only BYOK/OAuth/local endpoint secrets. Keys: `openai`, `anthropic`, `google`, `xai`, `ollama`, `lmstudio`, `mlx`, `custom`. Credential shapes: `api_key` (`apiKey`), `chatgpt_oauth` (`accessToken`, `refreshToken`, `expiresAt`, optional `accountId`), `local_endpoint` (`baseUrl`, `modelId`, optional `label`, `models[]`, optional `apiKey`). |
+| `credentials` | object | Map of provider ID → credential summary | `{}` | **Do not write secrets to settings JSON.** Runtime secrets live in `~/.orion/credentials.json`; UI state may contain only safe summaries such as configured type, local endpoint base URL/model IDs, OAuth expiry, and account ID. |
 
 ## Common examples
 
@@ -412,9 +412,7 @@ Do not include:
 ```json
 {
   "providers": {
-    "credentials": {
-      "openai": { "type": "api_key", "apiKey": "..." }
-    }
+    "credentials": {}
   }
 }
 ```
