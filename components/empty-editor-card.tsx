@@ -40,6 +40,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import type { KernelService } from "@/lib/kernel/kernel-service";
+import type { EmptyEditorCardContent } from "@/lib/settings/schema";
 import { cn } from "@/lib/utils";
 import { dispatchWorkspaceFilesChanged } from "@/lib/workspace/workspace-events";
 
@@ -59,8 +60,33 @@ interface EmptyEditorCardProps {
 
 type CreateItemKind = "file" | "folder";
 
-const RECENT_FILE_LIMIT = 5;
-const PINNED_WORKSPACE_LIMIT = 5;
+interface EmptyEditorCardSectionConfig {
+  content: EmptyEditorCardContent;
+  title: string;
+  emptyMessage: string;
+  icon: React.ReactNode;
+}
+
+const EMPTY_EDITOR_CARD_SECTIONS: Record<
+  EmptyEditorCardContent,
+  Omit<EmptyEditorCardSectionConfig, "content">
+> = {
+  recent_files: {
+    title: "Recent files",
+    emptyMessage: "No recent files",
+    icon: <History className="h-4 w-4 text-muted-foreground" />,
+  },
+  pinned_files: {
+    title: "Pinned files",
+    emptyMessage: "No pinned files",
+    icon: <Pin className="h-4 w-4 text-muted-foreground" />,
+  },
+  pinned_workspaces: {
+    title: "Pinned workspaces",
+    emptyMessage: "No pinned workspaces",
+    icon: <Pin className="h-4 w-4 text-muted-foreground" />,
+  },
+};
 
 /**
  * Returns a compact display label for a Jupyter-relative workspace path.
@@ -198,6 +224,153 @@ async function createWorkspaceRootFolder(
   });
 }
 
+interface EmptyEditorShortcutCardProps {
+  section: EmptyEditorCardSectionConfig;
+  recentFiles: EmptyEditorFile[];
+  pinnedFilePaths: string[];
+  pinnedWorkspacePaths: string[];
+  maxItems: number;
+  onOpenFile?: (file: EmptyEditorFile) => void;
+  onWorkspaceChange?: (path: string) => void;
+}
+
+/**
+ * Renders one configurable shortcut list in the empty-editor card grid.
+ */
+function EmptyEditorShortcutCard({
+  section,
+  recentFiles,
+  pinnedFilePaths,
+  pinnedWorkspacePaths,
+  maxItems,
+  onOpenFile,
+  onWorkspaceChange,
+}: EmptyEditorShortcutCardProps) {
+  if (section.content === "recent_files") {
+    const files = recentFiles.slice(0, maxItems);
+
+    return (
+      <section className="corner-squircle min-w-0 rounded-md border border-sidebar-border bg-transparent p-4">
+        <div className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          {section.icon}
+          {section.title}
+        </div>
+        {files.length > 0 ? (
+          <div className="space-y-1">
+            {files.map((file) => (
+              <button
+                key={file.path}
+                type="button"
+                className={cn(
+                  "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                  "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                )}
+                onClick={() => onOpenFile?.(file)}
+              >
+                <FileIcon filename={file.name} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{file.name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {file.path}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+            {section.emptyMessage}
+          </p>
+        )}
+      </section>
+    );
+  }
+
+  if (section.content === "pinned_files") {
+    const files = pinnedFilePaths.slice(0, maxItems).map((path) => ({
+      name: path.split("/").pop() ?? path,
+      path,
+    }));
+
+    return (
+      <section className="corner-squircle min-w-0 rounded-md border border-sidebar-border bg-transparent p-4">
+        <div className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground">
+          {section.icon}
+          {section.title}
+        </div>
+        {files.length > 0 ? (
+          <div className="space-y-1">
+            {files.map((file) => (
+              <button
+                key={file.path}
+                type="button"
+                className={cn(
+                  "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                  "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                )}
+                onClick={() => onOpenFile?.(file)}
+              >
+                <FileIcon filename={file.name} />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{file.name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {file.path}
+                  </span>
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+            {section.emptyMessage}
+          </p>
+        )}
+      </section>
+    );
+  }
+
+  const workspaces = pinnedWorkspacePaths.slice(0, maxItems);
+
+  return (
+    <section className="corner-squircle min-w-0 rounded-md border border-sidebar-border bg-transparent p-4">
+      <div className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground">
+        {section.icon}
+        {section.title}
+      </div>
+      {workspaces.length > 0 ? (
+        <div className="space-y-1">
+          {workspaces.map((path) => (
+            <button
+              key={path}
+              type="button"
+              className={cn(
+                "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              )}
+              title={path}
+              onClick={() => onWorkspaceChange?.(path)}
+            >
+              <Folder className="h-4 w-4 shrink-0 fill-[#ff4800] text-black/60" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">
+                  {workspacePathLabel(path)}
+                </span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {path}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+          {section.emptyMessage}
+        </p>
+      )}
+    </section>
+  );
+}
+
 /**
  * Shows connected workspace shortcuts when the editor has no active file.
  */
@@ -219,15 +392,23 @@ export function EmptyEditorCard({
     workspaceDirectory !== null && workspaceDirectory !== undefined
       ? workspaceDirectory
       : "";
-  /** Server root (`""`) is never pinned; show up to five pins without an inner scroll cap. */
-  const pinnedWorkspaces = React.useMemo(
+  const emptyEditorSettings = effectiveSettings.editor.emptyEditor;
+  /** Server root (`""`) is never pinned. */
+  const pinnedWorkspacePaths = React.useMemo(
     () =>
-      effectiveSettings.workspace.pinnedDirectoryPaths
-        .filter((path) => path !== "")
-        .slice(0, PINNED_WORKSPACE_LIMIT),
+      effectiveSettings.workspace.pinnedDirectoryPaths.filter((path) => path !== ""),
     [effectiveSettings.workspace.pinnedDirectoryPaths]
   );
-  const topRecentFiles = recentFiles.slice(0, RECENT_FILE_LIMIT);
+  const cardSections = React.useMemo<EmptyEditorCardSectionConfig[]>(
+    () =>
+      [emptyEditorSettings.leftCard, emptyEditorSettings.rightCard].map(
+        (content) => ({
+          content,
+          ...EMPTY_EDITOR_CARD_SECTIONS[content],
+        })
+      ),
+    [emptyEditorSettings.leftCard, emptyEditorSettings.rightCard]
+  );
 
   React.useEffect(() => {
     if (!createDialogOpen) return;
@@ -328,78 +509,18 @@ export function EmptyEditorCard({
         </div>
 
         <div className="grid gap-5 sm:grid-cols-2">
-          <section className="corner-squircle min-w-0 rounded-md border border-sidebar-border bg-transparent p-4">
-            <div className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <History className="h-4 w-4 text-muted-foreground" />
-              Recent files
-            </div>
-            {topRecentFiles.length > 0 ? (
-              <div className="space-y-1">
-                {topRecentFiles.map((file) => (
-                  <button
-                    key={file.path}
-                    type="button"
-                    className={cn(
-                      "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                      "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    )}
-                    onClick={() => onOpenFile?.(file)}
-                  >
-                    <FileIcon filename={file.name} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">
-                        {file.name}
-                      </span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {file.path}
-                      </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-                No recent files
-              </p>
-            )}
-          </section>
-
-          <section className="corner-squircle min-w-0 rounded-md border border-sidebar-border bg-transparent p-4">
-            <div className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground">
-              <Pin className="h-4 w-4 text-muted-foreground" />
-              Pinned workspaces
-            </div>
-            {pinnedWorkspaces.length > 0 ? (
-              <div className="space-y-1">
-                {pinnedWorkspaces.map((path) => (
-                  <button
-                    key={path}
-                    type="button"
-                    className={cn(
-                      "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                      "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    )}
-                    title={path}
-                    onClick={() => onWorkspaceChange?.(path)}
-                  >
-                    <Folder className="h-4 w-4 shrink-0 fill-[#ff4800] text-black/60" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">
-                        {workspacePathLabel(path)}
-                      </span>
-                      <span className="block truncate text-xs text-muted-foreground">
-                        {path}
-                      </span>
-                    </span>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-                No pinned workspaces
-              </p>
-            )}
-          </section>
+          {cardSections.map((section, index) => (
+            <EmptyEditorShortcutCard
+              key={`${section.content}-${index}`}
+              section={section}
+              recentFiles={recentFiles}
+              pinnedFilePaths={effectiveSettings.workspace.pinnedFilePaths}
+              pinnedWorkspacePaths={pinnedWorkspacePaths}
+              maxItems={emptyEditorSettings.maxItems}
+              onOpenFile={onOpenFile}
+              onWorkspaceChange={onWorkspaceChange}
+            />
+          ))}
         </div>
       </div>
 

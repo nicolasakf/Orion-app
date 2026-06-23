@@ -21,8 +21,6 @@ import {
   Save,
   Check,
   Circle,
-  ChevronDown,
-  Scan,
   MessagesSquare,
   PanelLeft,
   X,
@@ -86,6 +84,7 @@ import { SettingsDialog } from "@/components/settings-dialog/settings-dialog";
 import { TerminalPool } from "@/lib/shell/terminal-pool";
 import { openPathInSystemTerminal } from "@/lib/shell/system-commands/open-file";
 import {
+  DEFAULT_NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS,
   DEFAULT_PANEL_LAYOUT_STATE,
   DEFAULT_PANEL_VISIBILITY_STATE,
   loadNotebookPresentationHideAllCellInputs,
@@ -274,6 +273,7 @@ interface MobileLayoutProps {
   notebookPresentationHideAllInputs: boolean;
   onSetNotebookPresentationHideAllInputs: (hidden: boolean) => void;
   onFileLoadError: (path: string) => void;
+  onFileOpenCancel: (path: string) => void;
   onWorkspacePathRenamed?: (payload: {
     oldPath: string;
     newPath: string;
@@ -329,6 +329,7 @@ function MobileLayout({
   notebookPresentationHideAllInputs,
   onSetNotebookPresentationHideAllInputs,
   onFileLoadError,
+  onFileOpenCancel,
   onWorkspacePathRenamed,
   onWorkspacePathDeleted,
 }: MobileLayoutProps) {
@@ -463,6 +464,7 @@ function MobileLayout({
                 onSetNotebookPresentationHideAllInputs
               }
               onFileLoadError={onFileLoadError}
+              onFileOpenCancel={onFileOpenCancel}
             />
           </div>
         )}
@@ -650,7 +652,7 @@ export default function Page() {
   const [hasLoadedPanelVisibilityState, setHasLoadedPanelVisibilityState] =
     useState(false);
   const [presentationHideAllCellInputs, setPresentationHideAllCellInputs] =
-    useState(false);
+    useState(DEFAULT_NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS);
   const [isFocusMode, setIsFocusMode] = useState(
     DEFAULT_PANEL_VISIBILITY_STATE.isFocusMode,
   );
@@ -968,6 +970,20 @@ export default function Page() {
     return true;
   }, []);
 
+  /** Adds an unopenable workspace file as a mention chip in the chat composer. */
+  const mentionFileInChat = useCallback((path: string): boolean => {
+    window.dispatchEvent(
+      new CustomEvent("orion:mention-workspace-path", {
+        detail: {
+          path,
+          itemType: "file",
+          name: deriveFileNameFromPath(path),
+        },
+      }),
+    );
+    return true;
+  }, []);
+
   /**
    * Handles file selection and tracks fallback state for load failures.
    */
@@ -1049,7 +1065,12 @@ export default function Page() {
         return false;
       }
 
-      const openedExternally = openFileExternally(failedFilepath);
+      const unopenableFileAction =
+        effectiveSettings.editor.unopenableFileAction;
+      const handledLoadError =
+        unopenableFileAction === "open_externally"
+          ? openFileExternally(failedFilepath)
+          : mentionFileInChat(failedFilepath);
       const pendingSelection = pendingFileSelectionRef.current;
       const fallbackFile =
         pendingSelection?.failedPath === failedFilepath
@@ -1071,7 +1092,7 @@ export default function Page() {
           }
           return filtered;
         });
-        return openedExternally;
+        return handledLoadError;
       }
 
       setCurrentFile((activeFile) =>
@@ -1087,9 +1108,45 @@ export default function Page() {
         return filtered;
       });
       pendingFileSelectionRef.current = null;
-      return openedExternally;
+      return handledLoadError;
     },
-    [openFileExternally, saveRecentFilesToStorage],
+    [
+      effectiveSettings.editor.unopenableFileAction,
+      mentionFileInChat,
+      openFileExternally,
+      saveRecentFilesToStorage,
+    ],
+  );
+
+  /**
+   * Restores the previous selection when a large-file warning is cancelled.
+   */
+  const handleEditorFileOpenCancel = useCallback(
+    (cancelledFilepath: string): void => {
+      const pendingSelection = pendingFileSelectionRef.current;
+      const fallbackFile =
+        pendingSelection?.failedPath === cancelledFilepath
+          ? pendingSelection.fallbackFile
+          : null;
+
+      setCurrentFile((activeFile) => {
+        if (activeFile.path !== cancelledFilepath) {
+          return activeFile;
+        }
+        return fallbackFile ?? { name: "", path: "" };
+      });
+      setRecentFiles((prevFiles) => {
+        const filtered = prevFiles.filter(
+          (file) => file.path !== cancelledFilepath,
+        );
+        if (filtered.length !== prevFiles.length) {
+          saveRecentFilesToStorage(filtered);
+        }
+        return filtered;
+      });
+      pendingFileSelectionRef.current = null;
+    },
+    [saveRecentFilesToStorage],
   );
 
   /**
@@ -2528,6 +2585,7 @@ export default function Page() {
                   setPresentationHideAllCellInputs
                 }
                 onFileLoadError={handleEditorFileLoadError}
+                onFileOpenCancel={handleEditorFileOpenCancel}
                 onWorkspacePathRenamed={handleWorkspacePathRenamed}
                 onWorkspacePathDeleted={handleWorkspacePathDeleted}
               />
@@ -2767,7 +2825,6 @@ export default function Page() {
                                         name={currentKernel.name}
                                         size={16}
                                       />
-                                      <ChevronDown className="h-3.5 w-3.5 opacity-60" />
                                     </Button>
                                   </DropdownMenuTrigger>
                                   <DropdownMenuContent align="end" className="w-56">
@@ -2803,20 +2860,6 @@ export default function Page() {
                                 </Button>
                               )}
                               <ToolbarButton
-                                onClick={toggleFocusMode}
-                                aria-pressed={isFocusMode}
-                                className={cn(
-                                  isFocusMode &&
-                                  "bg-accent text-foreground hover:bg-accent",
-                                )}
-                                toolTipLabel={
-                                  isFocusMode ? "Exit Focus Mode" : "Enter Focus Mode"
-                                }
-                                toolTipShortcut={[[AltOrOption, "Z"]]}
-                              >
-                                <Scan className="h-4 w-4" />
-                              </ToolbarButton>
-                              <ToolbarButton
                                 onClick={toggleRightSidebar}
                                 toolTipLabel={
                                   rightSidebarCollapsed ? "Show Chat" : "Hide Chat"
@@ -2825,7 +2868,10 @@ export default function Page() {
                               >
                                 <MessagesSquare className="h-4 w-4" />
                               </ToolbarButton>
-                              <SettingsMenu />
+                              <SettingsMenu
+                                isFocusMode={isFocusMode}
+                                onToggleFocusMode={toggleFocusMode}
+                              />
                             </div>
                           </div>
                         </div>
@@ -2868,6 +2914,7 @@ export default function Page() {
                               setPresentationHideAllCellInputs
                             }
                             onFileLoadError={handleEditorFileLoadError}
+                            onFileOpenCancel={handleEditorFileOpenCancel}
                           />
                         </div>
                       </div>

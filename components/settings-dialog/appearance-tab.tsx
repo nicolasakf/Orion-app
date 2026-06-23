@@ -11,8 +11,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { SettingsInfoLabel } from "@/components/settings-dialog/settings-info-label";
+import {
+  SettingsInfoLabel,
+  SettingsInfoSectionTitle,
+} from "@/components/settings-dialog/settings-info-label";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import type { EmptyEditorCardContent } from "@/lib/settings/schema";
+
+const EMPTY_EDITOR_CARD_OPTIONS: Array<{
+  value: EmptyEditorCardContent;
+  label: string;
+}> = [
+  { value: "recent_files", label: "Recent files" },
+  { value: "pinned_files", label: "Pinned files" },
+  { value: "pinned_workspaces", label: "Pinned workspaces" },
+];
 
 /** Appearance tab: theme, editor preferences, and persistent display defaults. */
 export function AppearanceTab() {
@@ -21,6 +34,7 @@ export function AppearanceTab() {
   const chat = effectiveSettings.chat;
   const fileTree = effectiveSettings.fileTree;
   const editor = effectiveSettings.editor;
+  const emptyEditor = editor.emptyEditor;
 
   const handleThemeChange = (value: "light" | "dark" | "system") => {
     void setUserSettings((current) => ({
@@ -193,6 +207,43 @@ export function AppearanceTab() {
               </Select>
             </div>
 
+            <div className="corner-squircle flex items-center justify-between gap-4 rounded-md border p-3 sm:col-span-3">
+              <SettingsInfoLabel
+                htmlFor="editor-unopenable-file-action"
+                label="Unsupported files"
+                description="When you click a file Orion cannot open in the editor, add it as a chat mention or open it with your system's default app."
+              />
+              <Select
+                value={editor.unopenableFileAction}
+                onValueChange={(value) =>
+                  void setUserSettings((current) => ({
+                    ...current,
+                    editor: {
+                      ...current.editor,
+                      unopenableFileAction: value as
+                        | "mention_in_chat"
+                        | "open_externally",
+                    },
+                  }))
+                }
+              >
+                <SelectTrigger
+                  id="editor-unopenable-file-action"
+                  className="w-[220px] shrink-0"
+                >
+                  <SelectValue placeholder="Select action" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="mention_in_chat">
+                    Mention in chat
+                  </SelectItem>
+                  <SelectItem value="open_externally">
+                    Open with external app
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
             <div className="corner-squircle flex items-center justify-between rounded-md border p-3 sm:col-span-3">
               <SettingsInfoLabel
                 htmlFor="editor-minimap"
@@ -232,6 +283,101 @@ export function AppearanceTab() {
                     },
                   }))
                 }
+              />
+            </div>
+          </div>
+        </section>
+
+        <Separator />
+
+        <section className="space-y-3">
+          <SettingsInfoSectionTitle
+            title="Empty editor"
+            description="Choose what appears in the left and right shortcut cards when no file is open in the editor."
+          />
+          <div className="grid gap-4 sm:grid-cols-3 max-w-2xl">
+            <div className="space-y-2">
+              <Label htmlFor="empty-editor-left-card">Left card</Label>
+              <Select
+                value={emptyEditor.leftCard}
+                onValueChange={(value) =>
+                  void setUserSettings((current) => ({
+                    ...current,
+                    editor: {
+                      ...current.editor,
+                      emptyEditor: {
+                        ...current.editor.emptyEditor,
+                        leftCard: value as EmptyEditorCardContent,
+                      },
+                    },
+                  }))
+                }
+              >
+                <SelectTrigger id="empty-editor-left-card">
+                  <SelectValue placeholder="Select content" />
+                </SelectTrigger>
+                <SelectContent>
+                  {EMPTY_EDITOR_CARD_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="empty-editor-right-card">Right card</Label>
+              <Select
+                value={emptyEditor.rightCard}
+                onValueChange={(value) =>
+                  void setUserSettings((current) => ({
+                    ...current,
+                    editor: {
+                      ...current.editor,
+                      emptyEditor: {
+                        ...current.editor.emptyEditor,
+                        rightCard: value as EmptyEditorCardContent,
+                      },
+                    },
+                  }))
+                }
+              >
+                <SelectTrigger id="empty-editor-right-card">
+                  <SelectValue placeholder="Select content" />
+                </SelectTrigger>
+                <SelectContent>
+                  {EMPTY_EDITOR_CARD_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="empty-editor-max-items">Max items</Label>
+              <Input
+                id="empty-editor-max-items"
+                type="number"
+                min={1}
+                max={20}
+                value={emptyEditor.maxItems}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  if (!Number.isFinite(next)) return;
+                  void setUserSettings((current) => ({
+                    ...current,
+                    editor: {
+                      ...current.editor,
+                      emptyEditor: {
+                        ...current.editor.emptyEditor,
+                        maxItems: Math.max(1, Math.min(20, next)),
+                      },
+                    },
+                  }));
+                }}
               />
             </div>
           </div>
