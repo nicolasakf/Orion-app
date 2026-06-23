@@ -1,10 +1,9 @@
 "use client";
 
 import * as React from "react";
-import { Loader2 } from "lucide-react";
+import { ExternalLink, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { RoleCombobox } from "@/components/settings-dialog/role-combobox";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -13,430 +12,297 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { getOrionCloudConfig } from "@/lib/cloud/config";
+import {
+  buildCloudGoogleOAuthRedirectUrl,
+  createCloudOAuthState,
+  getCloudOAuthCallbackOrigin,
+  isExpectedCloudGoogleOAuthCallbackMessage,
+  pollCloudGoogleOAuthRelay,
+  type OrionCloudGoogleOAuthCallbackMessage,
+} from "@/lib/cloud/oauth";
 import { createOrionCloudSupabaseClient } from "@/lib/cloud/supabase-client";
 
 interface CloudAuthDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  defaultTab?: "login" | "signup";
   onAuthenticated?: () => void | Promise<void>;
 }
 
-type AuthStep = "form" | "emailConfirmation" | "forgotPassword" | "resetEmailSent";
-
-interface PendingProfile {
-  first_name: string | null;
-  last_name: string | null;
-  job_role: string | null;
-  timestamp: number;
-}
+type CloudAuthPhase = "idle" | "starting" | "awaiting" | "blocked" | "exchanging" | "failed";
 
 /** Returns a readable message for Supabase auth failures. */
 function getAuthErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Cloud sign-in failed.";
 }
 
-/** Stores signup profile fields until the user confirms their email and signs in. */
-function storePendingProfile(profile: Omit<PendingProfile, "timestamp">): void {
-  window.localStorage.setItem(
-    "pendingProfile",
-    JSON.stringify({
-      ...profile,
-      timestamp: Date.now(),
-    }),
+/** Opens an OAuth URL in a popup while preserving the opener for callback relay. */
+function openOAuthPopup(url: string): Window | null {
+  return window.open(
+    url,
+    "orion-cloud-google-oauth",
+    "popup=yes,width=520,height=720",
   );
 }
 
-/** Syncs deferred signup profile metadata after an authenticated session exists. */
-async function processPendingProfile(
-  supabase: NonNullable<ReturnType<typeof createOrionCloudSupabaseClient>>,
-  userId: string,
-): Promise<void> {
-  const pendingProfile = window.localStorage.getItem("pendingProfile");
-  if (!pendingProfile) return;
-
-  try {
-    const profile = JSON.parse(pendingProfile) as Partial<PendingProfile>;
-    const timestamp =
-      typeof profile.timestamp === "number" ? profile.timestamp : 0;
-    const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
-
-    if (Date.now() - timestamp >= oneWeekMs) {
-      window.localStorage.removeItem("pendingProfile");
-      return;
-    }
-
-    const updates: Record<string, string> = {};
-    if (typeof profile.first_name === "string" && profile.first_name) {
-      updates.first_name = profile.first_name;
-    }
-    if (typeof profile.last_name === "string" && profile.last_name) {
-      updates.last_name = profile.last_name;
-    }
-    if (typeof profile.job_role === "string" && profile.job_role) {
-      updates.job_role = profile.job_role;
-    }
-
-    if (Object.keys(updates).length === 0) {
-      window.localStorage.removeItem("pendingProfile");
-      return;
-    }
-
-    const { error } = await supabase
-      .from("profiles")
-      .update(updates)
-      .eq("id", userId);
-
-    if (!error) {
-      window.localStorage.removeItem("pendingProfile");
-    }
-  } catch (error) {
-    console.warn("Failed to process pending Orion Cloud profile:", error);
-    window.localStorage.removeItem("pendingProfile");
-  }
-}
-
-/** Orion Cloud auth dialog, adapted from the hosted Orion login/signup flow. */
+/** Google-only Orion Cloud auth dialog for local Orion app sessions. */
 export function CloudAuthDialog({
   open,
   onOpenChange,
-  defaultTab = "login",
   onAuthenticated,
 }: CloudAuthDialogProps) {
+  const cloudConfig = React.useMemo(() => getOrionCloudConfig(), []);
   const supabase = React.useMemo(() => createOrionCloudSupabaseClient(), []);
-  const [authMode, setAuthMode] = React.useState<"login" | "signup">(defaultTab);
-  const [authStep, setAuthStep] = React.useState<AuthStep>("form");
-  const [email, setEmail] = React.useState("");
-  const [password, setPassword] = React.useState("");
-  const [firstName, setFirstName] = React.useState("");
-  const [lastName, setLastName] = React.useState("");
-  const [jobRole, setJobRole] = React.useState("");
-  const [isLoading, setIsLoading] = React.useState(false);
-  const isLogin = authMode === "login";
+  const popupRef = React.useRef<Window | null>(null);
+  const pollTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [phase, setPhase] = React.useState<CloudAuthPhase>("idle");
+  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
+  const [fallbackUrl, setFallbackUrl] = React.useState<string | null>(null);
+  const [oauthState, setOauthState] = React.useState<string | null>(null);
+
+  const resetFlow = React.useCallback(() => {
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+    popupRef.current = null;
+    setPhase("idle");
+    setErrorMessage(null);
+    setFallbackUrl(null);
+    setOauthState(null);
+  }, []);
 
   React.useEffect(() => {
-    if (!open) return;
-    setAuthMode(defaultTab);
-    setAuthStep("form");
-    setIsLoading(false);
-  }, [defaultTab, open]);
+    if (open) resetFlow();
+  }, [open, resetFlow]);
 
-  const handleForgotPassword = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!supabase) {
+  const completeRelayMessage = React.useCallback(
+    (message: OrionCloudGoogleOAuthCallbackMessage) => {
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = null;
+      }
+
+      setPhase("exchanging");
+      if (message.error) {
+        const description = message.errorDescription
+          ? ` ${message.errorDescription}`
+          : "";
+        setErrorMessage(`${message.error}.${description}`);
+        setPhase("failed");
+        return;
+      }
+      if (!message.code) {
+        setErrorMessage("Google did not return an authorization code.");
+        setPhase("failed");
+        return;
+      }
+
+      void (async () => {
+        try {
+          if (!supabase) throw new Error("Orion Cloud is not configured for this local app.");
+          const result = await supabase.auth.exchangeCodeForSession(message.code);
+          if (result.error) throw result.error;
+          popupRef.current?.close();
+          popupRef.current = null;
+          toast.success("Signed in with Google.");
+          onOpenChange(false);
+          await onAuthenticated?.();
+        } catch (error: unknown) {
+          const nextMessage = getAuthErrorMessage(error);
+          setErrorMessage(nextMessage);
+          setPhase("failed");
+          toast.error(nextMessage);
+        }
+      })();
+    },
+    [onAuthenticated, onOpenChange, supabase],
+  );
+
+  React.useEffect(() => {
+    if (!open || !cloudConfig || !oauthState || !supabase) return;
+
+    const hostedOrigin = getCloudOAuthCallbackOrigin(cloudConfig.apiBaseUrl);
+    const expectedOrigins = new Set([window.location.origin, hostedOrigin]);
+
+    /** Completes the local Supabase session after the hosted relay returns a code. */
+    const handleMessage = (event: MessageEvent) => {
+      if (!expectedOrigins.has(event.origin)) return;
+      if (
+        event.origin !== hostedOrigin &&
+        popupRef.current &&
+        event.source &&
+        event.source !== popupRef.current
+      ) {
+        return;
+      }
+      if (!isExpectedCloudGoogleOAuthCallbackMessage(event.data, oauthState)) {
+        return;
+      }
+
+      completeRelayMessage(event.data);
+    };
+
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [cloudConfig, completeRelayMessage, oauthState, open, supabase]);
+
+  React.useEffect(() => {
+    if (!open || phase !== "awaiting" || !cloudConfig || !oauthState) return;
+
+    let cancelled = false;
+
+    /** Polls hosted Orion when postMessage cannot complete the OAuth handoff. */
+    const poll = async () => {
+      try {
+        const result = await pollCloudGoogleOAuthRelay(
+          cloudConfig.apiBaseUrl,
+          oauthState,
+        );
+        if (cancelled) return;
+        if (result.status === "success") {
+          completeRelayMessage(result);
+          return;
+        }
+      } catch {
+        // Transient network/server errors should not fail the user while they are still signing in.
+      }
+
+      if (!cancelled) {
+        pollTimeoutRef.current = setTimeout(() => void poll(), 2000);
+      }
+    };
+
+    pollTimeoutRef.current = setTimeout(() => void poll(), 1500);
+    return () => {
+      cancelled = true;
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+        pollTimeoutRef.current = null;
+      }
+    };
+  }, [cloudConfig, completeRelayMessage, oauthState, open, phase]);
+
+  const startGoogleOAuth = React.useCallback(async () => {
+    if (!cloudConfig || !supabase) {
       toast.error("Orion Cloud is not configured for this local app.");
       return;
     }
 
-    setIsLoading(true);
+    const nextState = createCloudOAuthState();
+    setPhase("starting");
+    setErrorMessage(null);
+    setFallbackUrl(null);
+    setOauthState(nextState);
+    const popup = openOAuthPopup("about:blank");
+    popupRef.current = popup;
+
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/auth/reset-password`,
+      const redirectTo = buildCloudGoogleOAuthRedirectUrl(
+        cloudConfig.apiBaseUrl,
+        window.location.origin,
+        nextState,
+      );
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: {
+          redirectTo,
+          skipBrowserRedirect: true,
+        },
       });
       if (error) throw error;
-      setAuthStep("resetEmailSent");
-    } catch (error) {
-      toast.error(getAuthErrorMessage(error));
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleAuth = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!supabase) {
-      toast.error("Orion Cloud is not configured for this local app.");
-      return;
-    }
-
-    if (!isLogin && !jobRole.trim()) {
-      toast.error("Please select or type your job role");
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      if (isLogin) {
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
-        if (data.user) {
-          await processPendingProfile(supabase, data.user.id);
-        }
-        toast.success("Successfully logged in!");
-        onOpenChange(false);
-        await onAuthenticated?.();
-      } else {
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: {
-              first_name: firstName.trim() || null,
-              last_name: lastName.trim() || null,
-              job_role: jobRole.trim() || null,
-            },
-          },
-        });
-        if (error) throw error;
-
-        storePendingProfile({
-          first_name: firstName.trim() || null,
-          last_name: lastName.trim() || null,
-          job_role: jobRole.trim() || null,
-        });
-        toast.success("Signup complete. Confirm your email to continue.");
-        setAuthStep("emailConfirmation");
+      if (!data.url) {
+        throw new Error("Google sign-in did not return an authorization URL.");
       }
+
+      setFallbackUrl(data.url);
+      if (popup) {
+        popup.location.href = data.url;
+      }
+      setPhase(popup ? "awaiting" : "blocked");
     } catch (error) {
-      toast.error(getAuthErrorMessage(error));
-    } finally {
-      setIsLoading(false);
+      popup?.close();
+      popupRef.current = null;
+      const nextMessage = getAuthErrorMessage(error);
+      setErrorMessage(nextMessage);
+      setPhase("failed");
+      toast.error(nextMessage);
     }
-  };
+  }, [cloudConfig, supabase]);
+
+  const isBusy = phase === "starting" || phase === "exchanging";
+  const isConfigured = Boolean(cloudConfig && supabase);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[425px]">
-        {authStep === "emailConfirmation" ? (
-          <>
-            <DialogHeader>
-              <DialogTitle>Confirm your email</DialogTitle>
-              <DialogDescription>
-                We sent a confirmation link to{" "}
-                <span className="font-medium">{email}</span>. Confirm your
-                email, then come back to sign in.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3 py-4">
-              <Button
-                type="button"
-                className="w-full"
-                onClick={() => {
-                  setAuthStep("form");
-                  setAuthMode("login");
-                }}
-              >
-                I&apos;ve already confirmed my email
+        <DialogHeader>
+          <DialogTitle>Sign in to Orion Cloud</DialogTitle>
+          <DialogDescription>
+            Continue with Google to publish and manage Orion Cloud notebooks from this local app.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4 py-4">
+          {!isConfigured ? (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              Orion Cloud is not configured for this local app.
+            </div>
+          ) : null}
+
+          {phase === "awaiting" ? (
+            <div className="flex items-center gap-2 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Waiting for Google sign-in to finish…
+            </div>
+          ) : null}
+
+          {phase === "blocked" && fallbackUrl ? (
+            <div className="space-y-3 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              <p>Your browser blocked the Google sign-in window.</p>
+              <Button asChild variant="outline" className="w-full">
+                <a href={fallbackUrl} target="orion-cloud-google-oauth" rel="opener">
+                  <ExternalLink className="h-4 w-4" />
+                  Open Google sign-in
+                </a>
               </Button>
             </div>
-          </>
-        ) : authStep === "forgotPassword" ? (
-          <>
-            <DialogHeader>
-              <DialogTitle>Reset your password</DialogTitle>
-              <DialogDescription>
-                Enter your email and we&apos;ll send you a link to reset your
-                password.
-              </DialogDescription>
-            </DialogHeader>
-            <form onSubmit={handleForgotPassword} className="space-y-4 py-4">
-              <div className="space-y-2">
-                <Label htmlFor="reset-email">Email</Label>
-                <Input
-                  id="reset-email"
-                  type="email"
-                  placeholder="name@example.com"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  required
-                />
-              </div>
-              <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : null}
-                Send reset link
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                className="w-full"
-                onClick={() => setAuthStep("form")}
-              >
-                Back to sign in
-              </Button>
-            </form>
-          </>
-        ) : authStep === "resetEmailSent" ? (
-          <>
-            <DialogHeader>
-              <DialogTitle>Check your email</DialogTitle>
-              <DialogDescription>
-                We sent a password reset link to{" "}
-                <span className="font-medium">{email}</span>. Follow the link
-                to set a new password.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3 py-4">
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                onClick={() => {
-                  setAuthStep("form");
-                  setAuthMode("login");
-                }}
-              >
-                Back to sign in
-              </Button>
+          ) : null}
+
+          {phase === "failed" && errorMessage ? (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+              {errorMessage}
             </div>
-          </>
-        ) : (
-          <>
-            <Tabs
-              value={authMode}
-              onValueChange={(value) => setAuthMode(value as "login" | "signup")}
-            >
-              <TabsList className="mt-4 grid w-full grid-cols-2">
-                <TabsTrigger value="login">I have an account</TabsTrigger>
-                <TabsTrigger value="signup">
-                  I don&apos;t have an account
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-            <DialogHeader>
-              <DialogTitle>
-                {isLogin ? "Welcome Back!" : "Create Account"}
-              </DialogTitle>
-            </DialogHeader>
-            <form onSubmit={handleAuth} className="space-y-4 py-4">
-              {!isLogin ? (
-                <>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-2">
-                      <Label htmlFor="first-name">First Name</Label>
-                      <Input
-                        id="first-name"
-                        type="text"
-                        value={firstName}
-                        onChange={(event) => setFirstName(event.target.value)}
-                        placeholder="John"
-                        required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="last-name">Last Name</Label>
-                      <Input
-                        id="last-name"
-                        type="text"
-                        value={lastName}
-                        onChange={(event) => setLastName(event.target.value)}
-                        placeholder="Doe"
-                        required
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>
-                      Which of the following roles best describes you?
-                    </Label>
-                    <RoleCombobox value={jobRole} onValueChange={setJobRole} />
-                  </div>
-                </>
-              ) : null}
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="name@example.com"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="password">Password</Label>
-                  {isLogin ? (
-                    <button
-                      type="button"
-                      className="text-xs text-muted-foreground transition-colors hover:text-foreground"
-                      onClick={() => setAuthStep("forgotPassword")}
-                    >
-                      Forgot password?
-                    </button>
-                  ) : null}
-                </div>
-                <Input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  required
-                />
-              </div>
-              <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : null}
-                {isLogin ? "Sign In" : "Sign Up"}
-              </Button>
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <span className="w-full border-t" />
-                </div>
-                <div className="relative flex justify-center text-xs uppercase">
-                  <span className="bg-background px-2 text-muted-foreground">
-                    Or continue with
-                  </span>
-                </div>
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full"
-                disabled={isLoading || !supabase}
-                onClick={async () => {
-                  if (!supabase) {
-                    toast.error("Orion Cloud is not configured for this local app.");
-                    return;
-                  }
-                  setIsLoading(true);
-                  try {
-                    const { error } = await supabase.auth.signInWithOAuth({
-                      provider: "google",
-                      options: {
-                        redirectTo: window.location.href,
-                      },
-                    });
-                    if (error) throw error;
-                  } catch (error) {
-                    toast.error(getAuthErrorMessage(error));
-                    setIsLoading(false);
-                  }
-                }}
+          ) : null}
+
+          <Button
+            type="button"
+            className="w-full"
+            disabled={!isConfigured || isBusy}
+            onClick={() => void startGoogleOAuth()}
+          >
+            {isBusy ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <svg
+                className="mr-2 h-4 w-4"
+                aria-hidden="true"
+                focusable="false"
+                data-prefix="fab"
+                data-icon="google"
+                role="img"
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 488 512"
               >
-                {isLoading ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <svg
-                    className="mr-2 h-4 w-4"
-                    aria-hidden="true"
-                    focusable="false"
-                    data-prefix="fab"
-                    data-icon="google"
-                    role="img"
-                    xmlns="http://www.w3.org/2000/svg"
-                    viewBox="0 0 488 512"
-                  >
-                    <path
-                      fill="currentColor"
-                      d="M488 261.8C488 403.3 391.1 504 248 504 110.8 504 0 393.2 0 256S110.8 8 248 8c66.8 0 123 24.5 166.3 64.9l-67.5 64.9C258.5 52.6 94.3 116.6 94.3 256c0 86.5 69.1 156.6 153.7 156.6 98.2 0 135-70.4 140.8-106.9H248v-85.3h236.1c2.3 12.7 3.9 24.9 3.9 41.4z"
-                    />
-                  </svg>
-                )}
-                Google
-              </Button>
-            </form>
-          </>
-        )}
+                <path
+                  fill="currentColor"
+                  d="M488 261.8C488 403.3 391.1 504 248 504 110.8 504 0 393.2 0 256S110.8 8 248 8c66.8 0 123 24.5 166.3 64.9l-67.5 64.9C258.5 52.6 94.3 116.6 94.3 256c0 86.5 69.1 156.6 153.7 156.6 98.2 0 135-70.4 140.8-106.9H248v-85.3h236.1c2.3 12.7 3.9 24.9 3.9 41.4z"
+                />
+              </svg>
+            )}
+            {phase === "failed" ? "Try Google again" : "Continue with Google"}
+          </Button>
+        </div>
       </DialogContent>
     </Dialog>
   );

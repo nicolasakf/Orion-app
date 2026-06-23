@@ -36,6 +36,12 @@ export const DEFAULT_SETTINGS: SettingsData = {
     minimapEnabled: false,
     tabSize: 2,
     insertSpaces: true,
+    unopenableFileAction: "mention_in_chat",
+    emptyEditor: {
+      leftCard: "recent_files",
+      rightCard: "pinned_files",
+      maxItems: 5,
+    },
   },
   notebook: {
     scrollbarVisible: true,

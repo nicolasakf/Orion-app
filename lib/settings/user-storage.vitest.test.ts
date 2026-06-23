@@ -22,8 +22,8 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("user browser credential storage", () => {
-  it("merges credentials on ordinary settings saves so unrelated writes do not erase keys", async () => {
+describe("user credential storage facade", () => {
+  it("does not write provider credentials back to legacy browser storage on settings saves", async () => {
     localStorage.setItem(
       PROVIDER_CREDENTIALS_STORAGE_KEY,
       JSON.stringify({
@@ -43,7 +43,7 @@ describe("user browser credential storage", () => {
     });
   });
 
-  it("replaces credentials when explicitly requested for provider removal/reset", async () => {
+  it("leaves legacy browser credentials untouched when saving settings", async () => {
     localStorage.setItem(
       PROVIDER_CREDENTIALS_STORAGE_KEY,
       JSON.stringify({
@@ -55,7 +55,7 @@ describe("user browser credential storage", () => {
     const document = createDefaultUserSettingsDocument();
     document.settings.providers.credentials.openai = {
       type: "api_key",
-      apiKey: "sk-openai",
+      configured: true,
     };
 
     await setUserSettingsDocument(document, {
@@ -64,11 +64,13 @@ describe("user browser credential storage", () => {
 
     expect(JSON.parse(localStorage.getItem(PROVIDER_CREDENTIALS_STORAGE_KEY) ?? "{}")).toEqual({
       openai: { type: "api_key", apiKey: "sk-openai" },
+      anthropic: { type: "api_key", apiKey: "sk-anthropic" },
     });
   });
 
-  it("loads API key and ChatGPT OAuth credentials after reload", async () => {
+  it("migrates legacy localStorage credentials and loads safe summaries after reload", async () => {
     const document = createDefaultUserSettingsDocument();
+    const expiresAt = Date.now() + 1000;
     localStorage.setItem(
       PROVIDER_CREDENTIALS_STORAGE_KEY,
       JSON.stringify({
@@ -77,15 +79,15 @@ describe("user browser credential storage", () => {
           type: "chatgpt_oauth",
           accessToken: "access",
           refreshToken: "refresh",
-          expiresAt: Date.now() + 1000,
+          expiresAt,
           accountId: "acct",
         },
       })
     );
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/settings")) {
+        return Response.json({
           document: {
             ...document,
             settings: {
@@ -93,20 +95,39 @@ describe("user browser credential storage", () => {
               providers: { credentials: {} },
             },
           },
-        })
-      )
-    );
+        });
+      }
+
+      if (url.endsWith("/api/credentials")) {
+        return Response.json({
+          credentials: {
+            openai: { type: "api_key", configured: true },
+            xai: {
+              type: "chatgpt_oauth",
+              configured: true,
+              expiresAt,
+              accountId: "acct",
+            },
+          },
+        });
+      }
+
+      return new Response(null, { status: 404 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     const loaded = await getUserSettingsDocument();
 
     expect(loaded?.settings.providers.credentials.openai).toMatchObject({
       type: "api_key",
-      apiKey: "sk-openai",
+      configured: true,
     });
     expect(loaded?.settings.providers.credentials.xai).toMatchObject({
       type: "chatgpt_oauth",
-      refreshToken: "refresh",
+      configured: true,
+      accountId: "acct",
     });
+    expect(localStorage.getItem(PROVIDER_CREDENTIALS_STORAGE_KEY)).toBeNull();
   });
 
   it("returns missing status separately from failed loads", async () => {

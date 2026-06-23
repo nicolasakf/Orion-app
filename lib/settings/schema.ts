@@ -45,6 +45,25 @@ export const ToolApprovalModeSchema = z.preprocess((value) => {
 }, z.enum(["always_ask", "auto_run"]));
 export const WordWrapSchema = z.enum(["off", "on", "wordWrapColumn", "bounded"]);
 
+/** Action when the user selects a file Orion cannot open in the editor. */
+export const UnopenableFileActionSchema = z
+  .enum(["mention_in_chat", "open_externally"])
+  .catch("mention_in_chat");
+
+/** Content shown in each column of the empty-editor shortcut cards. */
+export const EmptyEditorCardContentSchema = z.enum([
+  "recent_files",
+  "pinned_files",
+  "pinned_workspaces",
+]);
+
+export const EmptyEditorCardSettingsSchema = z.object({
+  leftCard: EmptyEditorCardContentSchema,
+  rightCard: EmptyEditorCardContentSchema,
+  /** Max list entries per empty-editor card column. */
+  maxItems: z.number().int().min(1).max(20),
+});
+
 /** Left sidebar tab identifiers. */
 export const SidebarViewIdSchema = z.enum([
   "files",
@@ -202,16 +221,15 @@ const LocalEndpointModelSchema = z.object({
 const ProviderCredentialSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("api_key"),
-    /** Browser-only credential; never written to user/workspace settings files.
-     *  Sent to the Orion server only as a transient value inside /api/chat. */
-    apiKey: z.string(),
+    /** Client-safe configured state; real keys live in `~/.orion/credentials.json`. */
+    configured: z.boolean().default(true),
     /** Optional OpenAI-compatible base URL for dynamically added providers. */
     baseUrl: z.string().optional(),
   }),
   z.object({
     type: z.literal("chatgpt_oauth"),
-    accessToken: z.string(),
-    refreshToken: z.string(),
+    /** Client-safe configured state; real OAuth tokens live in `~/.orion/credentials.json`. */
+    configured: z.boolean().default(true),
     /** Epoch ms when the access token expires. */
     expiresAt: z.number(),
     /** chatgpt_account_id extracted from the id_token JWT. */
@@ -227,12 +245,13 @@ const ProviderCredentialSchema = z.discriminatedUnion("type", [
     label: z.string().optional(),
     /** Runtime models enabled for this local provider connection. */
     models: z.array(LocalEndpointModelSchema).optional(),
-    /** Optional bearer token for local servers configured with auth. */
-    apiKey: z.string().optional(),
+    /** Whether a local bearer token is stored server-side. */
+    hasApiKey: z.boolean().default(false),
   }),
 ]);
 
-export type ProviderCredential = z.infer<typeof ProviderCredentialSchema>;
+export type ProviderCredentialSummary = z.infer<typeof ProviderCredentialSchema>;
+export type ProviderCredential = ProviderCredentialSummary;
 
 const SettingsDataSchema = z.object({
   appearance: z.object({
@@ -268,6 +287,10 @@ const SettingsDataSchema = z.object({
     minimapEnabled: z.boolean(),
     tabSize: z.number().int().min(1).max(8),
     insertSpaces: z.boolean(),
+    /** When a file cannot be opened in Orion, mention it in chat or open externally. */
+    unopenableFileAction: UnopenableFileActionSchema,
+    /** Left/right shortcut lists shown when no file is open in the editor. */
+    emptyEditor: EmptyEditorCardSettingsSchema,
   }),
   notebook: z.object({
     /**
@@ -291,13 +314,7 @@ const SettingsDataSchema = z.object({
   shell: ShellSettingsSchema,
   providers: z
     .object({
-      /**
-       * Per-provider user credentials (BYOK API keys, ChatGPT OAuth tokens, or
-       * local OpenAI-compatible endpoint settings).
-       * Keyed by provider_id ("openai" | "anthropic" | "google" | "xai" |
-       * "ollama" | "lmstudio" | "mlx" | "custom").
-       * Stored client-side only; never persisted on the server.
-       */
+      /** Client-safe per-provider credential summaries. Real secrets live in `~/.orion/credentials.json`. */
       credentials: z.record(ProviderCredentialSchema).default({}),
       /** Non-secret provider IDs the user explicitly added to the Providers tab. */
       addedProviderIds: z.array(z.string()).default([]),
@@ -322,6 +339,9 @@ export type InteractionModeBashPolicy = z.infer<typeof InteractionModeBashPolicy
 export type InteractionModeConfig = z.infer<typeof InteractionModeConfigSchema>;
 export type ToolApprovalMode = z.infer<typeof ToolApprovalModeSchema>;
 export type WordWrapSetting = z.infer<typeof WordWrapSchema>;
+export type UnopenableFileAction = z.infer<typeof UnopenableFileActionSchema>;
+export type EmptyEditorCardContent = z.infer<typeof EmptyEditorCardContentSchema>;
+export type EmptyEditorCardSettings = z.infer<typeof EmptyEditorCardSettingsSchema>;
 export type AgentCommunicationStyle = z.infer<typeof AgentCommunicationStyleSchema>;
 export type SidebarViewId = z.infer<typeof SidebarViewIdSchema>;
 export type NotebookMinimapPreviewMode = z.infer<

@@ -61,7 +61,7 @@ describe("user file settings storage", () => {
     document.settings.agent.context.compactionRetentionTurns = 8;
     document.settings.providers.credentials.openai = {
       type: "api_key",
-      apiKey: "sk-test",
+      configured: true,
     };
 
     const saved = await saveUserSettingsDocument(document);

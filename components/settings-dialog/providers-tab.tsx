@@ -40,6 +40,10 @@ import { ProviderLogo } from "@/components/provider-logo";
 import { toast } from "sonner";
 import { useSettingsContext } from "@/components/settings/settings-provider";
 import type { ProviderCredential } from "@/lib/settings/schema";
+import {
+  removeProviderCredentialDocument,
+  saveProviderCredentialDocument,
+} from "@/lib/settings/user-storage";
 import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
 import {
   type LocalEndpointModel,
@@ -185,13 +189,6 @@ interface ProviderCatalogRow {
   apiBaseUrl?: string;
 }
 
-// ── Helper: mask an API key for display ──────────────────────────────────────
-
-function maskApiKey(key: string): string {
-  if (key.length <= 8) return "••••••••";
-  return key.slice(0, 6) + "••••••••" + key.slice(-4);
-}
-
 interface LocalModelDraftRow {
   id: string;
   modelId: string;
@@ -243,7 +240,7 @@ interface DeviceFlowState {
 // ── ChatGPT OAuth Device Flow UI ──────────────────────────────────────────────
 
 interface DeviceFlowPanelProps {
-  onCredential: (credential: ProviderCredential) => void;
+  onCredential: () => void;
   onCancel: () => void;
 }
 
@@ -315,7 +312,6 @@ function DeviceFlowPanel({ onCredential, onCancel }: DeviceFlowPanelProps) {
 
         const data = await res.json() as {
           status: "pending" | "success" | "failed";
-          credential?: ProviderCredential;
           message?: string;
         };
 
@@ -326,9 +322,9 @@ function DeviceFlowPanel({ onCredential, onCancel }: DeviceFlowPanelProps) {
           return;
         }
 
-        if (data.status === "success" && data.credential) {
+        if (data.status === "success") {
           setFlow((prev) => ({ ...prev, phase: "success" }));
-          onCredential(data.credential);
+          onCredential();
           return;
         }
 
@@ -442,7 +438,7 @@ interface ProviderRowProps {
     endpoint: LocalEndpointDraft
   ) => Promise<void>;
   onRemove: (provider: ProviderId) => void;
-  onSaveOAuthCredential: (provider: ProviderId, credential: ProviderCredential) => void;
+  onSaveOAuthCredential: (provider: ProviderId) => void;
 }
 
 interface ProviderGroupSectionProps {
@@ -456,7 +452,7 @@ interface ProviderGroupSectionProps {
     endpoint: LocalEndpointDraft
   ) => Promise<void>;
   onRemove: (provider: ProviderId) => void;
-  onSaveOAuthCredential: (provider: ProviderId, credential: ProviderCredential) => void;
+  onSaveOAuthCredential: (provider: ProviderId) => void;
 }
 
 /** Renders a heading plus provider rows with separators between rows. */
@@ -692,8 +688,8 @@ function ProviderRow({
   );
 
   const handleDeviceCredential = useCallback(
-    (cred: ProviderCredential) => {
-      onSaveOAuthCredential(provider.id, cred);
+    () => {
+      onSaveOAuthCredential(provider.id);
       setShowDeviceFlow(false);
       toast.success("ChatGPT account connected successfully.");
     },
@@ -730,11 +726,6 @@ function ProviderRow({
                 </Badge>
               )}
             </div>
-            {hasApiKey && credential.type === "api_key" && (
-              <p className="text-xs text-muted-foreground font-mono mt-0.5">
-                {maskApiKey(credential.apiKey)}
-              </p>
-            )}
             {hasOAuth && credential.type === "chatgpt_oauth" && (
               <p className="text-xs text-muted-foreground mt-0.5">
                 Connected via ChatGPT subscription
@@ -795,7 +786,7 @@ function ProviderRow({
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  setKeyInput(hasApiKey ? "" : credential?.apiKey ?? "");
+                  setKeyInput("");
                   setBaseUrlInput(
                     hasLocalEndpoint
                       ? credential.baseUrl
@@ -955,6 +946,11 @@ function ProviderRow({
                     {showKey ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
                   </button>
                 </div>
+                {credential?.type === "local_endpoint" && credential.hasApiKey ? (
+                  <p className="text-xs text-muted-foreground">
+                    Leave blank to keep the stored bearer token.
+                  </p>
+                ) : null}
               </div>
               <div className="flex gap-2">
                 <Button
@@ -1069,7 +1065,7 @@ function ProviderRow({
 
 /** Settings tab for managing per-provider API keys and ChatGPT OAuth. */
 export function ProvidersTab() {
-  const { effectiveSettings, setUserSettings } = useSettingsContext();
+  const { effectiveSettings, setUserSettings, reloadUserSettings } = useSettingsContext();
   const credentials = effectiveSettings.providers?.credentials ?? {};
   const [addProviderOpen, setAddProviderOpen] = useState(false);
   const [catalogProviders, setCatalogProviders] = useState<ProviderCatalogRow[]>([]);
@@ -1170,27 +1166,26 @@ export function ProvidersTab() {
 
       if (validationFailed) return;
 
+      await saveProviderCredentialDocument(provider, {
+        type: "api_key",
+        apiKey,
+        ...(baseUrl && { baseUrl }),
+      });
+
       await setUserSettings((current) => ({
         ...current,
         providers: {
           ...current.providers,
-          credentials: {
-            ...current.providers?.credentials,
-            [provider]: {
-              type: "api_key" as const,
-              apiKey,
-              ...(baseUrl && { baseUrl }),
-            },
-          },
           addedProviderIds: Array.from(
             new Set([...(current.providers?.addedProviderIds ?? []), provider])
           ),
         },
       }));
+      await reloadUserSettings();
 
       toast.success(`${provider} API key saved.`);
     },
-    [credentials, providerMetaById, setUserSettings]
+    [credentials, providerMetaById, reloadUserSettings, setUserSettings]
   );
 
   /** Save and validate a local OpenAI-compatible provider endpoint. */
@@ -1233,36 +1228,29 @@ export function ProvidersTab() {
 
       if (validationFailed) return;
 
-      await setUserSettings((current) => ({
-        ...current,
-        providers: {
-          ...current.providers,
-          credentials: {
-            ...current.providers?.credentials,
-            [provider]: {
-              type: "local_endpoint" as const,
-              baseUrl: endpoint.baseUrl,
-              modelId: endpoint.modelId,
-              label: endpoint.label ?? getLocalModelLabel(provider, endpoint.modelId) ?? endpoint.modelId,
-              models: endpoint.models,
-              ...(endpoint.apiKey && { apiKey: endpoint.apiKey }),
-            },
-          },
-        },
-      }));
+      await saveProviderCredentialDocument(provider, {
+        type: "local_endpoint",
+        baseUrl: endpoint.baseUrl,
+        modelId: endpoint.modelId,
+        label: endpoint.label ?? getLocalModelLabel(provider, endpoint.modelId) ?? endpoint.modelId,
+        models: endpoint.models,
+        ...(endpoint.apiKey && { apiKey: endpoint.apiKey }),
+      });
+      await reloadUserSettings();
 
       toast.success(`${provider} local endpoint saved.`);
     },
-    [setUserSettings]
+    [reloadUserSettings]
   );
 
   /** Remove a credential for a provider. */
   const handleRemove = useCallback(
-    (provider: ProviderId) => {
+    async (provider: ProviderId) => {
       const removesProviderRow =
         !DEFAULT_REMOTE_PROVIDER_IDS.has(provider) &&
         !LOCAL_PROVIDERS.some((localProvider) => localProvider.id === provider);
-      setUserSettings((current) => {
+      await removeProviderCredentialDocument(provider);
+      await setUserSettings((current) => {
         const next = { ...current.providers?.credentials };
         delete next[provider];
         const nextAddedProviderIds = (current.providers?.addedProviderIds ?? []).filter(
@@ -1277,26 +1265,18 @@ export function ProvidersTab() {
           },
         };
       });
+      await reloadUserSettings();
       toast.success(`${provider} ${removesProviderRow ? "provider" : "credential"} removed.`);
     },
-    [setUserSettings]
+    [reloadUserSettings, setUserSettings]
   );
 
-  /** Save an OAuth credential returned from the device flow. */
+  /** Reload settings after the server persists an OAuth credential from the device flow. */
   const handleSaveOAuthCredential = useCallback(
-    (provider: ProviderId, credential: ProviderCredential) => {
-      setUserSettings((current) => ({
-        ...current,
-        providers: {
-          ...current.providers,
-          credentials: {
-            ...current.providers?.credentials,
-            [provider]: credential,
-          },
-        },
-      }));
+    (_provider: ProviderId) => {
+      void reloadUserSettings();
     },
-    [setUserSettings]
+    [reloadUserSettings]
   );
 
   const handleAddProvider = useCallback(

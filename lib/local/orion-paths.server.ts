@@ -20,6 +20,11 @@ export function getUserSettingsFilePath(): string {
   return path.join(getOrionDataDirectory(), "settings.json");
 }
 
+/** Returns the absolute path to Orion's local provider credential file. */
+export function getProviderCredentialsFilePath(): string {
+  return path.join(getOrionDataDirectory(), "credentials.json");
+}
+
 /** Returns the absolute path to timestamped user settings backups. */
 export function getUserSettingsBackupDirectory(): string {
   return path.join(getOrionDataDirectory(), "settings-backup");

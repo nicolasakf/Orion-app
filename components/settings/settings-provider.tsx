@@ -21,6 +21,7 @@ import type {
 import {
   clearUserSettingsDocument,
   loadUserSettingsDocumentFromApi,
+  migrateLegacyProviderCredentialsDocument,
   setUserSettingsDocument,
 } from "@/lib/settings/user-storage";
 
@@ -48,6 +49,44 @@ interface SettingsContextValue {
 }
 
 const SettingsContext = React.createContext<SettingsContextValue | null>(null);
+
+/** Extracts legacy imported credentials and returns a JSON string safe for settings parsing. */
+function stripImportedProviderCredentials(json: string): {
+  sanitizedJson: string;
+  credentials: Record<string, unknown>;
+} {
+  const parsed = JSON.parse(json) as unknown;
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { sanitizedJson: json, credentials: {} };
+  }
+
+  const root = parsed as Record<string, unknown>;
+  const settings =
+    typeof root.settings === "object" && root.settings !== null && !Array.isArray(root.settings)
+      ? root.settings as Record<string, unknown>
+      : root;
+  const providers =
+    typeof settings.providers === "object" &&
+    settings.providers !== null &&
+    !Array.isArray(settings.providers)
+      ? settings.providers as Record<string, unknown>
+      : undefined;
+  const credentials =
+    typeof providers?.credentials === "object" &&
+    providers.credentials !== null &&
+    !Array.isArray(providers.credentials)
+      ? providers.credentials as Record<string, unknown>
+      : {};
+
+  if (providers) {
+    providers.credentials = {};
+  }
+
+  return {
+    sanitizedJson: JSON.stringify(root),
+    credentials,
+  };
+}
 
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [userDocument, setUserDocument] = React.useState<UserSettingsDocument>(
@@ -269,19 +308,31 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const importUserSettingsFromJson = React.useCallback(
     async (json: string) => {
       setErrorMessage(null);
-      const parsed = parseUserSettingsDocumentFromJson(json);
+      const { sanitizedJson, credentials } = stripImportedProviderCredentials(json);
+      if (Object.keys(credentials).length > 0) {
+        await migrateLegacyProviderCredentialsDocument(credentials);
+      }
+      const parsed = parseUserSettingsDocumentFromJson(sanitizedJson);
       await persistUserDocument(parsed, "replace");
+      await reloadUserSettings();
       userSettingsWritableRef.current = true;
       setUserSettingsLoadStatus("loaded");
     },
-    [persistUserDocument]
+    [persistUserDocument, reloadUserSettings]
   );
 
   const exportEffectiveSettingsAsJson = React.useCallback(() => {
+    const exportSettings: SettingsData = {
+      ...effectiveSettings,
+      providers: {
+        ...effectiveSettings.providers,
+        credentials: {},
+      },
+    };
     return JSON.stringify(
       {
         version: userDocument.version,
-        settings: effectiveSettings,
+        settings: exportSettings,
       },
       null,
       2

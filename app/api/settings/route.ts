@@ -7,6 +7,7 @@ import {
   saveUserSettingsDocument,
 } from "@/lib/settings/user-file-storage.server";
 import { UserSettingsDocumentSchema } from "@/lib/settings/schema";
+import { clearProviderCredentials } from "@/lib/credentials/provider-credential-store.server";
 
 /** Loads the non-secret user settings document persisted under `~/.orion`. */
 export async function GET(): Promise<Response> {
@@ -61,6 +62,7 @@ export async function PUT(req: Request): Promise<Response> {
 export async function DELETE(): Promise<Response> {
   try {
     await clearUserSettingsFile();
+    await clearProviderCredentials();
     return new Response(null, { status: 204 });
   } catch (error) {
     console.error("Failed to clear user settings:", error);

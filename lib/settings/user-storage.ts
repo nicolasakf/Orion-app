@@ -3,10 +3,11 @@ import { z } from "zod";
 import { createDefaultUserSettingsDocument, DEFAULT_SETTINGS } from "@/lib/settings/defaults";
 import { mergeSettings } from "@/lib/settings/merge";
 import { migrateUserSettingsDocument } from "@/lib/settings/migrations";
-import type { UserSettingsDocument } from "@/lib/settings/schema";
+import type { ProviderCredential, UserSettingsDocument } from "@/lib/settings/schema";
 import { UserSettingsDocumentSchema } from "@/lib/settings/schema";
 
 const SETTINGS_API_PATH = "/api/settings";
+const CREDENTIALS_API_PATH = "/api/credentials";
 const PROVIDER_CREDENTIALS_STORAGE_KEY = "orion_provider_credentials";
 
 type ProviderCredentials = UserSettingsDocument["settings"]["providers"]["credentials"];
@@ -38,63 +39,147 @@ const SettingsApiErrorResponseSchema = z.object({
     .optional(),
 });
 
-/** Returns true when browser storage APIs are available for secret persistence. */
+const LegacyProviderCredentialSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("api_key"),
+    apiKey: z.string().min(1),
+    baseUrl: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("chatgpt_oauth"),
+    accessToken: z.string().min(1),
+    refreshToken: z.string().min(1),
+    expiresAt: z.number(),
+    accountId: z.string().optional(),
+  }),
+  z.object({
+    type: z.literal("local_endpoint"),
+    baseUrl: z.string().min(1),
+    modelId: z.string().min(1),
+    label: z.string().optional(),
+    models: z
+      .array(
+        z.object({
+          modelId: z.string().min(1),
+          label: z.string().optional(),
+          enabled: z.boolean().optional(),
+        })
+      )
+      .optional(),
+    apiKey: z.string().optional(),
+  }),
+]);
+
+const LegacyProviderCredentialsSchema = z.record(LegacyProviderCredentialSchema);
+
+const CredentialSummariesResponseSchema = z.object({
+  credentials: z.record(z.unknown()).default({}),
+});
+
+/** Returns true when browser storage APIs are available for legacy migration. */
 function supportsBrowserCredentialStorage(): boolean {
   return typeof window !== "undefined" && typeof localStorage !== "undefined";
 }
 
-/** Reads provider credentials from browser-only storage. */
-function getStoredProviderCredentials(): ProviderCredentials {
+/** Reads legacy full provider credentials from browser storage for one-time migration. */
+function getLegacyProviderCredentialsFromBrowser(): Record<string, unknown> | null {
   if (!supportsBrowserCredentialStorage()) return {};
 
   try {
     const raw = localStorage.getItem(PROVIDER_CREDENTIALS_STORAGE_KEY);
-    if (!raw) return {};
+    if (!raw) return null;
 
-    const parsedCredentials = JSON.parse(raw) as unknown;
-    const candidate = structuredClone(createDefaultUserSettingsDocument());
-    candidate.settings.providers.credentials = parsedCredentials as ProviderCredentials;
-    const parsedDocument = UserSettingsDocumentSchema.safeParse(candidate);
-
-    return parsedDocument.success
-      ? parsedDocument.data.settings.providers.credentials
-      : {};
+    const parsedCredentials = LegacyProviderCredentialsSchema.safeParse(JSON.parse(raw));
+    return parsedCredentials.success ? parsedCredentials.data : null;
   } catch (error) {
-    console.warn("Failed to load provider credentials from browser storage:", error);
-    return {};
+    console.warn("Failed to load legacy provider credentials from browser storage:", error);
+    return null;
   }
 }
 
-/** Saves provider credentials to browser-only storage. */
-function setStoredProviderCredentials(
-  credentials: ProviderCredentials,
-  mode: ProviderCredentialWriteMode
-): void {
-  if (!supportsBrowserCredentialStorage()) return;
-
-  try {
-    const nextCredentials =
-      mode === "merge"
-        ? { ...getStoredProviderCredentials(), ...credentials }
-        : credentials;
-    localStorage.setItem(
-      PROVIDER_CREDENTIALS_STORAGE_KEY,
-      JSON.stringify(nextCredentials)
-    );
-  } catch (error) {
-    console.warn("Failed to save provider credentials to browser storage:", error);
-  }
-}
-
-/** Clears provider credentials from browser-only storage. */
-function clearStoredProviderCredentials(): void {
+/** Clears migrated legacy provider credentials from browser storage. */
+function clearLegacyProviderCredentialsFromBrowser(): void {
   if (!supportsBrowserCredentialStorage()) return;
 
   try {
     localStorage.removeItem(PROVIDER_CREDENTIALS_STORAGE_KEY);
   } catch (error) {
-    console.warn("Failed to clear provider credentials from browser storage:", error);
+    console.warn("Failed to clear legacy provider credentials from browser storage:", error);
   }
+}
+
+/** Loads safe credential summaries from the local credential API. */
+async function loadProviderCredentialSummariesFromApi(): Promise<ProviderCredentials> {
+  const response = await fetch(CREDENTIALS_API_PATH, { method: "GET" });
+  if (!response.ok) {
+    throw new Error(`Credential API returned ${response.status}`);
+  }
+  const raw = await response.json();
+  const parsed = CredentialSummariesResponseSchema.safeParse(raw);
+  if (!parsed.success) throw new Error("Credential API returned invalid summaries.");
+
+  const candidate = structuredClone(createDefaultUserSettingsDocument());
+  candidate.settings.providers.credentials = parsed.data.credentials as ProviderCredentials;
+  const validated = UserSettingsDocumentSchema.safeParse(candidate);
+  return validated.success ? validated.data.settings.providers.credentials : {};
+}
+
+/** Imports legacy browser credentials into the server store and clears them only on success. */
+async function migrateLegacyBrowserCredentialsIfPresent(): Promise<ProviderCredentials | null> {
+  const legacyCredentials = getLegacyProviderCredentialsFromBrowser();
+  if (!legacyCredentials || Object.keys(legacyCredentials).length === 0) return null;
+
+  const response = await fetch(CREDENTIALS_API_PATH, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      operation: "migrate_legacy",
+      credentials: legacyCredentials,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Credential migration failed with ${response.status}`);
+  }
+
+  const raw = await response.json();
+  const parsed = CredentialSummariesResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("Credential migration returned invalid summaries.");
+  }
+  clearLegacyProviderCredentialsFromBrowser();
+
+  const candidate = structuredClone(createDefaultUserSettingsDocument());
+  candidate.settings.providers.credentials = parsed.data.credentials as ProviderCredentials;
+  const validated = UserSettingsDocumentSchema.safeParse(candidate);
+  return validated.success ? validated.data.settings.providers.credentials : {};
+}
+
+/** Imports legacy full credentials into the server store without returning secrets. */
+export async function migrateLegacyProviderCredentialsDocument(
+  credentials: Record<string, unknown>
+): Promise<ProviderCredentials> {
+  const response = await fetch(CREDENTIALS_API_PATH, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      operation: "migrate_legacy",
+      credentials,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Credential migration failed with ${response.status}`);
+  }
+
+  const raw = await response.json();
+  const parsed = CredentialSummariesResponseSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new Error("Credential migration returned invalid summaries.");
+  }
+
+  const candidate = structuredClone(createDefaultUserSettingsDocument());
+  candidate.settings.providers.credentials = parsed.data.credentials as ProviderCredentials;
+  const validated = UserSettingsDocumentSchema.safeParse(candidate);
+  return validated.success ? validated.data.settings.providers.credentials : {};
 }
 
 /** Returns a copy of the settings document without provider credentials. */
@@ -113,9 +198,10 @@ function stripProviderCredentials(
   };
 }
 
-/** Merges browser-only provider credentials into a non-secret settings document. */
-function mergeProviderCredentials(
-  document: UserSettingsDocument
+/** Merges server-owned provider credential summaries into a non-secret settings document. */
+function mergeProviderCredentialSummaries(
+  document: UserSettingsDocument,
+  credentials: ProviderCredentials
 ): UserSettingsDocument {
   return {
     ...document,
@@ -123,10 +209,64 @@ function mergeProviderCredentials(
       ...document.settings,
       providers: {
         ...document.settings.providers,
-        credentials: getStoredProviderCredentials(),
+        credentials,
       },
     },
   };
+}
+
+/** Saves one provider credential through the local API and returns its safe summary. */
+export async function saveProviderCredentialDocument(
+  provider: string,
+  credential: unknown
+): Promise<ProviderCredential> {
+  const response = await fetch(CREDENTIALS_API_PATH, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ operation: "save", provider, credential }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save provider credential: ${response.status}`);
+  }
+
+  const raw = (await response.json()) as { credential?: ProviderCredential };
+  if (!raw.credential) {
+    throw new Error("Credential API did not return a summary.");
+  }
+  return raw.credential;
+}
+
+/** Removes one provider credential through the local API. */
+export async function removeProviderCredentialDocument(provider: string): Promise<void> {
+  const response = await fetch(CREDENTIALS_API_PATH, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ operation: "remove", provider }),
+  });
+  if (!response.ok && response.status !== 204) {
+    throw new Error(`Failed to remove provider credential: ${response.status}`);
+  }
+}
+
+/** Clears all provider credentials through the local API. */
+async function clearProviderCredentialDocuments(): Promise<void> {
+  const response = await fetch(CREDENTIALS_API_PATH, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ operation: "clear" }),
+  });
+  if (!response.ok && response.status !== 204) {
+    throw new Error(`Failed to clear provider credentials: ${response.status}`);
+  }
+}
+
+/** Returns a document with the latest credential summaries loaded from the server. */
+async function mergeLatestProviderCredentialSummaries(
+  document: UserSettingsDocument
+): Promise<UserSettingsDocument> {
+  const migrated = await migrateLegacyBrowserCredentialsIfPresent();
+  const credentials = migrated ?? await loadProviderCredentialSummariesFromApi();
+  return mergeProviderCredentialSummaries(document, credentials);
 }
 
 /** Extracts the best available error message from a failed settings API response. */
@@ -177,7 +317,7 @@ export async function loadUserSettingsDocumentFromApi(): Promise<UserSettingsLoa
 
     return {
       status: parsed.data.status,
-      document: mergeProviderCredentials(validated.data),
+      document: await mergeLatestProviderCredentialSummaries(validated.data),
     };
   } catch (error) {
     console.warn("Failed to load user settings from local API:", error);
@@ -191,22 +331,17 @@ export async function loadUserSettingsDocumentFromApi(): Promise<UserSettingsLoa
   }
 }
 
-/** Loads user settings from Orion's local settings API and merges browser-only secrets. */
+/** Loads user settings from Orion's local settings API and merges safe credential summaries. */
 export async function getUserSettingsDocument(): Promise<UserSettingsDocument | null> {
   const result = await loadUserSettingsDocumentFromApi();
   return result.status === "failed" ? null : result.document;
 }
 
-/** Persists non-secret user settings to disk and browser-only provider credentials locally. */
+/** Persists non-secret user settings to disk; provider secrets are stored by credential APIs. */
 export async function setUserSettingsDocument(
   document: UserSettingsDocument,
-  options: { providerCredentialWriteMode?: ProviderCredentialWriteMode } = {}
+  _options: { providerCredentialWriteMode?: ProviderCredentialWriteMode } = {}
 ): Promise<void> {
-  setStoredProviderCredentials(
-    document.settings.providers.credentials,
-    options.providerCredentialWriteMode ?? "merge"
-  );
-
   const documentForApi: UserSettingsDocument = {
     version: document.version,
     settings: mergeSettings(DEFAULT_SETTINGS, document.settings),
@@ -225,9 +360,10 @@ export async function setUserSettingsDocument(
   }
 }
 
-/** Clears persisted user settings and browser-only provider credentials. */
+/** Clears persisted user settings and server-owned provider credentials. */
 export async function clearUserSettingsDocument(): Promise<void> {
-  clearStoredProviderCredentials();
+  clearLegacyProviderCredentialsFromBrowser();
+  await clearProviderCredentialDocuments();
 
   const response = await fetch(SETTINGS_API_PATH, { method: "DELETE" });
   if (!response.ok && response.status !== 404) {

@@ -5,6 +5,7 @@ import {
   exchangeDeviceCodeForTokens,
   extractAccountId,
 } from "@/lib/credentials/chatgpt-oauth";
+import { saveProviderCredential } from "@/lib/credentials/provider-credential-store.server";
 
 const RequestSchema = z.object({
   deviceAuthId: z.string().min(1),
@@ -20,7 +21,7 @@ const RequestSchema = z.object({
  * Returns:
  *   { status: "pending" }  — user hasn't approved yet; client should retry after interval
  *   { status: "failed" }   — unrecoverable error; client should stop polling
- *   { status: "success", credential: { type, accessToken, refreshToken, expiresAt, accountId? } }
+ *   { status: "success", credential: <client-safe summary> }
  */
 export async function POST(req: Request) {
   let body: unknown;
@@ -76,9 +77,10 @@ export async function POST(req: Request) {
       expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
       ...(accountId && { accountId }),
     };
+    const summary = await saveProviderCredential("openai", credential);
 
     return new Response(
-      JSON.stringify({ status: "success", credential }),
+      JSON.stringify({ status: "success", credential: summary }),
       { status: 200, headers: { "Content-Type": "application/json" } }
     );
   } catch (err) {

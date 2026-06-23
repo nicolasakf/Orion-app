@@ -24,7 +24,7 @@ export function getWorkspaceSettingsPath(workspaceDirectory: string): string {
   return joinJupyterPath(workspaceDirectory, WORKSPACE_SETTINGS_RELATIVE_PATH);
 }
 
-/** Removes browser-only secrets from workspace settings overrides. */
+/** Removes credential summaries/secrets from workspace settings overrides. */
 function stripWorkspaceSettingsSecrets(
   document: WorkspaceSettingsDocument
 ): WorkspaceSettingsDocument {

@@ -21,7 +21,7 @@ export type UserSettingsFileLoadResult = {
   document: UserSettingsDocument;
 };
 
-/** Removes browser-only secrets before writing the user settings document to disk. */
+/** Removes provider credential summaries/secrets before writing the user settings document to disk. */
 export function stripUserSettingsSecrets(
   document: UserSettingsDocument
 ): UserSettingsDocument {

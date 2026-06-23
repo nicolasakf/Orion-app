@@ -1,18 +1,19 @@
 
 import { z } from "zod";
-import { refreshAccessToken, extractAccountId } from "@/lib/credentials/chatgpt-oauth";
+
+import { resolveProviderCredentialForModel } from "@/lib/credentials/provider-credential-store.server";
 
 const RequestSchema = z.object({
-  refreshToken: z.string().min(1),
+  provider: z.string().min(1).default("openai"),
+  model: z.string().min(1).default("codex-mini-latest"),
 });
 
 /**
  * POST /api/credentials/oauth/refresh
  *
- * Exchanges a ChatGPT refresh token for a new access token.
- * Called client-side when the stored access token has expired.
+ * Refreshes a stored ChatGPT OAuth credential if needed.
  *
- * Returns the new credential fields so the client can update its stored settings.
+ * Returns only whether a stored credential could be resolved.
  */
 export async function POST(req: Request) {
   let body: unknown;
@@ -28,26 +29,17 @@ export async function POST(req: Request) {
   const parsed = RequestSchema.safeParse(body);
   if (!parsed.success) {
     return new Response(
-      JSON.stringify({ title: "Invalid Request", message: "refreshToken is required." }),
+      JSON.stringify({ title: "Invalid Request", message: "provider and model are required." }),
       { status: 400, headers: { "Content-Type": "application/json" } }
     );
   }
 
   try {
-    const tokens = await refreshAccessToken(parsed.data.refreshToken);
-
-    const jwtToInspect = tokens.id_token ?? tokens.access_token;
-    const accountId = extractAccountId(jwtToInspect);
-
-    return new Response(
-      JSON.stringify({
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        expiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
-        ...(accountId && { accountId }),
-      }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
-    );
+    const credential = await resolveProviderCredentialForModel(parsed.data.provider, parsed.data.model);
+    return new Response(JSON.stringify({ ok: Boolean(credential) }), {
+      status: credential ? 200 : 404,
+      headers: { "Content-Type": "application/json" },
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Token refresh failed.";
     return new Response(
