@@ -4,6 +4,32 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.0] - 2026-06-23
+
+### Added
+
+- Credentials: persist provider API keys and OAuth tokens server-side in `~/.orion/credentials.json` with client-safe configured summaries in settings
+- Agent: deep EDA investigation workflow with ledger state and a loadable `deep-eda` built-in skill
+- Agent: implicit skill routing from user intent without an explicit `load_skill` call
+- Agent: expanded tool schemas, context optimizer, and improved chat sidebar subagent UX
+- Settings: configurable empty-editor shortcut cards and unsupported-file handling (chat mention or external open)
+- Editor: warning card before opening very large files
+- Kernel: normalized Jupyter connection URL parsing in kernel dialogs
+- Updates: shared install-command logic between in-app updater, CLI, and Python launcher
+- Desktop: ad-hoc code signing for macOS builds when `ORION_ADHOC_MAC_SIGNING=1`
+
+### Changed
+
+- Auth: removed in-app password reset page and account-tab password change form
+- Cloud: streamlined OAuth dialog and shared OAuth helpers
+
+### Fixed
+
+- Docs: centralized user-docs link helper with required `.html` suffix
+- Chat: composer placeholder copy aligned with queue-mode UI
+
+[0.11.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.11.0
+
 ## [0.10.2] - 2026-06-21
 
 ### Added
