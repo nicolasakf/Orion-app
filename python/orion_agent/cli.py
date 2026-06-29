@@ -139,14 +139,12 @@ def parse_node_version(output: str) -> tuple[int, int, int] | None:
         return None
 
 
-def system_node() -> str | None:
-    """Return a usable system Node executable, or None if missing/too old."""
-    node = shutil.which("node")
-    if not node:
-        return None
+def usable_node_executable(node: str | Path) -> str | None:
+    """Return the path when it runs Node 20+, otherwise None."""
+    executable = str(node)
     try:
         result = subprocess.run(
-            [node, "--version"],
+            [executable, "--version"],
             check=True,
             text=True,
             capture_output=True,
@@ -155,8 +153,24 @@ def system_node() -> str | None:
         return None
     version = parse_node_version(result.stdout)
     if version and version[0] >= 20:
-        return node
+        return executable
     return None
+
+
+def system_node() -> str | None:
+    """Return a usable system Node executable, or None if missing/too old."""
+    node = shutil.which("node")
+    if not node:
+        return None
+    return usable_node_executable(node)
+
+
+def managed_node_executable() -> Path:
+    """Return the expected Orion-managed Node executable path for this platform."""
+    slug, _ext = node_platform_slug()
+    node_root = runtime_dir() / "node" / NODE_VERSION
+    extracted = node_root / f"node-{NODE_VERSION}-{slug}"
+    return extracted / ("node.exe" if sys.platform == "win32" else "bin/node")
 
 
 def node_cpu_arch() -> str:
@@ -255,20 +269,27 @@ def ensure_node(assume_yes: bool) -> str:
     if existing:
         return existing
 
+    managed = managed_node_executable()
+    if managed.exists():
+        verified = usable_node_executable(managed)
+        if verified:
+            return verified
+
     if not confirm(
         "Orion needs Node.js 20+ to run the local app. Download portable Node into ~/.orion/runtime?",
         assume_yes,
     ):
         raise SystemExit("Setup declined. Install Node.js 20+ or rerun `orion --yes`.")
 
+    if managed.exists():
+        verified = usable_node_executable(managed)
+        if verified:
+            return verified
+
     slug, ext = node_platform_slug()
     node_root = runtime_dir() / "node" / NODE_VERSION
-    extracted = node_root / f"node-{NODE_VERSION}-{slug}"
-    node_path = extracted / ("node.exe" if sys.platform == "win32" else "bin/node")
-    if node_path.exists():
-        return str(node_path)
-
     archive = node_root / f"node-{NODE_VERSION}-{slug}.{ext}"
+    node_path = managed
     url = f"https://nodejs.org/dist/{NODE_VERSION}/node-{NODE_VERSION}-{slug}.{ext}"
     print(f"Downloading Node.js from {url}")
     download_file(url, archive)
@@ -833,10 +854,7 @@ def network_check(url: str) -> dict[str, Any]:
 
 def portable_node_status() -> dict[str, Any]:
     """Return system and Orion-managed Node.js state."""
-    slug, _ext = node_platform_slug()
-    managed_root = runtime_dir() / "node" / NODE_VERSION
-    managed_node = managed_root / f"node-{NODE_VERSION}-{slug}"
-    node_path = managed_node / ("node.exe" if sys.platform == "win32" else "bin/node")
+    node_path = managed_node_executable()
     return {
         "system": redact_path(system_node()),
         "managedPath": redact_path(node_path),

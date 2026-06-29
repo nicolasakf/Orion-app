@@ -5,10 +5,11 @@ from __future__ import annotations
 import os
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from orion_agent.cli import (
     JupyterStartError,
+    ensure_node,
     node_cpu_arch,
     node_platform_slug,
     python_discovery_candidates,
@@ -40,6 +41,25 @@ class NodePlatformSlugTests(unittest.TestCase):
             "orion_agent.cli.node_cpu_arch", return_value="arm64"
         ):
             self.assertEqual(node_platform_slug(), ("win-arm64", "zip"))
+
+
+class EnsureNodeTests(unittest.TestCase):
+    """Tests for portable Node reuse during launcher startup."""
+
+    def test_ensure_node_reuses_existing_portable_runtime_without_prompt(self) -> None:
+        managed = MagicMock()
+        managed.exists.return_value = True
+        with patch("orion_agent.cli.system_node", return_value=None), patch(
+            "orion_agent.cli.managed_node_executable",
+            return_value=managed,
+        ), patch(
+            "orion_agent.cli.usable_node_executable",
+            return_value="/fake/node/bin/node",
+        ), patch(
+            "orion_agent.cli.confirm",
+            side_effect=AssertionError("should not prompt when portable Node exists"),
+        ):
+            self.assertEqual(ensure_node(False), "/fake/node/bin/node")
 
 
 class ManagedRuntimePythonTests(unittest.TestCase):
