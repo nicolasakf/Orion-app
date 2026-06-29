@@ -292,7 +292,7 @@ def ensure_node(assume_yes: bool) -> str:
     node_path = managed
     url = f"https://nodejs.org/dist/{NODE_VERSION}/node-{NODE_VERSION}-{slug}.{ext}"
     print(f"Downloading Node.js from {url}")
-    download_file(url, archive)
+    download_file(url, archive, show_progress=True)
     if ext == "zip":
         with zipfile.ZipFile(archive) as zf:
             zf.extractall(node_root)
