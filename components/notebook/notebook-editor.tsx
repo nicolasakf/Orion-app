@@ -3710,7 +3710,6 @@ export function NotebookEditor({
             onRunAll={handleRunAll} // This would now dispatch an event or be handled by parent
             onRestartKernel={handleRestartKernel} // Dispatch event or handled by parent
             onStopKernel={handleStopKernel} // Dispatch event or handled by parent
-            onRestartAndRunAll={handleRestartAndRunAll} // Dispatch event or handled by parent
             onKernelSelect={handleKernelSelect} // This can still trigger local dialogs, which then call parent setters
             kernelStatus={parentKernelStatus || "disconnected"} // Use parent status
             currentKernel={parentCurrentKernel} // Use parent kernel

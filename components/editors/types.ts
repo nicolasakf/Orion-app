@@ -44,7 +44,6 @@ export interface EditorToolbarProps {
   onRunAll: (stopOnError?: boolean, triggerSource?: RunAllTriggerSource) => void;
   onStopKernel: () => void | Promise<void>;
   onRestartKernel: () => void | Promise<void>;
-  onRestartAndRunAll: () => void | Promise<void>;
   onTogglePresentationHideAllCellInputs: () => void;
 }
 

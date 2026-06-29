@@ -2021,24 +2021,6 @@ export default function Page() {
     }
   }, [kernelService]);
 
-  const handleRestartAndRunAll = React.useCallback(async () => {
-    if (!kernelService) return;
-    try {
-      setKernelStatus("connecting");
-      await kernelService.restart();
-      executionCountRef.current = 0;
-      setKernelStatus("connected");
-
-      // Wait for kernel to be fully ready before running all cells
-      setTimeout(() => {
-        handleRunAll(true, "restart-run-all");
-      }, 1000);
-    } catch (error) {
-      console.error("Error restarting kernel:", error);
-      setKernelStatus("disconnected");
-    }
-  }, [kernelService, handleRunAll]);
-
   const openConnectionDialog = React.useCallback(() => {
     setIsKernelDropdownOpen(false);
     setConnectionError("");
@@ -2794,7 +2776,6 @@ export default function Page() {
                                   onRunAll={handleRunAll}
                                   onStopKernel={handleStopKernel}
                                   onRestartKernel={handleRestartKernel}
-                                  onRestartAndRunAll={handleRestartAndRunAll}
                                   onTogglePresentationHideAllCellInputs={
                                     handleTogglePresentationHideAllCellInputs
                                   }

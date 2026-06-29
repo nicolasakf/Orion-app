@@ -1,5 +1,5 @@
 /** Toolbar action that started a run-all batch (used to anchor the go-to-error popover). */
-export type RunAllTriggerSource = "run-all" | "restart-run-all";
+export type RunAllTriggerSource = "run-all";
 
 export const RUN_ALL_CELLS_EVENT_NAME = "runAllCells";
 

@@ -9,7 +9,6 @@ import {
   FileCode,
   FileText,
   Play,
-  RefreshCw,
   RotateCcw,
   Square,
   UploadCloud,
@@ -68,7 +67,6 @@ function dispatchNotebookPublish(): void {
 
 type GoToErrorPopoverState = {
   cellIndex: number;
-  triggerSource: RunAllTriggerSource;
 };
 
 export interface NotebookEditorToolbarProps {
@@ -79,7 +77,6 @@ export interface NotebookEditorToolbarProps {
   onRunAll: (stopOnError?: boolean, triggerSource?: RunAllTriggerSource) => void;
   onStopKernel: () => void | Promise<void>;
   onRestartKernel: () => void | Promise<void>;
-  onRestartAndRunAll: () => void | Promise<void>;
   onTogglePresentationHideAllCellInputs: () => void;
 }
 
@@ -131,7 +128,6 @@ export function NotebookEditorToolbar({
   onRunAll,
   onStopKernel,
   onRestartKernel,
-  onRestartAndRunAll,
   onTogglePresentationHideAllCellInputs,
 }: NotebookEditorToolbarProps) {
   const [goToErrorState, setGoToErrorState] =
@@ -160,18 +156,12 @@ export function NotebookEditorToolbar({
     [dismissGoToError, onRunAll],
   );
 
-  const handleRestartAndRunAllClick = React.useCallback(() => {
-    dismissGoToError();
-    void onRestartAndRunAll();
-  }, [dismissGoToError, onRestartAndRunAll]);
-
   React.useEffect(() => {
     const handleRunAllStoppedOnError = (event: Event) => {
       const detail = (event as CustomEvent<RunAllStoppedOnErrorEventDetail>)
         .detail;
       setGoToErrorState({
         cellIndex: detail.cellIndex,
-        triggerSource: detail.triggerSource,
       });
     };
 
@@ -194,7 +184,7 @@ export function NotebookEditorToolbar({
     <>
       <TooltipProvider delayDuration={300}>
         <Popover
-          open={goToErrorOpen && goToErrorState?.triggerSource === "run-all"}
+          open={goToErrorOpen}
           onOpenChange={(open) => {
             if (!open) dismissGoToError();
           }}
@@ -253,7 +243,7 @@ export function NotebookEditorToolbar({
               </DropdownMenu>
             </div>
           </PopoverAnchor>
-          {goToErrorState?.triggerSource === "run-all" ? (
+          {goToErrorState ? (
             <GoToErrorPopoverContent
               cellIndex={goToErrorState.cellIndex}
               onDismiss={dismissGoToError}
@@ -276,33 +266,6 @@ export function NotebookEditorToolbar({
       >
         <RotateCcw className="h-4 w-4" />
       </ToolbarButton>
-      <Popover
-        open={
-          goToErrorOpen && goToErrorState?.triggerSource === "restart-run-all"
-        }
-        onOpenChange={(open) => {
-          if (!open) dismissGoToError();
-        }}
-      >
-        <PopoverAnchor asChild>
-          <span className="inline-flex">
-            <ToolbarButton
-              onClick={handleRestartAndRunAllClick}
-              disabled={!canControlKernel || isRunning}
-              toolTipLabel="Restart Kernel and Run All Cells"
-            >
-              <RefreshCw className="h-4 w-4" />
-            </ToolbarButton>
-          </span>
-        </PopoverAnchor>
-        {goToErrorState?.triggerSource === "restart-run-all" ? (
-          <GoToErrorPopoverContent
-            cellIndex={goToErrorState.cellIndex}
-            onDismiss={dismissGoToError}
-            align="center"
-          />
-        ) : null}
-      </Popover>
       <ToolbarButton
         onClick={onTogglePresentationHideAllCellInputs}
         aria-pressed={presentationHideAllCellInputs}
