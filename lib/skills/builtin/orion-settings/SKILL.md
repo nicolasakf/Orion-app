@@ -1,6 +1,6 @@
 ---
 name: orion-settings
-description: Operates Orion user and workspace settings safely. Use when reading, creating, validating, or changing `~/.orion/settings.json` or `<workspace>/.orion/settings.json`, settings overrides, model pins, provider config, or workspace-level settings.
+description: Operates Orion user and workspace settings safely. Use when reading, creating, validating, or changing `~/.orion/settings.json` or `<workspace>/.orion/settings.json`, settings overrides, model pins, provider config, workspace-level settings, or recovering user settings from automatic backups in `~/.orion/settings-backup`.
 ---
 
 # Orion settings
@@ -9,6 +9,9 @@ description: Operates Orion user and workspace settings safely. Use when reading
 
 For extended user guides, merge precedence, and workspace override examples beyond this skill file, read:
 https://docs.orion-agent.ai/ai-assistant/builtin-skills/orion-settings.html
+
+For end-user backup and restore steps (including Windows), read:
+https://docs.orion-agent.ai/troubleshooting/restore-user-settings-from-backup.html
 
 Also see:
 https://docs.orion-agent.ai/configuration/workspace-settings.html
@@ -38,6 +41,78 @@ Partial JSON is merged with built-in defaults on load. Workspace overrides may b
 5. For user settings, write `~/.orion/settings.json` only when filesystem access to the Orion host is available.
 6. For workspace settings, write `<workspace>/.orion/settings.json` as a workspace override file. Prefer the `{ version, overrides }` shape for workspace files.
 7. Never store secrets.
+
+## User settings backup and recovery
+
+Orion keeps **automatic backups of user settings only** (`~/.orion/settings.json`). Workspace overrides in `<workspace>/.orion/settings.json` are **not** backed up.
+
+### Where backups live
+
+| Item | Path |
+| --- | --- |
+| Backup directory | `~/.orion/settings-backup/` (or `$ORION_HOME_DIR/settings-backup` when `ORION_HOME_DIR` is set) |
+| Active user settings | `~/.orion/settings.json` |
+
+Backup filenames look like `settings-2026-06-06T13-00-45Z.json` (UTC timestamp; colons replaced with hyphens). Only files matching `settings-*.json` in that directory are valid backups.
+
+Orion creates a backup **before overwriting** `settings.json` through the normal save path (Settings UI, Settings JSON editor save, or API persist). Direct filesystem copies do **not** trigger a backup.
+
+Orion keeps up to **30** backups; older files are deleted automatically.
+
+Backups follow the same rules as settings exports: they must remain **credential-free**. Do not copy secrets into backup files.
+
+### When to use recovery
+
+Use this workflow when the user wants to **undo**, **revert**, or **restore** user settings — for example after a bad edit, accidental overwrite, or broken JSON.
+
+### Recovery workflow
+
+1. Resolve the Orion home directory:
+
+```bash
+ORION_HOME="${ORION_HOME_DIR:-$HOME/.orion}"
+```
+
+2. List available backups (newest first):
+
+```bash
+ls -lt "$ORION_HOME/settings-backup"/settings-*.json 2>/dev/null || echo "No backups found"
+```
+
+3. If the user did not name a target time, inspect candidate files (timestamps, or diff key sections) and confirm which backup to restore.
+
+4. **Optional but recommended:** copy the current `settings.json` aside before overwriting, so the user can undo the restore:
+
+```bash
+cp "$ORION_HOME/settings.json" \
+  "$ORION_HOME/settings-backup/settings-manual-$(date -u +%Y-%m-%dT%H-%M-%SZ).json"
+```
+
+Skip this step only when the current file is missing or the user explicitly does not need a rollback point.
+
+5. Restore by copying the chosen backup over the active user settings file:
+
+```bash
+cp "$ORION_HOME/settings-backup/settings-2026-06-06T13-00-45Z.json" \
+  "$ORION_HOME/settings.json"
+```
+
+To restore the **most recent** backup:
+
+```bash
+latest="$(ls -t "$ORION_HOME/settings-backup"/settings-*.json 2>/dev/null | head -1)"
+test -n "$latest" && cp "$latest" "$ORION_HOME/settings.json"
+```
+
+6. Tell the user to **reload Orion** (refresh the app window) so the running UI picks up the restored file. Filesystem-only restores do not notify the live session automatically.
+
+7. If the restored file fails to load, pick an older backup or fix JSON syntax before retrying.
+
+### Recovery limits
+
+- Only **user-level** settings are covered. To revert workspace overrides, edit or delete `<workspace>/.orion/settings.json` directly.
+- Backups exist only when a prior save created them. If `settings-backup` is empty, suggest Settings → export (if the user still has a good copy) or reconstruct from defaults plus the field reference below.
+- Never read or restore from `~/.orion/credentials.json` when fixing settings.
 
 ## Accepted document shapes
 
