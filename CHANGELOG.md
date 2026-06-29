@@ -4,6 +4,20 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.2] - 2026-06-29
+
+### Changed
+
+- Desktop: improve macOS window chrome and theme background sync
+- Notebook: remove the restart-and-run-all toolbar action
+
+### Fixed
+
+- CLI: reuse the portable Node runtime before prompting to download Node.js
+- CLI: show download progress when fetching Node.js
+
+[0.11.2]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.11.2
+
 ## [0.11.1] - 2026-06-23
 
 ### Fixed
