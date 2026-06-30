@@ -1278,6 +1278,7 @@ export function NotebookEditor({
       description: string;
       hideInputCells: boolean;
       allowSourceDownload: boolean;
+      password: string;
       apiBaseUrl: string;
       accessToken: string;
     }): Promise<PublishNotebookResponse> => {
@@ -1326,6 +1327,7 @@ export function NotebookEditor({
         request: {
           publishId: input.publishId,
           metadata,
+          password: input.password.trim() || undefined,
           bundle: {
             schemaVersion: 1,
             rendererSchemaVersion: NOTEBOOK_APP_VIEW_SCHEMA_VERSION,

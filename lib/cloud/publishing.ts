@@ -26,6 +26,7 @@ export const PublishNotebookRequestSchema = z.object({
   publishId: z.string().uuid().optional(),
   metadata: PublishedNotebookMetadataSchema,
   bundle: PublishedNotebookBundleSchema,
+  password: z.string().trim().min(1).max(256).optional(),
 });
 
 export const PublishNotebookResponseSchema = z.object({
@@ -35,6 +36,7 @@ export const PublishNotebookResponseSchema = z.object({
   description: z.string(),
   currentView: PublishedNotebookViewSchema,
   allowSourceDownload: z.boolean(),
+  hasPassword: z.boolean().default(false),
   url: z.string().url(),
   updatedAt: z.string(),
 });

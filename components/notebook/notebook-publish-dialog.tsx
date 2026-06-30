@@ -1,7 +1,16 @@
 "use client";
 
 import * as React from "react";
-import { Check, CloudOff, Copy, ExternalLink, Loader2, UploadCloud } from "lucide-react";
+import {
+  Check,
+  CloudOff,
+  Copy,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  Loader2,
+  UploadCloud,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { CloudAuthDialog } from "@/components/cloud/cloud-auth-dialog";
@@ -43,6 +52,7 @@ interface PublishNotebookInput {
   description: string;
   hideInputCells: boolean;
   allowSourceDownload: boolean;
+  password: string;
   apiBaseUrl: string;
   accessToken: string;
 }
@@ -68,6 +78,8 @@ export function NotebookPublishDialog({
   const [description, setDescription] = React.useState("");
   const [hideInputCells, setHideInputCells] = React.useState(true);
   const [allowSourceDownload, setAllowSourceDownload] = React.useState(false);
+  const [password, setPassword] = React.useState("");
+  const [showPassword, setShowPassword] = React.useState(false);
   const [publishId, setPublishId] = React.useState<string>("");
   const [published, setPublished] = React.useState<PublishNotebookResponse[]>([]);
   const [result, setResult] = React.useState<PublishNotebookResponse | null>(null);
@@ -81,6 +93,8 @@ export function NotebookPublishDialog({
     setTitle(defaultTitle);
     setResult(null);
     setCopied(false);
+    setPassword("");
+    setShowPassword(false);
   }, [defaultTitle, open]);
 
   React.useEffect(() => {
@@ -98,6 +112,7 @@ export function NotebookPublishDialog({
     setTitle(selectedExisting.title);
     setDescription(selectedExisting.description);
     setAllowSourceDownload(selectedExisting.allowSourceDownload);
+    setPassword("");
   }, [selectedExisting]);
 
   const handlePublish = async () => {
@@ -118,6 +133,7 @@ export function NotebookPublishDialog({
         description,
         hideInputCells,
         allowSourceDownload,
+        password,
         apiBaseUrl: cloudConfig.apiBaseUrl,
         accessToken,
       });
@@ -160,6 +176,7 @@ export function NotebookPublishDialog({
       setTitle(defaultTitle);
       setDescription("");
       setAllowSourceDownload(false);
+      setPassword("");
       setConfirmUnpublishOpen(false);
       toast.success("Notebook unpublished.");
     } catch (error) {
@@ -251,6 +268,39 @@ export function NotebookPublishDialog({
               />
               Allow viewers to download the source .ipynb
             </label>
+            <div className="space-y-2">
+              <Label htmlFor="publish-password">
+                {selectedExisting?.hasPassword ? "Change password" : "Password"}
+              </Label>
+              <div className="relative">
+                <Input
+                  id="publish-password"
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  maxLength={256}
+                  placeholder={
+                    selectedExisting?.hasPassword
+                      ? "Leave blank to keep the current password"
+                      : "Optional"
+                  }
+                  className="pr-9"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((value) => !value)}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  tabIndex={-1}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-3.5 w-3.5" />
+                  ) : (
+                    <Eye className="h-3.5 w-3.5" />
+                  )}
+                </button>
+              </div>
+            </div>
             {result ? (
               <div className="flex items-center gap-2 rounded-md border bg-muted/30 p-3 text-sm">
                 <div className="flex min-w-0 flex-1 items-center">

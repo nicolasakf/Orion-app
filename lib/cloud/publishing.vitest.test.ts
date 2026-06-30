@@ -41,6 +41,7 @@ const response = {
   description: "Interactive client-side view",
   currentView: "app",
   allowSourceDownload: true,
+  hasPassword: false,
   url: "https://api.orion.local/p/shared-notebook",
   updatedAt: "2026-06-08T10:00:00.000Z",
 };
@@ -85,6 +86,34 @@ describe("Orion cloud publishing API client", () => {
         body: JSON.stringify(request),
       }),
     );
+  });
+
+  it("sends publish passwords outside the public notebook bundle", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ ...response, hasPassword: true }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const passwordRequest: PublishNotebookRequest = {
+      ...request,
+      password: "team-secret",
+    };
+
+    await expect(
+      publishNotebookToCloud({
+        apiBaseUrl: "https://api.orion.local",
+        accessToken: "token-123",
+        request: passwordRequest,
+      }),
+    ).resolves.toEqual({ ...response, hasPassword: true });
+
+    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(String(options.body)) as PublishNotebookRequest;
+
+    expect(body.password).toBe("team-secret");
+    expect("password" in body.metadata).toBe(false);
+    expect("password" in body.bundle.metadata).toBe(false);
   });
 
   it("rewrites publish share URLs to the configured API host", async () => {
