@@ -20,6 +20,9 @@ export const COMPACTION_AUTO_THRESHOLD = 0.92;
 /** Number of recent user-turn pairs kept verbatim by the optimizer. */
 export const OPTIMIZER_RETENTION_TURNS = 6;
 
+/** Number of recent assistant/tool steps kept verbatim during single-turn research loops. */
+export const OPTIMIZER_RETENTION_STEPS = 6;
+
 /** Number of recent user-turn pairs kept verbatim after a compaction. */
 export const COMPACTION_RETENTION_TURNS = 4;
 

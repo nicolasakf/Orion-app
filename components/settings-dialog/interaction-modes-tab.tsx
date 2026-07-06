@@ -5,6 +5,7 @@ import { Copy, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,11 +17,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import {
   SettingsInfoLabel,
 } from "@/components/settings-dialog/settings-info-label";
+import { SettingsSwitchField } from "@/components/settings-dialog/settings-form-fields";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import {
   getDefaultInteractionModeConfig,
@@ -50,14 +51,11 @@ const TOOL_LABELS: Record<OrionToolName, string> = {
   await_command: "Await command",
   read_file: "Read file",
   edit_file: "Edit file",
+  reload_page: "Reload page",
   web_fetch: "Web fetch",
   web_search: "Web search",
   delegate: "Delegate",
   load_skill: "Load skill",
-  begin_deep_eda: "Begin deep EDA",
-  record_visual_inspection: "Record visual inspection",
-  update_deep_eda_state: "Update deep EDA state",
-  complete_deep_eda: "Complete deep EDA",
 };
 
 const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
@@ -82,17 +80,12 @@ const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
     tools: ["read_file", "edit_file", "bash", "await_command", "list_kernels", "shutdown_kernel"],
   },
   {
-    label: "Web and Extensions",
-    tools: ["web_fetch", "web_search", "load_skill", "delegate"],
+    label: "App",
+    tools: ["reload_page"],
   },
   {
-    label: "Agent loop control",
-    tools: [
-      "begin_deep_eda",
-      "record_visual_inspection",
-      "update_deep_eda_state",
-      "complete_deep_eda",
-    ],
+    label: "Web and Extensions",
+    tools: ["web_fetch", "web_search", "load_skill", "delegate"],
   },
 ];
 
@@ -168,6 +161,7 @@ export function AgentInteractionModesSection() {
             toolNames: patch.toolNames ?? mode.toolNames,
             customSystemPrompt: patch.customSystemPrompt ?? mode.customSystemPrompt,
             bashPolicy: patch.bashPolicy ?? mode.bashPolicy,
+            hiddenInSelector: patch.hiddenInSelector ?? mode.hiddenInSelector,
           };
         }
         return { ...mode, ...patch, builtIn: false };
@@ -230,36 +224,47 @@ export function AgentInteractionModesSection() {
         </p>
       </div>
 
-      <Tabs
-        value={selectedMode?.id ?? modes[0]?.id ?? "Agent"}
-        onValueChange={setSelectedModeId}
-        className="flex min-h-0 flex-1 flex-col gap-4"
-      >
-        <div className="flex items-center gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-2">
-            <div className="min-w-0 overflow-x-auto">
-            <TabsList className="w-max justify-start">
-              {modes.map((mode) => (
-                <TabsTrigger
-                  key={mode.id}
-                  value={mode.id}
-                  className="gap-1.5"
-                >
-                  <span>{mode.label}</span>
-                  {!mode.builtIn ? (
-                    <span className="text-[10px] font-normal text-muted-foreground">
-                      {mode.baseMode}
+      <div className="flex min-h-0 flex-1 flex-col gap-4">
+        <div className="flex w-full items-end gap-3">
+          <div className="w-fit space-y-2">
+            <Label htmlFor="interaction-mode-select">Mode</Label>
+            <Select
+              value={selectedMode?.id ?? modes[0]?.id ?? "Agent"}
+              onValueChange={setSelectedModeId}
+            >
+              <SelectTrigger id="interaction-mode-select" className="w-fit">
+                <SelectValue placeholder="Select a mode" />
+              </SelectTrigger>
+              <SelectContent className="w-max">
+                {modes.map((mode) => (
+                  <SelectItem key={mode.id} value={mode.id}>
+                    <span className="flex items-center gap-1.5">
+                      <span>{mode.label}</span>
+                      {mode.beta ? (
+                        <Badge variant="secondary" className="px-1 py-0 text-[10px] font-normal">
+                          Beta
+                        </Badge>
+                      ) : null}
+                      {!mode.builtIn ? (
+                        <span className="text-[10px] font-normal text-muted-foreground">
+                          {mode.baseMode}
+                        </span>
+                      ) : null}
+                      {mode.hiddenInSelector ? (
+                        <span className="text-[10px] font-normal text-muted-foreground">
+                          Hidden
+                        </span>
+                      ) : null}
                     </span>
-                  ) : null}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-            </div>
-            <Button type="button" className="h-10 shrink-0 px-3" onClick={createMode}>
-              <Plus className="size-4" />
-              New
-            </Button>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
+          <Button type="button" className="h-10 shrink-0 px-3" onClick={createMode}>
+            <Plus className="size-4" />
+            New
+          </Button>
           {selectedMode ? (
             <div className="ml-auto flex shrink-0 gap-2">
               <Button type="button" size="sm" variant="outline" onClick={duplicateMode}>
@@ -283,6 +288,23 @@ export function AgentInteractionModesSection() {
 
         {selectedMode ? (
           <div className="min-h-0 space-y-5 overflow-auto pr-1">
+            {selectedMode.beta ? (
+              <p className="text-sm text-muted-foreground">
+                This mode is in beta and still being tested. Enable it in the chat selector when you
+                want to try it.
+              </p>
+            ) : null}
+
+            <SettingsSwitchField
+              id="mode-show-in-selector"
+              label="Show in mode selector"
+              description="When off, this mode stays available here in settings but is hidden from the chat interaction mode menu."
+              checked={!selectedMode.hiddenInSelector}
+              onCheckedChange={(checked) =>
+                updateSelectedMode({ hiddenInSelector: !checked })
+              }
+            />
+
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="mode-label">Label</Label>
@@ -399,7 +421,7 @@ export function AgentInteractionModesSection() {
             </section>
           </div>
         ) : null}
-      </Tabs>
+      </div>
     </div>
   );
 }

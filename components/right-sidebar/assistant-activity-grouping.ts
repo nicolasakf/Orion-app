@@ -49,8 +49,16 @@ export function isAssistantActivityPart(part: UIMessage["parts"][number]): boole
 }
 
 /** True when a part is assistant text that should render as final content. */
-function isRenderableAssistantText(part: UIMessage["parts"][number]): boolean {
+function isRenderableAssistantText(
+  part: UIMessage["parts"][number] | undefined
+): part is Extract<UIMessage["parts"][number], { type: "text" }> {
+  if (!part) return false;
   return part.type === "text" && "text" in part && Boolean(part.text);
+}
+
+/** True when a part can be shown inside the compact work transcript. */
+function isRenderableAssistantWorkPart(part: UIMessage["parts"][number]): boolean {
+  return isAssistantActivityPart(part) || isRenderableAssistantText(part);
 }
 
 /** True when an assistant message contains activity and no renderable text. */
@@ -83,10 +91,74 @@ function hasFollowingAssistantText(messages: UIMessage[], startIndex: number): b
   return false;
 }
 
+/** Return the last assistant text part in a contiguous assistant message run. */
+function findFinalAssistantTextPart(
+  messages: UIMessage[],
+  startIndex: number,
+  endIndex: number
+): { messageIndex: number; partIndex: number } | null {
+  for (let messageIndex = endIndex - 1; messageIndex >= startIndex; messageIndex--) {
+    const message = messages[messageIndex];
+    if (!message || message.role !== "assistant") continue;
+    for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex--) {
+      if (isRenderableAssistantText(message.parts[partIndex])) {
+        return { messageIndex, partIndex };
+      }
+    }
+  }
+
+  return null;
+}
+
+/** True when a contiguous assistant message run contains tool or reasoning work. */
+function assistantRunHasActivity(
+  messages: UIMessage[],
+  startIndex: number,
+  endIndex: number
+): boolean {
+  for (let messageIndex = startIndex; messageIndex < endIndex; messageIndex++) {
+    const message = messages[messageIndex];
+    if (message?.role === "assistant" && message.parts.some(isAssistantActivityPart)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/** Collect visible work parts before the final assistant text in a message run. */
+function collectAssistantRunWorkItems(
+  messages: UIMessage[],
+  startIndex: number,
+  endIndex: number,
+  finalTextPart: { messageIndex: number; partIndex: number } | null
+): AssistantActivityMessagePart[] {
+  const items: AssistantActivityMessagePart[] = [];
+
+  for (let messageIndex = startIndex; messageIndex < endIndex; messageIndex++) {
+    const message = messages[messageIndex];
+    if (!message || message.role !== "assistant") continue;
+    for (let partIndex = 0; partIndex < message.parts.length; partIndex++) {
+      if (
+        finalTextPart &&
+        (messageIndex > finalTextPart.messageIndex ||
+          (messageIndex === finalTextPart.messageIndex && partIndex >= finalTextPart.partIndex))
+      ) {
+        break;
+      }
+
+      const part = message.parts[partIndex];
+      if (!isRenderableAssistantWorkPart(part)) continue;
+      items.push({ part, partIndex, message, messageIndex });
+    }
+  }
+
+  return items;
+}
+
 /**
- * Build message-level rows, optionally merging adjacent assistant messages that
- * contain only reasoning/tool activity. Subagent transcripts produce one such
- * message per model step, so this gives the UI one coherent work group.
+ * Build message-level rows, optionally merging assistant work that appears
+ * before the final assistant response in the same turn.
  */
 export function buildAssistantActivityMessageBlocks(
   messages: UIMessage[],
@@ -101,53 +173,60 @@ export function buildAssistantActivityMessageBlocks(
   }
 
   const blocks: AssistantActivityMessageBlock[] = [];
-  let pendingRun: AssistantActivityMessagePart[] = [];
-  let pendingFirstMessageIndex: number | undefined;
-  let pendingLastMessageIndex: number | undefined;
+  let messageIndex = 0;
 
-  /** Flush a pending cross-message activity run at a message boundary. */
-  const flushRun = () => {
-    if (
-      pendingRun.length === 0 ||
-      pendingFirstMessageIndex === undefined ||
-      pendingLastMessageIndex === undefined
-    ) {
-      pendingRun = [];
-      pendingFirstMessageIndex = undefined;
-      pendingLastMessageIndex = undefined;
-      return;
+  while (messageIndex < messages.length) {
+    const message = messages[messageIndex];
+    if (message?.role !== "assistant") {
+      if (message) blocks.push({ type: "message", message, messageIndex });
+      messageIndex++;
+      continue;
     }
 
-    blocks.push({
-      type: "activityRun",
-      items: pendingRun,
-      firstMessageIndex: pendingFirstMessageIndex,
-      lastMessageIndex: pendingLastMessageIndex,
-      hasFollowingText: hasFollowingAssistantText(messages, pendingLastMessageIndex + 1),
-    });
-    pendingRun = [];
-    pendingFirstMessageIndex = undefined;
-    pendingLastMessageIndex = undefined;
-  };
+    const runStartIndex = messageIndex;
+    let runEndIndex = messageIndex + 1;
+    while (runEndIndex < messages.length && messages[runEndIndex]?.role === "assistant") {
+      runEndIndex++;
+    }
 
-  messages.forEach((message, messageIndex) => {
-    if (isAssistantActivityOnlyMessage(message)) {
-      if (pendingFirstMessageIndex === undefined) {
-        pendingFirstMessageIndex = messageIndex;
+    if (!assistantRunHasActivity(messages, runStartIndex, runEndIndex)) {
+      for (let index = runStartIndex; index < runEndIndex; index++) {
+        blocks.push({ type: "message", message: messages[index], messageIndex: index });
       }
-      pendingLastMessageIndex = messageIndex;
-      message.parts.forEach((part, partIndex) => {
-        if (!isAssistantActivityPart(part)) return;
-        pendingRun.push({ part, partIndex, message, messageIndex });
-      });
-      return;
+      messageIndex = runEndIndex;
+      continue;
     }
 
-    flushRun();
-    blocks.push({ type: "message", message, messageIndex });
-  });
+    const finalTextPart = findFinalAssistantTextPart(messages, runStartIndex, runEndIndex);
+    const workEndIndex = finalTextPart?.messageIndex ?? runEndIndex - 1;
+    const crossMessageFinalTextPart = finalTextPart
+      ? { messageIndex: finalTextPart.messageIndex, partIndex: 0 }
+      : null;
+    const workItems = collectAssistantRunWorkItems(
+      messages,
+      runStartIndex,
+      runEndIndex,
+      crossMessageFinalTextPart
+    );
 
-  flushRun();
+    if (workItems.length > 0) {
+      blocks.push({
+        type: "activityRun",
+        items: workItems,
+        firstMessageIndex: workItems[0].messageIndex,
+        lastMessageIndex: workItems.at(-1)?.messageIndex ?? workEndIndex,
+        hasFollowingText:
+          Boolean(finalTextPart) || hasFollowingAssistantText(messages, workEndIndex + 1),
+      });
+    }
+
+    const passthroughStartIndex = finalTextPart?.messageIndex ?? runEndIndex;
+    for (let index = passthroughStartIndex; index < runEndIndex; index++) {
+      blocks.push({ type: "message", message: messages[index], messageIndex: index });
+    }
+
+    messageIndex = runEndIndex;
+  }
 
   return blocks;
 }
@@ -155,19 +234,50 @@ export function buildAssistantActivityMessageBlocks(
 /** Build render blocks that group contiguous reasoning/tool activity. */
 export function buildAssistantRenderBlocks(parts: UIMessage["parts"]): AssistantRenderBlock[] {
   const blocks: AssistantRenderBlock[] = [];
+  const finalTextIndex = (() => {
+    for (let index = parts.length - 1; index >= 0; index--) {
+      if (isRenderableAssistantText(parts[index])) return index;
+    }
+    return -1;
+  })();
+
+  const hasActivityBeforeFinal =
+    finalTextIndex > 0 && parts.slice(0, finalTextIndex).some(isAssistantActivityPart);
+
+  if (hasActivityBeforeFinal) {
+    const activityItems = parts
+      .slice(0, finalTextIndex)
+      .map((part, partIndex) => ({ part, partIndex }))
+      .filter((item) => isRenderableAssistantWorkPart(item.part));
+
+    if (activityItems.length > 0) {
+      blocks.push({
+        type: "activityGroup",
+        items: activityItems,
+        hasFollowingText: true,
+      });
+    }
+
+    const finalPart = parts[finalTextIndex];
+    if (isRenderableAssistantText(finalPart)) {
+      blocks.push({
+        type: "text",
+        item: { part: finalPart, partIndex: finalTextIndex },
+      });
+    }
+
+    return blocks;
+  }
+
   let pendingActivity: AssistantPartWithIndex[] = [];
 
-  /** Check whether later parts contain assistant text that can finalize the activity. */
-  const hasTextAfter = (startIndex: number): boolean =>
-    parts.slice(startIndex).some(isRenderableAssistantText);
-
   /** Flush pending activity parts into the block list at a text/trailing boundary. */
-  const flushActivity = (nextIndex: number) => {
+  const flushActivity = (hasFollowingText: boolean) => {
     if (pendingActivity.length === 0) return;
     blocks.push({
       type: "activityGroup",
       items: pendingActivity,
-      hasFollowingText: hasTextAfter(nextIndex),
+      hasFollowingText,
     });
     pendingActivity = [];
   };
@@ -179,7 +289,7 @@ export function buildAssistantRenderBlocks(parts: UIMessage["parts"]): Assistant
     }
 
     if (part.type === "text" && "text" in part && part.text) {
-      flushActivity(partIndex);
+      flushActivity(true);
       blocks.push({
         type: "text",
         item: { part, partIndex },
@@ -187,7 +297,7 @@ export function buildAssistantRenderBlocks(parts: UIMessage["parts"]): Assistant
     }
   });
 
-  flushActivity(parts.length);
+  flushActivity(false);
 
   return blocks;
 }

@@ -14,6 +14,7 @@ import {
   buildAgentSystemPrompt,
   buildAskModeSystemPrompt,
   buildEditModeSystemPrompt,
+  buildResearchModeSystemPrompt,
 } from "./agent-system-prompt";
 import { buildSubagentSystemPrompt } from "./subagents";
 import type { AgentRule } from "./rules";
@@ -86,5 +87,16 @@ describe("custom interaction mode prompt injection", () => {
 
     expect(prompt).not.toContain("## Available Skills");
     expect(prompt).not.toContain("## Sub-agent Delegation");
+  });
+});
+
+describe("Research mode prompt", () => {
+  it("frames research as iterative coherent steps without numeric batch limits", () => {
+    const prompt = buildResearchModeSystemPrompt();
+
+    expect(prompt).toContain("Do not draft the whole notebook up front");
+    expect(prompt).toContain("document the observation and decision");
+    expect(prompt).toContain("one plot family");
+    expect(prompt).not.toContain("at most 3");
   });
 });

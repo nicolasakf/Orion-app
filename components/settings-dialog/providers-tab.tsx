@@ -10,11 +10,14 @@ import {
   Loader2,
   ExternalLink,
   Copy,
-  CheckCheck,
   RefreshCw,
   Plus,
 } from "lucide-react";
 
+import {
+  CheckmarkedButton,
+  useCheckmarkedFeedback,
+} from "@/components/common/checkmarked-button";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -246,7 +249,7 @@ interface DeviceFlowPanelProps {
 
 function DeviceFlowPanel({ onCredential, onCancel }: DeviceFlowPanelProps) {
   const [flow, setFlow] = useState<DeviceFlowState>({ phase: "idle" });
-  const [copied, setCopied] = useState(false);
+  const { checked: copied, showCheckmark } = useCheckmarkedFeedback();
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelledRef = useRef(false);
 
@@ -349,12 +352,11 @@ function DeviceFlowPanel({ onCredential, onCancel }: DeviceFlowPanelProps) {
     if (!flow.userCode) return;
     try {
       await navigator.clipboard.writeText(flow.userCode);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      showCheckmark();
     } catch {
       // clipboard unavailable — ignore
     }
-  }, [flow.userCode]);
+  }, [flow.userCode, showCheckmark]);
 
   if (flow.phase === "starting") {
     return (
@@ -377,13 +379,16 @@ function DeviceFlowPanel({ onCredential, onCancel }: DeviceFlowPanelProps) {
           <div className="corner-squircle font-mono text-lg font-semibold tracking-widest border border-border rounded-md px-3 py-1.5 bg-muted select-all">
             {flow.userCode}
           </div>
-          <Button variant="ghost" size="sm" onClick={handleCopyCode} className="shrink-0">
-            {copied ? (
-              <CheckCheck className="h-3.5 w-3.5 text-green-500" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" />
-            )}
-          </Button>
+          <CheckmarkedButton
+            variant="ghost"
+            size="sm"
+            onClick={handleCopyCode}
+            className="shrink-0"
+            aria-label={copied ? "Code copied" : "Copy code"}
+            checked={copied}
+            icon={<Copy />}
+            iconClassName="h-3.5 w-3.5"
+          />
         </div>
 
         {/* Open verification URL */}

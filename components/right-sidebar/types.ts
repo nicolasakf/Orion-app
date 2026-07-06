@@ -1,4 +1,5 @@
 import type { NotebookType } from "@/lib/types";
+import type { ModelCatalogSource } from "@/lib/agent/model-catalog";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { ResolvedChatReference } from "@/lib/chat/chat-references";
 import type { FileUIPart } from "ai";
@@ -11,14 +12,39 @@ export interface LLM {
   provider: ProviderId;
   inputPrice?: number;
   outputPrice?: number;
+  cachedPrice?: number;
   icon?: React.ComponentType<{ className?: string }>;
   options?: any;
+  /** Provider-specific model identifier sent to the API when it differs from value. */
+  apiModelId?: string;
   /** True if the matching provider credential is configured locally. */
   isAccessible?: boolean;
   /** Model context window size in tokens. */
   contextWindow?: number;
+  /** Max tokens the provider reports this model can generate in one response. */
+  maxOutputTokens?: number;
   /** True when the model can receive image file parts as input. */
   supportsImageInput?: boolean;
+  /** True when the model reports native tool calling support. */
+  supportsToolCalling?: boolean;
+  /** True when the provider/model can safely force a specific tool choice. */
+  supportsForcedToolChoice?: boolean;
+  /** True when the model exposes reasoning-specific behavior. */
+  supportsReasoning?: boolean;
+  /** Token threshold where long-context pricing begins. */
+  longContextThreshold?: number;
+  /** Input price per million tokens after the long-context threshold. */
+  longContextInputPrice?: number;
+  /** Output price per million tokens after the long-context threshold. */
+  longContextOutputPrice?: number;
+  /** Source of the catalog metadata shown in the selector detail card. */
+  catalogSource?: ModelCatalogSource;
+  /** Whether the static catalog pins this model by default. */
+  pinnedByDefault?: boolean;
+  /** Catalog metadata timestamp. */
+  catalogCreatedAt?: string;
+  /** Whether this model is exposed to the client catalog. */
+  clientAvailable?: boolean;
 }
 
 export interface EditingState {

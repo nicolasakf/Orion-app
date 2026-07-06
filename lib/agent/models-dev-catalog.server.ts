@@ -64,6 +64,7 @@ const ModelCatalogEntryCacheSchema = z.object({
   max_output_tokens: z.number().nullable(),
   supports_image_input: z.boolean().optional(),
   supports_tool_calling: z.boolean().optional(),
+  supports_forced_tool_choice: z.boolean().optional(),
   supports_reasoning: z.boolean().optional(),
   long_context_threshold: z.number().nullable(),
   long_context_input_price_per_1m: z.number().nullable(),

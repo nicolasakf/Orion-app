@@ -14,6 +14,7 @@ export interface ModelCatalogEntry {
   max_output_tokens: number | null;
   supports_image_input?: boolean;
   supports_tool_calling?: boolean;
+  supports_forced_tool_choice?: boolean;
   supports_reasoning?: boolean;
   long_context_threshold: number | null;
   long_context_input_price_per_1m: number | null;
@@ -845,12 +846,23 @@ function defaultSupportsImageInput(model: { provider_id: ProviderId }): boolean 
   return true;
 }
 
+/** Direct providers with known reliable specific-tool forcing support. */
+function defaultSupportsForcedToolChoice(model: { provider_id: ProviderId }): boolean {
+  return (
+    model.provider_id === "openai" ||
+    model.provider_id === "anthropic" ||
+    model.provider_id === "google"
+  );
+}
+
 export const CLIENT_MODEL_CATALOG = MODEL_CATALOG.filter(
   (model) => model.client_avail
 ).map((model) => ({
   ...model,
   source: model.source ?? "snapshot",
   supports_image_input: model.supports_image_input ?? defaultSupportsImageInput(model),
+  supports_forced_tool_choice:
+    model.supports_forced_tool_choice ?? defaultSupportsForcedToolChoice(model),
 }));
 
 export function getModelCatalogEntry(

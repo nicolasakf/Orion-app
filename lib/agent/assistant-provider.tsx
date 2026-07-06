@@ -52,7 +52,7 @@ import {
   type SubagentDefinition,
 } from "@/lib/agent/subagents";
 import { detectClientPlatformOs, isJupyterServerHostLocal } from "@/lib/utils";
-import { guardExecutionToolResult, isExecutionToolResult } from "./deep-eda";
+import { guardExecutionToolResult, isExecutionToolResult } from "./visual-evidence";
 
 // ============================================================================
 // Types
@@ -719,6 +719,13 @@ export function AssistantProvider({
           return `[ERROR] Skill "${name}" not found. Available skills: ${available || "none"}`;
         }
         return skill.content;
+      }
+
+      if (toolName === "reload_page") {
+        window.setTimeout(() => {
+          window.location.reload();
+        }, 750);
+        return "Reloading the Orion page to apply the latest settings.";
       }
 
       if (toolName === "web_fetch" || toolName === "web_search") {

@@ -18,10 +18,7 @@ import { tool } from "ai";
 import { z } from "zod";
 
 import { EditOrionMetadataParamsSchema } from "./tools/edit-orion-metadata-schema";
-import {
-  DEEP_EDA_COVERAGE_AREAS,
-  type ExecutionToolResult,
-} from "./deep-eda";
+import type { ExecutionToolResult } from "./visual-evidence";
 
 /** Converts structured execution output into text plus raster model input. */
 function executionResultToModelOutput({ output }: { output: unknown }) {
@@ -37,16 +34,21 @@ function executionResultToModelOutput({ output }: { output: unknown }) {
     parts.push({ type: "text", text: result.text });
   }
   for (const visual of result.visuals ?? []) {
-    parts.push({
-      type: "text",
-      text: `Raster output ${visual.visualId} (${visual.mimeType}) must be inspected before continuing.`,
-    });
     if (visual.data) {
+      parts.push({
+        type: "text",
+        text: `Raster output ${visual.visualId} (${visual.mimeType}) is included below. Review what it shows before choosing the next research step.`,
+      });
       parts.push({ type: "image-data", data: visual.data, mediaType: visual.mimeType });
     } else if (visual.visualInspectionUnavailableReason) {
       parts.push({
         type: "text",
-        text: `Visual inspection unavailable: ${visual.visualInspectionUnavailableReason}. Run supporting numeric checks and record the limitation.`,
+        text: `Raster output ${visual.visualId} (${visual.mimeType}) could not be shown to you: ${visual.visualInspectionUnavailableReason}. Use supporting numeric or structural checks before relying on it.`,
+      });
+    } else {
+      parts.push({
+        type: "text",
+        text: `Raster output ${visual.visualId} (${visual.mimeType}) did not include preview data. Use supporting numeric or structural checks before relying on it.`,
       });
     }
   }
@@ -180,7 +182,7 @@ export const orionTools = {
 
   insert_cell: tool({
     description:
-      "Insert one or more code or markdown cells at a specific position in the notebook. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Existing cells at or after the index are shifted down. Provide multiple cells to insert several at once.",
+      "Insert one or more code or markdown cells at a specific position in the notebook. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Existing cells at or after the index are shifted down. In Research mode, prefer one coherent research step at a time and interleave markdown observations/decisions with evidence cells.",
     inputSchema: z.object({
       cells: z
         .array(
@@ -227,7 +229,7 @@ export const orionTools = {
 
   overwrite_cell_source: tool({
     description:
-      "Replace the source code of one or more existing cells. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. The notebook is saved once after all updates.",
+      "Replace the source code of one or more existing cells. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. In Research mode, edit the next coherent research step or a focused fix, then run it before adding new analysis.",
     inputSchema: z.object({
       cells: z
         .array(
@@ -255,7 +257,7 @@ export const orionTools = {
 
   execute_cell: tool({
     description:
-      "Execute one or more cells in the notebook by their indices and return their outputs. If the active notebook has unsaved editor changes, Orion saves them before execution. Cells are executed sequentially in the order provided. All cells must already exist in the notebook.",
+      "Execute one or more cells in the notebook by their indices and return their outputs. If the active notebook has unsaved editor changes, Orion saves them before execution. Cells are executed sequentially in the order provided. All cells must already exist in the notebook. In Research mode, run the cells for the current coherent research step, inspect the evidence, then document the observation and next decision in notebook markdown.",
     inputSchema: z.object({
       cellIndices: z
         .array(z.number().int().min(0))
@@ -352,81 +354,6 @@ export const orionTools = {
         .describe("Maximum execution time in seconds."),
     }),
     toModelOutput: executionResultToModelOutput,
-  }),
-
-  // ============================================================================
-  // Agent Loop Control
-  // ============================================================================
-
-  begin_deep_eda: tool({
-    description:
-      "Request activation of the exhaustive deep-EDA loop. Call this before doing deep EDA after loading the deep-eda skill. Slash-command activation is already approved; model-selected activation requires user confirmation.",
-    inputSchema: z.object({
-      objective: z.string().min(1).describe("The user's explicit exhaustive EDA objective."),
-    }),
-  }),
-
-  record_visual_inspection: tool({
-    description:
-      "Record the required sanity inspection for every pending agent-generated PNG/JPEG. Cover every visual ID named in the execution result before taking another action.",
-    inputSchema: z.object({
-      inspections: z.array(
-        z.object({
-          visualId: z.string().min(1),
-          description: z.string().min(1),
-          verdict: z.enum(["valid", "questionable", "invalid", "unavailable"]),
-          issues: z.array(z.string()),
-          disposition: z.enum(["accept", "revise", "cannot_validate"]),
-          supportingChecks: z.array(z.string()).describe(
-            "Numeric or structural checks supporting the verdict. Required when verdict is unavailable; otherwise pass an empty array when none were needed."
-          ),
-          supersedesVisualId: z.string().describe(
-            "Visual ID corrected by this output. Pass an empty string when this is not a replacement inspection."
-          ),
-        })
-      ).min(1),
-    }),
-  }),
-
-  update_deep_eda_state: tool({
-    description:
-      "Incrementally update Orion's active deep-EDA ledger. Send only changed coverage entries, new findings, questions to add/update, and question IDs to resolve. Use empty arrays for unchanged sections.",
-    inputSchema: z.object({
-      coverageUpdates: z.array(
-        z.object({
-          area: z.enum(DEEP_EDA_COVERAGE_AREAS),
-          status: z.enum(["pending", "in_progress", "complete", "not_applicable"]),
-          evidenceRefs: z.array(z.string()),
-          rationale: z.string(),
-        })
-      ),
-      findingsToAdd: z.array(
-        z.object({
-          claim: z.string(),
-          evidenceRefs: z.array(z.string()).min(1),
-          confidence: z.enum(["low", "medium", "high"]),
-        })
-      ),
-      openQuestionsUpsert: z.array(
-        z.object({
-          id: z.string(),
-          question: z.string(),
-          priority: z.enum(["low", "medium", "high"]),
-          nextAction: z.string(),
-        })
-      ),
-      resolvedQuestionIds: z.array(z.string().min(1)),
-    }),
-  }),
-
-  complete_deep_eda: tool({
-    description:
-      "Propose completion of the active deep-EDA loop. Orion accepts only when coverage and evidence are complete, at least one PNG/JPEG plot and all raster outputs are inspected, no high-priority question remains, and notebook synthesis cells are provided.",
-    inputSchema: z.object({
-      completionRationale: z.string().min(1),
-      synthesisCellIndices: z.array(z.number().int().min(0)).min(1),
-      remainingLimitations: z.array(z.string()),
-    }),
   }),
 
   // ============================================================================
@@ -548,6 +475,12 @@ export const orionTools = {
     }),
   }),
 
+  reload_page: tool({
+    description:
+      "Reload the Orion browser page. Use this after changing Orion settings files or other app configuration that the running UI will not fully pick up until refresh. This tool schedules the reload after returning its tool result.",
+    inputSchema: z.object({}),
+  }),
+
   // ============================================================================
   // Web Access
   // ============================================================================
@@ -629,10 +562,7 @@ export function isOrionToolName(value: unknown): value is OrionToolName {
  */
 export const NO_DEPENDENCY_TOOLS: ReadonlySet<OrionToolName> = new Set<OrionToolName>([
   "load_skill",
-  "begin_deep_eda",
-  "record_visual_inspection",
-  "update_deep_eda_state",
-  "complete_deep_eda",
+  "reload_page",
   "web_fetch",
   "web_search",
   // delegate spawns a client-side sub-agent and does not need a Jupyter server or
@@ -695,10 +625,6 @@ const EDIT_MODE_EXCLUDED: ReadonlySet<OrionToolName> = new Set<OrionToolName>([
   "execute_cell",
   "execute_code",
   "restart_notebook",
-  "begin_deep_eda",
-  "record_visual_inspection",
-  "update_deep_eda_state",
-  "complete_deep_eda",
 ]);
 
 /**

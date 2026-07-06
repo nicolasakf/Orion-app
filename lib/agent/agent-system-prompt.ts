@@ -223,6 +223,19 @@ export const ORION_AGENT_SYSTEM_PROMPT_ASK = promptContentAsk;
 /** System prompt for Edit mode (file/terminal access, no notebook execution). */
 export const ORION_AGENT_SYSTEM_PROMPT_EDIT = promptContentEdit;
 
+const RESEARCH_MODE_SECTION = `## Research Mode
+
+You are in Orion Research mode. Work as an adaptive investigator: gather evidence, inspect outputs, document what you learned in the notebook, and choose the next action from what the evidence shows.
+
+Core loop:
+- Generate or gather evidence before important conclusions.
+- Review generated PNG/JPEG plots, tables, and statistics before continuing. If a plot preview is unavailable, use numeric or structural checks before relying on it.
+- Treat the notebook as the research journal. After each evidence-producing step, add concise markdown that states what the output shows, the research decision it motivates, and any limitation or open question.
+- Do not draft the whole notebook up front. Work in coherent research steps: write or run the next focused check, inspect evidence, document the observation and decision, then continue.
+- A research step should answer one investigative move, such as loading/schema sanity, missingness checks, one plot family, one relationship question, or one anomaly check.
+- Keep batches flexible when one coherent step needs several cells, but avoid full-notebook scaffolding before the first execution.
+- Finish with a notebook synthesis section covering findings, decisions made along the way, uncertainty, limitations, and useful next steps.`;
+
 function buildSubagentDelegationSection(
   availableSubagents?: Array<{
     name: string;
@@ -397,6 +410,12 @@ The user explicitly selected the \`${forcedSubagentName}\` sub-agent for this tu
   }
 
   return sections.join("\n\n");
+}
+
+/** Builds the system prompt for Research mode, Orion's evidence-driven default mode. */
+export function buildResearchModeSystemPrompt(options?: Parameters<typeof buildAgentSystemPrompt>[0]): string {
+  const basePrompt = buildAgentSystemPrompt(options);
+  return `${basePrompt}\n\n${RESEARCH_MODE_SECTION}`;
 }
 
 /** Shared options accepted by Ask and Edit mode prompt builders. */

@@ -5,7 +5,7 @@
  */
 
 import type { UIMessage } from "ai";
-import { OPTIMIZER_RETENTION_TURNS } from "./token-budget";
+import { OPTIMIZER_RETENTION_STEPS, OPTIMIZER_RETENTION_TURNS } from "./token-budget";
 
 // ────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -22,11 +22,6 @@ function isOutputAvailableToolPart(
     p.type.startsWith("tool-") &&
     p.state === "output-available"
   );
-}
-
-function getToolName(part: Record<string, unknown>): string {
-  const typeName = part.type as string;
-  return typeName.startsWith("tool-") ? typeName.slice("tool-".length) : typeName;
 }
 
 /** Approximate char count for any output shape. */
@@ -76,43 +71,16 @@ function stubOutput(output: unknown, toolName: string): string {
   return stub;
 }
 
-/** Collect visual IDs from accepted record_visual_inspection calls. */
-function collectInspectedVisualIds(messages: UIMessage[]): Set<string> {
-  const inspected = new Set<string>();
-  for (const message of messages) {
-    for (const part of message.parts) {
-      if (part.type !== "tool-record_visual_inspection") continue;
-      const record = part as unknown as Record<string, unknown>;
-      const output = record.output;
-      if (
-        typeof output !== "object" ||
-        output === null ||
-        (output as Record<string, unknown>).accepted !== true
-      ) {
-        continue;
-      }
-      const input = record.input;
-      if (typeof input !== "object" || input === null) continue;
-      const inspections = (input as Record<string, unknown>).inspections;
-      if (!Array.isArray(inspections)) continue;
-      for (const inspection of inspections) {
-        if (typeof inspection !== "object" || inspection === null) continue;
-        const visualId = (inspection as Record<string, unknown>).visualId;
-        if (typeof visualId === "string") inspected.add(visualId);
-      }
-    }
-  }
-  return inspected;
+function hasLaterAssistantStep(messages: UIMessage[], messageIndex: number): boolean {
+  return messages.slice(messageIndex + 1).some((message) => message.role === "assistant");
 }
 
-/** Remove raster bytes once the agent has persisted a structured inspection. */
+/** Remove raster bytes after a later model step has had a chance to review them. */
 export function stripInspectedRasterData(messages: UIMessage[]): UIMessage[] {
-  const inspected = collectInspectedVisualIds(messages);
-  if (inspected.size === 0) return messages;
-
-  return messages.map((message) => ({
+  return messages.map((message, messageIndex) => ({
     ...message,
     parts: message.parts.map((part) => {
+      if (!hasLaterAssistantStep(messages, messageIndex)) return part;
       if (!isOutputAvailableToolPart(part)) return part;
       const toolPart = part as unknown as Record<string, unknown>;
       const output = toolPart.output;
@@ -123,13 +91,12 @@ export function stripInspectedRasterData(messages: UIMessage[]): UIMessage[] {
       const nextVisuals = visuals.map((visual) => {
         if (typeof visual !== "object" || visual === null) return visual;
         const record = visual as Record<string, unknown>;
-        if (typeof record.visualId !== "string" || !inspected.has(record.visualId)) return visual;
         if (!("data" in record)) return visual;
         changed = true;
         const { data: _data, ...withoutData } = record;
         return {
           ...withoutData,
-          visualInspectionUnavailableReason: "raw preview removed after structured inspection",
+          visualInspectionUnavailableReason: "raw preview removed after a subsequent model step",
         };
       });
       return changed
@@ -162,6 +129,25 @@ function findRetentionCutoff(messages: UIMessage[], retentionTurns: number): num
   return 0;
 }
 
+/**
+ * Research loops usually happen inside one user turn, so user-turn retention
+ * never trims them. Count assistant/tool steps from the end as a loop-aware cap.
+ */
+function findAgentStepRetentionCutoff(messages: UIMessage[], retentionSteps: number): number {
+  if (retentionSteps <= 0) return 0;
+
+  let assistantStepCount = 0;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role !== "assistant") continue;
+    if (!messages[i].parts.some((part) => part.type.startsWith("tool-"))) continue;
+    assistantStepCount += 1;
+    if (assistantStepCount >= retentionSteps) {
+      return i;
+    }
+  }
+  return 0;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Public API
 // ────────────────────────────────────────────────────────────────────────────
@@ -173,28 +159,39 @@ function findRetentionCutoff(messages: UIMessage[], retentionTurns: number): num
  */
 export function optimizeMessagesForWire(
   messages: UIMessage[],
-  opts?: { retentionTurns?: number }
+  opts?: { retentionTurns?: number; retentionSteps?: number; researchActive?: boolean }
 ): UIMessage[] {
   const withoutInspectedRasterData = stripInspectedRasterData(messages);
   const retention = opts?.retentionTurns ?? OPTIMIZER_RETENTION_TURNS;
-  const cutoffIdx = findRetentionCutoff(withoutInspectedRasterData, retention);
-  if (cutoffIdx <= 0) return withoutInspectedRasterData;
+  const userTurnCutoffIdx = findRetentionCutoff(withoutInspectedRasterData, retention);
+  const agentStepCutoffIdx = opts?.researchActive === true
+    ? findAgentStepRetentionCutoff(
+        withoutInspectedRasterData,
+        opts?.retentionSteps ?? OPTIMIZER_RETENTION_STEPS
+      )
+    : 0;
+  const cutoffIdx = Math.max(userTurnCutoffIdx, agentStepCutoffIdx);
 
   return withoutInspectedRasterData.map((msg, idx) => {
-    if (idx >= cutoffIdx) return msg;
-
-    const hasOldToolParts = msg.parts.some(isOutputAvailableToolPart);
+    const hasOldToolParts = msg.parts.some(
+      (part) => part.type.startsWith("tool-") && (isOutputAvailableToolPart(part) || "input" in part)
+    );
     if (!hasOldToolParts) return msg;
 
     return {
       ...msg,
       parts: msg.parts.map((part) => {
-        if (!isOutputAvailableToolPart(part)) return part;
-        const p = part as Record<string, unknown>;
-        return {
-          ...p,
-          output: stubOutput(p.output, getToolName(p)),
-        };
+        if (!part.type.startsWith("tool-")) return part;
+        const toolName = part.type.slice("tool-".length);
+        const p = part as unknown as Record<string, unknown>;
+        const oldByStepRetention = idx < cutoffIdx;
+        if (!oldByStepRetention) return part;
+
+        const next = { ...p };
+        if (isOutputAvailableToolPart(part)) {
+          next.output = stubOutput(p.output, toolName);
+        }
+        return next;
       }),
     } as UIMessage;
   }) as UIMessage[];
@@ -208,7 +205,7 @@ export function optimizeMessagesForWire(
 export function buildWirePayload(
   messages: UIMessage[],
   compactionSummary?: { text: string; coversThrough: string; createdAt: Date } | null,
-  opts?: { retentionTurns?: number }
+  opts?: { retentionTurns?: number; retentionSteps?: number; researchActive?: boolean }
 ): UIMessage[] {
   let wire = messages;
 

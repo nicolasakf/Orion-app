@@ -1,4 +1,4 @@
-/** Built-in skill auto-loaded for notebook work unless the editor context is a non-notebook file. */
+/** Built-in skill used for Orion-native interactive notebook UI work. */
 export const ORION_UI_SKILL_NAME = "orion-ui";
 
 /**
@@ -10,21 +10,7 @@ export function resolveImplicitForcedSkillNames(options: {
   activeFilePath?: string;
   origin?: string;
 }): string[] {
-  // Sub-agents always run in a temporary notebook copy.
-  if (options.origin === "subagent") {
-    return [ORION_UI_SKILL_NAME];
-  }
-
-  // A non-notebook file is open in the editor (e.g. `.py`, `.md`) — skip notebook UI guidance.
-  if (options.activeFilePath && !options.notebookPath) {
-    return [];
-  }
-
-  // A notebook is open in the editor.
-  if (options.notebookPath) {
-    return [ORION_UI_SKILL_NAME];
-  }
-
+  void options;
   return [];
 }
 

@@ -36,6 +36,8 @@ export const DEFAULT_SETTINGS: SettingsData = {
     minimapEnabled: false,
     tabSize: 2,
     insertSpaces: true,
+    autosaveEnabled: false,
+    autosaveIntervalMs: 1000,
     unopenableFileAction: "mention_in_chat",
     emptyEditor: {
       leftCard: "recent_files",

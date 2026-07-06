@@ -1,0 +1,132 @@
+import { describe, expect, it } from "vitest";
+import type { UIMessage } from "ai";
+
+import {
+  RESEARCH_SESSION_BUDGET_WARNING_STEP,
+  advanceResearchSessionForContinuation,
+  createResearchSession,
+  getResearchTurnActivity,
+  summarizeResearchSessionForPrompt,
+} from "./research-session";
+
+describe("research turn activity", () => {
+  it("detects successful evidence and inserted markdown documentation", () => {
+    const message = {
+      id: "assistant-1",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-execute_code",
+          toolCallId: "exec-1",
+          state: "output-available",
+          input: { code: "df.describe()", timeoutSeconds: 60 },
+          output: "summary stats",
+        },
+        {
+          type: "tool-insert_cell",
+          toolCallId: "insert-1",
+          state: "output-available",
+          input: {
+            cells: [{ cellType: "markdown", cellSource: "Observation: skewed distribution." }],
+            startIndex: -1,
+          },
+          output: "1 cell inserted successfully",
+        },
+      ],
+    } as unknown as UIMessage;
+
+    expect(getResearchTurnActivity(message)).toEqual({
+      completedToolCount: 2,
+      successfulSubstantiveToolCount: 2,
+      evidenceProduced: true,
+      markdownDocumented: true,
+      proseOnly: false,
+    });
+  });
+
+  it("treats prose-only assistant messages as prose-only turns", () => {
+    const message = {
+      id: "assistant-1",
+      role: "assistant",
+      parts: [{ type: "text", text: "I should inspect the chart next." }],
+    } as UIMessage;
+
+    expect(getResearchTurnActivity(message).proseOnly).toBe(true);
+  });
+});
+
+describe("research session continuation", () => {
+  it("nudges documentation after evidence without markdown", () => {
+    const session = createResearchSession({ objective: "Analyze data" });
+    const decision = advanceResearchSessionForContinuation(session, {
+      completedToolCount: 1,
+      successfulSubstantiveToolCount: 1,
+      evidenceProduced: true,
+      markdownDocumented: false,
+      proseOnly: false,
+    });
+
+    expect(decision.continue).toBe(true);
+    expect(decision.nudge).toBe("document_evidence");
+    expect(decision.session.undocumentedEvidenceSteps).toBe(1);
+  });
+
+  it("recovers once from repeated stalled turns before requesting final synthesis", () => {
+    const session = createResearchSession({ objective: "Analyze data" });
+    const stalled = {
+      completedToolCount: 0,
+      successfulSubstantiveToolCount: 0,
+      evidenceProduced: false,
+      markdownDocumented: false,
+      proseOnly: false,
+    };
+
+    const first = advanceResearchSessionForContinuation(session, stalled);
+    const second = advanceResearchSessionForContinuation(first.session, stalled);
+    const third = advanceResearchSessionForContinuation(second.session, stalled);
+
+    expect(second.nudge).toBe("recover_progress");
+    expect(third.nudge).toBe("final_synthesis");
+
+    const finished = advanceResearchSessionForContinuation(third.session, {
+      completedToolCount: 1,
+      successfulSubstantiveToolCount: 1,
+      evidenceProduced: false,
+      markdownDocumented: true,
+      proseOnly: false,
+    });
+    expect(finished.continue).toBe(false);
+    expect(finished.session.active).toBe(false);
+  });
+
+  it("nudges synthesis near the step budget", () => {
+    const session = {
+      ...createResearchSession({ objective: "Analyze data" }),
+      stepCount: RESEARCH_SESSION_BUDGET_WARNING_STEP - 1,
+    };
+    const decision = advanceResearchSessionForContinuation(session, {
+      completedToolCount: 1,
+      successfulSubstantiveToolCount: 1,
+      evidenceProduced: false,
+      markdownDocumented: false,
+      proseOnly: false,
+    });
+
+    expect(decision.nudge).toBe("synthesize_soon");
+  });
+
+  it("summarizes active session state for the prompt", () => {
+    const session = {
+      ...createResearchSession({ objective: "Analyze churn", profile: "eda", intensity: "deep" }),
+      stepCount: 3,
+      undocumentedEvidenceSteps: 1,
+    };
+
+    expect(
+      summarizeResearchSessionForPrompt({ session, nudge: "document_evidence" })
+    ).toContain("Analyze churn");
+    expect(
+      summarizeResearchSessionForPrompt({ session, nudge: "document_evidence" })
+    ).toContain("markdown");
+  });
+});

@@ -9,6 +9,8 @@ export const SESSION_FALLBACK_CHAT_MODEL_ID = DEFAULT_SELECTED_CHAT_MODEL_ID;
 export interface ModelSelectionOption {
   value: string;
   provider: string;
+  /** When false, the user has no credential for this model's provider. */
+  isAccessible?: boolean;
 }
 
 interface ResolveSelectedModelFallbackOptions {
@@ -41,9 +43,15 @@ export function saveSelectedModelToSession(modelId: string): void {
   }
 }
 
+/** First catalog model the user can use (provider credential configured). */
+function findFirstAccessibleModel(models: ModelSelectionOption[]): string | null {
+  return models.find((model) => model.isAccessible !== false)?.value ?? null;
+}
+
 /**
  * Resolves a replacement model only after every source that can validate a stored
  * selection has loaded, including settings-backed local endpoint models.
+ * Prefers the first accessible model when the stored selection is missing or locked.
  */
 export function resolveSelectedModelFallback({
   selectedModel,
@@ -52,11 +60,9 @@ export function resolveSelectedModelFallback({
   settingsReady,
 }: ResolveSelectedModelFallbackOptions): string | null {
   if (!modelsCatalogLoaded || !settingsReady || models.length === 0) return null;
-  if (findModelBySelectionKey(models, selectedModel)) return null;
 
-  return (
-    models.find((model) => model.value === SESSION_FALLBACK_CHAT_MODEL_ID)?.value ??
-    models[0]?.value ??
-    null
-  );
+  const selected = findModelBySelectionKey(models, selectedModel);
+  if (selected && selected.isAccessible !== false) return null;
+
+  return findFirstAccessibleModel(models);
 }

@@ -2,9 +2,13 @@
 
 import * as React from "react";
 import dynamic from "next/dynamic";
-import { Check, ChevronDown, ChevronRight, Code, Copy, Maximize2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Code, Copy, Maximize2 } from "lucide-react";
 import { useTheme } from "next-themes";
 
+import {
+  CheckmarkedButton,
+  useCheckmarkedFeedback,
+} from "@/components/common/checkmarked-button";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -153,7 +157,7 @@ export function CodeBlock({
   className,
 }: CodeBlockProps) {
   const [isCollapsed, setIsCollapsed] = React.useState(false);
-  const [showCheck, setShowCheck] = React.useState(false);
+  const { checked: showCheck, showCheckmark } = useCheckmarkedFeedback();
   const lineCount = React.useMemo(() => code.split("\n").length, [code]);
   const maxInlineHeight = lineCount > MAX_INLINE_LINES ? CODE_BLOCK_INLINE_MAX_HEIGHT_CLASS : "";
 
@@ -166,12 +170,11 @@ export function CodeBlock({
   const handleCopy = React.useCallback(async () => {
     try {
       await navigator.clipboard.writeText(code);
-      setShowCheck(true);
-      window.setTimeout(() => setShowCheck(false), 700);
+      showCheckmark();
     } catch (err) {
       console.error("Failed to copy code:", err);
     }
-  }, [code]);
+  }, [code, showCheckmark]);
 
   return (
     <Dialog>
@@ -206,19 +209,15 @@ export function CodeBlock({
                     <Maximize2 />
                   </Button>
                 </DialogTrigger>
-                <Button
+                <CheckmarkedButton
                   variant="ghost"
                   size="sm"
                   className="h-6 px-1 text-muted-foreground hover:bg-transparent hover:text-foreground [&_svg]:size-3"
                   onClick={handleCopy}
                   aria-label="Copy code"
-                >
-                  {showCheck ? (
-                    <Check className="animate-in zoom-in-50 text-green-500 duration-100" />
-                  ) : (
-                    <Copy className="animate-in zoom-in-50 duration-100" />
-                  )}
-                </Button>
+                  checked={showCheck}
+                  icon={<Copy />}
+                />
               </div>
             </div>
           </div>

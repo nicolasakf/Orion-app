@@ -2,17 +2,25 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_INTERACTION_MODE_CONFIGS,
+  getSelectorInteractionModes,
   getToolsForInteractionMode,
   normalizeInteractionModeConfigs,
   resolveInteractionModeConfig,
+  resolveSelectorInteractionModeId,
 } from "./interaction-modes";
 import { ASK_MODE_TOOLS, EDIT_MODE_TOOLS, ORION_TOOL_NAMES, orionTools } from "./tool-schemas";
 
 describe("interaction mode defaults", () => {
-  it("matches the historical built-in tool sets", () => {
-    const [agent, ask, edit] = DEFAULT_INTERACTION_MODE_CONFIGS;
+  it("puts Agent first and gives Research the same default tool surface", () => {
+    const [agent, research, edit, ask] = DEFAULT_INTERACTION_MODE_CONFIGS;
 
+    expect(agent.id).toBe("Agent");
     expect(agent.toolNames).toEqual(ORION_TOOL_NAMES);
+    expect(research.id).toBe("Research");
+    expect(research.toolNames).toEqual(ORION_TOOL_NAMES);
+    expect(research.hiddenInSelector).toBe(true);
+    expect(research.beta).toBe(true);
+    expect(agent.hiddenInSelector).toBe(false);
     expect(ask.toolNames).toEqual(Object.keys(ASK_MODE_TOOLS));
     expect(edit.toolNames).toEqual(Object.keys(EDIT_MODE_TOOLS));
     expect(ask.bashPolicy).toBe("read_only");
@@ -55,5 +63,30 @@ describe("interaction mode defaults", () => {
     expect(Object.keys(tools)).toEqual(["read_file", "edit_file"]);
     expect(tools.read_file).toBe(orionTools.read_file);
   });
-});
 
+  it("defaults unresolved mode requests to Agent", () => {
+    expect(resolveInteractionModeConfig({ modeId: "missing" }).id).toBe("Agent");
+  });
+
+  it("hides Research from the selector by default and allows opting in", () => {
+    const defaults = normalizeInteractionModeConfigs([]);
+    expect(getSelectorInteractionModes(defaults).map((mode) => mode.id)).toEqual([
+      "Agent",
+      "Edit",
+      "Ask",
+    ]);
+
+    const visibleResearch = normalizeInteractionModeConfigs([
+      { id: "Research", hiddenInSelector: false },
+    ]);
+    expect(
+      getSelectorInteractionModes(visibleResearch).some((mode) => mode.id === "Research")
+    ).toBe(true);
+  });
+
+  it("falls back to the first visible mode when the current mode is hidden", () => {
+    const modes = normalizeInteractionModeConfigs([]);
+    expect(resolveSelectorInteractionModeId("Research", modes)).toBe("Agent");
+    expect(resolveSelectorInteractionModeId("Agent", modes)).toBe("Agent");
+  });
+});

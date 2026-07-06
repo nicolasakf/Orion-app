@@ -23,21 +23,31 @@ describe("web access tool schemas", () => {
   });
 });
 
-describe("agent loop control schemas", () => {
-  it("exposes deep EDA and visual inspection controls without kernel dependencies", () => {
-    for (const toolName of [
-      "begin_deep_eda",
-      "record_visual_inspection",
-      "update_deep_eda_state",
-      "complete_deep_eda",
-    ] as const) {
-      expect(orionTools[toolName]).toBeDefined();
-      expect(NO_DEPENDENCY_TOOLS.has(toolName)).toBe(true);
-    }
+describe("page reload tool schema", () => {
+  it("is available without Jupyter or kernel readiness", () => {
+    expect(orionTools.reload_page).toBeDefined();
+    expect(NO_DEPENDENCY_TOOLS.has("reload_page")).toBe(true);
+  });
+});
+
+describe("research-oriented notebook tool schemas", () => {
+  it("describes notebook work as coherent research steps without numeric cell limits", () => {
+    expect((orionTools.insert_cell as { description?: string }).description).toContain(
+      "one coherent research step"
+    );
+    expect((orionTools.overwrite_cell_source as { description?: string }).description).toContain(
+      "focused fix"
+    );
+    expect((orionTools.execute_cell as { description?: string }).description).toContain(
+      "current coherent research step"
+    );
+    expect((orionTools.insert_cell as { description?: string }).description).not.toContain("at most 3");
   });
 
-  it("keeps loop controls out of Ask and Edit modes", () => {
-    expect("begin_deep_eda" in ASK_MODE_TOOLS).toBe(false);
-    expect("begin_deep_eda" in EDIT_MODE_TOOLS).toBe(false);
+  it("does not expose legacy investigation control tools", () => {
+    expect("begin_investigation" in orionTools).toBe(false);
+    expect("record_visual_inspection" in orionTools).toBe(false);
+    expect("update_investigation_state" in orionTools).toBe(false);
+    expect("complete_investigation" in orionTools).toBe(false);
   });
 });

@@ -33,7 +33,7 @@ import type {
   NotebookDocument,
   CellOutput,
 } from "./types";
-import type { AgentVisualOutput, ExecutionToolResult } from "../deep-eda";
+import type { AgentVisualOutput, ExecutionToolResult } from "../visual-evidence";
 
 /** Max traceback lines to include in the agent log */
 const MAX_TRACEBACK_LINES = 30;

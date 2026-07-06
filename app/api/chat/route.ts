@@ -39,6 +39,7 @@ import {
   buildAskModeSystemPrompt,
   buildEditModeSystemPrompt,
   buildAgentEnvironmentContextPrompt,
+  buildResearchModeSystemPrompt,
   buildSubagentSystemPrompt,
 } from "@/lib/agent/agent-system-prompt";
 import { AgentCommunicationStyleSchema, type AgentCommunicationStyle } from "@/lib/settings/schema";
@@ -63,10 +64,10 @@ import {
 } from "@/lib/chat/chat-references";
 import { normalizeInlineDataUrlFileParts } from "@/lib/agent/model-message-files";
 import {
-  DeepEdaStateSnapshotSchema,
-  getDeepEdaPhase,
-  summarizeDeepEdaState,
-} from "@/lib/agent/deep-eda";
+  ResearchNudgeSchema,
+  ResearchSessionSnapshotSchema,
+  summarizeResearchSessionForPrompt,
+} from "@/lib/agent/research-session";
 import { resolveImplicitForcedSkillNames } from "@/lib/agent/implicit-skills";
 
 /** Standard request duration limit in seconds */
@@ -119,6 +120,20 @@ async function getPricingCatalogModel(providerId: ProviderId, modelId: string): 
     long_context_input_price_per_1m: null,
     long_context_output_price_per_1m: null,
   };
+}
+
+/** True when this provider/model combination can safely force a specific tool. */
+async function supportsForcedToolChoice(options: {
+  providerId: ProviderId;
+  modelId: string;
+  credential: CredentialMode;
+}): Promise<boolean> {
+  const adapter = getProviderAdapter(options.providerId, options.credential);
+  if (adapter?.capabilities.forcedToolChoice !== true) return false;
+
+  const catalogEntry = await getMergedModelCatalogEntry(options.providerId, options.modelId);
+  if (catalogEntry?.supports_forced_tool_choice === false) return false;
+  return true;
 }
 
 export async function POST(req: Request) {
@@ -187,14 +202,14 @@ export async function POST(req: Request) {
     agentCommunicationStyle?: unknown;
     /** Custom communication instructions; overrides preset when non-empty. */
     agentCustomCommunicationStyle?: unknown;
-    /** True while the user-approved exhaustive EDA controller is active. */
-    deepEdaActive?: boolean;
-    /** Current investigation ledger for the active exhaustive EDA run. */
-    deepEdaState?: unknown;
-    /** Agent-generated raster outputs that must be inspected before any other action. */
-    pendingVisualInspectionIds?: string[];
-    /** Inspected raster outputs that require a corrected replacement before finishing. */
-    visualRevisionRequiredIds?: string[];
+    /** Lightweight notebook-native Research mode session state. */
+    researchSession?: unknown;
+    /** Soft steering instruction selected by the client loop. */
+    researchNudge?: unknown;
+    /** Client retry count for automatic continuations. */
+    automaticContinuationAttempt?: unknown;
+    /** Client-provided category for an automatic continuation. */
+    automaticContinuationReason?: unknown;
   };
 
   try {
@@ -242,25 +257,29 @@ export async function POST(req: Request) {
     previousSummaryText,
     agentCommunicationStyle: rawAgentCommunicationStyle,
     agentCustomCommunicationStyle: rawAgentCustomCommunicationStyle,
-    deepEdaActive: deepEdaActiveRaw,
-    deepEdaState: deepEdaStateRaw,
-    pendingVisualInspectionIds: pendingVisualInspectionIdsRaw,
-    visualRevisionRequiredIds: visualRevisionRequiredIdsRaw,
+    researchSession: researchSessionRaw,
+    researchNudge: researchNudgeRaw,
+    automaticContinuationAttempt: automaticContinuationAttemptRaw,
+    automaticContinuationReason: automaticContinuationReasonRaw,
   } = body;
 
-  const deepEdaActive = deepEdaActiveRaw === true;
-  const parsedDeepEdaState = DeepEdaStateSnapshotSchema.safeParse(deepEdaStateRaw);
-  const deepEdaState = parsedDeepEdaState.success ? parsedDeepEdaState.data : undefined;
-  const pendingVisualInspectionIds = Array.isArray(pendingVisualInspectionIdsRaw)
-    ? pendingVisualInspectionIdsRaw.filter(
-        (value): value is string => typeof value === "string" && value.length > 0
-      )
-    : [];
-  const visualRevisionRequiredIds = Array.isArray(visualRevisionRequiredIdsRaw)
-    ? visualRevisionRequiredIdsRaw.filter(
-        (value): value is string => typeof value === "string" && value.length > 0
-      )
-    : [];
+  const parsedResearchSession = ResearchSessionSnapshotSchema.safeParse(researchSessionRaw);
+  const researchSession =
+    parsedResearchSession.success && parsedResearchSession.data.active
+      ? parsedResearchSession.data
+      : undefined;
+  const parsedResearchNudge = ResearchNudgeSchema.safeParse(researchNudgeRaw);
+  const researchNudge = parsedResearchNudge.success ? parsedResearchNudge.data : undefined;
+  const automaticContinuationAttempt =
+    typeof automaticContinuationAttemptRaw === "number" &&
+    Number.isInteger(automaticContinuationAttemptRaw) &&
+    automaticContinuationAttemptRaw > 0
+      ? Math.min(automaticContinuationAttemptRaw, 20)
+      : 0;
+  const automaticContinuationReason =
+    typeof automaticContinuationReasonRaw === "string"
+      ? automaticContinuationReasonRaw.slice(0, 80)
+      : "";
 
   const agentCommunicationStyle: AgentCommunicationStyle =
     AgentCommunicationStyleSchema.parse(rawAgentCommunicationStyle);
@@ -780,6 +799,11 @@ export async function POST(req: Request) {
     );
   }
   const catalogModel = await getPricingCatalogModel(providerId, modelId);
+  const canForceToolChoice = await supportsForcedToolChoice({
+    providerId,
+    modelId,
+    credential: resolvedCredential,
+  });
 
   if (origin === "title_generation") {
     const chatSession = await resolveOrCreateChatSession(chatId);
@@ -879,7 +903,7 @@ export async function POST(req: Request) {
     userId: "local",
     model: modelId,
     provider: providerId,
-    agentMode: effectiveMode === "Agent",
+    agentMode: effectiveMode === "Research" || effectiveMode === "Agent",
     messageCount: messages.length,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
     modelSettings: modelSettings ?? null,
@@ -893,6 +917,7 @@ export async function POST(req: Request) {
 
     // Build the system prompt for this request.
     //
+    // - Research: full agent prompt plus notebook-native research behavior
     // - Agent / sub-agent: full agent prompt
     // - Ask: read-only tool prompt (no skills, no delegation)
     // - Edit: file/terminal prompt with skills and delegation but no cell execution
@@ -901,7 +926,7 @@ export async function POST(req: Request) {
     // request a notebook-defined sub-agent system prompt instead of the main
     // parent prompt.
     let agentSystemPrompt: string | undefined;
-    if (effectiveMode === "Agent") {
+    if (effectiveMode === "Research" || effectiveMode === "Agent") {
       if (origin === "subagent" && subagentPrompt) {
         const envContext = buildAgentEnvironmentContextPrompt({
           serverInfo,
@@ -916,6 +941,25 @@ export async function POST(req: Request) {
           envContext,
           agentRules,
           forcedSkillNames: missingForcedSkillNames,
+        });
+      } else if (effectiveMode === "Research") {
+        agentSystemPrompt = buildResearchModeSystemPrompt({
+          notebookPath,
+          activeFilePath,
+          workspaceDirectory,
+          availableSkills,
+          availableSubagents,
+          agentRules,
+          forcedSkillNames: missingForcedSkillNames,
+          forcedSubagentName,
+          serverInfo,
+          jupyterServerIsLocal,
+          clientPlatformOs,
+          communicationStyle: agentCommunicationStyle,
+          customCommunicationStyle: agentCustomCommunicationStyle,
+          customSystemPrompt: effectiveInteractionModeConfig.customSystemPrompt,
+          enableSkills,
+          enableSubagents,
         });
       } else {
         agentSystemPrompt = buildAgentSystemPrompt({
@@ -970,17 +1014,16 @@ export async function POST(req: Request) {
         enableSubagents,
       });
     }
-    if (deepEdaActive && effectiveMode === "Agent" && agentSystemPrompt) {
-      const deepEdaPhase = getDeepEdaPhase({
-        active: true,
-        state: deepEdaState,
-        pendingVisualIds: pendingVisualInspectionIds,
-        revisionRequiredIds: visualRevisionRequiredIds,
+    if (effectiveMode === "Research" && researchSession && agentSystemPrompt) {
+      const sessionPrompt = summarizeResearchSessionForPrompt({
+        session: researchSession,
+        nudge: researchNudge,
       });
-      const activationInstruction = missingForcedSkillNames.includes("deep-eda")
-        ? "Activation is already complete. Load the required deep-EDA skill in this step; after it returns, do not load it again and do not call `begin_deep_eda`."
-        : "Activation and skill loading are already complete. Do not call `begin_deep_eda` and do not reload the deep-EDA skill.";
-      agentSystemPrompt += `\n\n## Active Deep EDA Controller\n\nPhase: \`${deepEdaPhase}\`. ${activationInstruction} Take the next concrete analytical action after any required skill load. Orion will continue the run after prose-only turns, but prose cannot complete it. Finish only when \`complete_deep_eda\` is accepted.\n\n${summarizeDeepEdaState(deepEdaState)}`;
+      const continuationNote =
+        automaticContinuationAttempt > 0
+          ? `\nAutomatic continuation ${automaticContinuationAttempt}${automaticContinuationReason ? ` (${automaticContinuationReason})` : ""}.`
+          : "";
+      agentSystemPrompt += `\n\n${sessionPrompt}${continuationNote}`;
     }
     // Process request through the gateway (injects agent system prompt into messages)
     const { model, messages: processedMessages, providerOptions } = gateway.processRequest({
@@ -1017,41 +1060,20 @@ export async function POST(req: Request) {
     const shouldForceLoadSkill = !!missingForcedSkillName;
     const shouldForceDelegate =
       !!(enableSubagents && forcedSubagentName && !hasDelegatedSubagentInHistory(forcedSubagentName));
-    const deepEdaPhase = getDeepEdaPhase({
-      active: deepEdaActive,
-      state: deepEdaState,
-      pendingVisualIds: pendingVisualInspectionIds,
-      revisionRequiredIds: visualRevisionRequiredIds,
-    });
-    const toolsForMode = Object.fromEntries(
-      Object.entries(getToolsForInteractionMode(effectiveInteractionModeConfig)).filter(([toolName]) => {
-        if (effectiveMode !== "Agent") return true;
-        if (toolName === "load_skill" && deepEdaActive && !shouldForceLoadSkill) return false;
-        if (toolName === "begin_deep_eda") return !deepEdaActive;
-        if (toolName === "record_visual_inspection") {
-          return pendingVisualInspectionIds.length > 0;
-        }
-        if (toolName === "update_deep_eda_state") return deepEdaActive;
-        if (toolName === "complete_deep_eda") return deepEdaPhase === "synthesizing";
-        return true;
-      })
-    ) as ReturnType<typeof getToolsForInteractionMode>;
-    const forcedToolChoice = shouldForceDelegate
+    const toolsForMode = getToolsForInteractionMode(effectiveInteractionModeConfig);
+    const requestedToolChoice = shouldForceDelegate
       ? { type: "tool" as const, toolName: "delegate" as const }
       : shouldForceLoadSkill
         ? { type: "tool" as const, toolName: "load_skill" as const }
-        : pendingVisualInspectionIds.length > 0 && effectiveMode === "Agent"
-          ? { type: "tool" as const, toolName: "record_visual_inspection" as const }
-          : visualRevisionRequiredIds.length > 0 && !deepEdaActive && effectiveMode === "Agent"
-            ? "required" as const
-            : "auto";
+        : "auto";
+    const forcedToolChoice = canForceToolChoice ? requestedToolChoice : "auto";
 
     logLLMCall({
       fileId,
       requestId,
       model: modelId,
       provider: providerId,
-      agentMode: effectiveMode === "Agent",
+      agentMode: effectiveMode === "Research" || effectiveMode === "Agent",
       processedMessageCount: processedMessages.length,
       processedMessages: processedMessages.map((m) => ({ role: m.role, content: m.content })),
       hasTools: true,

@@ -9,8 +9,8 @@ export const MAX_PINNED_WORKSPACE_DIRECTORY_PATHS = 50;
 export const MAX_PINNED_FILE_PATHS = 50;
 
 export const ThemeSettingSchema = z.enum(["light", "dark", "system"]);
-export const InteractionModeSchema = z.enum(["Agent", "Ask", "Edit"]).catch("Agent");
-export const InteractionModeBaseSchema = z.enum(["Agent", "Ask", "Edit"]);
+export const InteractionModeSchema = z.enum(["Agent", "Research", "Edit", "Ask"]).catch("Agent");
+export const InteractionModeBaseSchema = z.enum(["Agent", "Research", "Edit", "Ask"]);
 export const InteractionModeBashPolicySchema = z.enum(["read_only", "full"]);
 export const InteractionModeConfigSchema = z.object({
   id: z.string().min(1),
@@ -21,6 +21,8 @@ export const InteractionModeConfigSchema = z.object({
   customSystemPrompt: z.string().catch(""),
   builtIn: z.boolean(),
   bashPolicy: InteractionModeBashPolicySchema,
+  hiddenInSelector: z.boolean().catch(false),
+  beta: z.boolean().catch(false),
 });
 /**
  * Communication style preset for the agent's responses.
@@ -287,6 +289,10 @@ const SettingsDataSchema = z.object({
     minimapEnabled: z.boolean(),
     tabSize: z.number().int().min(1).max(8),
     insertSpaces: z.boolean(),
+    /** When true, Orion periodically saves dirty files open in the editor. */
+    autosaveEnabled: z.boolean(),
+    /** Autosave interval in milliseconds for dirty files open in the editor. */
+    autosaveIntervalMs: z.number().int().positive(),
     /** When a file cannot be opened in Orion, mention it in chat or open externally. */
     unopenableFileAction: UnopenableFileActionSchema,
     /** Left/right shortcut lists shown when no file is open in the editor. */

@@ -34,10 +34,13 @@ describe("built-in skills", () => {
     }
   });
 
-  it("makes Matplotlib raster evidence the deep-EDA visualization default", () => {
+  it("keeps deep-EDA as an EDA research profile shortcut", () => {
     const skill = readBuiltinSkills().find((candidate) => candidate.name === "deep-eda");
-    expect(skill?.content).toContain("matplotlib.pyplot as plt");
-    expect(skill?.content).toContain("Do not use Plotly");
-    expect(skill?.content).toContain("no PNG/JPEG plot");
+    expect(skill?.content).toContain("EDA profile");
+    expect(skill?.content).toContain("Use normal notebook, kernel, file, web, and terminal tools");
+    expect(skill?.content).toContain("schema_integrity");
+    expect(skill?.content).toContain("Matplotlib/Seaborn");
+    expect(skill?.content).toContain("staged research coverage");
+    expect(skill?.content).toContain("before the first execution");
   });
 });

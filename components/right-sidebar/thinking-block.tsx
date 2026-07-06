@@ -21,22 +21,26 @@ export function ThinkingBlock({ reasoning, isStreaming }: ThinkingBlockProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const startTimeRef = useRef<number>(Date.now());
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  /** Once a block finishes streaming, keep the completed label even if parent props flicker. */
+  const [hasFinishedStreaming, setHasFinishedStreaming] = useState(!isStreaming);
+  const showAsStreaming = isStreaming && !hasFinishedStreaming;
 
   useEffect(() => {
-    if (!isStreaming) return;
+    if (!showAsStreaming) return;
 
     const interval = setInterval(() => {
       setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isStreaming]);
+  }, [showAsStreaming]);
 
   // Capture final elapsed time when streaming stops
   useEffect(() => {
-    if (!isStreaming) {
-      setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
-    }
+    if (isStreaming) return;
+
+    setHasFinishedStreaming(true);
+    setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
   }, [isStreaming]);
 
   /** Format seconds into "Xm Ys" or "Xs" */
@@ -61,7 +65,7 @@ export function ThinkingBlock({ reasoning, isStreaming }: ThinkingBlockProps) {
             isExpanded && "rotate-90"
           )}
         />
-        {isStreaming ? (
+        {showAsStreaming ? (
           <span className="animate-pulse">Thinking</span>
         ) : (
           <span>Thought {formatDuration(elapsedSeconds)}</span>

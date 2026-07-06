@@ -7,12 +7,12 @@ import {
 } from "./implicit-skills";
 
 describe("resolveImplicitForcedSkillNames", () => {
-  it("loads orion-ui when a notebook is open in the editor", () => {
+  it("does not force-load orion-ui just because a notebook is open", () => {
     expect(
       resolveImplicitForcedSkillNames({
         notebookPath: "analysis/experiment.ipynb",
       })
-    ).toEqual([ORION_UI_SKILL_NAME]);
+    ).toEqual([]);
   });
 
   it("skips orion-ui when a non-notebook file is open in the editor", () => {
@@ -27,13 +27,13 @@ describe("resolveImplicitForcedSkillNames", () => {
     expect(resolveImplicitForcedSkillNames({})).toEqual([]);
   });
 
-  it("loads orion-ui for sub-agent runs regardless of parent editor context", () => {
+  it("does not force-load orion-ui for sub-agent runs without an explicit UI request", () => {
     expect(
       resolveImplicitForcedSkillNames({
         origin: "subagent",
         activeFilePath: "README.md",
       })
-    ).toEqual([ORION_UI_SKILL_NAME]);
+    ).toEqual([]);
   });
 });
 
@@ -43,7 +43,7 @@ describe("buildRequiredSkillsPromptSection", () => {
   });
 
   it("lists each required load_skill call", () => {
-    const section = buildRequiredSkillsPromptSection(["orion-ui", "deep-eda"]);
+    const section = buildRequiredSkillsPromptSection([ORION_UI_SKILL_NAME, "deep-eda"]);
     expect(section).toContain("## Required Skills");
     expect(section).toContain("`orion-ui`");
     expect(section).toContain('load_skill` with `name: "deep-eda"');

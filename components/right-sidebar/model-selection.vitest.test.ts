@@ -31,18 +31,46 @@ describe("resolveSelectedModelFallback", () => {
     expect(fallback).toBeNull();
   });
 
-  it("uses the catalog fallback only after loaded sources cannot resolve the stored model", () => {
+  it("uses the first accessible model when the stored model is missing from the catalog", () => {
     const fallback = resolveSelectedModelFallback({
       selectedModel: "removed-model",
       models: [
-        { value: "gpt-5.5", provider: "openai" },
-        { value: SESSION_FALLBACK_CHAT_MODEL_ID, provider: "google" },
+        { value: "gpt-5.5", provider: "openai", isAccessible: true },
+        { value: SESSION_FALLBACK_CHAT_MODEL_ID, provider: "google", isAccessible: false },
       ],
       modelsCatalogLoaded: true,
       settingsReady: true,
     });
 
-    expect(fallback).toBe(SESSION_FALLBACK_CHAT_MODEL_ID);
+    expect(fallback).toBe("gpt-5.5");
+  });
+
+  it("uses the first accessible model when the stored model has no provider credential", () => {
+    const fallback = resolveSelectedModelFallback({
+      selectedModel: SESSION_FALLBACK_CHAT_MODEL_ID,
+      models: [
+        { value: "gpt-5.5", provider: "openai", isAccessible: true },
+        { value: SESSION_FALLBACK_CHAT_MODEL_ID, provider: "google", isAccessible: false },
+      ],
+      modelsCatalogLoaded: true,
+      settingsReady: true,
+    });
+
+    expect(fallback).toBe("gpt-5.5");
+  });
+
+  it("keeps the stored model when no provider credentials are configured", () => {
+    const fallback = resolveSelectedModelFallback({
+      selectedModel: SESSION_FALLBACK_CHAT_MODEL_ID,
+      models: [
+        { value: "gpt-5.5", provider: "openai", isAccessible: false },
+        { value: SESSION_FALLBACK_CHAT_MODEL_ID, provider: "google", isAccessible: false },
+      ],
+      modelsCatalogLoaded: true,
+      settingsReady: true,
+    });
+
+    expect(fallback).toBeNull();
   });
 
   it("keeps a composite selected model when duplicate model ids exist", () => {

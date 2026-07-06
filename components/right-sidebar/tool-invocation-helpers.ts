@@ -131,15 +131,12 @@ export const TOOL_META: Record<OrionToolName, ToolMeta> = {
   await_command: { labelPending: "Awaiting command", labelDone: "Awaited command", icon: Hourglass },
   read_file: { labelPending: "Reading file", labelDone: "Read file", icon: FileText },
   edit_file: { labelPending: "Editing file", labelDone: "Edited file", icon: PenLine },
+  reload_page: { labelPending: "Reloading page", labelDone: "Reloaded page", icon: RefreshCw },
   web_fetch: { labelPending: "Fetching web page", labelDone: "Fetched web page", icon: Globe },
   web_search: { labelPending: "Searching web", labelDone: "Searched web", icon: Search },
   read_cell_output: { labelPending: "Reading output", labelDone: "Read output", icon: Eye },
   load_skill: { labelPending: "Loading skill", labelDone: "Loaded skill", icon: Brain },
   delegate: { labelPending: "Running sub-agent", labelDone: "Sub-agent finished", icon: Bot },
-  begin_deep_eda: { labelPending: "Starting deep EDA", labelDone: "Deep EDA ready", icon: Brain },
-  record_visual_inspection: { labelPending: "Inspecting visual", labelDone: "Inspected visual", icon: Eye },
-  update_deep_eda_state: { labelPending: "Updating EDA ledger", labelDone: "Updated EDA ledger", icon: Brain },
-  complete_deep_eda: { labelPending: "Checking EDA completion", labelDone: "Checked EDA completion", icon: Brain },
 };
 
 /** Fallback for unknown tool names */

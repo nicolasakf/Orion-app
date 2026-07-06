@@ -20,3 +20,35 @@ export function shouldContinueAfterToolCalls(messages: UIMessage[]): boolean {
   const toolParts = lastAssistantMessage.parts.filter((part) => part.type.startsWith("tool-"));
   return !toolParts.some(isCancelledToolPart);
 }
+
+function isToolPart(part: UIMessage["parts"][number]): boolean {
+  return part.type.startsWith("tool-");
+}
+
+function isCompletedToolPart(part: UIMessage["parts"][number]): boolean {
+  return (
+    isToolPart(part) &&
+    "state" in part &&
+    (part.state === "output-available" || part.state === "output-error")
+  );
+}
+
+/**
+ * Stable key for the completed tool result that would cause useChat to send an
+ * automatic follow-up request. Used to avoid resubmitting the same result forever
+ * if a provider returns an empty/non-tool response.
+ */
+export function getCompletedToolContinuationKey(messages: UIMessage[]): string | null {
+  const lastAssistantMessage = messages.findLast((message) => message.role === "assistant");
+  if (!lastAssistantMessage) return null;
+  const completedToolParts = lastAssistantMessage.parts.filter(isCompletedToolPart);
+  if (completedToolParts.length === 0) return null;
+  if (completedToolParts.some(isCancelledToolPart)) return null;
+  return completedToolParts
+    .map((part) => {
+      const toolCallId = "toolCallId" in part ? String(part.toolCallId) : "";
+      const state = "state" in part ? String(part.state) : "";
+      return `${part.type}:${toolCallId}:${state}`;
+    })
+    .join("|");
+}

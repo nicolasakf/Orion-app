@@ -461,11 +461,27 @@ function getActivityStatus(
   return "complete";
 }
 
+/** True while this reasoning part is still the tail of an in-flight assistant turn. */
+function isReasoningPartActivelyStreaming({
+  isLoading,
+  isLastMessage,
+  hasFollowingText,
+  hasPartsAfter,
+}: {
+  isLoading: boolean;
+  isLastMessage: boolean;
+  hasFollowingText: boolean;
+  hasPartsAfter: boolean;
+}): boolean {
+  return isLoading && isLastMessage && !hasFollowingText && !hasPartsAfter;
+}
+
 interface ActivityItemRenderOptions {
   item: AssistantActivityMessagePart;
   isLoading: boolean;
   isLastMessage: boolean;
   messageHasFollowingText: boolean;
+  hasPartsAfter: boolean;
   pendingApprovalIds?: Set<string>;
   onApprove?: (toolCallId: string) => void;
   onReject?: (toolCallId: string) => void;
@@ -483,6 +499,7 @@ function renderAssistantActivityItem({
   isLoading,
   isLastMessage,
   messageHasFollowingText,
+  hasPartsAfter,
   pendingApprovalIds,
   onApprove,
   onReject,
@@ -551,9 +568,31 @@ function renderAssistantActivityItem({
     );
   }
 
+  if (part.type === "text" && part.text) {
+    const isActivelyStreaming =
+      isLoading && isLastMessage && !messageHasFollowingText && !hasPartsAfter;
+
+    return (
+      <AssistantMessage
+        key={`${message.id}-work-text-${partIndex}`}
+        content={part.text}
+        isStreaming={isActivelyStreaming}
+        conversationReference={{
+          messageId: message.id,
+          messageIndex,
+          partIndex,
+        }}
+      />
+    );
+  }
+
   if (part.type === "reasoning" && part.text) {
-    const isActivelyThinking =
-      isLoading && isLastMessage && !messageHasFollowingText;
+    const isActivelyThinking = isReasoningPartActivelyStreaming({
+      isLoading,
+      isLastMessage,
+      hasFollowingText: messageHasFollowingText,
+      hasPartsAfter,
+    });
 
     return (
       <ThinkingBlock
@@ -623,12 +662,13 @@ function AssistantActivityRunRow({
           autoCollapse={shouldAutoCollapseActivityGroup(item.hasFollowingText, hasPendingApproval)}
           forceExpanded={shouldForceExpandActivityGroup(hasPendingApproval)}
         >
-          {item.items.map((activityItem) =>
+          {item.items.map((activityItem, activityIndex) =>
             renderAssistantActivityItem({
               item: activityItem,
               isLoading,
               isLastMessage,
               messageHasFollowingText: item.hasFollowingText,
+              hasPartsAfter: activityIndex < item.items.length - 1,
               pendingApprovalIds,
               onApprove,
               onReject,
@@ -705,6 +745,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
         isLoading,
         isLastMessage,
         messageHasFollowingText: hasTextAfter,
+        hasPartsAfter: partIndex < message.parts.length - 1,
         pendingApprovalIds,
         onApprove,
         onReject,
@@ -722,6 +763,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
       isLoading,
       isLastMessage,
       messageHasFollowingText: false,
+      hasPartsAfter: partIndex < message.parts.length - 1,
       pendingApprovalIds,
       onApprove,
       onReject,

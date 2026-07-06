@@ -20,7 +20,7 @@ import type {
   EditCheckpointContext,
   EditCheckpointRecorder,
 } from "../edit-checkpoint-recorder";
-import type { AgentVisualOutput } from "../deep-eda";
+import type { AgentVisualOutput } from "../visual-evidence";
 import {
   guardToolText,
   TOOL_OUTPUT_TEXT_CHAR_BUDGET,

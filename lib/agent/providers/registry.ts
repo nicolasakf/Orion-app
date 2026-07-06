@@ -21,6 +21,7 @@ const DEFAULT_CAPABILITIES: ProviderCapabilities = {
   systemMessages: true,
   toolCalling: true,
   imageInput: true,
+  forcedToolChoice: false,
   reasoning: false,
   promptCaching: false,
 };
@@ -42,6 +43,7 @@ function openAICompatibleAdapter(input: {
   baseURL?: string;
   credentialKind?: "api_key" | "local_endpoint";
   imageInput?: boolean;
+  forcedToolChoice?: boolean;
 }): ProviderAdapter {
   return {
     id: input.id,
@@ -50,6 +52,7 @@ function openAICompatibleAdapter(input: {
     capabilities: {
       ...DEFAULT_CAPABILITIES,
       imageInput: input.imageInput ?? true,
+      forcedToolChoice: input.forcedToolChoice ?? false,
     },
     createModel({ credential, modelId }) {
       const apiKey =
@@ -246,7 +249,11 @@ function patchChatGPTBody(body: string | null): string | null {
   }
 }
 
-const openaiAdapter = openAICompatibleAdapter({ id: "openai", label: "OpenAI" });
+const openaiAdapter = openAICompatibleAdapter({
+  id: "openai",
+  label: "OpenAI",
+  forcedToolChoice: true,
+});
 
 const anthropicAdapter: ProviderAdapter = {
   id: "anthropic",
@@ -254,6 +261,7 @@ const anthropicAdapter: ProviderAdapter = {
   credentialKind: "api_key",
   capabilities: {
     ...DEFAULT_CAPABILITIES,
+    forcedToolChoice: true,
     reasoning: true,
     promptCaching: true,
   },
@@ -299,7 +307,10 @@ const googleAdapter: ProviderAdapter = {
   id: "google",
   label: "Google",
   credentialKind: "api_key",
-  capabilities: DEFAULT_CAPABILITIES,
+  capabilities: {
+    ...DEFAULT_CAPABILITIES,
+    forcedToolChoice: true,
+  },
   createModel({ credential, modelId }) {
     return createGoogleGenerativeAI({ apiKey: requireByok(credential, "google") })(modelId);
   },

@@ -64,7 +64,7 @@ describe("buildAssistantRenderBlocks", () => {
     });
   });
 
-  it("creates separate activity groups around interleaved text", () => {
+  it("keeps pre-final text inside one activity group", () => {
     const blocks = buildAssistantRenderBlocks([
       toolPart("read_file", "call-1", "output-available"),
       textPart("first"),
@@ -72,14 +72,16 @@ describe("buildAssistantRenderBlocks", () => {
       textPart("second"),
     ]);
 
-    expect(blocks.map((block) => block.type)).toEqual([
-      "activityGroup",
-      "text",
-      "activityGroup",
-      "text",
-    ]);
+    expect(blocks.map((block) => block.type)).toEqual(["activityGroup", "text"]);
     expect(blocks[0]).toMatchObject({ type: "activityGroup", hasFollowingText: true });
-    expect(blocks[2]).toMatchObject({ type: "activityGroup", hasFollowingText: true });
+    expect(blocks[0]).toMatchObject({
+      type: "activityGroup",
+      items: [{ partIndex: 0 }, { partIndex: 1 }, { partIndex: 2 }],
+    });
+    expect(blocks[1]).toMatchObject({
+      type: "text",
+      item: { partIndex: 3 },
+    });
   });
 
   it("keeps pre-response activity out of final auto-collapse", () => {
@@ -159,6 +161,85 @@ describe("buildAssistantActivityMessageBlocks", () => {
         { messageIndex: 2, partIndex: 0, part: { toolCallId: "call-2" } },
       ],
     });
+  });
+
+  it("groups assistant progress text with earlier work before the final response", () => {
+    const messages = [
+      {
+        id: "user-1",
+        role: "user" as const,
+        parts: [textPart("go")],
+      },
+      {
+        id: "assistant-1",
+        role: "assistant" as const,
+        parts: [toolPart("use_notebook", "call-1", "output-available")],
+      },
+      {
+        id: "assistant-2",
+        role: "assistant" as const,
+        parts: [textPart("I checked the notebook. Running the next cell.")],
+      },
+      {
+        id: "assistant-3",
+        role: "assistant" as const,
+        parts: [toolPart("execute_cell", "call-2", "output-available")],
+      },
+      {
+        id: "assistant-4",
+        role: "assistant" as const,
+        parts: [textPart("done")],
+      },
+    ] satisfies UIMessage[];
+
+    const blocks = buildAssistantActivityMessageBlocks(messages, {
+      groupConsecutiveActivityOnlyMessages: true,
+    });
+
+    expect(blocks.map((block) => block.type)).toEqual([
+      "message",
+      "activityRun",
+      "message",
+    ]);
+    expect(blocks[1]).toMatchObject({
+      type: "activityRun",
+      firstMessageIndex: 1,
+      lastMessageIndex: 3,
+      hasFollowingText: true,
+      items: [
+        { messageIndex: 1, partIndex: 0, part: { toolCallId: "call-1" } },
+        {
+          messageIndex: 2,
+          partIndex: 0,
+          part: { text: "I checked the notebook. Running the next cell." },
+        },
+        { messageIndex: 3, partIndex: 0, part: { toolCallId: "call-2" } },
+      ],
+    });
+  });
+
+  it("leaves assistant text-only runs unchanged", () => {
+    const messages = [
+      {
+        id: "assistant-1",
+        role: "assistant" as const,
+        parts: [textPart("first chunk")],
+      },
+      {
+        id: "assistant-2",
+        role: "assistant" as const,
+        parts: [textPart("second chunk")],
+      },
+    ] satisfies UIMessage[];
+
+    const blocks = buildAssistantActivityMessageBlocks(messages, {
+      groupConsecutiveActivityOnlyMessages: true,
+    });
+
+    expect(blocks).toMatchObject([
+      { type: "message", messageIndex: 0 },
+      { type: "message", messageIndex: 1 },
+    ]);
   });
 
   it("does not treat assistant text after a user boundary as final text for an activity run", () => {

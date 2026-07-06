@@ -129,7 +129,9 @@ export function SettingsDialog({
       case "agent":
         return <AgentTab section={agentSection} />;
       case "models":
-        return <ModelsTab />;
+        return (
+          <ModelsTab onNavigateToProviders={() => handleTabChange("providers")} />
+        );
       case "providers":
         return <ProvidersTab />;
       case "settings-file":

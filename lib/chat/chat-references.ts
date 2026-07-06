@@ -70,6 +70,15 @@ export interface ResolvedChatReference extends ChatReference {
 
 export interface ChatMessageMetadata {
   references?: ResolvedChatReference[];
+  slashCommands?: ChatSlashCommandToken[];
+}
+
+export type ChatSlashCommandCategory = "builtin" | "subagent" | "skill";
+
+export interface ChatSlashCommandToken {
+  label: string;
+  name?: string;
+  category?: ChatSlashCommandCategory;
 }
 
 export interface ChatReferenceOption {
@@ -141,8 +150,15 @@ export const ResolvedChatReferenceSchema = z.object({
   toolHint: z.string().max(1000).optional(),
 });
 
+const ChatSlashCommandTokenSchema = z.object({
+  label: z.string().min(1).max(120),
+  name: z.string().min(1).max(160).optional(),
+  category: z.enum(["builtin", "subagent", "skill"]).optional(),
+});
+
 export const ChatMessageMetadataSchema = z.object({
   references: z.array(ResolvedChatReferenceSchema).max(20).optional(),
+  slashCommands: z.array(ChatSlashCommandTokenSchema).max(10).optional(),
 });
 
 /** Returns validated references from unknown message metadata. */
@@ -150,6 +166,28 @@ export function parseChatMessageReferences(metadata: unknown): ResolvedChatRefer
   const parsed = ChatMessageMetadataSchema.safeParse(metadata);
   if (!parsed.success) return [];
   return parsed.data.references ?? [];
+}
+
+/** Returns validated slash command tokens from unknown message metadata. */
+export function parseChatMessageSlashCommands(metadata: unknown): ChatSlashCommandToken[] {
+  const parsed = ChatMessageMetadataSchema.safeParse(metadata);
+  if (!parsed.success) return [];
+  return parsed.data.slashCommands ?? [];
+}
+
+/** Keeps only chat metadata fields that Orion understands and should persist. */
+export function normalizeChatMessageMetadata(metadata: unknown): ChatMessageMetadata | undefined {
+  const parsed = ChatMessageMetadataSchema.safeParse(metadata);
+  if (!parsed.success) return undefined;
+
+  const references = parsed.data.references ?? [];
+  const slashCommands = parsed.data.slashCommands ?? [];
+  if (references.length === 0 && slashCommands.length === 0) return undefined;
+
+  return {
+    ...(references.length > 0 ? { references } : {}),
+    ...(slashCommands.length > 0 ? { slashCommands } : {}),
+  };
 }
 
 export function getReferenceTypeLabel(type: ChatReferenceType): string {

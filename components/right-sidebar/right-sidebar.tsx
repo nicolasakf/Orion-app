@@ -7,7 +7,6 @@ import {
   type UIMessage,
   type FileUIPart,
   DefaultChatTransport,
-  lastAssistantMessageIsCompleteWithToolCalls,
 } from "ai";
 import { Bot, ChevronLeft } from "lucide-react";
 
@@ -26,14 +25,18 @@ import { downloadChatTranscriptMarkdown } from "@/lib/chat/export-chat-transcrip
 import {
   formatCellReferenceLabel,
   formatOutputReferenceLabel,
+  normalizeChatMessageMetadata,
   parseChatMessageReferences,
   type ChatReferenceOption,
   type ChatReferenceType,
   type ResolvedChatReference,
 } from "@/lib/chat/chat-references";
 import {
+  getInsertChatMessageDetail,
   getInsertChatSkillDetail,
+  INSERT_CHAT_MESSAGE_EVENT,
   INSERT_CHAT_SKILL_EVENT,
+  insertMessageIntoComposerInput,
   insertSkillIntoComposerInput,
 } from "@/lib/chat/chat-composer-events";
 import { compactConversation } from "@/lib/agent/context-manager";
@@ -58,18 +61,24 @@ import { NO_DEPENDENCY_TOOLS, SERVER_ONLY_TOOLS } from "@/lib/agent/tool-schemas
 import {
   normalizeInteractionModeConfigs,
   resolveInteractionModeConfig,
+  resolveSelectorInteractionModeId,
 } from "@/lib/agent/interaction-modes";
 import { isReadOnlyBashBlocked } from "@/lib/agent/read-only-bash-guard";
 import { restoreEditCheckpoint } from "@/lib/agent/edit-checkpoint-restore";
 import {
-  applyDeepEdaStateUpdate,
-  createInitialDeepEdaState,
   isExecutionToolResult,
   prepareExecutionToolResultForModel,
-  validateDeepEdaCompletion,
-  type DeepEdaStateSnapshot,
-  type DeepEdaStateUpdate,
-} from "@/lib/agent/deep-eda";
+} from "@/lib/agent/visual-evidence";
+import {
+  advanceResearchSessionForContinuation,
+  createInactiveResearchSession,
+  createResearchSession,
+  getResearchTurnActivity,
+  RESEARCH_SESSION_MAX_STEPS,
+  type ResearchNudge,
+  type ResearchSessionIntensity,
+  type ResearchSessionSnapshot,
+} from "@/lib/agent/research-session";
 import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
 import { needsApproval } from "@/lib/agent/tool-approval";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
@@ -103,7 +112,10 @@ import { ChatBody } from "./chat-body";
 import { createCostSummaryMessageId } from "./cost-summary-card";
 import { ChatTextbox, type ReferenceTab } from "./chat-textbox";
 import { finalizeCompletedToolTimings, type ToolTiming } from "./assistant-activity-grouping";
-import { shouldContinueAfterToolCalls } from "./assistant-turn-state";
+import {
+  getCompletedToolContinuationKey,
+  shouldContinueAfterToolCalls,
+} from "./assistant-turn-state";
 import { useContextEstimate } from "./context-usage-pill";
 import {
   ORION_GITHUB_ISSUES_URL,
@@ -135,6 +147,8 @@ import {
   parseModelSelectionKey,
   resolveCatalogModelIdForApi,
 } from "@/lib/agent/model-selection-key";
+
+const MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS = 1;
 
 /**
  * Extract assistant text from `/api/chat` stream responses for title generation.
@@ -575,18 +589,6 @@ interface DelegateToolOutput {
   reconnected: boolean;
 }
 
-interface DeepEdaRuntimeSession {
-  active: boolean;
-  activation: "slash" | "confirmed-natural-language" | null;
-  objective: string;
-  state: DeepEdaStateSnapshot;
-}
-
-interface PendingDeepEdaConfirmation {
-  objective: string;
-  resolve: (approved: boolean) => void;
-}
-
 const CURRENT_CHAT_SESSION_KEY = "orion:currentChatId";
 
 /** Reads the last selected chat for the current browser tab. */
@@ -743,9 +745,22 @@ export function RightSidebar({
             provider,
             inputPrice: m.input_price_per_1m ?? undefined,
             outputPrice: m.output_price_per_1m ?? undefined,
+            cachedPrice: m.cached_price_per_1m ?? undefined,
             icon: getProviderIcon(provider),
+            apiModelId: m.api_model_id,
             contextWindow: m.context_window ?? undefined,
+            maxOutputTokens: m.max_output_tokens ?? undefined,
             supportsImageInput: m.supports_image_input === true,
+            supportsToolCalling: m.supports_tool_calling,
+            supportsForcedToolChoice: m.supports_forced_tool_choice === true,
+            supportsReasoning: m.supports_reasoning,
+            longContextThreshold: m.long_context_threshold ?? undefined,
+            longContextInputPrice: m.long_context_input_price_per_1m ?? undefined,
+            longContextOutputPrice: m.long_context_output_price_per_1m ?? undefined,
+            catalogSource: m.source,
+            pinnedByDefault: m.pinned_by_default,
+            catalogCreatedAt: m.created_at,
+            clientAvailable: m.client_avail,
           };
         });
         setModels(mappedModels);
@@ -822,9 +837,16 @@ export function RightSidebar({
           provider: providerId,
           inputPrice: 0,
           outputPrice: 0,
+          cachedPrice: 0,
           icon: getProviderIcon(providerId),
           contextWindow: 32768,
           supportsImageInput: false,
+          supportsForcedToolChoice: false,
+          supportsToolCalling: false,
+          supportsReasoning: false,
+          catalogSource: "local",
+          pinnedByDefault: false,
+          clientAvailable: true,
         });
       }
     }
@@ -889,7 +911,7 @@ export function RightSidebar({
 
     const fallbackModel = resolveSelectedModelFallback({
       selectedModel,
-      models: allModels,
+      models: modelsWithAccess,
       modelsCatalogLoaded,
       settingsReady: settingsHydrated && userSettingsLoadStatus !== "failed",
     });
@@ -898,8 +920,8 @@ export function RightSidebar({
     setSelectedModel(fallbackModel);
     saveSelectedModelToSession(fallbackModel);
   }, [
-    allModels,
     modelsCatalogLoaded,
+    modelsWithAccess,
     pinnedModelIds,
     selectedModel,
     settingsHydrated,
@@ -1572,19 +1594,10 @@ export function RightSidebar({
    */
   const subagentRunIndexRef = useRef<Map<string, number>>(new Map());
   const activeSubagentRunToolCallsRef = useRef<Set<string>>(new Set());
-  const deepEdaSessionRef = useRef<DeepEdaRuntimeSession>({
-    active: false,
-    activation: null,
-    objective: "",
-    state: createInitialDeepEdaState(),
-  });
-  const pendingVisualIdsRef = useRef<Set<string>>(new Set());
-  const visualRevisionRequiredIdsRef = useRef<Set<string>>(new Set());
-  const visualInspectionRecordsRef = useRef<Map<string, Record<string, unknown>>>(new Map());
-  const lastDeepEdaUpdateFingerprintRef = useRef<string | null>(null);
-  const pendingDeepEdaConfirmationRef = useRef<PendingDeepEdaConfirmation | null>(null);
-  const [deepEdaActive, setDeepEdaActive] = useState(false);
-  const [deepEdaConfirmationOpen, setDeepEdaConfirmationOpen] = useState(false);
+  const researchSessionRef = useRef<ResearchSessionSnapshot>(createInactiveResearchSession());
+  const researchNudgeRef = useRef<ResearchNudge | undefined>(undefined);
+  const lastAutomaticContinuationKeyRef = useRef<string | null>(null);
+  const automaticContinuationAttemptsRef = useRef<Map<string, number>>(new Map());
   const forcedSubagentForCurrentTurnRef = useRef<string | null>(null);
 
   // Manual input state — v6 useChat no longer manages input
@@ -1602,6 +1615,9 @@ export function RightSidebar({
   /** Starts a fresh model turn and clears UI-level cancellation state. */
   const beginAgentTurn = useCallback(() => {
     stopRequestedRef.current = false;
+    lastAutomaticContinuationKeyRef.current = null;
+    automaticContinuationAttemptsRef.current.clear();
+    researchNudgeRef.current = undefined;
     setStopRequestActive(false);
   }, []);
   const handleInputChange = useCallback(
@@ -1933,6 +1949,20 @@ export function RightSidebar({
     () => normalizeInteractionModeConfigs(effectiveSettings.chat.interactionModes),
     [effectiveSettings.chat.interactionModes]
   );
+
+  React.useEffect(() => {
+    const visibleModeId = resolveSelectorInteractionModeId(
+      interactionMode,
+      interactionModeConfigs
+    );
+    if (visibleModeId === interactionMode) return;
+    setInteractionMode(visibleModeId);
+    if (typeof window !== "undefined") {
+      sessionStorage.setItem(SESSION_MODE_KEY, visibleModeId);
+    }
+    // Re-check only when selector visibility settings change, not when mode is set programmatically.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- interactionMode intentionally omitted
+  }, [interactionModeConfigs]);
   const resolvedInteractionModeConfig = React.useMemo(
     () =>
       resolveInteractionModeConfig({
@@ -1958,7 +1988,9 @@ export function RightSidebar({
         model: apiModelId,
         interactionMode: resolvedInteractionModeConfig.id,
         interactionModeConfig: resolvedInteractionModeConfig,
-        agentMode: resolvedInteractionModeConfig.baseMode === "Agent",
+        agentMode:
+          resolvedInteractionModeConfig.baseMode === "Research" ||
+          resolvedInteractionModeConfig.baseMode === "Agent",
         chatId: effectiveChatId ?? undefined,
         modelRequestId: modelRequestIdRef.current,
         modelSettings: modelSettingsMap[selectedModel],
@@ -1973,12 +2005,8 @@ export function RightSidebar({
         clientPlatformOs,
         agentCommunicationStyle,
         agentCustomCommunicationStyle,
-        deepEdaActive: deepEdaSessionRef.current.active,
-        deepEdaState: deepEdaSessionRef.current.active
-          ? deepEdaSessionRef.current.state
-          : undefined,
-        pendingVisualInspectionIds: Array.from(pendingVisualIdsRef.current),
-        visualRevisionRequiredIds: Array.from(visualRevisionRequiredIdsRef.current),
+        researchSession: researchSessionRef.current.active ? researchSessionRef.current : undefined,
+        researchNudge: researchNudgeRef.current,
         ...overrides,
       };
     },
@@ -2004,59 +2032,69 @@ export function RightSidebar({
 
   // Ref for dynamic body values — read by the transport function at send time
   const bodyRef = useRef<Record<string, unknown>>(buildChatRequestBody());
+  const setMessagesRef = useRef<((updater: UIMessage[] | ((messages: UIMessage[]) => UIMessage[])) => void) | null>(null);
+
+  /** Clear automatic follow-up retry bookkeeping after durable research progress. */
+  const resetAutomaticContinuationGuards = useCallback(() => {
+    lastAutomaticContinuationKeyRef.current = null;
+    automaticContinuationAttemptsRef.current.clear();
+    researchNudgeRef.current = undefined;
+    bodyRef.current = {
+      ...bodyRef.current,
+      researchNudge: undefined,
+    };
+  }, []);
 
   /** Synchronize client loop state before useChat schedules its next request. */
   const syncAgentLoopRequestBody = useCallback(() => {
     bodyRef.current = {
       ...bodyRef.current,
-      deepEdaActive: deepEdaSessionRef.current.active,
-      deepEdaState: deepEdaSessionRef.current.active
-        ? deepEdaSessionRef.current.state
-        : undefined,
-      pendingVisualInspectionIds: Array.from(pendingVisualIdsRef.current),
-      visualRevisionRequiredIds: Array.from(visualRevisionRequiredIdsRef.current),
+      researchSession: researchSessionRef.current.active ? researchSessionRef.current : undefined,
+      researchNudge: researchNudgeRef.current,
     };
   }, []);
 
-  /** Starts a fresh exhaustive EDA ledger after explicit user approval. */
-  const activateDeepEda = useCallback(
-    (activation: DeepEdaRuntimeSession["activation"], objective: string) => {
-      pendingVisualIdsRef.current.clear();
-      visualRevisionRequiredIdsRef.current.clear();
-      visualInspectionRecordsRef.current.clear();
-      deepEdaSessionRef.current = {
-        active: true,
+  /** Starts a notebook-native research session for the current model turn. */
+  const activateResearchSession = useCallback(
+    (
+      activation: "research-mode" | "slash",
+      objective: string,
+      profile = "general",
+      intensity: ResearchSessionIntensity = "standard"
+    ) => {
+      researchSessionRef.current = createResearchSession({
         activation,
         objective,
-        state: createInitialDeepEdaState(),
-      };
-      lastDeepEdaUpdateFingerprintRef.current = null;
-      setDeepEdaActive(true);
+        profile,
+        intensity,
+      });
+      resetAutomaticContinuationGuards();
       syncAgentLoopRequestBody();
     },
-    [syncAgentLoopRequestBody]
+    [resetAutomaticContinuationGuards, syncAgentLoopRequestBody]
   );
 
-  /** Ends the active EDA controller without altering durable notebook work. */
-  const deactivateDeepEda = useCallback(() => {
-    deepEdaSessionRef.current = {
-      active: false,
-      activation: null,
-      objective: "",
-      state: createInitialDeepEdaState(),
-    };
-    lastDeepEdaUpdateFingerprintRef.current = null;
-    setDeepEdaActive(false);
+  /** Ends the active research session without altering durable notebook work. */
+  const deactivateResearchSession = useCallback(() => {
+    researchSessionRef.current = createInactiveResearchSession();
+    researchNudgeRef.current = undefined;
+    resetAutomaticContinuationGuards();
     syncAgentLoopRequestBody();
-  }, [syncAgentLoopRequestBody]);
+  }, [resetAutomaticContinuationGuards, syncAgentLoopRequestBody]);
 
-  /** Resolves the one-time confirmation used for model-selected deep EDA. */
-  const resolveDeepEdaConfirmation = useCallback((approved: boolean) => {
-    const pending = pendingDeepEdaConfirmationRef.current;
-    pendingDeepEdaConfirmationRef.current = null;
-    setDeepEdaConfirmationOpen(false);
-    pending?.resolve(approved);
-  }, []);
+  /** Research mode activates the notebook-native research loop before sending. */
+  const ensureResearchSessionActive = useCallback(
+    (objective: string) => {
+      if (resolvedInteractionModeConfig.baseMode !== "Research") return;
+      activateResearchSession(
+        "research-mode",
+        objective.trim() || "Research mode task",
+        "general",
+        "standard"
+      );
+    },
+    [activateResearchSession, resolvedInteractionModeConfig.baseMode]
+  );
 
   // Keep bodyRef in sync with latest values
   useEffect(() => {
@@ -2074,10 +2112,75 @@ export function RightSidebar({
       prepareSendMessagesRequest: ({ messages, body }) => ({
         body: {
           ...body,
-          messages: buildWirePayload(messages, compactionSummaryRef.current),
+          messages: buildWirePayload(messages, compactionSummaryRef.current, {
+            researchActive: researchSessionRef.current.active,
+          }),
         },
       }),
     })
+  );
+
+  /** Allow automatic model follow-ups while preventing the same stalled key from looping forever. */
+  const allowAutomaticContinuation = useCallback(
+    (
+      key: string | null,
+      options?: {
+        maxAttempts?: number;
+        reason?: string;
+      }
+    ): boolean => {
+      if (!key) return false;
+      const maxAttempts = options?.maxAttempts ?? MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS;
+      const attempts = automaticContinuationAttemptsRef.current.get(key) ?? 0;
+      if (attempts >= maxAttempts) return false;
+      const nextAttempt = attempts + 1;
+      automaticContinuationAttemptsRef.current.set(key, nextAttempt);
+      lastAutomaticContinuationKeyRef.current = key;
+      bodyRef.current = {
+        ...bodyRef.current,
+        automaticContinuationAttempt: nextAttempt,
+        automaticContinuationReason: options?.reason,
+      };
+      return true;
+    },
+    []
+  );
+
+  const allowResearchContinuation = useCallback(
+    (key: string | null, reason: string, currentMessages: UIMessage[]): boolean => {
+      if (!researchSessionRef.current.active || stopRequestedRef.current) return false;
+
+      const lastAssistantMessage = currentMessages.findLast((message) => message.role === "assistant");
+      const decision = advanceResearchSessionForContinuation(
+        researchSessionRef.current,
+        getResearchTurnActivity(lastAssistantMessage)
+      );
+      researchSessionRef.current = decision.session;
+      researchNudgeRef.current = decision.nudge;
+      syncAgentLoopRequestBody();
+
+      if (!decision.continue) {
+        if (decision.terminal) {
+          toast.info(`Research session ended after ${decision.session.stepCount} steps.`);
+        }
+        return false;
+      }
+
+      return allowAutomaticContinuation(`research:${reason}:${decision.reason}:${key ?? "unknown"}`, {
+        maxAttempts: RESEARCH_SESSION_MAX_STEPS,
+        reason: decision.nudge ?? reason,
+      });
+    },
+    [allowAutomaticContinuation, syncAgentLoopRequestBody]
+  );
+
+  /** Check whether the UI should still consider a pending follow-up turn active. */
+  const hasAutomaticContinuationAttemptsRemaining = useCallback(
+    (key: string | null, maxAttempts = MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS): boolean => {
+      if (!key) return false;
+      return (automaticContinuationAttemptsRef.current.get(key) ?? 0) < maxAttempts;
+    },
+    []
   );
 
   const {
@@ -2095,12 +2198,32 @@ export function RightSidebar({
     // markdown/tool rendering does not monopolize the main thread.
     experimental_throttle: 50,
     sendAutomaticallyWhen: ({ messages: currentMessages }) => {
-      if (lastAssistantMessageIsCompleteWithToolCalls({ messages: currentMessages })) return true;
-      if (!deepEdaSessionRef.current.active || stopRequestedRef.current) return false;
+      if (shouldContinueAfterToolCalls(currentMessages)) {
+        const continuationKey = `tool:${getCompletedToolContinuationKey(currentMessages) ?? "unknown"}`;
+        if (researchSessionRef.current.active) {
+          return allowResearchContinuation(
+            continuationKey,
+            "research_tool_result",
+            currentMessages
+          );
+        }
+        return allowAutomaticContinuation(
+          continuationKey,
+          {
+            maxAttempts: MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS,
+          }
+        );
+      }
+      if (!researchSessionRef.current.active || stopRequestedRef.current) return false;
       const lastMessage = currentMessages.at(-1);
       if (lastMessage?.role !== "assistant") return false;
       const hasToolPart = lastMessage.parts.some((part) => part.type.startsWith("tool-"));
-      return !hasToolPart;
+      if (hasToolPart) return false;
+      return allowResearchContinuation(
+        `prose:${lastMessage.id}`,
+        "research_prose_only",
+        currentMessages
+      );
     },
     onFinish: ({ messages: finalMessages }) => {
       const persistId = effectiveChatIdRef.current;
@@ -2117,10 +2240,9 @@ export function RightSidebar({
       const newChatMessages: ChatMessage[] = persistedMessages.map((m, messageIndex) => {
         const messageForStorage = stripSessionOnlyFileParts(m);
         const existing = chatForPersist?.messages.find((msg) => msg.id === m.id);
-        const references = parseChatMessageReferences(m.metadata);
         return {
           ...messageForStorage,
-          metadata: references.length > 0 ? { references } : undefined,
+          metadata: normalizeChatMessageMetadata(m.metadata),
           timestamp: existing?.timestamp || new Date(),
           modelUsed: selectedModel,
           checkpointId:
@@ -2201,6 +2323,7 @@ export function RightSidebar({
       }
     },
   });
+  setMessagesRef.current = setMessages;
 
   // Derived isLoading for backward compat with child components
   const isLoading = status === "streaming" || status === "submitted";
@@ -2226,6 +2349,7 @@ export function RightSidebar({
   const hasPendingToolCalls = React.useMemo(() => {
     const modeUsesTools =
       resolvedInteractionModeConfig.toolNames.length > 0 ||
+      resolvedInteractionModeConfig.baseMode === "Research" ||
       resolvedInteractionModeConfig.baseMode === "Agent";
     if (!modeUsesTools) return false;
 
@@ -2249,8 +2373,29 @@ export function RightSidebar({
     if (status === "streaming" || status === "submitted") return true;
     if (hasPendingToolCalls) return true;
     if (pendingApprovalIds.size > 0) return true;
-    return shouldContinueAfterToolCalls(messages);
-  }, [stopRequestActive, status, hasPendingToolCalls, pendingApprovalIds, messages]);
+    if (researchSessionRef.current.active) {
+      if (researchSessionRef.current.stepCount >= RESEARCH_SESSION_MAX_STEPS) return false;
+      const lastMessage = messages.at(-1);
+      if (lastMessage?.role === "assistant" && !lastMessage.parts.some((part) => part.type.startsWith("tool-"))) {
+        return true;
+      }
+    }
+    if (!shouldContinueAfterToolCalls(messages)) return false;
+    const baseContinuationKey = `tool:${getCompletedToolContinuationKey(messages) ?? "unknown"}`;
+    if (researchSessionRef.current.active) return true;
+    const continuationKey = baseContinuationKey;
+    return hasAutomaticContinuationAttemptsRemaining(
+      continuationKey,
+      MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS
+    );
+  }, [
+    stopRequestActive,
+    status,
+    hasPendingToolCalls,
+    pendingApprovalIds,
+    messages,
+    hasAutomaticContinuationAttemptsRemaining,
+  ]);
 
   const isInputLocked = isAgentTurnActive;
 
@@ -2289,6 +2434,21 @@ export function RightSidebar({
   );
 
   useEffect(() => {
+    const focusComposer = () => textareaRef.current?.focus();
+
+    /** Inserts plain text requested by notebook UI affordances into the chat draft. */
+    const handleInsertChatMessage = (event: Event) => {
+      if (isInputLocked) return;
+
+      const detail = getInsertChatMessageDetail(event);
+      if (!detail) return;
+
+      setInput((current) => insertMessageIntoComposerInput(current, detail.message));
+      focusComposer();
+      window.setTimeout(focusComposer, 0);
+      window.setTimeout(focusComposer, 120);
+    };
+
     const handleInsertChatSkill = (event: Event) => {
       if (isInputLocked) return;
 
@@ -2308,14 +2468,15 @@ export function RightSidebar({
           insertSkillIntoComposerInput(current, detail.skillName, detail.message),
         );
       }
-      const focusComposer = () => textareaRef.current?.focus();
       focusComposer();
       window.setTimeout(focusComposer, 0);
       window.setTimeout(focusComposer, 120);
     };
 
+    window.addEventListener(INSERT_CHAT_MESSAGE_EVENT, handleInsertChatMessage);
     window.addEventListener(INSERT_CHAT_SKILL_EVENT, handleInsertChatSkill);
     return () => {
+      window.removeEventListener(INSERT_CHAT_MESSAGE_EVENT, handleInsertChatMessage);
       window.removeEventListener(INSERT_CHAT_SKILL_EVENT, handleInsertChatSkill);
     };
   }, [assistant?.availableSkills, isInputLocked, textareaRef]);
@@ -2545,25 +2706,19 @@ export function RightSidebar({
     [activeNotebookPath, kernelService, refreshCheckpointStatuses]
   );
 
-  /** Applies model-specific raster preview handling and arms the inspection gate. */
+  /** Applies model-specific raster preview handling for execution evidence. */
   const prepareAgentToolResult = useCallback(
     async (result: unknown): Promise<unknown> => {
       if (!isExecutionToolResult(result)) return result;
-      const prepared = await prepareExecutionToolResultForModel({
+      return prepareExecutionToolResultForModel({
         result,
         supportsImageInput: modelInfo?.supportsImageInput === true,
         imageMaxBase64Chars: effectiveSettings.agent.toolOutput.imageBase64CharBudget,
       });
-      for (const visual of prepared.visuals) {
-        pendingVisualIdsRef.current.add(visual.visualId);
-      }
-      syncAgentLoopRequestBody();
-      return prepared;
     },
     [
       effectiveSettings.agent.toolOutput.imageBase64CharBudget,
       modelInfo?.supportsImageInput,
-      syncAgentLoopRequestBody,
     ]
   );
 
@@ -2579,176 +2734,6 @@ export function RightSidebar({
               result: CANCELLED_TOOL_RESULT,
             });
             markToolEnded(toolCallId);
-            return;
-          }
-
-          const finishControlTool = (result: unknown) => {
-            trackedToolCallsRef.current.set(toolCallId, { status: "completed", result });
-            if (!stopRequestedRef.current) {
-              addTimedToolOutput({ tool: toolName, toolCallId, output: result });
-            }
-          };
-
-          if (toolName === "begin_deep_eda") {
-            const objective = typeof args.objective === "string" ? args.objective.trim() : "";
-            if (deepEdaSessionRef.current.active) {
-              finishControlTool({
-                active: true,
-                alreadyActive: true,
-                doNotCallAgain: true,
-                instruction: "The run is already active. Take the next concrete analytical action.",
-              });
-              return;
-            }
-
-            const approved = await new Promise<boolean>((resolve) => {
-              pendingDeepEdaConfirmationRef.current = { objective, resolve };
-              setDeepEdaConfirmationOpen(true);
-            });
-            if (!approved) {
-              finishControlTool({ active: false, declinedByUser: true });
-              return;
-            }
-            activateDeepEda("confirmed-natural-language", objective);
-            finishControlTool({ active: true, activation: "confirmed-natural-language" });
-            return;
-          }
-
-          if (toolName === "record_visual_inspection") {
-            const inspections = Array.isArray(args.inspections)
-              ? args.inspections.filter(
-                  (inspection): inspection is Record<string, unknown> =>
-                    typeof inspection === "object" && inspection !== null
-                )
-              : [];
-            const submittedIds = new Set(
-              inspections
-                .map((inspection) => inspection.visualId)
-                .filter((visualId): visualId is string => typeof visualId === "string")
-            );
-            const missingIds = Array.from(pendingVisualIdsRef.current).filter(
-              (visualId) => !submittedIds.has(visualId)
-            );
-            if (missingIds.length > 0) {
-              finishControlTool({
-                accepted: false,
-                error: `Inspection must cover every pending raster output: ${missingIds.join(", ")}.`,
-              });
-              return;
-            }
-            const unavailableWithoutChecks = inspections.filter(
-              (inspection) =>
-                inspection.verdict === "unavailable" &&
-                (!Array.isArray(inspection.supportingChecks) || inspection.supportingChecks.length === 0)
-            );
-            if (unavailableWithoutChecks.length > 0) {
-              finishControlTool({
-                accepted: false,
-                error: "Unavailable visual inspections require supporting numeric or structural checks.",
-              });
-              return;
-            }
-
-            for (const inspection of inspections) {
-              const visualId = inspection.visualId;
-              if (typeof visualId !== "string" || !pendingVisualIdsRef.current.has(visualId)) {
-                continue;
-              }
-              visualInspectionRecordsRef.current.set(visualId, inspection);
-              pendingVisualIdsRef.current.delete(visualId);
-              if (inspection.disposition === "revise") {
-                visualRevisionRequiredIdsRef.current.add(visualId);
-              }
-              const supersedesVisualId = inspection.supersedesVisualId;
-              if (
-                typeof supersedesVisualId === "string" &&
-                supersedesVisualId.length > 0 &&
-                inspection.verdict === "valid" &&
-                inspection.disposition === "accept"
-              ) {
-                visualRevisionRequiredIdsRef.current.delete(supersedesVisualId);
-              }
-            }
-            syncAgentLoopRequestBody();
-            finishControlTool({
-              accepted: true,
-              inspectedVisualIds: Array.from(submittedIds),
-              revisionRequiredVisualIds: Array.from(visualRevisionRequiredIdsRef.current),
-              instruction:
-                inspections.some((inspection) => inspection.disposition === "revise")
-                  ? "Revise and regenerate the questionable or invalid visual before finishing."
-                  : "Visual sanity checks recorded. Continue with the user's requested scope.",
-            });
-            return;
-          }
-
-          if (toolName === "update_deep_eda_state") {
-            if (!deepEdaSessionRef.current.active) {
-              finishControlTool({ error: "No deep-EDA session is active." });
-              return;
-            }
-            const update = args as unknown as DeepEdaStateUpdate;
-            const fingerprint = JSON.stringify(update);
-            if (lastDeepEdaUpdateFingerprintRef.current === fingerprint) {
-              finishControlTool({
-                accepted: false,
-                duplicate: true,
-                instruction: "This ledger update was already applied. Gather new evidence or take the next analytical action.",
-              });
-              return;
-            }
-            deepEdaSessionRef.current = {
-              ...deepEdaSessionRef.current,
-              state: applyDeepEdaStateUpdate(deepEdaSessionRef.current.state, update),
-            };
-            lastDeepEdaUpdateFingerprintRef.current = fingerprint;
-            syncAgentLoopRequestBody();
-            finishControlTool({
-              accepted: true,
-              ledgerUpdated: true,
-              instruction: "Ledger increment merged. Continue with the highest-value unresolved analysis.",
-            });
-            return;
-          }
-
-          if (toolName === "complete_deep_eda") {
-            if (!deepEdaSessionRef.current.active) {
-              finishControlTool({ error: "No deep-EDA session is active." });
-              return;
-            }
-            const synthesisCellIndices = Array.isArray(args.synthesisCellIndices)
-              ? args.synthesisCellIndices.filter(
-                  (value): value is number => Number.isInteger(value) && Number(value) >= 0
-                )
-              : [];
-            const missingRequirements = validateDeepEdaCompletion({
-              state: deepEdaSessionRef.current.state,
-              pendingVisualIds: Array.from(pendingVisualIdsRef.current),
-              unresolvedVisualRevisionIds: Array.from(visualRevisionRequiredIdsRef.current),
-              inspectedVisualCount: visualInspectionRecordsRef.current.size,
-              synthesisCellIndices,
-            });
-            if (synthesisCellIndices.length > 0) {
-              const synthesisRead = await assistant.executeToolCall("read_cell", {
-                cellIndices: synthesisCellIndices,
-                includeOutputs: false,
-                includeOrionMetadata: false,
-              });
-              const synthesisText = typeof synthesisRead === "string" ? synthesisRead : "";
-              for (const cellIndex of synthesisCellIndices) {
-                if (!synthesisText.includes(`=====Cell ${cellIndex} | type: markdown |`)) {
-                  missingRequirements.push(
-                    `Synthesis cell ${cellIndex} is missing or is not a markdown cell.`
-                  );
-                }
-              }
-            }
-            if (missingRequirements.length > 0) {
-              finishControlTool({ accepted: false, missingRequirements });
-              return;
-            }
-            deactivateDeepEda();
-            finishControlTool({ accepted: true, deepEdaComplete: true });
             return;
           }
 
@@ -3074,10 +3059,7 @@ export function RightSidebar({
       markToolStarted,
       markToolEnded,
       setChats,
-      activateDeepEda,
-      deactivateDeepEda,
       prepareAgentToolResult,
-      syncAgentLoopRequestBody,
     ]
   );
 
@@ -3085,6 +3067,7 @@ export function RightSidebar({
   useEffect(() => {
     const modeUsesTools =
       resolvedInteractionModeConfig.toolNames.length > 0 ||
+      resolvedInteractionModeConfig.baseMode === "Research" ||
       resolvedInteractionModeConfig.baseMode === "Agent";
     if (!modeUsesTools || !assistant?.toolsReady) return;
 
@@ -3127,7 +3110,7 @@ export function RightSidebar({
         markToolStarted(inv.toolCallId);
 
         // Tool gating:
-        // Tier 1 — NO_DEPENDENCY_TOOLS (load_skill, delegate): always pass through.
+        // Tier 1 — NO_DEPENDENCY_TOOLS (load_skill, reload_page, delegate): always pass through.
         // Tier 2 — SERVER_ONLY_TOOLS: need a Jupyter server (toolsReady), but no kernel.
         // Tier 3 — kernel tools (execute_cell, execute_code, restart_notebook): need kernelStatus === "connected".
         //
@@ -3348,10 +3331,9 @@ export function RightSidebar({
 
     const messagesToLoad = (currentChat?.messages ?? []).map((message) => {
       const { checkpointId: _checkpointId, ...messageWithoutCheckpoint } = message;
-      const references = parseChatMessageReferences(message.metadata);
       return {
         ...messageWithoutCheckpoint,
-        metadata: references.length > 0 ? { references } : undefined,
+        metadata: normalizeChatMessageMetadata(message.metadata),
       };
     });
 
@@ -3644,6 +3626,7 @@ export function RightSidebar({
       const modelRequestId = crypto.randomUUID();
       modelRequestIdRef.current = modelRequestId;
       beginAgentTurn();
+      ensureResearchSessionActive(messageText);
       forcedSubagentForCurrentTurnRef.current = null;
       if (!pendingSubmit) {
         setInput("");
@@ -3656,7 +3639,9 @@ export function RightSidebar({
       // exceeds COMPACTION_AUTO_THRESHOLD × cap before sending.
       if (!compactionInFlightRef.current) {
         const ctxWindow = getModel(selectedModel)?.contextWindow ?? HARD_CAP_TOKENS;
-        const wirePayload = buildWirePayload(messagesRef.current, compactionSummaryRef.current);
+        const wirePayload = buildWirePayload(messagesRef.current, compactionSummaryRef.current, {
+          researchActive: researchSessionRef.current.active,
+        });
         const est = estimateMessageTokens(wirePayload, "", {
           contextWindow: ctxWindow,
           additionalImageCount: imageFileParts.length,
@@ -3698,6 +3683,7 @@ export function RightSidebar({
       runCompaction,
       getModel,
       beginAgentTurn,
+      ensureResearchSessionActive,
     ]
   );
 
@@ -3768,7 +3754,18 @@ export function RightSidebar({
         bodyRef.current = { ...bodyRef.current, modelRequestId };
 
         await sendMessage(
-          { text: plainUserText },
+          {
+            text: plainUserText,
+            metadata: {
+              slashCommands: [
+                {
+                  label: commandLabel,
+                  name: submitSlashCommand,
+                  category: "subagent",
+                },
+              ],
+            },
+          },
           {
             body: buildChatRequestBody({ modelRequestId, forcedSubagentName: subagent.name }),
           }
@@ -3784,18 +3781,20 @@ export function RightSidebar({
         assistant?.availableSkills.some((skill) => skill.name === skillName)
       );
       if (allSelectedSkillsAvailable && !isInputLocked) {
-        const activatesDeepEda = selectedSkills.skillNames.includes("deep-eda");
-        if (activatesDeepEda && resolvedInteractionModeConfig.baseMode !== "Agent") {
-          toast.error("Deep EDA is available only in Agent mode.");
-          return;
-        }
+        const activatesEdaProfile = selectedSkills.skillNames.includes("deep-eda");
+        const researchModeConfig = interactionModeConfigs.find((mode) => mode.id === "Research");
         beginAgentTurn();
         const modelRequestId = crypto.randomUUID();
         modelRequestIdRef.current = modelRequestId;
         const plainUserText =
           selectedSkills.message || formatApplySkillsRequest(selectedSkills.skillNames);
-        if (activatesDeepEda) {
-          activateDeepEda("slash", plainUserText);
+        if (activatesEdaProfile) {
+          activateResearchSession("slash", plainUserText, "eda", "deep");
+          if (researchModeConfig) {
+            handleInteractionModeChange("Research");
+          }
+        } else {
+          ensureResearchSessionActive(plainUserText);
         }
 
         clearComposer();
@@ -3804,12 +3803,30 @@ export function RightSidebar({
         bodyRef.current = { ...bodyRef.current, modelRequestId };
 
         await sendMessage(
-          { text: plainUserText },
+          {
+            text: plainUserText,
+            metadata: {
+              slashCommands: selectedSkills.skillNames.map((skillName) => ({
+                label: `/${skillName}`,
+                name: `skill:${skillName}`,
+                category: "skill" as const,
+              })),
+            },
+          },
           {
             body: buildChatRequestBody({
               modelRequestId,
               forcedSkillNames: selectedSkills.skillNames,
-              ...(activatesDeepEda ? { deepEdaActive: true } : {}),
+              ...(activatesEdaProfile && researchModeConfig
+                ? {
+                    interactionMode: researchModeConfig.id,
+                    interactionModeConfig: researchModeConfig,
+                    agentMode: true,
+                    researchSession: researchSessionRef.current,
+                  }
+                : activatesEdaProfile
+                  ? { researchSession: researchSessionRef.current }
+                  : {}),
             }),
           }
         );
@@ -3838,6 +3855,7 @@ export function RightSidebar({
       beginAgentTurn();
       const modelRequestId = crypto.randomUUID();
       modelRequestIdRef.current = modelRequestId;
+      ensureResearchSessionActive(effectiveInput);
       const currentMessages = messages;
       const editIndex = editingState.messageIndex;
       const referencesForEditedMessage = [
@@ -3980,10 +3998,9 @@ export function RightSidebar({
           const newChatMessages: ChatMessage[] = finalMessages.map((m, messageIndex) => {
             const messageForStorage = stripSessionOnlyFileParts(m);
             const existing = currentChat?.messages.find((msg) => msg.id === m.id);
-            const references = parseChatMessageReferences(m.metadata);
             return {
               ...messageForStorage,
-              metadata: references.length > 0 ? { references } : undefined,
+              metadata: normalizeChatMessageMetadata(m.metadata),
               timestamp: existing?.timestamp || new Date(),
               modelUsed: selectedModel,
               checkpointId:
@@ -4113,10 +4130,9 @@ export function RightSidebar({
         ? result.messages.map((message) => {
           const messageForStorage = stripSessionOnlyFileParts(message);
           const existing = chat.messages.find((candidate) => candidate.id === message.id);
-          const references = parseChatMessageReferences(message.metadata);
           return {
             ...messageForStorage,
-            metadata: references.length > 0 ? { references } : undefined,
+            metadata: normalizeChatMessageMetadata(message.metadata),
             timestamp: existing?.timestamp ?? new Date(cancelledAt),
             modelUsed: existing?.modelUsed ?? selectedModel,
             checkpointId: existing?.checkpointId,
@@ -4180,18 +4196,13 @@ export function RightSidebar({
     pendingApprovalToolCallsRef.current.clear();
     setPendingApprovalIds(new Set());
 
-    pendingVisualIdsRef.current.clear();
-    visualRevisionRequiredIdsRef.current.clear();
-    visualInspectionRecordsRef.current.clear();
-    resolveDeepEdaConfirmation(false);
-    deactivateDeepEda();
+    deactivateResearchSession();
 
     stop();
   }, [
     chats,
-    deactivateDeepEda,
+    deactivateResearchSession,
     markToolEnded,
-    resolveDeepEdaConfirmation,
     selectedModel,
     setChats,
     setMessages,
@@ -4379,13 +4390,6 @@ export function RightSidebar({
             onExportTranscript={handleExportTranscript}
           />
 
-          {deepEdaActive ? (
-            <div className="mx-2 mb-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-3 py-2 text-xs text-violet-900 dark:text-violet-100">
-              <span className="font-semibold">Deep EDA active.</span>{" "}
-              Orion will continue until its evidence and coverage checks pass or you press Stop.
-            </div>
-          ) : null}
-
           <ChatBody
             key="main-chat-body"
             viewKey={`main:${effectiveChatId ?? "no-chat"}`}
@@ -4406,6 +4410,7 @@ export function RightSidebar({
             subagentProgress={subagentProgress}
             subagentReportPaths={subagentReportPaths}
             toolTimings={toolTimings}
+            groupConsecutiveAssistantActivity
             onOpenSubagentChat={setActiveSubagentToolCallId}
             onOpenSubagentReport={handleOpenSubagentReport}
             costSummaryByMessageId={costSummaryByMessageId}
@@ -4472,40 +4477,6 @@ export function RightSidebar({
         onOpenChange={setAutoRunConfirmOpen}
         onConfirm={handleAutoRunConfirm}
       />
-
-      <AlertDialog
-        open={deepEdaConfirmationOpen}
-        onOpenChange={(open) => {
-          if (!open) resolveDeepEdaConfirmation(false);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Start exhaustive deep EDA?</AlertDialogTitle>
-            <AlertDialogDescription>
-              The agent requested the deep-EDA skill for
-              {pendingDeepEdaConfirmationRef.current?.objective
-                ? ` “${pendingDeepEdaConfirmationRef.current.objective}”`
-                : " this task"}
-              . It will continue without an automatic iteration limit until its completion checks pass or you press Stop.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel
-              onClick={() => resolveDeepEdaConfirmation(false)}
-              shortcut="Escape"
-            >
-              Keep it bounded
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => resolveDeepEdaConfirmation(true)}
-              shortcut="Enter"
-            >
-              Start deep EDA
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
 
       <AlertDialog
         open={stopConfirmAction !== null}

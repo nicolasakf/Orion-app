@@ -332,8 +332,13 @@ function ModelPinButton({
   );
 }
 
+interface ModelsTabProps {
+  /** Switches the settings dialog to the Providers tab. */
+  onNavigateToProviders?: () => void;
+}
+
 /** Models tab: search, refresh, and pin models shown in the chat model selector. */
-export function ModelsTab() {
+export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
   const { effectiveSettings, setUserSettings } = useOrionSettings();
   const [models, setModels] = useState<ModelRow[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -931,9 +936,25 @@ export function ModelsTab() {
 
       {allModels.length === 0 && !isLoading && (
         <p className="text-sm text-muted-foreground">
-          {visibleProviderIds.size === 0
-            ? "Add a provider on the Providers tab to browse and pin models."
-            : "No models found for your providers. Click refresh to reload."}
+          {visibleProviderIds.size === 0 ? (
+            <>
+              Hey, there are no providers configured.{" "}
+              {onNavigateToProviders ? (
+                <button
+                  type="button"
+                  onClick={onNavigateToProviders}
+                  className="text-foreground hover:underline"
+                >
+                  Click here
+                </button>
+              ) : (
+                "Click here"
+              )}{" "}
+              to configure a provider.
+            </>
+          ) : (
+            "No models found for your providers. Click refresh to reload."
+          )}
         </p>
       )}
 

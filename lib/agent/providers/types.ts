@@ -10,6 +10,7 @@ export interface ProviderCapabilities {
   systemMessages: boolean;
   toolCalling: boolean;
   imageInput: boolean;
+  forcedToolChoice: boolean;
   reasoning: boolean;
   promptCaching: boolean;
 }

@@ -7,7 +7,7 @@ import {
   type OrionToolName,
 } from "@/lib/agent/tool-schemas";
 
-export const BUILTIN_INTERACTION_MODE_IDS = ["Agent", "Ask", "Edit"] as const;
+export const BUILTIN_INTERACTION_MODE_IDS = ["Agent", "Research", "Edit", "Ask"] as const;
 export type BuiltInInteractionModeId = (typeof BUILTIN_INTERACTION_MODE_IDS)[number];
 export type InteractionModeBase = BuiltInInteractionModeId;
 export type InteractionModeBashPolicy = "read_only" | "full";
@@ -21,6 +21,10 @@ export interface InteractionModeConfig {
   customSystemPrompt: string;
   builtIn: boolean;
   bashPolicy: InteractionModeBashPolicy;
+  /** When true, the mode is configurable in settings but omitted from the chat selector. */
+  hiddenInSelector: boolean;
+  /** Marks experimental built-in modes shown in settings (for example Research). */
+  beta: boolean;
 }
 
 export type SerializedInteractionModeConfig = Omit<InteractionModeConfig, "toolNames"> & {
@@ -29,31 +33,50 @@ export type SerializedInteractionModeConfig = Omit<InteractionModeConfig, "toolN
 
 const BUILTIN_MODE_METADATA: Record<
   BuiltInInteractionModeId,
-  Pick<InteractionModeConfig, "id" | "label" | "description" | "baseMode" | "builtIn">
+  Pick<
+    InteractionModeConfig,
+    "id" | "label" | "description" | "baseMode" | "builtIn" | "hiddenInSelector" | "beta"
+  >
 > = {
+  Research: {
+    id: "Research",
+    label: "Research",
+    description:
+      "Use for open-ended analysis where Orion should inspect evidence, compare possibilities, and decide what to investigate next. Beta — still in active testing.",
+    baseMode: "Research",
+    builtIn: true,
+    hiddenInSelector: true,
+    beta: true,
+  },
   Agent: {
     id: "Agent",
     label: "Agent",
     description:
-      "Full autonomy. Executes code, edits files, runs terminal commands, and spawns sub-agents.",
+      "Use for most tasks where you want Orion to get things done, including coding, notebook work, debugging, and multi-step changes.",
     baseMode: "Agent",
     builtIn: true,
+    hiddenInSelector: false,
+    beta: false,
   },
   Ask: {
     id: "Ask",
     label: "Ask",
     description:
-      "Read-only access. Reads files and notebooks, and runs read-only terminal commands. Cannot modify anything.",
+      "Use when you want an explanation, review, or answer without changing any files.",
     baseMode: "Ask",
     builtIn: true,
+    hiddenInSelector: false,
+    beta: false,
   },
   Edit: {
     id: "Edit",
     label: "Edit",
     description:
-      "File and terminal access. Edits files and runs terminal commands freely, but cannot execute notebook cells.",
+      "Use for targeted file edits or terminal work when you do not want Orion to run notebook code.",
     baseMode: "Edit",
     builtIn: true,
+    hiddenInSelector: false,
+    beta: false,
   },
 };
 
@@ -66,16 +89,22 @@ export const DEFAULT_INTERACTION_MODE_CONFIGS: InteractionModeConfig[] = [
     bashPolicy: "full",
   },
   {
-    ...BUILTIN_MODE_METADATA.Ask,
-    toolNames: Object.keys(ASK_MODE_TOOLS) as OrionToolName[],
+    ...BUILTIN_MODE_METADATA.Research,
+    toolNames: [...ORION_TOOL_NAMES],
     customSystemPrompt: "",
-    bashPolicy: "read_only",
+    bashPolicy: "full",
   },
   {
     ...BUILTIN_MODE_METADATA.Edit,
     toolNames: Object.keys(EDIT_MODE_TOOLS) as OrionToolName[],
     customSystemPrompt: "",
     bashPolicy: "full",
+  },
+  {
+    ...BUILTIN_MODE_METADATA.Ask,
+    toolNames: Object.keys(ASK_MODE_TOOLS) as OrionToolName[],
+    customSystemPrompt: "",
+    bashPolicy: "read_only",
   },
 ];
 
@@ -119,6 +148,10 @@ function parseBashPolicy(
   return value === "read_only" || value === "full" ? value : fallback;
 }
 
+function parseBoolean(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
 function normalizeCustomMode(
   raw: Record<string, unknown>,
   usedIds: Set<string>
@@ -140,6 +173,8 @@ function normalizeCustomMode(
       typeof raw.customSystemPrompt === "string" ? raw.customSystemPrompt : "",
     builtIn: false,
     bashPolicy: parseBashPolicy(raw.bashPolicy, fallback.bashPolicy),
+    hiddenInSelector: parseBoolean(raw.hiddenInSelector, false),
+    beta: parseBoolean(raw.beta, false),
   };
 }
 
@@ -169,6 +204,10 @@ export function normalizeInteractionModeConfigs(
           ? raw.customSystemPrompt
           : defaults.customSystemPrompt,
       bashPolicy: raw ? parseBashPolicy(raw.bashPolicy, defaults.bashPolicy) : defaults.bashPolicy,
+      hiddenInSelector: raw
+        ? parseBoolean(raw.hiddenInSelector, defaults.hiddenInSelector)
+        : defaults.hiddenInSelector,
+      beta: defaults.beta,
     });
     usedIds.add(builtinId);
   }
@@ -180,6 +219,26 @@ export function normalizeInteractionModeConfigs(
   }
 
   return result;
+}
+
+/** Returns modes that should appear in the chat interaction mode selector. */
+export function getSelectorInteractionModes(
+  modes: InteractionModeConfig[]
+): InteractionModeConfig[] {
+  return modes.filter((mode) => !mode.hiddenInSelector);
+}
+
+/**
+ * Keeps the requested mode when it is selector-visible; otherwise falls back to
+ * the first visible mode (or Agent when none are visible).
+ */
+export function resolveSelectorInteractionModeId(
+  modeId: string,
+  modes: InteractionModeConfig[]
+): string {
+  const selectorModes = getSelectorInteractionModes(modes);
+  if (selectorModes.some((mode) => mode.id === modeId)) return modeId;
+  return selectorModes[0]?.id ?? "Agent";
 }
 
 /** Resolve a requested mode id/config into a safe mode configuration. */
@@ -210,16 +269,7 @@ export function resolveInteractionModeConfig(options: {
 
 /** Build the AI SDK tool object for a resolved mode. */
 export function getToolsForInteractionMode(mode: InteractionModeConfig): Partial<typeof orionTools> {
-  const requiredAgentControlTools: OrionToolName[] =
-    mode.baseMode === "Agent"
-      ? [
-          "begin_deep_eda",
-          "record_visual_inspection",
-          "update_deep_eda_state",
-          "complete_deep_eda",
-        ]
-      : [];
-  const toolNames = Array.from(new Set([...mode.toolNames, ...requiredAgentControlTools]));
+  const toolNames = Array.from(new Set(mode.toolNames));
   return Object.fromEntries(
     toolNames
       .filter(isOrionToolName)

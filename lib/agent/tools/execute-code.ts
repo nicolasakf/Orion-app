@@ -12,7 +12,7 @@ import type { KernelService } from "@/lib/kernel/kernel-service";
 import { stripAnsi } from "@/lib/shell/terminal-executor";
 import type { KernelSidecar } from "../kernel-sidecar";
 import type { ExecuteCodeParams } from "./types";
-import type { ExecutionToolResult } from "../deep-eda";
+import type { ExecutionToolResult } from "../visual-evidence";
 
 export class ExecuteCodeTool extends BaseTool {
   private notebookManager: NotebookManager;

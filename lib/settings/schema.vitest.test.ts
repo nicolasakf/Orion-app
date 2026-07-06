@@ -34,9 +34,13 @@ describe("UserSettingsDocumentSchema", () => {
     expect(doc.settings.notebook.output.chartColors).toHaveLength(10);
     expect(doc.settings.chat.interactionModes.map((mode) => mode.id)).toEqual([
       "Agent",
-      "Ask",
+      "Research",
       "Edit",
+      "Ask",
     ]);
+    expect(
+      doc.settings.chat.interactionModes.find((mode) => mode.id === "Research")?.hiddenInSelector
+    ).toBe(true);
   });
 
   it("rejects compaction threshold above 1 on a full document", () => {
@@ -71,8 +75,9 @@ describe("settings migrations", () => {
     expect(migrated.settings.shell.mobileBreakpointPx).toBe(768);
     expect(migrated.settings.chat.interactionModes.map((mode) => mode.id)).toEqual([
       "Agent",
-      "Ask",
+      "Research",
       "Edit",
+      "Ask",
     ]);
   });
 

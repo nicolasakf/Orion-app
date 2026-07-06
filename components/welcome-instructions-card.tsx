@@ -28,6 +28,10 @@ import { cn } from "@/lib/utils";
 import {
   ORION_USER_DOCS_CONNECT_JUPYTER_URL,
 } from "@/lib/constants/user-docs";
+import {
+  CheckmarkedIcon,
+  useCheckmarkedFeedback,
+} from "@/components/common/checkmarked-button";
 
 const JUPYTER_INSTALL_URL =
   "https://jupyter-server.readthedocs.io/en/latest/users/installation.html";
@@ -50,12 +54,12 @@ export function WelcomeInstructionsCard({
   onConnectServer,
 }: WelcomeInstructionsCardProps) {
   const [installExpanded, setInstallExpanded] = useState(false);
-  const [cmdCopied, setCmdCopied] = useState(false);
+  const { checked: cmdCopied, showCheckmark } = useCheckmarkedFeedback();
 
+  /** Copies the Jupyter launch command and shows the shared success feedback. */
   const handleCopyCommand = () => {
     navigator.clipboard.writeText("jupyter server --ServerApp.allow_origin='*'");
-    setCmdCopied(true);
-    setTimeout(() => setCmdCopied(false), 2000);
+    showCheckmark();
   };
 
   return (
@@ -137,11 +141,11 @@ export function WelcomeInstructionsCard({
                             onClick={handleCopyCommand}
                             className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                           >
-                            {cmdCopied ? (
-                              <Check className="h-3 w-3 text-green-500" />
-                            ) : (
-                              <Copy className="h-3 w-3" />
-                            )}
+                            <CheckmarkedIcon
+                              checked={cmdCopied}
+                              icon={<Copy />}
+                              iconClassName="h-3 w-3"
+                            />
                             {cmdCopied ? "Copied" : "Copy"}
                           </button>
                         </li>
