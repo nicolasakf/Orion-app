@@ -59,6 +59,7 @@ export function useTextFileModel({
   const [showErrorDialog, setShowErrorDialog] = useState<boolean>(false);
   const [errorDialogMessage, setErrorDialogMessage] = useState<string>("");
   const isDirtyRef = useRef(false);
+  const dirtyVersionRef = useRef(0);
   const fileContentRef = useRef("");
 
   const pathExtension = filepath
@@ -67,6 +68,7 @@ export function useTextFileModel({
 
   /** Marks the file as dirty and notifies the page once per transition. */
   const markDirty = useCallback(() => {
+    dirtyVersionRef.current += 1;
     if (!isDirtyRef.current) {
       isDirtyRef.current = true;
       onUnsavedChangesChange?.(true);
@@ -228,9 +230,12 @@ export function useTextFileModel({
 
       try {
         const contentToSave = fileContentRef.current;
+        const dirtyVersionToSave = dirtyVersionRef.current;
         if (isUserSettingsEditorPath(filepath)) {
           await saveUserSettingsRawFileToApi(contentToSave);
-          markClean();
+          if (dirtyVersionRef.current === dirtyVersionToSave) {
+            markClean();
+          }
           window.dispatchEvent(new CustomEvent("orion:user-settings-file-changed"));
           console.log("User settings file saved successfully");
           return { status: "saved" };
@@ -251,7 +256,9 @@ export function useTextFileModel({
           });
         }
 
-        markClean();
+        if (dirtyVersionRef.current === dirtyVersionToSave) {
+          markClean();
+        }
         if (isSkillDefinitionPath(filepath)) {
           window.dispatchEvent(
             new CustomEvent("orion:skills-changed", {

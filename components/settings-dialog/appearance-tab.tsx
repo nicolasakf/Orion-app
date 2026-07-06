@@ -27,6 +27,11 @@ const EMPTY_EDITOR_CARD_OPTIONS: Array<{
   { value: "pinned_workspaces", label: "Pinned workspaces" },
 ];
 
+/** Keeps autosave intervals valid while the user edits the milliseconds field. */
+function clampAutosaveIntervalMs(value: number): number {
+  return Math.max(1, Math.floor(value));
+}
+
 /** Appearance tab: theme, editor preferences, and persistent display defaults. */
 export function AppearanceTab() {
   const { effectiveSettings, setUserSettings } = useOrionSettings();
@@ -283,6 +288,53 @@ export function AppearanceTab() {
                     },
                   }))
                 }
+              />
+            </div>
+
+            <div className="corner-squircle flex items-center justify-between rounded-md border p-3 sm:col-span-3">
+              <SettingsInfoLabel
+                htmlFor="editor-autosave"
+                label="Autosave"
+                description="Periodically saves dirty files open in the editor."
+              />
+              <Switch
+                id="editor-autosave"
+                checked={editor.autosaveEnabled}
+                onCheckedChange={(checked) =>
+                  void setUserSettings((current) => ({
+                    ...current,
+                    editor: {
+                      ...current.editor,
+                      autosaveEnabled: checked,
+                    },
+                  }))
+                }
+              />
+            </div>
+
+            <div className="space-y-2 sm:col-span-3">
+              <SettingsInfoLabel
+                htmlFor="editor-autosave-interval-ms"
+                label="Autosave interval"
+                description="How often autosave should save dirty editor files, in milliseconds."
+              />
+              <Input
+                id="editor-autosave-interval-ms"
+                type="number"
+                min={1}
+                step={100}
+                value={editor.autosaveIntervalMs}
+                onChange={(e) => {
+                  const next = Number(e.target.value);
+                  if (!Number.isFinite(next)) return;
+                  void setUserSettings((current) => ({
+                    ...current,
+                    editor: {
+                      ...current.editor,
+                      autosaveIntervalMs: clampAutosaveIntervalMs(next),
+                    },
+                  }));
+                }}
               />
             </div>
           </div>

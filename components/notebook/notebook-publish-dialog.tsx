@@ -2,7 +2,6 @@
 
 import * as React from "react";
 import {
-  Check,
   CloudOff,
   Copy,
   ExternalLink,
@@ -13,6 +12,10 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import {
+  CheckmarkedButton,
+  useCheckmarkedFeedback,
+} from "@/components/common/checkmarked-button";
 import { CloudAuthDialog } from "@/components/cloud/cloud-auth-dialog";
 import {
   AlertDialog,
@@ -86,16 +89,16 @@ export function NotebookPublishDialog({
   const [loading, setLoading] = React.useState(false);
   const [unpublishing, setUnpublishing] = React.useState(false);
   const [confirmUnpublishOpen, setConfirmUnpublishOpen] = React.useState(false);
-  const [copied, setCopied] = React.useState(false);
+  const { checked: copied, resetCheckmark, showCheckmark } = useCheckmarkedFeedback();
 
   React.useEffect(() => {
     if (!open) return;
     setTitle(defaultTitle);
     setResult(null);
-    setCopied(false);
+    resetCheckmark();
     setPassword("");
     setShowPassword(false);
-  }, [defaultTitle, open]);
+  }, [defaultTitle, open, resetCheckmark]);
 
   React.useEffect(() => {
     if (!open || !cloudConfig || !accessToken) return;
@@ -154,8 +157,7 @@ export function NotebookPublishDialog({
   const copyUrl = async () => {
     if (!result?.url) return;
     await navigator.clipboard.writeText(result.url);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
+    showCheckmark();
   };
 
   const handleUnpublish = async () => {
@@ -189,11 +191,11 @@ export function NotebookPublishDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-lg">
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>Publish notebook</DialogTitle>
             <DialogDescription asChild>
-              <div className="space-y-2 text-sm text-muted-foreground">
+              <div className="min-w-0 space-y-2 text-sm text-pretty text-muted-foreground">
                 <p>
                   Create a shareable Orion page. Published notebooks are interactive HTML pages and do not give viewers access to your Python kernel.
                 </p>
@@ -217,7 +219,7 @@ export function NotebookPublishDialog({
             </div>
           ) : null}
 
-          <div className="space-y-4">
+          <div className="min-w-0 space-y-4">
             {published.length > 0 ? (
               <div className="space-y-2">
                 <Label htmlFor="publish-target">Publish target</Label>
@@ -302,28 +304,28 @@ export function NotebookPublishDialog({
               </div>
             </div>
             {result ? (
-              <div className="flex items-center gap-2 rounded-md border bg-muted/30 p-3 text-sm">
-                <div className="flex min-w-0 flex-1 items-center">
-                  <a
-                    href={result.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex min-w-0 max-w-full items-center gap-1 text-primary underline-offset-4 hover:underline"
-                  >
-                    <span className="truncate">{result.url}</span>
-                    <ExternalLink className="h-3.5 w-3.5 shrink-0" />
-                  </a>
-                </div>
-                <Button
+              <div className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/30 p-3 text-sm">
+                <a
+                  href={result.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={result.url}
+                  className="inline-flex min-w-0 items-center gap-1.5 text-primary underline-offset-4 hover:underline"
+                >
+                  <span className="truncate">{result.url}</span>
+                  <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                </a>
+                <CheckmarkedButton
                   type="button"
                   variant="ghost"
                   size="icon"
                   className="h-7 w-7 shrink-0"
                   onClick={copyUrl}
                   aria-label={copied ? "Link copied" : "Copy link"}
-                >
-                  {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-                </Button>
+                  checked={copied}
+                  icon={<Copy />}
+                  iconClassName="h-3.5 w-3.5"
+                />
               </div>
             ) : null}
           </div>

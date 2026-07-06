@@ -19,12 +19,15 @@ import { Editor } from "@/components/editor";
 import { resolveOrionEditorDefinition } from "@/components/editors/editor-definitions";
 import {
   Save,
-  Check,
   Circle,
   MessagesSquare,
   PanelLeft,
   X,
 } from "lucide-react";
+import {
+  CheckmarkedIcon,
+  useCheckmarkedFeedback,
+} from "@/components/common/checkmarked-button";
 import { ToolbarButton } from "@/components/common/toolbar-button";
 import {
   Tooltip,
@@ -598,6 +601,52 @@ export default function Page() {
   // Flag set before an intentional window.location.reload() to skip beforeunload warning
   const intentionalReloadRef = useRef(false);
 
+  useEffect(() => {
+    if (
+      !effectiveSettings.editor.autosaveEnabled ||
+      !currentFile.path ||
+      !hasUnsavedChanges
+    ) {
+      return;
+    }
+
+    let isSaving = false;
+    const autosaveIntervalMs = Math.max(
+      1,
+      Math.floor(effectiveSettings.editor.autosaveIntervalMs),
+    );
+    const saveOpenFile = async () => {
+      if (isSaving) return;
+      isSaving = true;
+      try {
+        const result = await openDocumentSnapshots.saveOpenDocumentIfDirty(
+          currentFile.path,
+          isNotebookFile(currentFile) ? "notebook" : "text",
+        );
+        if (result.status === "error") {
+          console.warn(
+            "Autosave failed:",
+            result.message ?? "Unknown save error.",
+          );
+        }
+      } finally {
+        isSaving = false;
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void saveOpenFile();
+    }, autosaveIntervalMs);
+
+    return () => window.clearInterval(intervalId);
+  }, [
+    currentFile,
+    effectiveSettings.editor.autosaveEnabled,
+    effectiveSettings.editor.autosaveIntervalMs,
+    hasUnsavedChanges,
+    openDocumentSnapshots,
+  ]);
+
   // Warn via native browser dialog when user reloads via any mechanism other
   // than our intercepted keyboard shortcuts (address bar, browser button, etc.)
   useEffect(() => {
@@ -634,7 +683,8 @@ export default function Page() {
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [hasUnsavedChanges]);
 
-  const [isSaved, setIsSaved] = useState<boolean>(false);
+  const { checked: isSaved, showCheckmark: showSavedCheckmark } =
+    useCheckmarkedFeedback();
   const [recentFiles, setRecentFiles] = useState<ActiveFile[]>([]);
   const [open, setOpen] = useState(false);
   const leftPanelRef = useRef<any>(null);
@@ -1158,13 +1208,7 @@ export default function Page() {
     // Dispatch a custom event to be caught by the Editor component
     window.dispatchEvent(new CustomEvent("saveFile"));
 
-    // Show check mark
-    setIsSaved(true);
-
-    // Reset to save icon after 2 seconds
-    setTimeout(() => {
-      setIsSaved(false);
-    }, 1000);
+    showSavedCheckmark();
   };
 
   /**
@@ -2744,24 +2788,11 @@ export default function Page() {
                                     toolTipLabel="Save File"
                                     toolTipShortcut={[[CmdOrCtrl, "S"]]}
                                   >
-                                    <div className="relative w-4 h-4">
-                                      <Save
-                                        className={cn(
-                                          "h-4 w-4 absolute transition-all duration-300",
-                                          isSaved
-                                            ? "opacity-0 scale-0 rotate-45"
-                                            : "opacity-100 scale-100 rotate-0",
-                                        )}
-                                      />
-                                      <Check
-                                        className={cn(
-                                          "h-4 w-4 absolute text-green-500 transition-all duration-300",
-                                          isSaved
-                                            ? "opacity-100 scale-100 rotate-0"
-                                            : "opacity-0 scale-0 rotate-45",
-                                        )}
-                                      />
-                                    </div>
+                                    <CheckmarkedIcon
+                                      checked={isSaved}
+                                      icon={<Save />}
+                                      iconClassName="h-4 w-4"
+                                    />
                                   </ToolbarButton>
                                 </>
                               )}
