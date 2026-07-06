@@ -18,6 +18,11 @@ import {
   resolveOutputForPresentation,
 } from "@/components/notebook/output-presentation";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
+import type {
+  OrionTableCommResponse,
+  OrionTableOutputMetadata,
+  OrionTableRequest,
+} from "@/components/notebook/orion-ui-table/types";
 
 const COLLAPSED_HEIGHT_DEFAULT = 192; // px — matches Tailwind h-48
 const COLLAPSED_HEIGHT_MIN = 64; // px
@@ -268,6 +273,14 @@ interface OutputRendererProps {
     outputId?: string,
   ) => void;
   onOrionUiAction?: (action: unknown) => void;
+  onOrionUiTableRequest?: (
+    request: OrionTableRequest,
+  ) => Promise<OrionTableCommResponse>;
+  onOrionUiTableMetadataChange?: (
+    cellIndex: number,
+    outputIndex: number,
+    metadata: OrionTableOutputMetadata,
+  ) => void;
   isInAppView?: boolean;
   /** Whether this output is collapsed (for text-based outputs) */
   isCollapsed?: boolean;
@@ -292,6 +305,8 @@ export function OutputRenderer({
   onToggleOutputAppView,
   onOrionUiStateChange,
   onOrionUiAction,
+  onOrionUiTableRequest,
+  onOrionUiTableMetadataChange,
   isInAppView,
   isCollapsed,
   onToggleCollapse,
@@ -462,6 +477,8 @@ export function OutputRenderer({
       onToggleOutputAppView,
       onOrionUiStateChange,
       onOrionUiAction,
+      onOrionUiTableRequest,
+      onOrionUiTableMetadataChange,
       isInAppView: !!isInAppView,
       onOpenFullScreen: openFullScreen,
       presentationMenu: sharedPresentationMenu,
@@ -476,6 +493,8 @@ export function OutputRenderer({
       onToggleOutputAppView,
       onOrionUiStateChange,
       onOrionUiAction,
+      onOrionUiTableRequest,
+      onOrionUiTableMetadataChange,
       isInAppView,
       openFullScreen,
       sharedPresentationMenu,

@@ -3,7 +3,12 @@ from types import ModuleType
 from unittest.mock import patch
 
 import orion_ui as ui
-from orion_ui import _runtime
+from orion_ui import _runtime, _table
+
+try:
+    import pandas as pd
+except ImportError:  # pragma: no cover - depends on local test environment.
+    pd = None
 
 
 class PlotlyTemplateRegistry(dict):
@@ -14,6 +19,7 @@ class OrionUiTests(unittest.TestCase):
     def setUp(self):
         _runtime._STATE.clear()
         _runtime._OUTPUT_STATE.clear()
+        _table.clear_registry()
 
     def test_repr_mimebundle_emits_orion_payload_and_fallbacks(self):
         controls = ui.card(
@@ -175,6 +181,96 @@ class OrionUiTests(unittest.TestCase):
         self.assertEqual(cells["height"], 28)
         self.assertEqual(header["font"]["weight"], 600)
         self.assertEqual(cells["font"]["size"], 12)
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_payload_contains_bounded_initial_window(self):
+        df = pd.DataFrame({"status": ["active"] * 120, "score": list(range(120))})
+
+        component = ui.table(df, source="df", page_size=10)
+        payload = component._repr_mimebundle_()[ui.ORION_UI_MIME_TYPE]
+        props = payload["root"]["props"]
+
+        self.assertEqual(payload["root"]["type"], "Table")
+        self.assertEqual(props["source"], "df")
+        self.assertNotIn("title", props)
+        self.assertEqual(props["shape"], [120, 2])
+        self.assertEqual(props["initialWindow"]["totalRows"], 120)
+        self.assertEqual(len(props["initialWindow"]["rows"]), 10)
+        self.assertNotIn("rows", props["columns"][0])
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_backend_filters_sorts_groups_and_generates_expression(self):
+        df = pd.DataFrame(
+            {
+                "status": ["active", "paused", "active", "active"],
+                "score": [2, 4, 1, 9],
+            }
+        )
+        component = ui.table(df, source="df", page_size=2)
+        table_id = component.props["tableId"]
+
+        state = {
+            "filters": [{"column": "status", "operation": "equals", "value": "active"}],
+            "sort": {"column": "score", "direction": "desc"},
+            "groupBy": "status",
+        }
+        window = _table.get_table_window(table_id, state, offset=0, limit=2)
+
+        self.assertEqual(window["totalRows"], 3)
+        self.assertEqual([row["score"] for row in window["rows"]], [9, 2])
+        self.assertEqual(window["groupBy"], "status")
+        self.assertEqual(window["groupCounts"]["active"], 3)
+        self.assertIn("df.query", window["expression"])
+        self.assertIn(".sort_values('score', ascending=False)", window["expression"])
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_column_stats_and_export_are_backend_limited(self):
+        df = pd.DataFrame({"name": ["a", "b", "a"], "score": [1, 2, 3]})
+        component = ui.table(df, source="df", show_index=False)
+        table_id = component.props["tableId"]
+
+        stats = _table.column_stats(table_id, "score")
+        exported = _table.export_csv(table_id, columns=["name"], max_rows=2)
+
+        self.assertEqual(stats["count"], 3)
+        self.assertEqual(stats["sum"], 6.0)
+        self.assertEqual(exported["rowCount"], 2)
+        self.assertTrue(exported["truncated"])
+        self.assertEqual(exported["csv"].splitlines()[0], "name")
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_comm_message_accepts_ipykernel_dict_shape(self):
+        df = pd.DataFrame({"name": ["a", "b"], "score": [1, 2]})
+        component = ui.table(df, source="df", show_index=False)
+        table_id = component.props["tableId"]
+
+        data = _table._comm_message_data(
+            {
+                "content": {
+                    "data": {
+                        "requestId": "request-1",
+                        "action": "fetch",
+                        "tableId": table_id,
+                        "offset": 0,
+                        "limit": 1,
+                    }
+                }
+            }
+        )
+        response = _table._handle_request(data)
+
+        self.assertEqual(data["requestId"], "request-1")
+        self.assertEqual(response["totalRows"], 2)
+        self.assertEqual(len(response["rows"]), 1)
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_requires_source_and_pandas_dataframe(self):
+        df = pd.DataFrame({"a": [1]})
+
+        with self.assertRaises(ValueError):
+            ui.table(df, source="")
+        with self.assertRaises(TypeError):
+            ui.table([{"a": 1}], source="df")
 
 
 if __name__ == "__main__":

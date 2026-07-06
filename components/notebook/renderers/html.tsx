@@ -2,6 +2,7 @@
 
 import type { JSX } from "react";
 import { extractTableFromHTML, isEmptyDataframeHtmlTable } from "@/lib/notebook/table-extractor";
+import { scopeHtmlStyleTags } from "@/lib/notebook/scoped-html-styles";
 import { cn } from "@/lib/utils";
 import type { NotebookMimeRendererProps } from "./types";
 import { toJoinedString } from "./types";
@@ -24,13 +25,14 @@ export function HtmlOutputRenderer({
   actions,
 }: NotebookMimeRendererProps): JSX.Element {
   const html = toJoinedString(value);
+  const safeHtml = scopeHtmlStyleTags(sanitize(html));
   const tableData = extractTableFromHTML(html);
 
   if (tableData.headers.length > 0 && tableData.rows.length > 0) {
     return (
       <div
         className={htmlOutputShellClassName(actions.isFullScreen)}
-        dangerouslySetInnerHTML={{ __html: sanitize(html) }}
+        dangerouslySetInnerHTML={{ __html: safeHtml }}
       />
     );
   }
@@ -49,7 +51,7 @@ export function HtmlOutputRenderer({
   return (
     <div
       className={htmlOutputShellClassName(actions.isFullScreen)}
-      dangerouslySetInnerHTML={{ __html: sanitize(html) }}
+      dangerouslySetInnerHTML={{ __html: safeHtml }}
     />
   );
 }

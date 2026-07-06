@@ -107,8 +107,9 @@ Display:
 - `ui.tooltip(*children, label=None, trigger=None, text=None, content=None, description=None)`
 - `ui.markdown_cell(cell_id=None, text=None)`
 - `ui.output(cell_id, output_index=0)`
+- `ui.table(df, source="df", mode="paginated", page_size=50, show_index=True, max_cell_chars=200)`
 
-All component helpers accept optional `class_name="..."` for semantic hooks inside generated UI. Do not write CSS into notebook metadata. If a notebook needs custom styling, include it in the relevant cell source/output; Orion also exposes JupyterLab-compatible selectors such as `.jp-Notebook`, `.jp-Cell`, `.jp-MarkdownOutput`, `.jp-RenderedHTMLCommon`, `.jp-InputArea-editor`, and `.jp-OutputArea-output` for cell-authored styles.
+All component helpers accept optional `class_name="..."` for semantic hooks inside generated UI. Do not write CSS into notebook metadata. If a notebook needs custom styling, include it in the relevant cell source/output and follow the notebook CSS scoping rule from the system prompt; Orion also exposes JupyterLab-compatible rendered-content selectors such as `.jp-MarkdownOutput`, `.jp-RenderedHTMLCommon`, and `.jp-OutputArea-output` for cell-authored styles.
 
 State:
 
@@ -207,3 +208,5 @@ cd python/orion-ui && python -m pip install -e .
 - The UI uses Orion components for controls and existing plotting libraries for charts.
 - Plotly work calls `ui.theme.plotly()` once per kernel session unless the user explicitly requested different styling.
 - App View metadata references the rendered `orion_ui` output instead of recreating controls directly in metadata.
+- `ui.table()` supports pandas DataFrames in v1. The `source` argument is required so saved views can record readable pandas expressions.
+- Orion table filtering, sorting, grouping, stats, and exports run in the Python kernel through bounded row windows; the frontend must not materialize the full DataFrame.

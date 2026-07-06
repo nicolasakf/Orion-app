@@ -80,6 +80,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { OrionUiTable } from "@/components/notebook/orion-ui-table/orion-ui-table";
+import type {
+  OrionTableCommResponse,
+  OrionTableOutputMetadata,
+  OrionTableRequest,
+} from "@/components/notebook/orion-ui-table/types";
 import type { NotebookAppViewSchemaNode } from "@/lib/notebook/app-view";
 import { cn } from "@/lib/utils";
 
@@ -88,6 +94,11 @@ export type OrionUiLocalValue = string | number | boolean;
 export interface OrionUiRenderCallbacks {
   onStateChange?: (key: string, value: OrionUiLocalValue) => void;
   onAction?: (action: unknown) => void;
+  onTableRequest?: (
+    request: OrionTableRequest,
+  ) => Promise<OrionTableCommResponse>;
+  onTableMetadataChange?: (metadata: OrionTableOutputMetadata) => void;
+  tableMetadata?: OrionTableOutputMetadata | null;
   renderMarkdownReference?: (
     cellId: string | undefined,
     fallbackSource: string | undefined,
@@ -197,6 +208,7 @@ const builtinPrimitiveRenderers: Record<string, PrimitiveRenderer> = {
   RadioGroup: renderRadioGroup,
   Toggle: renderToggle,
   ToggleGroup: renderToggleGroup,
+  Table: renderTable,
   Calendar: renderCalendar,
   DatePicker: renderDatePicker,
   DateRangeSlider: renderDateRangeSlider,
@@ -1123,6 +1135,21 @@ function renderOutput(
         />
       )}
     </div>
+  );
+}
+
+/** Renders a backend-backed pandas DataFrame table primitive. */
+function renderTable(
+  node: NotebookAppViewSchemaNode,
+  context: SchemaRenderContext,
+): React.ReactNode {
+  return (
+    <OrionUiTable
+      node={node}
+      requestTableData={context.callbacks.onTableRequest}
+      tableMetadata={context.callbacks.tableMetadata}
+      onTableMetadataChange={context.callbacks.onTableMetadataChange}
+    />
   );
 }
 

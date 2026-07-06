@@ -48,7 +48,22 @@ model = ui.get("model")
 temperature = ui.get("temperature")
 ```
 
-`class_name` adds semantic CSS hooks for Orion UI in Notebook View and App View. Do not write CSS into notebook metadata; if a notebook needs custom styling, include it in the relevant cell source/output. Orion also exposes JupyterLab-compatible selectors such as `.jp-Notebook`, `.jp-Cell`, `.jp-MarkdownOutput`, `.jp-RenderedHTMLCommon`, `.jp-InputArea-editor`, and `.jp-OutputArea-output` for cell-authored styles. Do not rely on arbitrary Tailwind classes generated at runtime.
+## DataFrame tables
+
+Use `ui.table()` for interactive pandas DataFrame browsing without sending the
+entire DataFrame to the frontend:
+
+```python
+import orion_ui as ui
+
+ui.table(df, source="df", page_size=50)
+```
+
+Table filtering, sorting, grouping, stats, and export requests run in the
+Python kernel. Saved table views are stored on the notebook output metadata as
+structured operations plus a readable pandas expression.
+
+`class_name` adds semantic CSS hooks for Orion UI in Notebook View and App View. Do not write CSS into notebook metadata; if a notebook needs custom styling, include it in the relevant cell source/output and scope selectors to rendered markdown/output areas. Orion also exposes JupyterLab-compatible rendered-content selectors such as `.jp-MarkdownOutput`, `.jp-RenderedHTMLCommon`, and `.jp-OutputArea-output` for cell-authored styles. Do not rely on arbitrary Tailwind classes generated at runtime.
 
 ## Requirements
 

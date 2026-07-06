@@ -5,6 +5,11 @@ import { LayoutTemplate, Sparkles } from "lucide-react";
 
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
+import type {
+  OrionTableCommResponse,
+  OrionTableOutputMetadata,
+  OrionTableRequest,
+} from "@/components/notebook/orion-ui-table/types";
 import { OutputRenderer } from "@/components/notebook/output-renderer";
 import { QueuedOutputSkeleton } from "@/components/notebook/queued-output-skeleton";
 import { Button } from "@/components/ui/button";
@@ -40,6 +45,14 @@ interface NotebookAppViewProps {
     outputId?: string,
   ) => void;
   onOrionUiAction?: (action: unknown) => void;
+  onOrionUiTableRequest?: (
+    request: OrionTableRequest,
+  ) => Promise<OrionTableCommResponse>;
+  onOrionUiTableMetadataChange?: (
+    cellIndex: number,
+    outputIndex: number,
+    metadata: OrionTableOutputMetadata,
+  ) => void;
 }
 
 type NotebookAppViewItem =
@@ -129,6 +142,8 @@ export function NotebookAppView({
   onRemoveAppViewReference,
   onOrionUiStateChange,
   onOrionUiAction,
+  onOrionUiTableRequest,
+  onOrionUiTableMetadataChange,
 }: NotebookAppViewProps): React.JSX.Element {
   const appViewItems = useMemo(
     () => getNotebookAppViewItems(notebook),
@@ -219,6 +234,10 @@ export function NotebookAppView({
                       onOrionUiStateChange?.(key, value, outputId)
                     }
                     onOrionUiAction={onOrionUiAction}
+                    onOrionUiTableRequest={onOrionUiTableRequest}
+                    onOrionUiTableMetadataChange={
+                      onOrionUiTableMetadataChange
+                    }
                   />
                 )}
               </div>

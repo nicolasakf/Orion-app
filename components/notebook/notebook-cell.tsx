@@ -13,6 +13,7 @@ import {
   CellType,
   OutputType,
   type NotebookCellType,
+  type NotebookType,
   CellExecutionStatus,
   type CellExecutionInfo,
 } from "@/lib/types";
@@ -21,6 +22,11 @@ import { MonacoEditor } from "@/components/monaco-editor";
 import { OutputRenderer } from "@/components/notebook/output-renderer";
 import { QueuedOutputSkeleton } from "@/components/notebook/queued-output-skeleton";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
+import type {
+  OrionTableCommResponse,
+  OrionTableOutputMetadata,
+  OrionTableRequest,
+} from "@/components/notebook/orion-ui-table/types";
 import {
   ChevronDown,
   ChevronRight,
@@ -110,6 +116,7 @@ import { getDefaultMimeRegistry } from "@/lib/notebook/mime-registry";
 import {
   isNotebookCellInAppView,
   isNotebookOutputInAppView,
+  setNotebookOutputTableMetadata,
 } from "@/lib/notebook/app-view";
 import { getRelativeTime } from "@/lib/utils";
 
@@ -145,6 +152,9 @@ interface NotebookCellProps {
     outputId?: string,
   ) => void;
   onOrionUiAction?: (action: unknown) => void;
+  onOrionUiTableRequest?: (
+    request: OrionTableRequest,
+  ) => Promise<OrionTableCommResponse>;
   variant?: "default" | "ghost";
   validationIssue?: string;
   /**
@@ -887,6 +897,7 @@ function NotebookCellComponent({
   onMentionCell,
   onOrionUiStateChange,
   onOrionUiAction,
+  onOrionUiTableRequest,
   variant,
   validationIssue,
   presentationHideAllCellInputs,
@@ -2002,6 +2013,37 @@ function NotebookCellComponent({
     [cellIndex, isOutputCollapsedAtIndex, onCellAction],
   );
 
+  /** Persists Orion UI table view metadata on the owning output. */
+  const handleOrionUiTableMetadataChange = useCallback(
+    (
+      _metadataCellIndex: number,
+      outputIdx: number,
+      tableMetadata: OrionTableOutputMetadata,
+    ) => {
+      if (!onUpdateCellData || !cell.outputs?.[outputIdx]) {
+        return;
+      }
+
+      const notebook: NotebookType = {
+        cells: [cell],
+        metadata: {},
+        nbformat: 4,
+        nbformat_minor: 5,
+      };
+      const updatedNotebook = setNotebookOutputTableMetadata(
+        notebook,
+        0,
+        outputIdx,
+        tableMetadata as unknown as Record<string, unknown>,
+      );
+      const updatedCell = updatedNotebook.cells[0];
+      if (updatedCell) {
+        onUpdateCellData(cellIndex, updatedCell);
+      }
+    },
+    [cell, cellIndex, onUpdateCellData],
+  );
+
   /** Shows the output toolbar for the hovered output, cancelling any pending hide */
   const handleOutputMouseEnter = useCallback((idx: number) => {
     if (hideToolbarTimeoutRef.current) {
@@ -2516,6 +2558,10 @@ function NotebookCellComponent({
                                   }
                                   onOrionUiStateChange={onOrionUiStateChange}
                                   onOrionUiAction={onOrionUiAction}
+                                  onOrionUiTableRequest={onOrionUiTableRequest}
+                                  onOrionUiTableMetadataChange={
+                                    handleOrionUiTableMetadataChange
+                                  }
                                   isInAppView={
                                     isNotebookOutputInAppView(cell, idx)
                                   }
@@ -2574,6 +2620,8 @@ export const NotebookCell = memo(NotebookCellComponent, (prev, next) => {
     prev.onOrionUiStateChange === next.onOrionUiStateChange;
   const sameOrionUiActionHandler =
     prev.onOrionUiAction === next.onOrionUiAction;
+  const sameOrionUiTableRequestHandler =
+    prev.onOrionUiTableRequest === next.onOrionUiTableRequest;
   const samePresentationHide =
     prev.presentationHideAllCellInputs === next.presentationHideAllCellInputs;
   return (
@@ -2587,6 +2635,7 @@ export const NotebookCell = memo(NotebookCellComponent, (prev, next) => {
     sameMentionHandler &&
     sameOrionUiStateHandler &&
     sameOrionUiActionHandler &&
+    sameOrionUiTableRequestHandler &&
     samePresentationHide
   );
 });

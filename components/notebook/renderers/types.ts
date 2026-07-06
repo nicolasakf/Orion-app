@@ -1,6 +1,11 @@
 import type ansiToHtml from "ansi-to-html";
 import type { NotebookOutputType } from "@/lib/types";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
+import type {
+  OrionTableCommResponse,
+  OrionTableOutputMetadata,
+  OrionTableRequest,
+} from "@/components/notebook/orion-ui-table/types";
 
 /**
  * “Presentation” submenu: switch which MIME in the output bundle is shown
@@ -27,6 +32,14 @@ export interface NotebookOutputActionHandlers {
     outputId?: string,
   ) => void;
   onOrionUiAction?: (action: unknown) => void;
+  onOrionUiTableRequest?: (
+    request: OrionTableRequest,
+  ) => Promise<OrionTableCommResponse>;
+  onOrionUiTableMetadataChange?: (
+    cellIndex: number,
+    outputIndex: number,
+    metadata: OrionTableOutputMetadata,
+  ) => void;
   isInAppView?: boolean;
   /** Opens the output in a full-screen dialog (provided by OutputRenderer). */
   onOpenFullScreen?: () => void;

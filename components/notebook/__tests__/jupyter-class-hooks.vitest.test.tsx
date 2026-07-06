@@ -42,6 +42,49 @@ describe("Jupyter-compatible notebook class hooks", () => {
       .toBeInTheDocument();
   });
 
+  it("scopes HTML output style tags to rendered content only", () => {
+    const { container } = render(
+      <HtmlOutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: {
+            "text/html": [
+              "<style>body, .cm-editor, .jp-InputArea-editor, div { font-family: 'Times New Roman'; }</style><p>Styled</p>",
+            ],
+          },
+          metadata: {},
+        }}
+        mimeType="text/html"
+        value={[
+          "<style>body, .cm-editor, .jp-InputArea-editor, div { font-family: 'Times New Roman'; }</style><p>Styled</p>",
+        ]}
+        theme="light"
+        trusted
+        ansiConverter={{ toHtml: (value: string) => value } as never}
+        sanitize={(html) => html}
+        actions={{ cellIndex: 0, outputIndex: 0 }}
+      />,
+    );
+
+    const style = container.querySelector("style");
+    expect(style).toHaveAttribute(
+      "data-orion-style-scoped",
+      "notebook-editor",
+    );
+    expect(style?.textContent).toContain(
+      ".notebook-editor-content-area .jp-RenderedHTMLCommon,",
+    );
+    expect(style?.textContent).toContain(
+      ".notebook-editor-content-area .jp-RenderedHTMLCommon div",
+    );
+    expect(style?.textContent).toContain(
+      ".notebook-editor-content-area .jp-OutputArea-output div",
+    );
+    expect(style?.textContent).not.toContain(".cm-editor");
+    expect(style?.textContent).not.toContain(".jp-InputArea-editor");
+    expect(style?.textContent).not.toContain("body,");
+  });
+
   it("marks plain text outputs with the JupyterLab output area class", () => {
     render(
       <PlainTextOutputRenderer

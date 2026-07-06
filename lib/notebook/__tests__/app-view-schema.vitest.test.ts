@@ -5,7 +5,9 @@ import {
   isNotebookAppViewReferenceInNotebook,
   isNotebookCellInAppView,
   isNotebookOutputInAppView,
+  ORION_UI_MIME_TYPE,
   removeNotebookAppViewReference,
+  setNotebookOutputTableMetadata,
 } from "@/lib/notebook/app-view";
 import { CellType, OutputType, type NotebookType } from "@/lib/types";
 
@@ -161,5 +163,36 @@ describe("cell-level App View inclusion metadata", () => {
 
     expect(removed.cells[0]!.metadata?.orion?.app).toBeUndefined();
     expect(removed.cells[0]!.metadata?.orion?.id).toBe("intro");
+  });
+
+  it("writes output table metadata without removing hidden, collapsed, or App View metadata", () => {
+    const notebook = addNotebookAppViewReference(makeNotebook(), {
+      kind: "output",
+      cellIndex: 1,
+      outputIndex: 0,
+    });
+    notebook.cells[1]!.outputs![0]!.metadata = {
+      orion: {
+        hidden: true,
+        isCollapsed: true,
+        table: {
+          version: 1,
+          views: [{ id: "legacy", name: "Legacy", expression: "df" }],
+        },
+      },
+    };
+
+    const updated = setNotebookOutputTableMetadata(notebook, 1, 0, {
+      version: 1,
+      views: [{ id: "view-1", name: "Sorted", expression: "df.sort_values('A')" }],
+    });
+
+    expect(updated.cells[1]!.metadata?.orion?.app?.outputs?.["0"]?.enabled).toBe(true);
+    expect(updated.cells[1]!.outputs![0]!.metadata?.orion?.hidden).toBe(true);
+    expect(updated.cells[1]!.outputs![0]!.metadata?.orion?.isCollapsed).toBe(true);
+    expect(updated.cells[1]!.outputs![0]!.metadata?.orion?.table).toBeUndefined();
+    expect(
+      updated.cells[1]!.outputs![0]!.metadata?.[ORION_UI_MIME_TYPE]?.table?.views?.[0]?.name,
+    ).toBe("Sorted");
   });
 });

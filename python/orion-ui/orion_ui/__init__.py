@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
-from . import _runtime, theme
+from . import _runtime, _table as _table_runtime, theme
 
 ORION_UI_MIME_TYPE = "application/vnd.orion.ui+json"
 StateValue = Union[str, int, float, bool]
@@ -36,6 +36,7 @@ _COMPONENT_TYPES = {
     "RadioGroup",
     "Toggle",
     "ToggleGroup",
+    "Table",
     "Calendar",
     "DatePicker",
     "DateRangeSlider",
@@ -446,6 +447,62 @@ def tabs(
         defaultValue=default_value,
         class_name=class_name,
     )
+
+
+def table(
+    dataframe: Any,
+    *,
+    source: str,
+    mode: str = "paginated",
+    page_size: int = 50,
+    show_index: bool = True,
+    max_cell_chars: int = 200,
+    class_name: Optional[str] = None,
+) -> Component:
+    """Create an interactive backend-backed table for a pandas DataFrame.
+
+    Parameters
+    ----------
+    dataframe
+        pandas ``DataFrame`` to display. The full DataFrame stays in Python and
+        Orion receives only bounded row windows.
+    source : str
+        Python expression that recreates or references the DataFrame, such as
+        ``"df"``. Saved views use this to record readable pandas expressions.
+    mode : str, optional
+        Initial loading mode. One of ``"paginated"`` or ``"virtual"``. Default
+        is ``"paginated"``.
+    page_size : int, optional
+        Number of rows to fetch per page/window. Capped by Orion for safety.
+        Default is ``50``.
+    show_index : bool, optional
+        Whether to include the DataFrame index as the first visible column.
+        Default is ``True``.
+    max_cell_chars : int, optional
+        Maximum characters serialized for one non-scalar cell. Default is
+        ``200``.
+    class_name : str or None, optional
+        Semantic CSS hook merged at render time. Default is ``None``.
+
+    Returns
+    -------
+    Component
+        A ``Table`` component node backed by Python-side pandas operations.
+    """
+    table_id = f"orion-table-{uuid.uuid4().hex}"
+    registration = _table_runtime.register_table(
+        dataframe,
+        table_id=table_id,
+        source=source,
+        show_index=show_index,
+        max_cell_chars=max_cell_chars,
+    )
+    payload = _table_runtime.table_payload(
+        registration,
+        mode=mode,
+        page_size=page_size,
+    )
+    return _component("Table", (), **payload, class_name=class_name)
 
 
 def button(
@@ -1875,6 +1932,14 @@ def _render_static_html(component: Component) -> str:
     if component.type in {"Stack", "Page", "Section", "Grid", "Tabs", "Accordion", "Carousel"}:
         header = f"<strong>{title}</strong>" if title else ""
         return f"<div style='display:flex;flex-direction:column;gap:8px'>{header}{children}</div>"
+    if component.type == "Table":
+        source = html.escape(str(component.props.get("source", "DataFrame")))
+        shape = component.props.get("shape")
+        shape_text = ""
+        if isinstance(shape, list) and len(shape) == 2:
+            shape_text = f" ({html.escape(str(shape[0]))} rows x {html.escape(str(shape[1]))} columns)"
+        header = f"<strong>{title}</strong><br />" if title else ""
+        return f"{shell_start}{header}Orion table: <code>{source}</code>{shape_text}</div>"
     if component.type == "Button":
         return f"<button type='button'>{html.escape(str(component.props.get('label', 'Button')))}</button>"
     if component.type in {
@@ -1962,6 +2027,7 @@ __all__ = [
     "stack",
     "state",
     "switch",
+    "table",
     "tabs",
     "textarea",
     "theme",

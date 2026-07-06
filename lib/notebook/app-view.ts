@@ -22,6 +22,7 @@ export const BUILTIN_APP_VIEW_PRIMITIVES = [
   "RadioGroup",
   "Toggle",
   "ToggleGroup",
+  "Table",
   "Calendar",
   "DatePicker",
   "DateRangeSlider",
@@ -311,6 +312,48 @@ export function removeNotebookAppViewReference(
 
     return nextApp;
   });
+}
+
+/** Writes table view metadata onto one output while preserving sibling output metadata. */
+export function setNotebookOutputTableMetadata(
+  notebook: NotebookType,
+  cellIndex: number,
+  outputIndex: number,
+  tableMetadata: Record<string, unknown>,
+): NotebookType {
+  const cell = notebook.cells[cellIndex];
+  const output = cell?.outputs?.[outputIndex];
+  if (!cell || !output) {
+    return notebook;
+  }
+
+  const cells = notebook.cells.slice();
+  const outputs = (cell.outputs ?? []).slice();
+  const metadata = isRecord(output.metadata) ? { ...output.metadata } : {};
+  const orion = isRecord(metadata.orion) ? { ...metadata.orion } : {};
+  delete orion.table;
+  const orionUi = isRecord(metadata[ORION_UI_MIME_TYPE])
+    ? { ...metadata[ORION_UI_MIME_TYPE] }
+    : {};
+  const nextMetadata: Record<string, unknown> = {
+    ...metadata,
+    [ORION_UI_MIME_TYPE]: {
+      ...orionUi,
+      table: tableMetadata,
+    },
+  };
+  if (isEmptyRecord(orion)) {
+    delete nextMetadata.orion;
+  } else {
+    nextMetadata.orion = orion;
+  }
+
+  outputs[outputIndex] = {
+    ...output,
+    metadata: nextMetadata,
+  };
+  cells[cellIndex] = { ...cell, outputs };
+  return { ...notebook, cells };
 }
 
 /** Parses an Orion UI MIME payload into the shared primitive tree shape. */

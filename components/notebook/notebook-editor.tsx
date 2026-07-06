@@ -52,6 +52,13 @@ import {
 import { parseNotebook } from "@/lib/notebook/notebook-parser";
 import { NotebookCell } from "@/components/notebook/notebook-cell";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
+import {
+  ORION_TABLE_COMM_TARGET,
+  OrionTableCommEnvelopeSchema,
+  type OrionTableCommResponse,
+  type OrionTableOutputMetadata,
+  type OrionTableRequest,
+} from "@/components/notebook/orion-ui-table/types";
 import { NotebookAppView } from "@/components/notebook/notebook-app-view";
 import { NotebookPublishDialog } from "@/components/notebook/notebook-publish-dialog";
 import type {
@@ -106,6 +113,7 @@ import {
   isNotebookAppViewReferenceInNotebook,
   NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
   removeNotebookAppViewReference,
+  setNotebookOutputTableMetadata,
   type NotebookAppViewReference,
 } from "@/lib/notebook/app-view";
 import {
@@ -593,9 +601,11 @@ export function NotebookEditor({
 
   // Track whether there are unsaved changes so we can notify the parent once per transition
   const isUnsavedRef = useRef(false);
+  const dirtyVersionRef = useRef(0);
 
   /** Marks the notebook as having unsaved changes and notifies the parent (once per transition). */
   const markDirty = useCallback(() => {
+    dirtyVersionRef.current += 1;
     if (!isUnsavedRef.current) {
       isUnsavedRef.current = true;
       onUnsavedChangesChange?.(true);
@@ -1137,6 +1147,7 @@ export function NotebookEditor({
       }
 
       try {
+        const dirtyVersionToSave = dirtyVersionRef.current;
         capturePendingCellSources();
         const notebookToSave = applyPendingChanges(currentNotebook);
 
@@ -1156,14 +1167,16 @@ export function NotebookEditor({
           );
         }
 
-        // Keep local notebook state aligned with what was persisted.
-        // This prevents a later "clean" save (e.g. on file switch) from writing an older snapshot.
-        notebookRef.current = notebookToSave;
-        setNotebook(notebookToSave);
+        if (dirtyVersionRef.current === dirtyVersionToSave) {
+          // Keep local notebook state aligned with what was persisted.
+          // This prevents a later "clean" save (e.g. on file switch) from writing an older snapshot.
+          notebookRef.current = notebookToSave;
+          setNotebook(notebookToSave);
 
-        pendingCellChangesRef.current.clear();
-        modifiedCellsRef.current.clear();
-        markClean();
+          pendingCellChangesRef.current.clear();
+          modifiedCellsRef.current.clear();
+          markClean();
+        }
 
         console.log("Notebook saved successfully");
         return { status: "saved" };
@@ -2291,6 +2304,138 @@ export function NotebookEditor({
       }
     },
     [parentKernelService],
+  );
+
+  /** Ensures the Python table comm target exists before sending table requests. */
+  const ensureOrionUiTableBackend = useCallback(async (): Promise<void> => {
+    if (!parentKernelService || !parentKernelService.isReady()) {
+      throw new Error("No active kernel is available for table operations.");
+    }
+
+    const kernel = parentKernelService.getKernelConnection();
+    if (!kernel) {
+      throw new Error("No active kernel connection is available.");
+    }
+
+    const code = [
+      "import orion_ui as _orion_ui",
+      "if not hasattr(_orion_ui, '_table_runtime'):",
+      "    raise RuntimeError('The active orion_ui package does not include the table backend. Restart the kernel after updating Orion.')",
+      "_orion_ui._table_runtime.ensure_comm_target()",
+    ].join("\n");
+
+    const future = kernel.requestExecute({
+      code,
+      silent: true,
+      store_history: false,
+    });
+    const reply = await future.done;
+    if (reply.content.status !== "ok") {
+      const content = reply.content as { evalue?: string };
+      throw new Error(content.evalue ?? "Failed to prepare the Orion table backend.");
+    }
+  }, [parentKernelService]);
+
+  /**
+   * Sends one Orion UI table operation to the Python table runtime through a
+   * short-lived Jupyter comm and returns the validated result body.
+   */
+  const handleOrionUiTableRequest = useCallback(
+    async (request: OrionTableRequest): Promise<OrionTableCommResponse> => {
+      if (!parentKernelService || !parentKernelService.isReady()) {
+        throw new Error("No active kernel is available for table operations.");
+      }
+
+      await ensureOrionUiTableBackend();
+
+      const kernel = parentKernelService.getKernelConnection();
+      if (!kernel) {
+        throw new Error("No active kernel connection is available.");
+      }
+
+      const requestId = `orion-table-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}`;
+      const comm = kernel.createComm(ORION_TABLE_COMM_TARGET);
+
+      return await new Promise<OrionTableCommResponse>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          try {
+            comm.close();
+          } catch {
+            // The comm may already be closed by Jupyter.
+          }
+          reject(new Error("Timed out waiting for the Orion table backend."));
+        }, 15_000);
+
+        comm.onMsg = (msg) => {
+          const parsed = OrionTableCommEnvelopeSchema.safeParse(
+            msg.content.data,
+          );
+          if (!parsed.success || parsed.data.requestId !== requestId) {
+            return;
+          }
+
+          clearTimeout(timeout);
+          try {
+            comm.close();
+          } catch {
+            // The comm may already be closed by Jupyter.
+          }
+
+          if (!parsed.data.ok) {
+            reject(new Error(parsed.data.error ?? "Table operation failed."));
+            return;
+          }
+
+          resolve(parsed.data.result);
+        };
+
+        comm.open().done
+          .then(() => {
+            const payload = JSON.parse(
+              JSON.stringify({ ...request, requestId }),
+            ) as Parameters<typeof comm.send>[0];
+            comm.send(payload);
+          })
+          .catch((error: unknown) => {
+            clearTimeout(timeout);
+            reject(
+              error instanceof Error
+                ? error
+                : new Error("Failed to open Orion table comm."),
+            );
+          });
+      });
+    },
+    [ensureOrionUiTableBackend, parentKernelService],
+  );
+
+  /** Persists Orion UI table metadata for an output rendered outside NotebookCell. */
+  const handleOrionUiTableMetadataChange = useCallback(
+    (
+      cellIndex: number,
+      outputIndex: number,
+      tableMetadata: OrionTableOutputMetadata,
+    ) => {
+      setNotebook((prevNotebook) => {
+        if (!prevNotebook) return null;
+        return setNotebookOutputTableMetadata(
+          prevNotebook,
+          cellIndex,
+          outputIndex,
+          tableMetadata as unknown as Record<string, unknown>,
+        );
+      });
+
+      const cellId = cellIdForIndex(cellIndex);
+      const source = notebookRef.current?.cells[cellIndex]?.source.join("") ?? "";
+      if (cellId) {
+        pendingCellChangesRef.current.set(cellId, source);
+      }
+      markDirty();
+    },
+    [cellIdForIndex, markDirty],
   );
 
   /**
@@ -3818,6 +3963,10 @@ export function NotebookEditor({
                   onRemoveAppViewReference={handleRemoveAppViewReference}
                   onOrionUiStateChange={handleOrionUiStateChange}
                   onOrionUiAction={handleOrionUiAction}
+                  onOrionUiTableRequest={handleOrionUiTableRequest}
+                  onOrionUiTableMetadataChange={
+                    handleOrionUiTableMetadataChange
+                  }
                 />
               </div>
               <div
@@ -4055,6 +4204,7 @@ export function NotebookEditor({
                               onMentionCell={handleMentionCell}
                               onOrionUiStateChange={handleOrionUiStateChange}
                               onOrionUiAction={handleOrionUiAction}
+                              onOrionUiTableRequest={handleOrionUiTableRequest}
                               validationIssue={subagentValidation.cellIssues.get(
                                 index,
                               )}
