@@ -4,6 +4,26 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.11.3] - 2026-07-06
+
+### Added
+
+- Agent: Research mode (beta) replaces the deep EDA controller with notebook-native investigation sessions, step budgets, and visual evidence handling
+- Editor: autosave toggle and interval controls in Appearance settings, with transient save feedback
+- Notebook: Orion UI table (`ui.table()`) for large DataFrames with paginated and virtual modes, filter, sort, and export
+- Publish: optional password when publishing notebooks to Orion Cloud
+
+### Changed
+
+- Agent: orion-settings skill now covers settings backup and recovery from `~/.orion/settings-backup`
+
+### Fixed
+
+- Cloud: reject oversized notebook publish payloads with a clear error before hitting the API limit
+- Notebook: scope global `<style>` tags in HTML outputs to avoid leaking CSS into the notebook
+
+[0.11.3]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.11.3
+
 ## [0.11.2] - 2026-06-29
 
 ### Changed

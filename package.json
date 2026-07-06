@@ -1,6 +1,6 @@
 {
   "name": "orion-notebook",
-  "version": "0.11.2",
+  "version": "0.11.3",
   "description": "Local Orion CLI launcher for notebooks and Jupyter",
   "homepage": "https://github.com/nicolasakf/Orion-app",
   "repository": {
