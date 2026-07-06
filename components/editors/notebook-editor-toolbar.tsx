@@ -283,7 +283,7 @@ export function NotebookEditorToolbar({
       </ToolbarButton>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <ToolbarButton toolTipLabel="Export Notebook">
+          <ToolbarButton toolTipLabel="Export notebook">
             <Download className="h-4 w-4" />
           </ToolbarButton>
         </DropdownMenuTrigger>
@@ -303,7 +303,7 @@ export function NotebookEditorToolbar({
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
-      <ToolbarButton onClick={dispatchNotebookPublish} toolTipLabel="Publish to Orion Cloud">
+      <ToolbarButton onClick={dispatchNotebookPublish} toolTipLabel="Publish notebook">
         <UploadCloud className="h-4 w-4" />
       </ToolbarButton>
       <NotebookViewToggle />

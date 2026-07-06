@@ -41,6 +41,7 @@ Partial JSON is merged with built-in defaults on load. Workspace overrides may b
 5. For user settings, write `~/.orion/settings.json` only when filesystem access to the Orion host is available.
 6. For workspace settings, write `<workspace>/.orion/settings.json` as a workspace override file. Prefer the `{ version, overrides }` shape for workspace files.
 7. Never store secrets.
+8. After successfully changing any settings file, call `reload_page` when that tool is available so the running Orion UI picks up the new settings.
 
 ## User settings backup and recovery
 
@@ -104,7 +105,7 @@ latest="$(ls -t "$ORION_HOME/settings-backup"/settings-*.json 2>/dev/null | head
 test -n "$latest" && cp "$latest" "$ORION_HOME/settings.json"
 ```
 
-6. Tell the user to **reload Orion** (refresh the app window) so the running UI picks up the restored file. Filesystem-only restores do not notify the live session automatically.
+6. Call `reload_page` when that tool is available; otherwise tell the user to **reload Orion** (refresh the app window) so the running UI picks up the restored file. Filesystem-only restores do not notify the live session automatically.
 
 7. If the restored file fails to load, pick an older backup or fix JSON syntax before retrying.
 
@@ -135,6 +136,7 @@ Workspace files may also use `{ "version": 1, "settings": { ... } }`; Orion trea
 ## Default user settings document
 
 Copy this structure for a full user file. Omitted keys are backfilled from these defaults on load.
+For `chat.interactionModes`, `[]` is accepted in authored JSON and is normalized to Orion's built-in modes on load.
 
 ```json
 {
@@ -145,8 +147,11 @@ Copy this structure for a full user file. Omitted keys are backfilled from these
       "titleGenerationModelId": "gemini-3.1-flash-lite",
       "toolApprovalMode": "always_ask",
       "pinnedModelIds": [],
+      "modelLabels": {},
       "fontSize": 12,
-      "communicationStyle": "default"
+      "communicationStyle": "default",
+      "customCommunicationStyle": "",
+      "interactionModes": []
     },
     "fileTree": { "fontSize": 12 },
     "editor": {
@@ -154,7 +159,15 @@ Copy this structure for a full user file. Omitted keys are backfilled from these
       "wordWrap": "off",
       "minimapEnabled": false,
       "tabSize": 2,
-      "insertSpaces": true
+      "insertSpaces": true,
+      "autosaveEnabled": false,
+      "autosaveIntervalMs": 1000,
+      "unopenableFileAction": "mention_in_chat",
+      "emptyEditor": {
+        "leftCard": "recent_files",
+        "rightCard": "pinned_files",
+        "maxItems": 5
+      }
     },
     "notebook": {
       "scrollbarVisible": true,
@@ -173,7 +186,7 @@ Copy this structure for a full user file. Omitted keys are backfilled from these
       "export": { "sansFontFamily": "'Saira', sans-serif" },
       "editor": { "doublePressTimeoutMs": 400 }
     },
-    "workspace": { "pinnedDirectoryPaths": [] },
+    "workspace": { "pinnedDirectoryPaths": [], "pinnedFilePaths": [] },
     "agent": {
       "context": {
         "compactionAutoThreshold": 0.92,
@@ -248,7 +261,7 @@ Copy this structure for a full user file. Omitted keys are backfilled from these
       "minRefreshSpinMs": 500,
       "toastLimit": 1
     },
-    "providers": { "credentials": {} }
+    "providers": { "credentials": {}, "addedProviderIds": [] }
   }
 }
 ```
@@ -270,8 +283,26 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | `titleGenerationModelId` | string | Non-empty model ID from Orion catalog | `gemini-3.1-flash-lite` | Model used for short chat title generation. |
 | `toolApprovalMode` | string | `always_ask`, `auto_run` (aliases like `Always Ask` normalized on load) | `always_ask` | Whether destructive tools require approval before run. |
 | `pinnedModelIds` | string[] | Model IDs; order preserved | `[]` | Models pinned to top of model selector. |
+| `modelLabels` | object | Map of `providerId/modelId` → display label | `{}` | User-defined labels for model picker and cost display. |
 | `fontSize` | integer | 10–20 (px) | `12` | Chat message stream and composer font size. |
 | `communicationStyle` | string | `default`, `narrative`, `friendly`, `pragmatic` | `default` | Agent tone preset in system prompt. `default` = minimal tool narration; `narrative` = step-by-step; `friendly` = warm; `pragmatic` = minimal prose. |
+| `customCommunicationStyle` | string | Any string | `""` | Optional custom communication instructions. When non-empty, overrides `communicationStyle`. |
+| `interactionModes` | object[] | Interaction mode objects (see below) | Built-in `Agent`, `Research`, `Edit`, `Ask` modes | Configurable built-in and custom chat modes shown in Settings → Interaction Modes. Missing or empty built-ins are repaired on load. |
+
+#### `chat.interactionModes[]`
+
+| Field | Type | Allowed values | Default | Description |
+| --- | --- | --- | --- | --- |
+| `id` | string | Non-empty; custom IDs must not duplicate built-ins | Built-in mode ID | Stable mode identifier. |
+| `label` | string | Non-empty | Built-in mode label | Display name in settings and selector. |
+| `description` | string | Any string | Built-in description or `""` | Description shown in settings. |
+| `baseMode` | string | `Agent`, `Research`, `Edit`, `Ask` | Same as built-in mode | Base behavior to inherit for prompts and defaults. |
+| `toolNames` | string[] | Orion tool names | Built-in tool list | Tools enabled for the mode. Invalid names are removed during normalization. |
+| `customSystemPrompt` | string | Any string | `""` | Mode-specific custom system prompt text. |
+| `builtIn` | boolean | `true`, `false` | `true` for built-ins, `false` for custom modes | Whether this is a protected built-in mode. |
+| `bashPolicy` | string | `read_only`, `full` | `full` except built-in `Ask` = `read_only` | Bash capability policy for the mode. |
+| `hiddenInSelector` | boolean | `true`, `false` | `false` except built-in `Research` = `true` | Whether the mode is editable in settings but hidden from the chat selector. |
+| `beta` | boolean | `true`, `false` | `false` except built-in `Research` = `true` | Marks experimental built-in modes in settings. |
 
 ### `fileTree`
 
@@ -288,6 +319,18 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | `minimapEnabled` | boolean | `true`, `false` | `false` | Show editor minimap. |
 | `tabSize` | integer | 1–8 | `2` | Tab width in spaces. |
 | `insertSpaces` | boolean | `true`, `false` | `true` | Use spaces instead of tab characters. |
+| `autosaveEnabled` | boolean | `true`, `false` | `false` | Periodically save dirty editor files. |
+| `autosaveIntervalMs` | integer | > 0 (ms) | `1000` | Autosave interval for dirty editor files. |
+| `unopenableFileAction` | string | `mention_in_chat`, `open_externally` | `mention_in_chat` | Action when a selected file cannot be opened inside Orion. |
+| `emptyEditor` | object | Empty editor card settings (see below) | See default JSON | Left/right shortcut card contents shown when no editor file is open. |
+
+#### `editor.emptyEditor`
+
+| Field | Type | Allowed values | Default | Description |
+| --- | --- | --- | --- | --- |
+| `leftCard` | string | `recent_files`, `pinned_files`, `pinned_workspaces` | `recent_files` | Content shown in the left empty-editor shortcut card. |
+| `rightCard` | string | `recent_files`, `pinned_files`, `pinned_workspaces` | `pinned_files` | Content shown in the right empty-editor shortcut card. |
+| `maxItems` | integer | 1–20 | `5` | Max rows shown in each empty-editor card. |
 
 ### `notebook`
 
@@ -327,6 +370,7 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | Field | Type | Allowed values | Default | Description |
 | --- | --- | --- | --- | --- |
 | `pinnedDirectoryPaths` | string[] | Non-empty Jupyter-relative paths; max **50** entries | `[]` | Directories pinned in workspace picker (order preserved). Do not pin server root `""`. |
+| `pinnedFilePaths` | string[] | Non-empty Jupyter-relative paths; max **50** entries | `[]` | Files pinned in the recent-files picker and file tree (order preserved). Do not pin server root `""`. |
 
 ### `agent.context`
 
@@ -441,6 +485,31 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | Field | Type | Allowed values | Default | Description |
 | --- | --- | --- | --- | --- |
 | `credentials` | object | Map of provider ID → credential summary | `{}` | **Do not write secrets to settings JSON.** Runtime secrets live in `~/.orion/credentials.json`; UI state may contain only safe summaries such as configured type, local endpoint base URL/model IDs, OAuth expiry, and account ID. |
+| `addedProviderIds` | string[] | Provider IDs | `[]` | Non-secret provider IDs explicitly added in the Providers settings tab. |
+
+#### `providers.credentials[providerId]`
+
+Provider credential entries are client-safe summaries only. Never place raw API keys, OAuth tokens, bearer tokens, or Jupyter tokens here.
+
+| Field | Type | Allowed values | Default | Description |
+| --- | --- | --- | --- | --- |
+| `type` | string | `api_key`, `chatgpt_oauth`, `local_endpoint` | Required | Credential summary kind. |
+| `configured` | boolean | `true`, `false` | `true` for `api_key` and `chatgpt_oauth` | Whether a server-side credential is configured. |
+| `baseUrl` | string | URL/string accepted by provider flow | Required for `local_endpoint`; optional for `api_key` | OpenAI-compatible endpoint URL for dynamic or local providers. |
+| `expiresAt` | number | Epoch milliseconds | Required for `chatgpt_oauth` | Access token expiry timestamp summary. |
+| `accountId` | string | Any string | Optional | ChatGPT account ID extracted from OAuth identity data. |
+| `modelId` | string | Non-empty | Required for `local_endpoint` | Default runtime model ID for a local endpoint. |
+| `label` | string | Any string | Optional | User-facing label for a local endpoint model. |
+| `models` | object[] | Local endpoint model summaries | Optional | Runtime models enabled for a local endpoint. |
+| `hasApiKey` | boolean | `true`, `false` | `false` for `local_endpoint` | Whether a local bearer token exists server-side; does not contain the token. |
+
+#### `providers.credentials[providerId].models[]`
+
+| Field | Type | Allowed values | Default | Description |
+| --- | --- | --- | --- | --- |
+| `modelId` | string | Non-empty | Required | Runtime-specific model ID returned by the local endpoint. |
+| `label` | string | Any string | Optional | User-facing model label. |
+| `enabled` | boolean | `true`, `false` | Optional | Whether the runtime model appears in model pickers. |
 
 ## Common examples
 

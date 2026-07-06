@@ -41,15 +41,16 @@ Legacy note:
 
 Unsupported note:
 
-- `metadata.orion.css` and `metadata.orion.appView.css` are not supported. If notebook content needs custom styling, put that styling in the cell source/output itself rather than notebook metadata.
+- `metadata.orion.css` and `metadata.orion.appView.css` are not supported. If notebook content needs custom styling, put that styling in the cell source/output itself rather than notebook metadata, and scope selectors to the notebook editor area.
 
 Notebook View also exposes JupyterLab-compatible class hooks for portable styling:
 
 - `.jp-Notebook`: rendered notebook content root
 - `.jp-Cell`: rendered notebook cell wrapper
 - `.jp-MarkdownOutput` and `.jp-RenderedHTMLCommon`: rendered markdown
-- `.jp-InputArea-editor`: code or markdown editor/input area
 - `.jp-OutputArea-output`: rendered output wrapper
+
+Do not style code or markdown input editors (`.cm-editor`, `.jp-InputArea-editor`, `.jp-Cell-inputArea`) when the user asks to style notebook content.
 
 ### `appView` (object)
 

@@ -2,7 +2,7 @@
 
 ## Agent behavior
 
-- **Examine the codebase before answering** the user, even when the conversation is discussion-only (questions, reviews, architecture, or planning) and no code changes are requested. Search and read relevant files so answers reflect what the repo actually does rather than assumptions or generic advice.
+- **Examine the codebase before answering** the user, even when the conversation is discussion-only (questions, reviews, architecture, or planning) and no code changes are requested. Search and read relevant files so answers reflect what the repo actually does rather than assumptions or generic advice. If you are highly confident the necessary context is already known from earlier exploration in the same conversation, you may skip re-examination; otherwise, always examine the codebase first.
 
 ## Development Workflow
 

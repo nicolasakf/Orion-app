@@ -52,6 +52,9 @@ export type PublishedNotebookBundle = z.infer<typeof PublishedNotebookBundleSche
 export type PublishNotebookRequest = z.infer<typeof PublishNotebookRequestSchema>;
 export type PublishNotebookResponse = z.infer<typeof PublishNotebookResponseSchema>;
 
+/** Hosted Orion API request body limit on Vercel (~4.5 MB); keep headroom for JSON overhead. */
+export const ORION_PUBLISH_MAX_REQUEST_BYTES = 4_000_000;
+
 export interface PublishedNotebookSourceDownload {
   filename: string;
   notebook: Record<string, unknown>;
@@ -78,6 +81,17 @@ interface PublishNotebookOptions {
   apiBaseUrl: string;
   accessToken: string;
   request: PublishNotebookRequest;
+}
+
+/** Rejects publish payloads that exceed the hosted API request size limit. */
+function assertPublishRequestWithinSizeLimit(body: string): void {
+  const bytes = new TextEncoder().encode(body).byteLength;
+  if (bytes <= ORION_PUBLISH_MAX_REQUEST_BYTES) return;
+
+  const megabytes = (bytes / (1024 * 1024)).toFixed(1);
+  throw new Error(
+    `This notebook is too large to publish (${megabytes} MB). Orion Cloud accepts publish requests up to about 4 MB. Try hiding large chart or image outputs, clearing heavy cell outputs, or publishing a smaller notebook.`,
+  );
 }
 
 /** Builds a useful browser-network error for unreachable Orion API endpoints. */
@@ -146,6 +160,9 @@ export async function publishNotebookToCloud({
   accessToken,
   request,
 }: PublishNotebookOptions): Promise<PublishNotebookResponse> {
+  const body = JSON.stringify(PublishNotebookRequestSchema.parse(request));
+  assertPublishRequestWithinSizeLimit(body);
+
   let response: Response;
   try {
     response = await fetch(`${apiBaseUrl}/api/notebooks/publish`, {
@@ -154,7 +171,7 @@ export async function publishNotebookToCloud({
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(PublishNotebookRequestSchema.parse(request)),
+      body,
     });
   } catch (error) {
     throw createOrionApiFetchError(apiBaseUrl, error);

@@ -113,7 +113,7 @@ export function DialogShortcutProvider({
     const handleKeyDown = (event: KeyboardEvent) => {
       const activeController =
         activeDialogShortcutControllers[
-          activeDialogShortcutControllers.length - 1
+        activeDialogShortcutControllers.length - 1
         ]
 
       if (activeController !== controller) return

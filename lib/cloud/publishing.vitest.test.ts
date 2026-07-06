@@ -4,6 +4,7 @@ import {
   buildPublishedNotebookUrl,
   downloadPublishedNotebookSource,
   listPublishedNotebooks,
+  ORION_PUBLISH_MAX_REQUEST_BYTES,
   publishNotebookToCloud,
   unpublishNotebookFromCloud,
   PublishNotebookResponseSchema,
@@ -86,6 +87,31 @@ describe("Orion cloud publishing API client", () => {
         body: JSON.stringify(request),
       }),
     );
+  });
+
+  it("rejects publish payloads that exceed the hosted API request size limit", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const oversizedRequest: PublishNotebookRequest = {
+      ...request,
+      bundle: {
+        ...request.bundle,
+        staticHtmlSnapshot: `<!doctype html><html><body>${"x".repeat(
+          ORION_PUBLISH_MAX_REQUEST_BYTES,
+        )}</body></html>`,
+      },
+    };
+
+    await expect(
+      publishNotebookToCloud({
+        apiBaseUrl: "https://api.orion.local",
+        accessToken: "token-123",
+        request: oversizedRequest,
+      }),
+    ).rejects.toThrow(/too large to publish/i);
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("sends publish passwords outside the public notebook bundle", async () => {
