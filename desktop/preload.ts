@@ -22,4 +22,11 @@ contextBridge.exposeInMainWorld("orionDesktopUpdater", {
 contextBridge.exposeInMainWorld("orionDesktopShell", {
   setWindowBackgroundColor: (color: string): Promise<void> =>
     ipcRenderer.invoke("orion:shell:set-background-color", color),
+  showProjectFolderPicker: () =>
+    ipcRenderer.invoke("orion:shell:show-project-folder-picker"),
+  onOpenSettings: (listener: () => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("orion:settings:open", handler);
+    return () => ipcRenderer.removeListener("orion:settings:open", handler);
+  },
 });

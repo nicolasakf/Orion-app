@@ -102,13 +102,13 @@ export const TERMINAL_POOL_SYSTEM_SIZE = 2;
 /** From lib/shell/terminal-pool.ts. */
 export const TERMINAL_POOL_REAPER_INTERVAL_MS = 60_000;
 
-/** From lib/agent/tools/grep-files.ts and system-commands/grep.ts. */
+/** From lib/shell/system-commands/grep.ts. */
 export const SEARCH_MAX_MATCHES = 100;
-/** From lib/agent/tools/grep-files.ts. */
+/** From lib/shell/system-commands/grep.ts. */
 export const SEARCH_MAX_LINE_LENGTH = 200;
-/** From lib/agent/tools/glob-files.ts. */
+/** From lib/shell/system-commands/glob.ts. */
 export const SEARCH_GLOB_TERMINAL_MAX_RESULTS = 500;
-/** From lib/agent/tools/glob-files.ts. */
+/** From lib/shell/system-commands/glob.ts. */
 export const SEARCH_GLOB_MAX_DISPLAY_RESULTS = 100;
 /** From lib/shell/system-commands/grep.ts. */
 export const SEARCH_GREP_TIMEOUT_MS = 15_000;

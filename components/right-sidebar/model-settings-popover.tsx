@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Settings } from "lucide-react";
+import { Check } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -9,19 +9,11 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
-import { Slider } from "@/components/ui/slider";
-import { Label } from "@/components/ui/label";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
+import { cn } from "@/lib/utils";
 import type {
+  LLM,
   ModelSettings,
   OpenAIModelSettings,
   AnthropicModelSettings,
@@ -29,163 +21,252 @@ import type {
 
 export interface ModelSettingsPopoverProps {
   provider: ProviderId;
+  model?: LLM | null;
   settings: ModelSettings;
   onSettingsChange: (settings: ModelSettings) => void;
 }
 
-/** Renders OpenAI-specific settings: reasoning effort */
-function OpenAISettings({
-  settings,
-  onChange,
-  chatFontSize,
-}: {
-  settings: OpenAIModelSettings;
-  onChange: (s: OpenAIModelSettings) => void;
-  chatFontSize: number;
-}) {
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-row items-center gap-2">
-        <Label className="text-inherit whitespace-nowrap mr-2">Reasoning Effort</Label>
-        <Select
-          value={settings.reasoningEffort ?? "medium"}
-          onValueChange={(v) =>
-            onChange({
-              ...settings,
-              reasoningEffort: v as OpenAIModelSettings["reasoningEffort"],
-            })
-          }
-        >
-          <SelectTrigger className="h-7 text-inherit min-w-[110px] outline-none ring-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0 [&_svg]:h-3 [&_svg]:w-3">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent
-            className="text-inherit outline-none ring-0 focus:outline-none focus:ring-0 focus-visible:outline-none focus-visible:ring-0"
-            style={{ fontSize: chatFontSize }}
-          >
-            <SelectItem value="low" className="text-inherit">
-              Low
-            </SelectItem>
-            <SelectItem value="medium" className="text-inherit">
-              Medium
-            </SelectItem>
-            <SelectItem value="high" className="text-inherit">
-              High
-            </SelectItem>
-            <SelectItem value="extra-high" className="text-inherit">
-              Extra High
-            </SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-    </div>
-  );
+type IntelligenceLevelValue =
+  | "low"
+  | "medium"
+  | "high"
+  | "extra-high"
+  | "max";
+
+interface IntelligenceLevelOption {
+  value: IntelligenceLevelValue;
+  label: string;
+  shortLabel: string;
+  settings: ModelSettings;
 }
 
-/** Renders Anthropic-specific settings: extended thinking toggle and budget */
-function AnthropicSettings({
-  settings,
-  onChange,
-}: {
-  settings: AnthropicModelSettings;
-  onChange: (s: AnthropicModelSettings) => void;
-}) {
-  const isThinking = settings.extendedThinking ?? true;
-  const budget = settings.thinkingBudgetTokens ?? 10000;
+const OPENAI_INTELLIGENCE_LEVELS: IntelligenceLevelOption[] = [
+  {
+    value: "low",
+    label: "Low",
+    shortLabel: "Low",
+    settings: { reasoningEffort: "low" } satisfies OpenAIModelSettings,
+  },
+  {
+    value: "medium",
+    label: "Medium",
+    shortLabel: "Med",
+    settings: { reasoningEffort: "medium" } satisfies OpenAIModelSettings,
+  },
+  {
+    value: "high",
+    label: "High",
+    shortLabel: "High",
+    settings: { reasoningEffort: "high" } satisfies OpenAIModelSettings,
+  },
+  {
+    value: "extra-high",
+    label: "Extra High",
+    shortLabel: "XHigh",
+    settings: { reasoningEffort: "extra-high" } satisfies OpenAIModelSettings,
+  },
+];
 
+const ANTHROPIC_INTELLIGENCE_LEVELS: IntelligenceLevelOption[] = [
+  {
+    value: "low",
+    label: "Low",
+    shortLabel: "Low",
+    settings: {
+      extendedThinking: false,
+      thinkingBudgetTokens: 1000,
+    } satisfies AnthropicModelSettings,
+  },
+  {
+    value: "medium",
+    label: "Medium",
+    shortLabel: "Med",
+    settings: {
+      extendedThinking: true,
+      thinkingBudgetTokens: 10000,
+    } satisfies AnthropicModelSettings,
+  },
+  {
+    value: "high",
+    label: "High",
+    shortLabel: "High",
+    settings: {
+      extendedThinking: true,
+      thinkingBudgetTokens: 25000,
+    } satisfies AnthropicModelSettings,
+  },
+  {
+    value: "extra-high",
+    label: "Extra High",
+    shortLabel: "XHigh",
+    settings: {
+      extendedThinking: true,
+      thinkingBudgetTokens: 50000,
+    } satisfies AnthropicModelSettings,
+  },
+  {
+    value: "max",
+    label: "Max",
+    shortLabel: "Max",
+    settings: {
+      extendedThinking: true,
+      thinkingBudgetTokens: 100000,
+    } satisfies AnthropicModelSettings,
+  },
+];
+
+/** Levels exposed by the selected model's provider-backed settings. */
+function getIntelligenceLevels(
+  provider: ProviderId,
+  model: LLM | null | undefined
+): IntelligenceLevelOption[] {
+  if (provider === "openai") {
+    const modelId = (model?.apiModelId ?? model?.value ?? "").toLowerCase();
+    if (modelId.includes("nano") || modelId.includes("mini")) {
+      return OPENAI_INTELLIGENCE_LEVELS.slice(0, 3);
+    }
+    return OPENAI_INTELLIGENCE_LEVELS;
+  }
+
+  if (provider === "anthropic") {
+    return ANTHROPIC_INTELLIGENCE_LEVELS;
+  }
+
+  return [];
+}
+
+/** Reads the currently selected intelligence level from provider-specific settings. */
+function getSelectedLevelValue(
+  provider: ProviderId,
+  settings: ModelSettings
+): IntelligenceLevelValue {
+  if (provider === "openai") {
+    return (settings as OpenAIModelSettings).reasoningEffort ?? "medium";
+  }
+
+  if (provider === "anthropic") {
+    const anthropicSettings = settings as AnthropicModelSettings;
+    if (anthropicSettings.extendedThinking === false) return "low";
+
+    const budget = anthropicSettings.thinkingBudgetTokens ?? 10000;
+    if (budget >= 100000) return "max";
+    if (budget >= 50000) return "extra-high";
+    if (budget >= 25000) return "high";
+    return "medium";
+  }
+
+  return "medium";
+}
+
+interface IntelligenceBarsProps {
+  activeBars: number;
+  totalBars: number;
+  className?: string;
+}
+
+/** Compact bars that show the active intelligence level. */
+function IntelligenceBars({
+  activeBars,
+  totalBars,
+  className,
+}: IntelligenceBarsProps) {
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <Label className="text-inherit">Extended Thinking</Label>
-        <Switch
-          checked={isThinking}
-          onCheckedChange={(checked) =>
-            onChange({ ...settings, extendedThinking: checked })
-          }
+    <span
+      className={cn("flex h-4 items-end gap-0.5", className)}
+      aria-hidden="true"
+    >
+      {Array.from({ length: totalBars }).map((_, index) => (
+        <span
+          key={index}
+          className={cn(
+            "h-3 w-1 rounded-sm",
+            index < activeBars ? "bg-foreground" : "bg-muted-foreground/25"
+          )}
         />
-      </div>
-
-      {isThinking && (
-        <div className="flex flex-col gap-1.5">
-          <div className="flex items-center justify-between">
-            <Label className="text-inherit">Thinking Budget</Label>
-            <span className="text-inherit text-muted-foreground tabular-nums">
-              {budget.toLocaleString()} tokens
-            </span>
-          </div>
-          <Slider
-            min={1000}
-            max={100000}
-            step={1000}
-            value={[budget]}
-            onValueChange={([v]) =>
-              onChange({ ...settings, thinkingBudgetTokens: v })
-            }
-          />
-        </div>
-      )}
-    </div>
+      ))}
+    </span>
   );
 }
 
 /**
  * Popover that shows provider-specific model settings.
- * Triggered by a cog icon next to the model selector.
+ * Triggered by an intelligence bar indicator next to the model selector.
  */
 export function ModelSettingsPopover({
   provider,
+  model,
   settings,
   onSettingsChange,
 }: ModelSettingsPopoverProps) {
+  const [isOpen, setIsOpen] = React.useState(false);
   const { effectiveSettings } = useOrionSettings();
   const chatFontSize = effectiveSettings.chat.fontSize;
+  const levels = getIntelligenceLevels(provider, model);
 
-  const renderContent = () => {
-    switch (provider) {
-      case "openai":
-        return (
-          <OpenAISettings
-            settings={settings as OpenAIModelSettings}
-            onChange={onSettingsChange}
-            chatFontSize={chatFontSize}
-          />
-        );
-      case "anthropic":
-        return (
-          <AnthropicSettings
-            settings={settings as AnthropicModelSettings}
-            onChange={onSettingsChange}
-          />
-        );
-      default:
-        return (
-          <p className="text-inherit text-muted-foreground">
-            No configurable settings for this provider.
-          </p>
-        );
-    }
-  };
+  if (levels.length === 0) return null;
+
+  const selectedValue = getSelectedLevelValue(provider, settings);
+  const selectedIndex = (() => {
+    const exactIndex = levels.findIndex((level) => level.value === selectedValue);
+    if (exactIndex >= 0) return exactIndex;
+    return levels.length - 1;
+  })();
+  const selectedLevel = levels[selectedIndex] ?? levels[0];
+  const activeBars = selectedIndex + 1;
 
   return (
-    <Popover>
+    <Popover open={isOpen} onOpenChange={setIsOpen}>
       <PopoverTrigger asChild>
         <Button
+          type="button"
           variant="ghost"
           size="icon"
-          className="h-7 w-7 text-inherit text-muted-foreground hover:text-foreground hover:bg-transparent [&_svg]:!size-3"
+          className="h-7 w-7 text-inherit text-muted-foreground hover:bg-transparent hover:text-foreground"
           style={{ fontSize: chatFontSize }}
-          aria-label="Model settings"
+          aria-label={`Intelligence level: ${selectedLevel.label}`}
+          title={`Intelligence: ${selectedLevel.label}`}
         >
-          <Settings className="h-3 w-3" />
+          <IntelligenceBars
+            activeBars={activeBars}
+            totalBars={levels.length}
+          />
         </Button>
       </PopoverTrigger>
       <PopoverContent
-        className="w-64 text-inherit"
+        className="w-44 p-1.5 text-inherit"
         align="start"
         style={{ fontSize: chatFontSize }}
       >
-        <div className="flex flex-col gap-2">
-          {renderContent()}
+        <div className="flex flex-col gap-0.5">
+          {levels.map((level, index) => {
+            const isSelected = level.value === selectedLevel.value;
+            return (
+              <button
+                key={level.value}
+                type="button"
+                className={cn(
+                  "corner-squircle flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-inherit hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                  isSelected && "bg-accent"
+                )}
+                onClick={() => {
+                  onSettingsChange(level.settings);
+                  setIsOpen(false);
+                }}
+              >
+                <IntelligenceBars
+                  activeBars={index + 1}
+                  totalBars={levels.length}
+                  className="shrink-0"
+                />
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {level.label}
+                </span>
+                {isSelected ? (
+                  <Check className="h-3 w-3 shrink-0 text-foreground" />
+                ) : null}
+              </button>
+            );
+          })}
         </div>
       </PopoverContent>
     </Popover>

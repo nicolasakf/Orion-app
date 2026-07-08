@@ -22,7 +22,17 @@ function readBuiltinSkills() {
 describe("built-in skills", () => {
   it("includes core Orion built-in skills", () => {
     expect(readBuiltinSkills().map((skill) => skill.name)).toEqual(
-      expect.arrayContaining(["create-app", "create-rule", "orion-settings", "chat-history", "deep-eda"])
+      expect.arrayContaining([
+        "create-app",
+        "create-rule",
+        "orion-settings",
+        "chat-history",
+        "deep-eda",
+        "analyze-my-data",
+        "monthly-report",
+        "margin-analysis",
+        "inventory-aging",
+      ])
     );
   });
 

@@ -62,3 +62,7 @@ scripts/collect-github-traffic.ts
 scripts/collect-github-traffic.sh
 scripts/install-github-traffic-schedule.sh
 lib/github-traffic/
+
+# Temporary folders
+*temp*/
+*tmp*/

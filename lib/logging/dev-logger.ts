@@ -159,6 +159,7 @@ export function logChatRequest(data: {
     notebookPath?: string | null;
     activeFilePath?: string | null;
     workspaceDirectory?: string | null;
+    rootDirectory?: string | null;
   } | null;
 }): void {
   if (!IS_DEV) return;
@@ -188,6 +189,7 @@ export function logChatRequest(data: {
     lines.push("  Agent Context:");
     if (m.notebookPath) lines.push(field("  Notebook", m.notebookPath));
     if (m.activeFilePath) lines.push(field("  Active File", m.activeFilePath));
+    if (m.rootDirectory) lines.push(field("  Jupyter Root", m.rootDirectory));
     if (m.workspaceDirectory) lines.push(field("  Workspace", m.workspaceDirectory));
   }
 

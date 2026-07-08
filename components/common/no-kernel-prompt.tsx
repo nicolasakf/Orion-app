@@ -8,8 +8,10 @@ import { cn } from "@/lib/utils";
 export interface NoKernelPromptProps {
   /** Customizable description text shown below the title. */
   description?: string;
-  /** Button label (defaults to "Connect to Jupyter"). */
+  /** Button label (defaults to "Connect runtime"). */
   buttonLabel?: string;
+  /** Title shown above the description. */
+  title?: string;
   /** Callback when the connect button is clicked. */
   onConnect?: () => void;
   /** Optional dismiss callback — hides the X button if omitted. */
@@ -24,8 +26,9 @@ export interface NoKernelPromptProps {
  * Used in chat body and terminal panel to prompt the user to connect a kernel.
  */
 export function NoKernelPrompt({
-  description = "Connect to a Jupyter server to run notebooks and agent tools.",
-  buttonLabel = "Connect to Jupyter",
+  description = "Connect Orion's runtime to read files, run analyses, and use agent tools.",
+  buttonLabel = "Connect runtime",
+  title = "Runtime not connected",
   onConnect,
   onDismiss,
   className,
@@ -39,7 +42,7 @@ export function NoKernelPrompt({
     >
       <PlugZap className="mt-0.5 h-4 w-4 shrink-0" />
       <div className="flex-1">
-        <p className="font-medium leading-snug">No Jupyter server</p>
+        <p className="font-medium leading-snug">{title}</p>
         <p className="mt-0.5 text-xs text-amber-600/80 dark:text-amber-400/70">
           {description}
         </p>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback } from "react";
 import dynamic from "next/dynamic";
 
 import { MarkdownEditorToolbar } from "@/components/editors/markdown-editor-toolbar";
@@ -38,6 +39,7 @@ const baseDefinitionById = Object.fromEntries(
 /** Renders the notebook editor surface. */
 function NotebookEditorSurface({
   filepath,
+  businessMode,
   kernelService,
   currentKernel,
   kernelStatus,
@@ -48,6 +50,7 @@ function NotebookEditorSurface({
   onIsRunningChange,
   onNotebookChange,
   onUnsavedChangesChange,
+  onFileLoadError,
   onNotebookSnapshotGetterChange,
   onNotebookSaveHandlerChange,
   presentationHideAllCellInputs,
@@ -55,9 +58,18 @@ function NotebookEditorSurface({
 }: EditorRuntimeProps) {
   const { notebookViewMode, setNotebookViewMode } = useNotebookViewMode();
 
+  const handleActiveNotebookViewChange = useCallback(
+    (view: "notebook" | "app") => {
+      if (businessMode && view === "notebook") return;
+      setNotebookViewMode(view);
+    },
+    [businessMode, setNotebookViewMode],
+  );
+
   return (
     <NotebookEditor
       filepath={filepath}
+      businessMode={businessMode}
       kernelService={kernelService}
       currentKernel={currentKernel}
       kernelStatus={kernelStatus}
@@ -68,12 +80,13 @@ function NotebookEditorSurface({
       onIsRunningChange={onIsRunningChange}
       onNotebookChange={onNotebookChange}
       onUnsavedChangesChange={onUnsavedChangesChange}
+      onFileLoadError={onFileLoadError}
       onNotebookSnapshotGetterChange={onNotebookSnapshotGetterChange}
       onNotebookSaveHandlerChange={onNotebookSaveHandlerChange}
       presentationHideAllCellInputs={presentationHideAllCellInputs}
       onSetPresentationHideAllCellInputs={onSetPresentationHideAllCellInputs}
-      activeNotebookView={notebookViewMode}
-      onActiveNotebookViewChange={setNotebookViewMode}
+      activeNotebookView={businessMode ? "app" : notebookViewMode}
+      onActiveNotebookViewChange={handleActiveNotebookViewChange}
     />
   );
 }

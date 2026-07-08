@@ -39,7 +39,7 @@
         },
         "test-executor": {
           "files": {
-            "SKILL.md": "4d5db6919861ef9166ce6c9d8d2ce46b485182d8319a81e3bc423f1dc8bf94af"
+            "SKILL.md": "92e89de02786df6a82687e1791f04da1d920e6405cd52a8dee437c267fbda84c"
           }
         },
         "suggest-ui-manual-tests": {
@@ -103,7 +103,7 @@
         },
         "test-executor": {
           "files": {
-            "SKILL.md": "4d5db6919861ef9166ce6c9d8d2ce46b485182d8319a81e3bc423f1dc8bf94af"
+            "SKILL.md": "92e89de02786df6a82687e1791f04da1d920e6405cd52a8dee437c267fbda84c"
           }
         },
         "suggest-ui-manual-tests": {

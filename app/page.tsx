@@ -9,6 +9,7 @@ import { SettingsMenu } from "@/components/settings-menu";
 import { CloudAuthDialog } from "@/components/cloud/cloud-auth-dialog";
 import { PublishedNotebookDownloadOverlay } from "@/components/cloud/published-notebook-download-overlay";
 import { PublishedNotebookImportDialog } from "@/components/cloud/published-notebook-import-dialog";
+import { BusinessShell } from "@/components/business-shell/business-shell";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -68,6 +69,7 @@ import {
   updatePinnedFilePathsAfterRename,
 } from "@/lib/settings/pinned-files";
 import { EditorReloadDialog } from "@/components/editor-reload-dialog";
+import { FileNotFoundDialog } from "@/components/file-not-found-dialog";
 import { useJupyterShellReady } from "@/hooks/use-jupyter-shell-ready";
 import { useRegisterOpenUserSettingsFile } from "@/hooks/use-register-open-user-settings-file";
 import {
@@ -130,12 +132,20 @@ type ActiveFile = {
 type UnsavedDialogIntent =
   | { type: "reload" }
   | { type: "switch-file"; file: ActiveFile }
+  | { type: "navigate-history"; file: ActiveFile; index: number }
   | { type: "close-file" };
+
+type EditorNavigationState = {
+  entries: ActiveFile[];
+  index: number;
+};
 
 const ACTIVE_FILE_SESSION_KEY = "activeFile";
 const WORKSPACE_DIRECTORY_SESSION_KEY = "workspaceDirectory";
 /** Persists open-file history across sessions and browser tabs. */
 const RECENT_FILES_STORAGE_KEY = "recentFiles";
+/** Persists project history across sessions and browser tabs. */
+const RECENT_PROJECTS_STORAGE_KEY = "recentProjects";
 const PUBLISHED_IMPORT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -153,6 +163,48 @@ function isNotebookFile(file: ActiveFile): boolean {
   if (file.openAsText) return false;
   const candidate = file.path || file.name;
   return candidate.toLowerCase().endsWith(".ipynb");
+}
+
+/** Returns true when two active file references point to the same editor target. */
+function isSameEditorFile(a: ActiveFile, b: ActiveFile): boolean {
+  return a.path === b.path && a.openAsText === b.openAsText;
+}
+
+/** Finds the last matching file in an editor navigation list. */
+function findLastEditorFileIndex(files: ActiveFile[], target: ActiveFile): number {
+  for (let index = files.length - 1; index >= 0; index -= 1) {
+    if (isSameEditorFile(files[index], target)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/** Returns whether a file-open failure indicates the path no longer exists. */
+function isFileNotFoundLoadError(error: unknown): boolean {
+  const maybeError = error as {
+    response?: { status?: number; statusText?: string };
+    status?: number;
+    statusText?: string;
+    message?: string;
+  };
+  const status = maybeError.response?.status ?? maybeError.status;
+  if (status === 404) return true;
+
+  const message = [
+    maybeError.response?.statusText,
+    maybeError.statusText,
+    maybeError.message,
+  ]
+    .filter((part): part is string => typeof part === "string")
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    message.includes("404") ||
+    message.includes("not found") ||
+    message.includes("no such file or directory")
+  );
 }
 
 /**
@@ -231,6 +283,7 @@ function RegisterOpenUserSettingsFile({
 interface MobileLayoutProps {
   currentFile: ActiveFile;
   recentFiles: ActiveFile[];
+  recentProjectPaths: string[];
   onFileSelect: (file: ActiveFile) => void;
   onNavigateToLine: (file: ActiveFile, line: number) => void;
   notebookMinimap: NotebookMinimapSection[];
@@ -242,6 +295,7 @@ interface MobileLayoutProps {
   onRefreshKernels: () => void | Promise<void>;
   kernelService: KernelService | null;
   workspaceDirectory: string | null;
+  jupyterRootDirectory: string | null;
   onWorkspaceChange: (dir: string | null) => void;
   onOpenKernelDropdown: () => void;
   currentKernel: KernelInfo | null;
@@ -249,6 +303,7 @@ interface MobileLayoutProps {
   notebook: NotebookType | null;
   hasWorkspaceOpen: boolean;
   hasServerConnection: boolean;
+  canPromptForRuntime: boolean;
   openConnectionDialog: () => void;
   isRunning: boolean;
   executionCountRef: React.MutableRefObject<number>;
@@ -275,7 +330,7 @@ interface MobileLayoutProps {
   /** When true, code cell editors are hidden in the UI only (not persisted). */
   notebookPresentationHideAllInputs: boolean;
   onSetNotebookPresentationHideAllInputs: (hidden: boolean) => void;
-  onFileLoadError: (path: string) => void;
+  onFileLoadError: (path: string, error?: unknown) => boolean | void;
   onFileOpenCancel: (path: string) => void;
   onWorkspacePathRenamed?: (payload: {
     oldPath: string;
@@ -298,6 +353,7 @@ interface MobileLayoutProps {
 function MobileLayout({
   currentFile,
   recentFiles,
+  recentProjectPaths,
   onFileSelect,
   onNavigateToLine,
   notebookMinimap,
@@ -309,6 +365,7 @@ function MobileLayout({
   onRefreshKernels,
   kernelService,
   workspaceDirectory,
+  jupyterRootDirectory,
   onWorkspaceChange,
   onOpenKernelDropdown,
   currentKernel,
@@ -316,6 +373,7 @@ function MobileLayout({
   notebook,
   hasWorkspaceOpen,
   hasServerConnection,
+  canPromptForRuntime,
   openConnectionDialog,
   isRunning,
   executionCountRef,
@@ -388,6 +446,7 @@ function MobileLayout({
             kernelService={kernelService}
             notebook={notebook}
             workspaceDirectory={workspaceDirectory ?? undefined}
+            rootDirectory={jupyterRootDirectory}
             openDocumentSnapshots={openDocumentSnapshots}
             onAgentNotebookChange={() => {
               window.dispatchEvent(new CustomEvent("agentNotebookModified"));
@@ -443,9 +502,11 @@ function MobileLayout({
               openNotebookAsText={currentFile.openAsText === true}
               hasWorkspace={hasWorkspaceOpen}
               hasServerConnection={hasServerConnection}
+              canPromptForRuntime={canPromptForRuntime}
               onConnectServer={openConnectionDialog}
               workspaceDirectory={workspaceDirectory}
               recentFiles={recentFiles}
+              recentProjectPaths={recentProjectPaths}
               onOpenFile={handleMobileFileSelect}
               onWorkspaceChange={onWorkspaceChange}
               kernelService={kernelService}
@@ -499,6 +560,8 @@ export default function Page() {
     setUserSettings,
     setWorkspaceSettingsSource,
   } = useOrionSettings();
+  const isBusinessExperience =
+    effectiveSettings.appearance.experienceMode === "business";
   const {
     configured: cloudConfigured,
     user: cloudUser,
@@ -598,12 +661,17 @@ export default function Page() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [unsavedDialogIntent, setUnsavedDialogIntent] =
     useState<UnsavedDialogIntent | null>(null);
+  const [fileNotFoundDialogPath, setFileNotFoundDialogPath] = useState<
+    string | null
+  >(null);
   // Flag set before an intentional window.location.reload() to skip beforeunload warning
   const intentionalReloadRef = useRef(false);
 
   useEffect(() => {
+    const shouldAutosave =
+      effectiveSettings.editor.autosaveEnabled || isBusinessExperience;
     if (
-      !effectiveSettings.editor.autosaveEnabled ||
+      !shouldAutosave ||
       !currentFile.path ||
       !hasUnsavedChanges
     ) {
@@ -644,6 +712,7 @@ export default function Page() {
     effectiveSettings.editor.autosaveEnabled,
     effectiveSettings.editor.autosaveIntervalMs,
     hasUnsavedChanges,
+    isBusinessExperience,
     openDocumentSnapshots,
   ]);
 
@@ -686,6 +755,12 @@ export default function Page() {
   const { checked: isSaved, showCheckmark: showSavedCheckmark } =
     useCheckmarkedFeedback();
   const [recentFiles, setRecentFiles] = useState<ActiveFile[]>([]);
+  const [editorNavigation, setEditorNavigation] =
+    useState<EditorNavigationState>({
+      entries: [],
+      index: -1,
+    });
+  const [recentProjectPaths, setRecentProjectPaths] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
   const leftPanelRef = useRef<any>(null);
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(
@@ -720,6 +795,8 @@ export default function Page() {
   const [horizontalPanelSizes, setHorizontalPanelSizes] = useState<
     [number, number, number]
   >(DEFAULT_PANEL_LAYOUT_STATE.horizontal);
+  const [businessHorizontalPanelSizes, setBusinessHorizontalPanelSizes] =
+    useState<[number, number]>(DEFAULT_PANEL_LAYOUT_STATE.businessHorizontal);
   const [verticalPanelSizes, setVerticalPanelSizes] = useState<
     [number, number]
   >(DEFAULT_PANEL_LAYOUT_STATE.vertical);
@@ -730,6 +807,7 @@ export default function Page() {
     const savedLayout = loadPanelLayoutState();
     panelLayoutRef.current = savedLayout;
     setHorizontalPanelSizes(savedLayout.horizontal);
+    setBusinessHorizontalPanelSizes(savedLayout.businessHorizontal);
     setVerticalPanelSizes(savedLayout.vertical);
 
     const savedVisibility = loadPanelVisibilityState();
@@ -877,6 +955,52 @@ export default function Page() {
     }
   };
 
+  /** Parses stored recent-project paths from local storage. */
+  const parseStoredRecentProjectPaths = (stored: string | null): string[] => {
+    try {
+      const parsed = stored ? (JSON.parse(stored) as unknown) : [];
+      return Array.isArray(parsed)
+        ? parsed.filter((path): path is string => typeof path === "string")
+        : [];
+    } catch (error) {
+      console.warn("Failed to parse recent projects from storage:", error);
+      return [];
+    }
+  };
+
+  /** Saves recent project paths to local storage. */
+  const saveRecentProjectsToStorage = useCallback((paths: string[]) => {
+    try {
+      localStorage.setItem(RECENT_PROJECTS_STORAGE_KEY, JSON.stringify(paths));
+    } catch (error) {
+      console.warn("Failed to save recent projects to local storage:", error);
+    }
+  }, []);
+
+  /** Loads recent project paths from local storage. */
+  const loadRecentProjectsFromStorage = (): string[] => {
+    try {
+      return parseStoredRecentProjectPaths(
+        localStorage.getItem(RECENT_PROJECTS_STORAGE_KEY),
+      );
+    } catch (error) {
+      console.warn("Failed to load recent projects from local storage:", error);
+      return [];
+    }
+  };
+
+  /** Adds a project path to the recent projects list. */
+  const addToRecentProjects = useCallback(
+    (path: string) => {
+      setRecentProjectPaths((previous) => {
+        const next = [path, ...previous.filter((item) => item !== path)].slice(0, 10);
+        saveRecentProjectsToStorage(next);
+        return next;
+      });
+    },
+    [saveRecentProjectsToStorage],
+  );
+
   /**
    * Adds a file to the recent files list
    */
@@ -903,6 +1027,7 @@ export default function Page() {
   useEffect(() => {
     const storedFiles = loadRecentFilesFromStorage();
     setRecentFiles(storedFiles);
+    setRecentProjectPaths(loadRecentProjectsFromStorage());
   }, []);
 
   /**
@@ -919,13 +1044,14 @@ export default function Page() {
         WORKSPACE_DIRECTORY_SESSION_KEY,
         workspaceDirectory,
       );
+      addToRecentProjects(workspaceDirectory);
     } catch (error) {
       console.warn(
         "Failed to persist workspace directory to session storage:",
         error,
       );
     }
-  }, [workspaceDirectory]);
+  }, [addToRecentProjects, workspaceDirectory]);
 
   /**
    * Persists the current file so refreshes reopen the same file in the editor.
@@ -969,6 +1095,7 @@ export default function Page() {
   const closeCurrentFile = useCallback(() => {
     pendingFileSelectionRef.current = null;
     setCurrentFile({ name: "", path: "" });
+    setEditorNavigation((previous) => ({ ...previous, index: -1 }));
     setNotebook(null);
     setHasUnsavedChanges(false);
     setOpen(false);
@@ -987,20 +1114,66 @@ export default function Page() {
   );
 
   const selectFile = useCallback(
-    (file: ActiveFile) => {
-      if (
-        file.path !== currentFile.path ||
-        file.openAsText !== currentFile.openAsText
-      ) {
+    (file: ActiveFile, options?: { navigationIndex?: number }) => {
+      if (!isSameEditorFile(file, currentFile)) {
         pendingFileSelectionRef.current = {
           failedPath: file.path,
           fallbackFile: currentFile,
         };
       }
       setCurrentFile(file);
+      setEditorNavigation((previous) => {
+        if (!file.path) return previous;
+
+        if (options?.navigationIndex !== undefined) {
+          return { ...previous, index: options.navigationIndex };
+        }
+
+        const currentEntry = previous.entries[previous.index];
+        if (currentEntry && isSameEditorFile(currentEntry, file)) {
+          return previous;
+        }
+
+        const entries = [
+          ...previous.entries.slice(0, previous.index + 1),
+          file,
+        ];
+        return { entries, index: entries.length - 1 };
+      });
       addToRecentFiles(file);
     },
     [addToRecentFiles, currentFile],
+  );
+
+  const canNavigateBackInEditor = editorNavigation.index > 0;
+  const canNavigateForwardInEditor =
+    editorNavigation.index >= 0 &&
+    editorNavigation.index < editorNavigation.entries.length - 1;
+
+  /**
+   * Opens an adjacent editor-history entry, preserving the normal dirty-file guard.
+   */
+  const navigateEditorHistory = useCallback(
+    (direction: "back" | "forward") => {
+      const nextIndex =
+        direction === "back"
+          ? editorNavigation.index - 1
+          : editorNavigation.index + 1;
+      const file = editorNavigation.entries[nextIndex];
+      if (!file) return;
+
+      if (hasUnsavedChanges) {
+        setUnsavedDialogIntent({
+          type: "navigate-history",
+          file,
+          index: nextIndex,
+        });
+        return;
+      }
+
+      selectFile(file, { navigationIndex: nextIndex });
+    },
+    [editorNavigation, hasUnsavedChanges, selectFile],
   );
 
   /**
@@ -1110,29 +1283,20 @@ export default function Page() {
    * Restores the previous file when the newly selected file fails to load.
    */
   const handleEditorFileLoadError = useCallback(
-    (failedFilepath: string): boolean => {
+    (failedFilepath: string, error?: unknown): boolean => {
       if (isUserSettingsEditorPath(failedFilepath)) {
         return false;
       }
 
-      const unopenableFileAction =
-        effectiveSettings.editor.unopenableFileAction;
-      const handledLoadError =
-        unopenableFileAction === "open_externally"
-          ? openFileExternally(failedFilepath)
-          : mentionFileInChat(failedFilepath);
+      const shouldForgetFile = isFileNotFoundLoadError(error);
       const pendingSelection = pendingFileSelectionRef.current;
       const fallbackFile =
         pendingSelection?.failedPath === failedFilepath
           ? pendingSelection.fallbackFile
           : null;
 
-      if (!fallbackFile) {
-        setCurrentFile((activeFile) =>
-          activeFile.path === failedFilepath
-            ? { name: "", path: "" }
-            : activeFile,
-        );
+      if (shouldForgetFile) {
+        setFileNotFoundDialogPath(failedFilepath);
         setRecentFiles((prevFiles) => {
           const filtered = prevFiles.filter(
             (file) => file.path !== failedFilepath,
@@ -1142,20 +1306,52 @@ export default function Page() {
           }
           return filtered;
         });
+
+        void setUserSettings((current) => ({
+          ...current,
+          workspace: {
+            ...current.workspace,
+            pinnedFilePaths: filterPinnedFilePathsAfterDelete(
+              current.workspace.pinnedFilePaths,
+              { path: failedFilepath, itemType: "file" },
+            ),
+          },
+        }));
+      }
+
+      const handledLoadError = shouldForgetFile
+        ? true
+        : effectiveSettings.editor.unopenableFileAction === "open_externally"
+          ? openFileExternally(failedFilepath)
+          : mentionFileInChat(failedFilepath);
+
+      if (!fallbackFile) {
+        setCurrentFile((activeFile) =>
+          activeFile.path === failedFilepath
+            ? { name: "", path: "" }
+            : activeFile,
+        );
+        setEditorNavigation((previous) => ({
+          entries: previous.entries.filter(
+            (file) => file.path !== failedFilepath,
+          ),
+          index: -1,
+        }));
         return handledLoadError;
       }
 
       setCurrentFile((activeFile) =>
         activeFile.path === failedFilepath ? fallbackFile : activeFile,
       );
-      setRecentFiles((prevFiles) => {
-        const filtered = prevFiles.filter(
+      setEditorNavigation((previous) => {
+        const entries = previous.entries.filter(
           (file) => file.path !== failedFilepath,
         );
-        if (filtered.length !== prevFiles.length) {
-          saveRecentFilesToStorage(filtered);
-        }
-        return filtered;
+        const fallbackIndex = findLastEditorFileIndex(entries, fallbackFile);
+        return {
+          entries,
+          index: fallbackIndex >= 0 ? fallbackIndex : entries.length - 1,
+        };
       });
       pendingFileSelectionRef.current = null;
       return handledLoadError;
@@ -1165,6 +1361,7 @@ export default function Page() {
       mentionFileInChat,
       openFileExternally,
       saveRecentFilesToStorage,
+      setUserSettings,
     ],
   );
 
@@ -1184,6 +1381,18 @@ export default function Page() {
           return activeFile;
         }
         return fallbackFile ?? { name: "", path: "" };
+      });
+      setEditorNavigation((previous) => {
+        const entries = previous.entries.filter(
+          (file) => file.path !== cancelledFilepath,
+        );
+        const fallbackIndex = fallbackFile
+          ? findLastEditorFileIndex(entries, fallbackFile)
+          : -1;
+        return {
+          entries,
+          index: fallbackIndex >= 0 ? fallbackIndex : -1,
+        };
       });
       setRecentFiles((prevFiles) => {
         const filtered = prevFiles.filter(
@@ -1228,6 +1437,12 @@ export default function Page() {
       selectFile(unsavedDialogIntent.file);
       return;
     }
+    if (unsavedDialogIntent.type === "navigate-history") {
+      selectFile(unsavedDialogIntent.file, {
+        navigationIndex: unsavedDialogIntent.index,
+      });
+      return;
+    }
     closeCurrentFile();
   }, [closeCurrentFile, selectFile, unsavedDialogIntent]);
 
@@ -1245,6 +1460,12 @@ export default function Page() {
     }
     if (unsavedDialogIntent.type === "switch-file") {
       selectFile(unsavedDialogIntent.file);
+      return;
+    }
+    if (unsavedDialogIntent.type === "navigate-history") {
+      selectFile(unsavedDialogIntent.file, {
+        navigationIndex: unsavedDialogIntent.index,
+      });
       return;
     }
     closeCurrentFile();
@@ -1276,8 +1497,7 @@ export default function Page() {
       if (!path) return;
       const name = path.split("/").pop() ?? path;
       const newFile = { name, path };
-      setCurrentFile(newFile);
-      addToRecentFiles(newFile);
+      selectFile(newFile);
     };
     window.addEventListener(
       "agentNotebookCreated",
@@ -1288,7 +1508,7 @@ export default function Page() {
         "agentNotebookCreated",
         handleAgentCreated as EventListener,
       );
-  }, []);
+  }, [selectFile]);
 
   // Kernel state lifted from NotebookEditor
   const [kernelStatus, setKernelStatus] =
@@ -1304,6 +1524,8 @@ export default function Page() {
   const [connectionError, setConnectionError] = useState("");
   const executionCountRef = React.useRef(0);
   const [isAutoConnecting, setIsAutoConnecting] = useState(false);
+  const [kernelInitializationSettled, setKernelInitializationSettled] =
+    useState(false);
   const autoConnectionAttemptedRef = React.useRef(false);
   const [runningKernels, setRunningKernels] = useState<
     RunningKernelSidebarInfo[]
@@ -1350,8 +1572,7 @@ export default function Page() {
         );
 
       if (fileToRestore) {
-        setCurrentFile(fileToRestore);
-        addToRecentFiles(fileToRestore);
+        selectFile(fileToRestore);
       }
 
       if (urlFile || urlWorkspace) {
@@ -1366,7 +1587,7 @@ export default function Page() {
     } finally {
       hasRestoredSessionRef.current = true;
     }
-  }, [addToRecentFiles, isJupyterServerReady]);
+  }, [isJupyterServerReady, selectFile]);
 
   /**
    * Refresh the sidebar's running-kernel list from the Jupyter server.
@@ -1468,6 +1689,29 @@ export default function Page() {
         return next;
       });
 
+      setEditorNavigation((previous) => ({
+        entries: previous.entries.map((file) => {
+          if (payload.itemType === "file") {
+            if (file.path === payload.oldPath) {
+              return { ...file, name: payload.newName, path: payload.newPath };
+            }
+            return file;
+          }
+          if (file.path === payload.oldPath) {
+            return { ...file, name: payload.newName, path: payload.newPath };
+          }
+          const prefix = `${payload.oldPath}/`;
+          if (file.path.startsWith(prefix)) {
+            return {
+              ...file,
+              path: payload.newPath + file.path.slice(payload.oldPath.length),
+            };
+          }
+          return file;
+        }),
+        index: previous.index,
+      }));
+
       void setUserSettings((current) => ({
         ...current,
         workspace: {
@@ -1512,6 +1756,13 @@ export default function Page() {
         return next;
       });
 
+      setEditorNavigation((previous) => {
+        const entries = previous.entries.filter((file) => !pathMatches(file.path));
+        const index =
+          previous.index >= entries.length ? entries.length - 1 : previous.index;
+        return { entries, index };
+      });
+
       void setUserSettings((current) => ({
         ...current,
         workspace: {
@@ -1530,6 +1781,7 @@ export default function Page() {
         return { name: "", path: "" };
       });
       if (closedEditor) {
+        setEditorNavigation((previous) => ({ ...previous, index: -1 }));
         setHasUnsavedChanges(false);
         pendingFileSelectionRef.current = null;
         setNotebook(null);
@@ -1841,6 +2093,8 @@ export default function Page() {
         setAvailableKernels([
           { name: "python3", displayName: "Python 3", language: "python" },
         ]);
+      } finally {
+        setKernelInitializationSettled(true);
       }
     };
     initializeKernelService();
@@ -2256,6 +2510,8 @@ export default function Page() {
     kernelStatus === "busy" ||
     kernelStatus === "connecting" ||
     Boolean(currentKernel);
+  const canPromptForRuntime =
+    kernelInitializationSettled && !isAutoConnecting && !kernelService;
 
   /** A Jupyter workspace folder is selected in the Files panel (including server root ""). */
   const hasWorkspaceOpen =
@@ -2316,6 +2572,22 @@ export default function Page() {
       panelLayoutRef.current = {
         ...panelLayoutRef.current,
         vertical: next,
+      };
+      if (!persistPanelLayoutRef.current) return;
+      savePanelLayoutState(panelLayoutRef.current);
+    },
+    [],
+  );
+
+  /** Stores the business experience editor/chat split when panels are resized. */
+  const handleBusinessHorizontalLayout = React.useCallback(
+    (sizes: number[]) => {
+      if (sizes.length !== 2) return;
+      const next = [sizes[0], sizes[1]] as [number, number];
+      setBusinessHorizontalPanelSizes(next);
+      panelLayoutRef.current = {
+        ...panelLayoutRef.current,
+        businessHorizontal: next,
       };
       if (!persistPanelLayoutRef.current) return;
       savePanelLayoutState(panelLayoutRef.current);
@@ -2569,6 +2841,7 @@ export default function Page() {
               <MobileLayout
                 currentFile={currentFile}
                 recentFiles={recentFiles}
+                recentProjectPaths={recentProjectPaths}
                 onFileSelect={handleFileSelect}
                 onNavigateToLine={handleNavigateToLine}
                 notebookMinimap={notebookMinimap}
@@ -2580,6 +2853,7 @@ export default function Page() {
                 onRefreshKernels={handleRefreshKernels}
                 kernelService={kernelService}
                 workspaceDirectory={workspaceDirectory}
+                jupyterRootDirectory={jupyterRootDirectory}
                 onWorkspaceChange={setWorkspaceDirectory}
                 onOpenKernelDropdown={
                   !currentKernel
@@ -2591,6 +2865,7 @@ export default function Page() {
                 notebook={notebook}
                 hasWorkspaceOpen={hasWorkspaceOpen}
                 hasServerConnection={hasServerConnection}
+                canPromptForRuntime={canPromptForRuntime}
                 openConnectionDialog={openConnectionDialog}
                 isRunning={isRunning}
                 executionCountRef={executionCountRef}
@@ -2631,6 +2906,14 @@ export default function Page() {
                 onCancel={() => setUnsavedDialogIntent(null)}
               />
 
+              <FileNotFoundDialog
+                open={fileNotFoundDialogPath !== null}
+                filepath={fileNotFoundDialogPath ?? ""}
+                onOpenChange={(open) => {
+                  if (!open) setFileNotFoundDialogPath(null);
+                }}
+              />
+
               <CloudAuthDialog
                 open={cloudImportAuthOpen}
                 onOpenChange={setCloudImportAuthOpen}
@@ -2663,7 +2946,6 @@ export default function Page() {
   const terminalPanelDefaultSize = bottomSidebarCollapsed
     ? 0
     : verticalPanelSizes[1];
-
   return (
     <OpenSettingsProvider>
       <NotebookViewModeProvider>
@@ -2671,6 +2953,64 @@ export default function Page() {
           <div className="h-screen">
             <RegisterOpenUserSettingsFile onOpenFile={handleFileSelect} />
             {hasLoadedPanelVisibilityState ? (
+              isBusinessExperience ? (
+                <BusinessShell
+                  currentFile={currentFile}
+                  recentFiles={recentFiles}
+                  recentProjectPaths={recentProjectPaths}
+                  kernelService={kernelService}
+                  currentKernel={currentKernel}
+                  kernelStatus={displayKernelStatus}
+                  notebook={notebook}
+                  workspaceDirectory={workspaceDirectory}
+                  jupyterRootDirectory={jupyterRootDirectory}
+                  hasWorkspaceOpen={hasWorkspaceOpen}
+                  hasServerConnection={hasServerConnection}
+                  canPromptForRuntime={canPromptForRuntime}
+                  isFocusMode={isFocusMode}
+                  isRunning={isRunning}
+                  executionCountRef={executionCountRef}
+                  openDocumentSnapshots={openDocumentSnapshots}
+                  currentFileOutsideWorkspace={currentFileOutsideWorkspace}
+                  panelSizes={businessHorizontalPanelSizes}
+                  onPanelLayout={handleBusinessHorizontalLayout}
+                  recentFilesOpen={open}
+                  onRecentFilesOpenChange={setOpen}
+                  onOpenKernelDropdown={
+                    !currentKernel
+                      ? openConnectionDialog
+                      : () => setIsKernelDropdownOpen(true)
+                  }
+                  onToggleFocusMode={toggleFocusMode}
+                  onOpenFile={handleFileSelect}
+                  onCloseFile={handleCloseFile}
+                  canNavigateBack={canNavigateBackInEditor}
+                  canNavigateForward={canNavigateForwardInEditor}
+                  onNavigateBack={() => navigateEditorHistory("back")}
+                  onNavigateForward={() => navigateEditorHistory("forward")}
+                  shouldFocusEditorAfterSelect={
+                    shouldFocusEditorAfterRecentFileSelect
+                  }
+                  requestEditorFocus={requestEditorFocus}
+                  onWorkspaceChange={setWorkspaceDirectory}
+                  onKernelStatusChange={setKernelStatus}
+                  onCurrentKernelChange={setCurrentKernel}
+                  onIsRunningChange={setIsRunning}
+                  onNotebookChange={setNotebook}
+                  onUnsavedChangesChange={setHasUnsavedChanges}
+                  onTextSnapshotGetterChange={handleTextSnapshotGetterChange}
+                  onNotebookSnapshotGetterChange={
+                    handleNotebookSnapshotGetterChange
+                  }
+                  onTextSaveHandlerChange={handleTextSaveHandlerChange}
+                  onNotebookSaveHandlerChange={handleNotebookSaveHandlerChange}
+                  onFileLoadError={handleEditorFileLoadError}
+                  onFileOpenCancel={handleEditorFileOpenCancel}
+                  onAgentNotebookChange={() => {
+                    window.dispatchEvent(new CustomEvent("agentNotebookModified"));
+                  }}
+                />
+              ) : (
               <ResizablePanelGroup
                 direction="horizontal"
                 className="h-full"
@@ -2893,9 +3233,11 @@ export default function Page() {
                             openNotebookAsText={currentFile.openAsText === true}
                             hasWorkspace={hasWorkspaceOpen}
                             hasServerConnection={hasServerConnection}
+                            canPromptForRuntime={canPromptForRuntime}
                             onConnectServer={openConnectionDialog}
                             workspaceDirectory={workspaceDirectory}
                             recentFiles={recentFiles}
+                            recentProjectPaths={recentProjectPaths}
                             onOpenFile={handleFileSelect}
                             onWorkspaceChange={setWorkspaceDirectory}
                             // Pass kernel related props
@@ -2973,6 +3315,7 @@ export default function Page() {
                     kernelService={kernelService}
                     notebook={notebook}
                     workspaceDirectory={workspaceDirectory ?? undefined}
+                    rootDirectory={jupyterRootDirectory}
                     openDocumentSnapshots={openDocumentSnapshots}
                     onAgentNotebookChange={() => {
                       window.dispatchEvent(new CustomEvent("agentNotebookModified"));
@@ -3013,6 +3356,7 @@ export default function Page() {
                   </AssistantProvider>
                 </ResizablePanel>
               </ResizablePanelGroup>
+              )
             ) : null}
 
             <KernelConnectionDialog
@@ -3029,6 +3373,14 @@ export default function Page() {
               onSave={handleUnsavedDialogSave}
               onDiscard={handleUnsavedDialogDiscard}
               onCancel={() => setUnsavedDialogIntent(null)}
+            />
+
+            <FileNotFoundDialog
+              open={fileNotFoundDialogPath !== null}
+              filepath={fileNotFoundDialogPath ?? ""}
+              onOpenChange={(open) => {
+                if (!open) setFileNotFoundDialogPath(null);
+              }}
             />
 
             <CloudAuthDialog

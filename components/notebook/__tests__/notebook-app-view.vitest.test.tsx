@@ -1,9 +1,18 @@
 import * as React from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NotebookAppView } from "@/components/notebook/notebook-app-view";
-import { INSERT_CHAT_SKILL_EVENT } from "@/lib/chat/chat-composer-events";
+import {
+  INSERT_CHAT_MESSAGE_EVENT,
+  INSERT_CHAT_SKILL_EVENT,
+} from "@/lib/chat/chat-composer-events";
 import {
   CellExecutionStatus,
   CellType,
@@ -144,6 +153,105 @@ describe("NotebookAppView", () => {
     );
 
     expect(screen.getByText("No cells in App View yet")).toBeInTheDocument();
+  });
+
+  it("shows business prompt suggestions in the business empty state", () => {
+    render(
+      <NotebookAppView
+        businessMode
+        notebook={{
+          ...makeNotebook(),
+          cells: makeNotebook().cells.map((cell) => ({
+            ...cell,
+            metadata: { orion: { id: cell.metadata?.orion?.id } },
+          })),
+        }}
+      />,
+    );
+
+    expect(screen.getByText("What should Orion work on?")).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /Use prompt suggestion:/ }),
+    ).toHaveLength(4);
+    expect(
+      screen.getByRole("button", {
+        name: "Use prompt suggestion: Summarize this dataset",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Browse prompt library" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("No cells in App View yet")).not.toBeInTheDocument();
+  });
+
+  it("opens the full business prompt library catalog", () => {
+    render(
+      <NotebookAppView
+        businessMode
+        notebook={{
+          ...makeNotebook(),
+          cells: makeNotebook().cells.map((cell) => ({
+            ...cell,
+            metadata: { orion: { id: cell.metadata?.orion?.id } },
+          })),
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Browse prompt library" }));
+
+    const dialog = screen.getByRole("dialog", {
+      name: "Prompt Library",
+    });
+
+    expect(within(dialog).getByText("Data Overview")).toBeInTheDocument();
+    expect(within(dialog).getByText("Cleaning")).toBeInTheDocument();
+    expect(within(dialog).getByText("Exploration")).toBeInTheDocument();
+    expect(within(dialog).getByText("Segmentation")).toBeInTheDocument();
+    expect(within(dialog).getByText("Time Series")).toBeInTheDocument();
+    expect(within(dialog).getByText("Business Metrics")).toBeInTheDocument();
+    expect(within(dialog).getByText("Statistics")).toBeInTheDocument();
+    expect(within(dialog).getByText("Modeling")).toBeInTheDocument();
+    expect(within(dialog).getByText("Visualization")).toBeInTheDocument();
+    expect(within(dialog).getByText("Reporting")).toBeInTheDocument();
+    expect(
+      within(dialog).getAllByRole("button", {
+        name: /Use prompt suggestion:/,
+      }),
+    ).toHaveLength(50);
+  });
+
+  it("inserts a business prompt suggestion into chat", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+
+    render(
+      <NotebookAppView
+        businessMode
+        notebook={{
+          ...makeNotebook(),
+          cells: makeNotebook().cells.map((cell) => ({
+            ...cell,
+            metadata: { orion: { id: cell.metadata?.orion?.id } },
+          })),
+        }}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Use prompt suggestion: Summarize this dataset",
+      }),
+    );
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: INSERT_CHAT_MESSAGE_EVENT,
+        detail: {
+          message:
+            "Analyze the active dataset and create a clear overview covering row counts, columns, data types, key metrics, missing values, and the first questions worth investigating.",
+        },
+      }),
+    );
   });
 
   it("offers the create-app skill shortcut in the empty state", () => {

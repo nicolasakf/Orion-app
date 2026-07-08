@@ -9,6 +9,7 @@ export const MAX_PINNED_WORKSPACE_DIRECTORY_PATHS = 50;
 export const MAX_PINNED_FILE_PATHS = 50;
 
 export const ThemeSettingSchema = z.enum(["light", "dark", "system"]);
+export const ExperienceModeSchema = z.enum(["pro", "business"]).catch("pro");
 export const InteractionModeSchema = z.enum(["Agent", "Research", "Edit", "Ask"]).catch("Agent");
 export const InteractionModeBaseSchema = z.enum(["Agent", "Research", "Edit", "Ask"]);
 export const InteractionModeBashPolicySchema = z.enum(["read_only", "full"]);
@@ -258,6 +259,10 @@ export type ProviderCredential = ProviderCredentialSummary;
 const SettingsDataSchema = z.object({
   appearance: z.object({
     theme: ThemeSettingSchema,
+    /** Primary product shell: full notebook IDE or simplified business workspace. */
+    experienceMode: ExperienceModeSchema,
+    /** False until the user completes the first-run experience mode intro dialog. */
+    experienceModeChosen: z.boolean().default(true),
   }),
   chat: z.object({
     /** Model ID used when generating short chat titles. */
@@ -339,6 +344,7 @@ export const WorkspaceSettingsDocumentSchema = z.object({
 });
 
 export type ThemeSetting = z.infer<typeof ThemeSettingSchema>;
+export type ExperienceMode = z.infer<typeof ExperienceModeSchema>;
 export type InteractionModeSetting = z.infer<typeof InteractionModeSchema>;
 export type InteractionModeBase = z.infer<typeof InteractionModeBaseSchema>;
 export type InteractionModeBashPolicy = z.infer<typeof InteractionModeBashPolicySchema>;

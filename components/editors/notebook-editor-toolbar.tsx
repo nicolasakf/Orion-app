@@ -160,6 +160,9 @@ export function NotebookEditorToolbar({
     const handleRunAllStoppedOnError = (event: Event) => {
       const detail = (event as CustomEvent<RunAllStoppedOnErrorEventDetail>)
         .detail;
+      if (detail.triggerSource !== "run-all") {
+        return;
+      }
       setGoToErrorState({
         cellIndex: detail.cellIndex,
       });

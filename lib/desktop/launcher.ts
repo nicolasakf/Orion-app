@@ -38,6 +38,8 @@ export type DesktopJupyterMode = "bundled" | "pick-python" | "saved-existing";
 export interface DesktopSession {
   app: StartedOrionApp | null;
   jupyter: StartedJupyterServer | null;
+  /** Absolute directory Jupyter was launched from. Native folder picks must stay under this root. */
+  jupyterRootDirectory: string;
   url: string;
   dispose: () => void;
 }
@@ -244,6 +246,7 @@ export async function startDesktopSession(
     return {
       app: null,
       jupyter,
+      jupyterRootDirectory: jupyterRoot,
       url: devUrl,
       dispose: () => {
         jupyter?.dispose();
@@ -266,6 +269,7 @@ export async function startDesktopSession(
   return {
     app,
     jupyter,
+    jupyterRootDirectory: jupyterRoot,
     url: app.url,
     dispose: () => {
       jupyter?.dispose();

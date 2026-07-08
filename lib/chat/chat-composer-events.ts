@@ -19,6 +19,45 @@ export interface InsertChatSkillOptions {
 
 export interface InsertChatMessageDetail {
   message: string;
+  /** When true, submit immediately instead of only prefilling the composer. */
+  submit?: boolean;
+  /** Optional dedupe key to avoid duplicate auto-fix dispatches. */
+  dedupeKey?: string;
+}
+
+export interface SubmitChatMessageOptions {
+  /** Optional dedupe key to avoid duplicate auto-fix dispatches. */
+  dedupeKey?: string;
+}
+
+const dispatchedAutoFixKeys = new Set<string>();
+
+/**
+ * Returns true when an auto-fix dispatch should proceed for the given dedupe key.
+ */
+export function shouldDispatchAutoFix(dedupeKey?: string): boolean {
+  if (!dedupeKey) {
+    return true;
+  }
+  if (dispatchedAutoFixKeys.has(dedupeKey)) {
+    return false;
+  }
+  dispatchedAutoFixKeys.add(dedupeKey);
+  return true;
+}
+
+/** Builds a shared dedupe key for business notebook error auto-fix dispatches. */
+export function buildBusinessErrorDedupeKey(
+  cellIndex: number,
+  ename?: string,
+  evalue?: string,
+): string {
+  return `business-error:${cellIndex}:${ename ?? ""}:${evalue ?? ""}`;
+}
+
+/** Clears recorded auto-fix dedupe keys. Intended for tests only. */
+export function resetAutoFixDedupeKeysForTests(): void {
+  dispatchedAutoFixKeys.clear();
 }
 
 /**
@@ -109,6 +148,27 @@ export function dispatchInsertChatMessage(message: string): void {
   );
 }
 
+/** Requests that the chat composer submit a plain message immediately. */
+export function dispatchSubmitChatMessage(
+  message: string,
+  options?: SubmitChatMessageOptions,
+): void {
+  if (!shouldDispatchAutoFix(options?.dedupeKey)) {
+    return;
+  }
+
+  dispatchOpenChatSidebar();
+  window.dispatchEvent(
+    new CustomEvent<InsertChatMessageDetail>(INSERT_CHAT_MESSAGE_EVENT, {
+      detail: {
+        message,
+        submit: true,
+        ...(options?.dedupeKey ? { dedupeKey: options.dedupeKey } : {}),
+      },
+    }),
+  );
+}
+
 /** Extracts a typed insert-chat-skill payload from a DOM event. */
 export function getInsertChatSkillDetail(
   event: Event,
@@ -144,5 +204,9 @@ export function getInsertChatMessageDetail(
     return null;
   }
 
-  return { message: detail.message };
+  return {
+    message: detail.message,
+    ...(detail.submit === true ? { submit: true } : {}),
+    ...(typeof detail.dedupeKey === "string" ? { dedupeKey: detail.dedupeKey } : {}),
+  };
 }

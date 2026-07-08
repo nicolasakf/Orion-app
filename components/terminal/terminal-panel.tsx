@@ -422,7 +422,7 @@ export function TerminalPanel({
           )}
         >
           <NoKernelPrompt
-            description="Connect to a Jupyter server to use the integrated terminal."
+            description="Connect Orion's runtime to use the integrated terminal."
             onConnect={onOpenKernelDropdown}
             className="max-w-md"
           />

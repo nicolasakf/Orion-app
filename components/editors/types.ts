@@ -13,6 +13,7 @@ import type {
 export interface EditorRuntimeProps {
   filepath: string;
   openNotebookAsText?: boolean;
+  businessMode?: boolean;
   kernelService?: KernelService | null;
   currentKernel?: KernelInfo | null;
   kernelStatus?: KernelStatus;
@@ -25,6 +26,7 @@ export interface EditorRuntimeProps {
   onIsRunningChange?: React.Dispatch<React.SetStateAction<boolean>>;
   onNotebookChange?: (notebook: NotebookType | null) => void;
   onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
+  onFileLoadError?: (failedFilepath: string, error?: unknown) => boolean | void;
   onNotebookSnapshotGetterChange?: (
     getter: OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null,
   ) => void;

@@ -31,7 +31,8 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { toast } from "sonner";
-import { CmdOrCtrl, Shift } from "@/components/common/keyboard-icons";
+import { AltOrOption, CmdOrCtrl, Shift } from "@/components/common/keyboard-icons";
+import { useIsDesktopApp } from "@/hooks/use-platform";
 import { ToolbarButton } from "../common/toolbar-button";
 import { getRelativeDay } from "@/lib/utils";
 import type { Chat } from "@/lib/chat/chat-storage";
@@ -106,6 +107,10 @@ export interface ChatToolbarProps {
   editedTitle: string;
   chats: Chat[];
   currentChatId: string | null;
+  /** Shows a desktop window drag region between the chat title and action buttons. */
+  showWindowDragHandle?: boolean;
+  /** Adds extra padding below the toolbar in business view. */
+  relaxedSpacing?: boolean;
   onTitleChange: (value: string) => void;
   onTitleSave: () => void;
   onTitleCancel: () => void;
@@ -124,6 +129,8 @@ export function ChatToolbar({
   editedTitle,
   chats,
   currentChatId,
+  showWindowDragHandle = false,
+  relaxedSpacing = false,
   onTitleChange,
   onTitleSave,
   onTitleCancel,
@@ -135,6 +142,7 @@ export function ChatToolbar({
   onDeleteChat,
   onExportTranscript,
 }: ChatToolbarProps) {
+  const isDesktopApp = useIsDesktopApp();
   const titleInputRef = useRef<HTMLInputElement>(null);
   const copyClickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -216,10 +224,22 @@ export function ChatToolbar({
   }, {} as Record<string, Chat[]>);
 
   return (
-    <div className="sticky top-0 z-10 flex h-14 w-full min-w-0 shrink-0 items-center bg-sidebar px-2">
+    <div
+      className={
+        relaxedSpacing
+          ? "sticky top-0 z-10 flex min-h-14 w-full min-w-0 shrink-0 items-center bg-sidebar px-2 pb-3 pl-3 pt-2"
+          : "sticky top-0 z-10 flex h-14 w-full min-w-0 shrink-0 items-center bg-sidebar px-2"
+      }
+    >
       <div className="flex h-full w-full min-w-0 items-center justify-between gap-2">
         {/* Left side - Chat title */}
-        <div className="min-w-0 flex-1">
+        <div
+          className={
+            showWindowDragHandle
+              ? "min-w-0 shrink"
+              : "min-w-0 flex-1"
+          }
+        >
           {isEditingTitle ? (
             <Input
               ref={titleInputRef}
@@ -262,6 +282,13 @@ export function ChatToolbar({
           )}
         </div>
 
+        {showWindowDragHandle ? (
+          <div
+            aria-hidden="true"
+            className="electron-window-drag h-10 min-w-8 flex-1 self-stretch"
+          />
+        ) : null}
+
         {/* Right side — pinned to the trailing edge of the toolbar row */}
         <div className="flex shrink-0 items-center gap-1">
           <DropdownMenu>
@@ -284,7 +311,11 @@ export function ChatToolbar({
           <ToolbarButton
             onClick={onNewChat}
             toolTipLabel="New Chat"
-            toolTipShortcut={[[CmdOrCtrl, Shift, "O"]]}
+            toolTipShortcut={
+              isDesktopApp
+                ? [[CmdOrCtrl, "N"]]
+                : [[CmdOrCtrl, Shift, "O"]]
+            }
           >
             <Plus className="h-4 w-4" />
           </ToolbarButton>
@@ -296,7 +327,11 @@ export function ChatToolbar({
             <PopoverTrigger asChild>
               <ToolbarButton
                 toolTipLabel="Chat History"
-                toolTipShortcut={[[CmdOrCtrl, "H"]]}
+                toolTipShortcut={
+                  isDesktopApp
+                    ? [[CmdOrCtrl, AltOrOption, "H"]]
+                    : [[CmdOrCtrl, "H"]]
+                }
               >
                 <History className="h-4 w-4" />
               </ToolbarButton>

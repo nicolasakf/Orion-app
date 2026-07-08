@@ -134,7 +134,7 @@ describe("SQLite chat storage", () => {
 
     const migratedDb = await getChatDatabase();
 
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(2);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(3);
     await expect(getChat("chat-1")).resolves.toMatchObject({
       id: "chat-1",
       messages: [{ id: "message-1" }],
@@ -151,7 +151,7 @@ describe("SQLite chat storage", () => {
   it("creates the full schema on a fresh database", async () => {
     const db = await getChatDatabase();
 
-    expect(db.pragma("user_version", { simple: true })).toBe(2);
+    expect(db.pragma("user_version", { simple: true })).toBe(3);
     expect(tableExists(db, "chats")).toBe(true);
     expect(tableExists(db, "chat_messages")).toBe(true);
     expect(tableExists(db, "subagent_sessions")).toBe(true);
@@ -160,6 +160,7 @@ describe("SQLite chat storage", () => {
     expect(tableExists(db, "model_usage")).toBe(true);
     expect(tableExists(db, "edit_checkpoint")).toBe(true);
     expect(tableExists(db, "edit_checkpoint_target")).toBe(true);
+    expect(columnExists(db, "chats", "forked_from_json")).toBe(true);
   });
 
   it("saves, lists, loads, deletes, and clears chats", async () => {
@@ -240,6 +241,128 @@ describe("SQLite chat storage", () => {
       label: "Analysis",
       summary: "Done",
     });
+  });
+
+  it("round-trips fork metadata in full and metadata-only reads", async () => {
+    await saveChat(
+      createChat({
+        forkedFrom: {
+          sourceChatId: "source-chat",
+          sourceMessageId: "source-message",
+          sourceMessageIndex: 2,
+          mode: "edit_resend",
+          createdAt: "2026-05-19T12:02:00.000Z",
+        },
+      })
+    );
+
+    await expect(getChat("chat-1")).resolves.toMatchObject({
+      forkedFrom: {
+        sourceChatId: "source-chat",
+        sourceMessageId: "source-message",
+        sourceMessageIndex: 2,
+        mode: "edit_resend",
+      },
+    });
+    await expect(getChatMetas()).resolves.toMatchObject([
+      {
+        id: "chat-1",
+        forkedFrom: {
+          sourceChatId: "source-chat",
+          sourceMessageId: "source-message",
+        },
+      },
+    ]);
+  });
+
+  it("migrates schema version 2 databases to add fork metadata", async () => {
+    const dbPath = path.join(tempDirectory, "orion.db");
+    const versionTwoDb = new Database(dbPath);
+    versionTwoDb.exec(`
+      create table chats (
+        id text primary key,
+        title text not null,
+        created_at text not null,
+        updated_at text not null,
+        compaction_summary_json text
+      );
+      create table chat_messages (
+        id text primary key,
+        chat_id text not null,
+        ordinal integer not null,
+        role text not null,
+        timestamp text not null,
+        message_json text not null,
+        foreign key (chat_id) references chats(id) on delete cascade
+      );
+      create table subagent_sessions (
+        id text primary key,
+        chat_id text not null,
+        tool_call_id text not null,
+        session_json text not null,
+        created_at text not null,
+        updated_at text not null,
+        foreign key (chat_id) references chats(id) on delete cascade
+      );
+      create table chat_session (
+        id text primary key,
+        local_chat_id text not null unique,
+        status text not null default 'idle',
+        created_at text not null,
+        updated_at text not null
+      );
+      create table model_request (
+        id text primary key,
+        chat_session_id text,
+        origin text not null,
+        created_at text not null
+      );
+      create table model_usage (
+        id text primary key,
+        request_id text,
+        model_id text not null,
+        provider_id text not null,
+        tokens_in integer,
+        tokens_out integer,
+        cost_usd real,
+        cache_read_tokens integer,
+        cache_creation_tokens integer,
+        reasoning_tokens integer,
+        is_byok integer not null default 0
+      );
+      create table edit_checkpoint (
+        id text primary key,
+        request_id text not null unique,
+        local_chat_id text,
+        status text not null default 'open',
+        summary text,
+        created_at text not null,
+        updated_at text not null
+      );
+      create table edit_checkpoint_target (
+        id text primary key,
+        checkpoint_id text not null,
+        kind text not null,
+        operation text not null,
+        path text not null,
+        target_id text,
+        before_json text not null,
+        after_json text not null,
+        before_hash text,
+        after_hash text,
+        first_tool_call_id text,
+        last_tool_call_id text,
+        created_at text not null,
+        updated_at text not null
+      );
+      pragma user_version = 2;
+    `);
+    versionTwoDb.close();
+
+    const migratedDb = await getChatDatabase();
+
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(3);
+    expect(columnExists(migratedDb, "chats", "forked_from_json")).toBe(true);
   });
 
   it("stores local chat sessions, model requests, and model usage rows", async () => {
@@ -607,4 +730,12 @@ function indexExists(db: OrionDatabase, name: string): boolean {
       .prepare("select 1 from sqlite_master where type = 'index' and name = ?")
       .get(name)
   );
+}
+
+/** Returns true when a table column exists in the test database. */
+function columnExists(db: OrionDatabase, tableName: string, columnName: string): boolean {
+  const rows = db
+    .prepare("select name from pragma_table_info(?)")
+    .all(tableName) as Array<{ name: string }>;
+  return rows.some((row) => row.name === columnName);
 }

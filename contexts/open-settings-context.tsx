@@ -31,29 +31,41 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
     React.useState<AgentSettingsSection | null>(null);
   const openUserSettingsFileHandlerRef = React.useRef<(() => void) | null>(null);
 
-  /** ⌘⌥, (Windows: Win+Alt+,): toggle the settings dialog from anywhere in the app shell. */
+  /** Opens the settings dialog from the desktop menu or keyboard shortcut. */
   React.useEffect(() => {
+    const isDesktopShell = Boolean(window.orionDesktopShell);
+    const openDefaultSettings = () => {
+      setInitialTab(null);
+      setInitialAgentSection(null);
+      setOpen(true);
+    };
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (
-        !e.metaKey ||
-        !e.altKey ||
-        e.ctrlKey ||
-        e.shiftKey ||
-        e.code !== "Comma"
-      ) {
+      const isDesktopSettingsShortcut =
+        isDesktopShell &&
+        ((e.metaKey && !e.ctrlKey) || (!e.metaKey && e.ctrlKey)) &&
+        !e.altKey &&
+        !e.shiftKey &&
+        e.code === "Comma";
+      const isBrowserSettingsShortcut =
+        !isDesktopShell &&
+        e.metaKey &&
+        e.altKey &&
+        !e.ctrlKey &&
+        !e.shiftKey &&
+        e.code === "Comma";
+      if (!isDesktopSettingsShortcut && !isBrowserSettingsShortcut) {
         return;
       }
       e.preventDefault();
-      setOpen((prev) => {
-        if (prev) {
-          setInitialTab(null);
-          setInitialAgentSection(null);
-        }
-        return !prev;
-      });
+      openDefaultSettings();
     };
+    const unsubscribeDesktopOpenSettings =
+      window.orionDesktopShell?.onOpenSettings?.(openDefaultSettings);
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    return () => {
+      unsubscribeDesktopOpenSettings?.();
+      window.removeEventListener("keydown", handleKeyDown);
+    };
   }, []);
 
   const openWithTab = React.useCallback(

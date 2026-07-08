@@ -34,6 +34,7 @@ import { Switch } from "@/components/ui/switch";
 import { useOpenSettings } from "@/contexts/open-settings-context";
 import { useCloudUser } from "@/hooks/use-cloud-user";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import { useIsDesktopApp } from "@/hooks/use-platform";
 import { createOrionCloudSupabaseClient } from "@/lib/cloud/supabase-client";
 import { cn } from "@/lib/utils";
 import { useOrionUpdate } from "@/components/update-provider";
@@ -69,25 +70,29 @@ function AccountMenuToggles({
   onToggleFocusMode,
   isDarkTheme,
   onThemeToggle,
+  showFocusMode = true,
 }: {
   isFocusMode: boolean;
   onToggleFocusMode: () => void;
   isDarkTheme: boolean;
   onThemeToggle: (checked: boolean) => void;
+  showFocusMode?: boolean;
 }) {
   return (
     <div className="ml-4 flex items-center gap-3">
-      <ToolbarButton
-        onClick={onToggleFocusMode}
-        aria-pressed={isFocusMode}
-        className={cn(
-          isFocusMode && "bg-accent text-foreground hover:bg-accent",
-        )}
-        toolTipLabel={isFocusMode ? "Exit Focus Mode" : "Enter Focus Mode"}
-        toolTipShortcut={[[AltOrOption, "Z"]]}
-      >
-        <Scan className="h-4 w-4" />
-      </ToolbarButton>
+      {showFocusMode ? (
+        <ToolbarButton
+          onClick={onToggleFocusMode}
+          aria-pressed={isFocusMode}
+          className={cn(
+            isFocusMode && "bg-accent text-foreground hover:bg-accent",
+          )}
+          toolTipLabel={isFocusMode ? "Exit Focus Mode" : "Enter Focus Mode"}
+          toolTipShortcut={[[AltOrOption, "Z"]]}
+        >
+          <Scan className="h-4 w-4" />
+        </ToolbarButton>
+      ) : null}
       <div className="flex items-center gap-1.5">
         <Sun className="h-3.5 w-3.5 text-muted-foreground" />
         <Switch
@@ -107,12 +112,14 @@ export function SettingsMenu({
   onToggleFocusMode,
   ...props
 }: SettingsMenuProps) {
-  const { setUserSettings } = useOrionSettings();
+  const { effectiveSettings, setUserSettings } = useOrionSettings();
+  const isBusinessMode = effectiveSettings.appearance.experienceMode === "business";
   const { setTheme, resolvedTheme } = useTheme();
   const [authOpen, setAuthOpen] = useState(false);
   const { configured, user, loading, refresh } = useCloudUser();
   const { state: updateState, updateAvailable, checkForUpdates, performUpdate } =
     useOrionUpdate();
+  const isDesktopApp = useIsDesktopApp();
   const {
     open: isSettingsDialogOpen,
     onOpenChange: setIsSettingsDialogOpen,
@@ -152,6 +159,9 @@ export function SettingsMenu({
 
   const avatarUrl =
     user?.user_metadata?.avatar_url ?? user?.user_metadata?.picture;
+  const settingsTooltipShortcut = isDesktopApp
+    ? [[CmdOrCtrl, ","]]
+    : [[CmdOrCtrl, AltOrOption, ","]];
 
   return (
     <>
@@ -162,7 +172,7 @@ export function SettingsMenu({
             size="icon"
             className="relative h-8 w-8"
             toolTipLabel="Account & settings"
-            toolTipShortcut={[[CmdOrCtrl, AltOrOption, ","]]}
+            toolTipShortcut={settingsTooltipShortcut}
             {...props}
           >
             <img
@@ -220,6 +230,7 @@ export function SettingsMenu({
                     onToggleFocusMode={onToggleFocusMode}
                     isDarkTheme={resolvedTheme === "dark"}
                     onThemeToggle={handleThemeToggle}
+                    showFocusMode={!isBusinessMode}
                   />
                 </div>
               </>
@@ -238,6 +249,7 @@ export function SettingsMenu({
                   onToggleFocusMode={onToggleFocusMode}
                   isDarkTheme={resolvedTheme === "dark"}
                   onThemeToggle={handleThemeToggle}
+                  showFocusMode={!isBusinessMode}
                 />
               </div>
             )}

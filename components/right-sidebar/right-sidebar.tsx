@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import { flushSync } from "react-dom";
 import { useChat } from "@ai-sdk/react";
 import {
   type UIMessage,
@@ -21,6 +22,7 @@ import {
   type SubagentSession,
   type SubagentSessionStatus,
 } from "@/lib/chat/chat-storage";
+import { createChatFork, type ChatForkKind } from "@/lib/chat/chat-forking";
 import { downloadChatTranscriptMarkdown } from "@/lib/chat/export-chat-transcript";
 import {
   formatCellReferenceLabel,
@@ -38,6 +40,7 @@ import {
   INSERT_CHAT_SKILL_EVENT,
   insertMessageIntoComposerInput,
   insertSkillIntoComposerInput,
+  shouldDispatchAutoFix,
 } from "@/lib/chat/chat-composer-events";
 import { compactConversation } from "@/lib/agent/context-manager";
 import { buildWirePayload, stripInspectedRasterData } from "@/lib/agent/context-optimizer";
@@ -58,6 +61,7 @@ import { useAssistantChatOptional } from "@/lib/agent";
 import type { AgentRule } from "@/lib/agent/rules";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import { NO_DEPENDENCY_TOOLS, SERVER_ONLY_TOOLS } from "@/lib/agent/tool-schemas";
+import { isAbsoluteAgentPath, toAgentAbsolutePath } from "@/lib/agent/path-resolver";
 import {
   normalizeInteractionModeConfigs,
   resolveInteractionModeConfig,
@@ -87,7 +91,7 @@ import type { KernelStatus, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import { useKernelVariables } from "@/hooks/use-kernel-variables";
-import { usePlatformOs } from "@/hooks/use-platform";
+import { useIsDesktopApp, usePlatformOs } from "@/hooks/use-platform";
 import { useOpenSettings } from "@/contexts/open-settings-context";
 import { AutoRunConfirmDialog } from "@/components/common/auto-run-confirm-dialog";
 import { ProviderLogo } from "@/components/provider-logo";
@@ -109,6 +113,7 @@ import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { ModelCatalogEntry } from "@/lib/agent/model-catalog";
 import { ChatToolbar } from "./chat-toolbar";
 import { ChatBody } from "./chat-body";
+import { ChatSurface } from "./chat-surface";
 import { createCostSummaryMessageId } from "./cost-summary-card";
 import { ChatTextbox, type ReferenceTab } from "./chat-textbox";
 import { finalizeCompletedToolTimings, type ToolTiming } from "./assistant-activity-grouping";
@@ -633,6 +638,16 @@ function isRightSidebarKeyboardScope(
   );
 }
 
+/** Returns true when chat shortcuts should run for the current keydown event. */
+function shouldHandleChatShortcut(
+  event: KeyboardEvent,
+  sidebarRoot: HTMLElement | null,
+  isDesktopApp: boolean,
+): boolean {
+  if (isDesktopApp) return true;
+  return isRightSidebarKeyboardScope(event, sidebarRoot);
+}
+
 // ============================================================================
 // RightSidebar
 // ============================================================================
@@ -669,6 +684,8 @@ export function RightSidebar({
 
   // State management
   const [chats, setChats] = useState<Chat[]>([]);
+  const chatsRef = useRef<Chat[]>([]);
+  chatsRef.current = chats;
   const [isChatsLoaded, setIsChatsLoaded] = useState(false);
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -694,7 +711,12 @@ export function RightSidebar({
   const [autoRunConfirmOpen, setAutoRunConfirmOpen] = useState(false);
   const [showKernelPrompt, setShowKernelPrompt] = useState(false);
   const [activeSubagentToolCallId, setActiveSubagentToolCallId] = useState<string | null>(null);
-  const toolApprovalMode = effectiveSettings.chat.toolApprovalMode;
+  const isBusinessExperience =
+    effectiveSettings.appearance.experienceMode === "business";
+  const isDesktopApp = useIsDesktopApp();
+  const toolApprovalMode = isBusinessExperience
+    ? "auto_run"
+    : effectiveSettings.chat.toolApprovalMode;
   const [modelSettingsMap, setModelSettingsMap] = useState<ModelSettingsMap>({});
   const [isCompacting, setIsCompacting] = useState(false);
   const [checkpointStatuses, setCheckpointStatuses] = useState<Map<string, EditCheckpointStatus>>(new Map());
@@ -1223,6 +1245,13 @@ export function RightSidebar({
 
   // AI Assistant context (optional — may not be in provider)
   const assistant = useAssistantChatOptional();
+  const agentPromptPath = useCallback(
+    (path: string): string =>
+      isAbsoluteAgentPath(path)
+        ? path
+        : toAgentAbsolutePath(path, { rootDirectory: assistant?.rootDirectory }) ?? path,
+    [assistant?.rootDirectory]
+  );
   const clientPlatformOs = usePlatformOs();
   const { variables: kernelVariables, refresh: refreshKernelVariables } =
     useKernelVariables(kernelService ?? null);
@@ -1321,6 +1350,7 @@ export function RightSidebar({
     const { notebookPath } = agentEditorContext(activeNotebookPath);
     if (activeNotebookPath) {
       const isNotebook = activeNotebookPath.endsWith(".ipynb");
+      const promptPath = agentPromptPath(activeNotebookPath);
       addOption(
         makeReference(
           "file",
@@ -1328,21 +1358,22 @@ export function RightSidebar({
           { type: "file", path: activeNotebookPath },
           `Active file: ${activeNotebookPath}`,
           isNotebook
-            ? `Use use_notebook with notebookPath="${activeNotebookPath}", then read_notebook or read_cell for exact cells.`
-            : `Use read_file with path="${activeNotebookPath}" for exact contents.`
+            ? `Use use_notebook with notebookPath="${promptPath}", then read_notebook or read_cell for exact cells.`
+            : `Use read_file with path="${promptPath}" for exact contents.`
         ),
         "Active file"
       );
     }
 
     if (notebookPath && selectedNotebookCellIndex !== null) {
+      const promptPath = agentPromptPath(notebookPath);
       addOption(
         makeReference(
           "cell",
           formatCellReferenceLabel([selectedNotebookCellIndex]),
           { type: "cell", notebookPath, cellIndices: [selectedNotebookCellIndex] },
           `Selected notebook cell ${selectedNotebookCellIndex} in ${notebookPath}.`,
-          `Use use_notebook with notebookPath="${notebookPath}", then read_cell for cell index ${selectedNotebookCellIndex}.`
+          `Use use_notebook with notebookPath="${promptPath}", then read_cell for cell index ${selectedNotebookCellIndex}.`
         ),
         "Selected cell"
       );
@@ -1354,6 +1385,7 @@ export function RightSidebar({
       activeNotebook !== undefined &&
       (referenceSearchTab === "cells" || referenceSearchQuery.length > 0);
     if (shouldIncludeNotebookCells) {
+      const promptPath = agentPromptPath(notebookPath);
       activeNotebook.cells.forEach((cell, index) => {
         addOption(
           makeReference(
@@ -1361,7 +1393,7 @@ export function RightSidebar({
             formatCellReferenceLabel([index]),
             { type: "cell", notebookPath, cellIndices: [index] },
             notebookCellSourcePreview(cell),
-            `Use use_notebook with notebookPath="${notebookPath}", then read_cell for cell index ${index}.`
+            `Use use_notebook with notebookPath="${promptPath}", then read_cell for cell index ${index}.`
           ),
           notebookCellDescription(cell, index)
         );
@@ -1372,6 +1404,7 @@ export function RightSidebar({
       .filter((file) => file.path && file.path !== activeNotebookPath)
       .slice(0, 2);
     for (const file of recentFileOptions) {
+      const promptPath = agentPromptPath(file.path);
       addOption(
         makeReference(
           "file",
@@ -1379,8 +1412,8 @@ export function RightSidebar({
           { type: "file", path: file.path },
           `Recent file: ${file.path}`,
           file.path.endsWith(".ipynb")
-            ? `Use use_notebook with notebookPath="${file.path}", then read_notebook or read_cell for exact cells.`
-            : `Use read_file with path="${file.path}" for exact contents.`
+            ? `Use use_notebook with notebookPath="${promptPath}", then read_notebook or read_cell for exact cells.`
+            : `Use read_file with path="${promptPath}" for exact contents.`
         ),
         "Recent file"
       );
@@ -1388,19 +1421,21 @@ export function RightSidebar({
 
     if (workspaceDirectory !== null && workspaceDirectory !== undefined) {
       const label = workspaceDirectory || "/";
+      const promptPath = agentPromptPath(workspaceDirectory);
       addOption(
         makeReference(
           "folder",
           label,
           { type: "folder", path: workspaceDirectory },
           `Current workspace folder: ${label}`,
-          "Use file and shell tools relative to this workspace when exact contents are needed."
+          `Use file and shell tools with absolute paths under "${promptPath}" when exact contents are needed.`
         ),
         "Current workspace"
       );
     }
 
     for (const entry of workspaceReferenceEntries) {
+      const promptPath = agentPromptPath(entry.path);
       addOption(
         makeReference(
           entry.type,
@@ -1408,8 +1443,8 @@ export function RightSidebar({
           { type: entry.type, path: entry.path },
           `${entry.type === "folder" ? "Folder" : "File"}: ${entry.path}`,
           entry.type === "folder"
-            ? `Use bash with safe read-only commands scoped to "${entry.path}" when exact folder contents are needed.`
-            : `Use read_file with path="${entry.path}" for exact contents.`
+            ? `Use bash with safe read-only commands scoped to "${promptPath}" when exact folder contents are needed.`
+            : `Use read_file with path="${promptPath}" for exact contents.`
         ),
         entry.path
       );
@@ -1467,6 +1502,7 @@ export function RightSidebar({
   }, [
     activeNotebookPath,
     activeNotebook,
+    agentPromptPath,
     assistant?.terminalPool,
     effectiveChatId,
     kernelVariables,
@@ -1542,6 +1578,17 @@ export function RightSidebar({
   const [stopConfirmAction, setStopConfirmAction] = useState<
     { type: "new-chat" } | { type: "switch-chat"; targetChatId: string } | null
   >(null);
+  type PendingChatForkAction = {
+    kind: ChatForkKind;
+    sourceChat: Chat;
+    sourceMessageIndex: number;
+    editedText?: string;
+    references?: ResolvedChatReference[];
+    attachments?: ChatDraftAttachment[];
+  };
+  const [pendingChatForkAction, setPendingChatForkAction] =
+    useState<PendingChatForkAction | null>(null);
+  const [isRestoringForkWorkspace, setIsRestoringForkWorkspace] = useState(false);
 
   // Guard against calling generateAndSetTitle more than once per chat session.
   // A ref is used so the check is synchronous and not subject to stale closure
@@ -1610,6 +1657,9 @@ export function RightSidebar({
     references: ResolvedChatReference[];
     attachments: ChatDraftAttachment[];
   } | null>(null);
+  const customHandleSubmitRef = useRef<
+    (event: React.FormEvent<HTMLFormElement>) => unknown
+  >(() => {});
   const queueProcessingRef = useRef(false);
   const prevAgentTurnActiveRef = useRef(false);
   /** Starts a fresh model turn and clears UI-level cancellation state. */
@@ -1718,7 +1768,7 @@ export function RightSidebar({
           typeof detail.preview === "string"
             ? detail.preview
             : `Notebook cell ${detail.cellIndex} in ${detail.notebookPath}.`,
-          `Use use_notebook with notebookPath="${detail.notebookPath}", then read_cell for cell index ${detail.cellIndex}.`
+          `Use use_notebook with notebookPath="${agentPromptPath(detail.notebookPath)}", then read_cell for cell index ${detail.cellIndex}.`
         )
       );
     };
@@ -1727,7 +1777,7 @@ export function RightSidebar({
     return () => {
       window.removeEventListener("orion:mention-notebook-cell", handleMentionNotebookCell);
     };
-  }, [addDraftReference]);
+  }, [addDraftReference, agentPromptPath]);
 
   useEffect(() => {
     /** Converts output mention events from notebook surfaces into composer chips. */
@@ -1758,7 +1808,7 @@ export function RightSidebar({
           typeof detail.preview === "string"
             ? detail.preview
             : `Notebook cell ${detail.cellIndex}, output ${detail.outputIndex} in ${detail.notebookPath}.`,
-          `Use use_notebook with notebookPath="${detail.notebookPath}", then read_cell_output with reads=[{cellIndex:${detail.cellIndex},outputIndex:${detail.outputIndex}}].`
+          `Use use_notebook with notebookPath="${agentPromptPath(detail.notebookPath)}", then read_cell_output with reads=[{cellIndex:${detail.cellIndex},outputIndex:${detail.outputIndex}}].`
         )
       );
     };
@@ -1767,7 +1817,7 @@ export function RightSidebar({
     return () => {
       window.removeEventListener("orion:mention-notebook-output", handleMentionNotebookOutput);
     };
-  }, [addDraftReference]);
+  }, [addDraftReference, agentPromptPath]);
 
   useEffect(() => {
     const handleMentionWorkspacePath = (event: Event) => {
@@ -1785,19 +1835,21 @@ export function RightSidebar({
           : fileNameFromPath(detail.path);
 
       if (detail.itemType === "folder") {
+        const promptPath = agentPromptPath(detail.path);
         addDraftReference(
           makeReference(
             "folder",
             label,
             { type: "folder", path: detail.path },
             `Folder: ${detail.path}`,
-            `Use bash with safe read-only commands scoped to "${detail.path}" when exact folder contents are needed.`
+            `Use bash with safe read-only commands scoped to "${promptPath}" when exact folder contents are needed.`
           )
         );
         return;
       }
 
       const isNotebook = detail.path.endsWith(".ipynb");
+      const promptPath = agentPromptPath(detail.path);
       addDraftReference(
         makeReference(
           "file",
@@ -1805,8 +1857,8 @@ export function RightSidebar({
           { type: "file", path: detail.path },
           `File: ${detail.path}`,
           isNotebook
-            ? `Use use_notebook with notebookPath="${detail.path}", then read_notebook or read_cell for exact cells.`
-            : `Use read_file with path="${detail.path}" for exact contents.`
+            ? `Use use_notebook with notebookPath="${promptPath}", then read_notebook or read_cell for exact cells.`
+            : `Use read_file with path="${promptPath}" for exact contents.`
         )
       );
     };
@@ -1815,7 +1867,7 @@ export function RightSidebar({
     return () => {
       window.removeEventListener("orion:mention-workspace-path", handleMentionWorkspacePath);
     };
-  }, [addDraftReference]);
+  }, [addDraftReference, agentPromptPath]);
 
   useEffect(() => {
     const handleAttachEditorSelection = (event: Event) => {
@@ -1853,8 +1905,8 @@ export function RightSidebar({
       const range = formatLineRange(detail.lineStart, detail.lineEnd);
       const toolHint =
         typeof notebookCellIndex === "number"
-          ? `Use use_notebook with notebookPath="${detail.path}", then read_cell for cell index ${notebookCellIndex}; the selected source lines ${range} are included inline.`
-          : `Use read_file with path="${detail.path}", startLine=${detail.lineStart - 1}, endLine=${detail.lineEnd - 1} for exact contents.`;
+          ? `Use use_notebook with notebookPath="${agentPromptPath(detail.path)}", then read_cell for cell index ${notebookCellIndex}; the selected source lines ${range} are included inline.`
+          : `Use read_file with path="${agentPromptPath(detail.path)}", startLine=${detail.lineStart - 1}, endLine=${detail.lineEnd - 1} for exact contents.`;
 
       addDraftReference(
         makeReference(
@@ -1884,7 +1936,7 @@ export function RightSidebar({
     return () => {
       window.removeEventListener("orion:attach-editor-selection", handleAttachEditorSelection);
     };
-  }, [addDraftReference]);
+  }, [addDraftReference, agentPromptPath]);
 
   useEffect(() => {
     const handleMentionConversationSelection = (event: Event) => {
@@ -2002,11 +2054,13 @@ export function RightSidebar({
         agentRules: serializeAgentRules(assistant?.availableRules ?? []),
         serverInfo: assistant?.serverInfo ?? undefined,
         jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
+        rootDirectory: assistant?.rootDirectory ?? undefined,
         clientPlatformOs,
         agentCommunicationStyle,
         agentCustomCommunicationStyle,
         researchSession: researchSessionRef.current.active ? researchSessionRef.current : undefined,
         researchNudge: researchNudgeRef.current,
+        businessExperienceMode: isBusinessExperience,
         ...overrides,
       };
     },
@@ -2027,6 +2081,7 @@ export function RightSidebar({
       resolvedInteractionModeConfig,
       selectedModel,
       workspaceDirectory,
+      isBusinessExperience,
     ]
   );
 
@@ -2229,7 +2284,8 @@ export function RightSidebar({
       const persistId = effectiveChatIdRef.current;
       if (!persistId) return;
 
-      const chatForPersist = chats.find((c) => c.id === persistId);
+      const latestChats = chatsRef.current;
+      const chatForPersist = latestChats.find((c) => c.id === persistId);
       const checkpointRequestId = modelRequestIdRef.current;
       const checkpointUserMessageIndex = checkpointRequestId
         ? finalMessages.findLastIndex((candidate) => candidate.role === "user")
@@ -2251,7 +2307,7 @@ export function RightSidebar({
         };
       });
 
-      const chatBeforeUpdate = chats.find((c) => c.id === persistId);
+      const chatBeforeUpdate = latestChats.find((c) => c.id === persistId);
       const isFirstUserMessage =
         chatBeforeUpdate?.messages.length === 0 &&
         newChatMessages.some((m) => m.role === "user");
@@ -2438,10 +2494,43 @@ export function RightSidebar({
 
     /** Inserts plain text requested by notebook UI affordances into the chat draft. */
     const handleInsertChatMessage = (event: Event) => {
-      if (isInputLocked) return;
-
       const detail = getInsertChatMessageDetail(event);
       if (!detail) return;
+
+      if (detail.submit) {
+        if (!shouldDispatchAutoFix(detail.dedupeKey)) {
+          return;
+        }
+
+        if (isInputLocked) {
+          setMessageQueue((current) => [
+            ...current,
+            {
+              id: crypto.randomUUID(),
+              text: detail.message,
+              references: [],
+              attachments: [],
+            },
+          ]);
+          return;
+        }
+
+        pendingSubmitRef.current = {
+          text: detail.message,
+          references: [],
+          attachments: [],
+        };
+        void Promise.resolve(
+          customHandleSubmitRef.current({
+            preventDefault: () => {},
+          } as React.FormEvent<HTMLFormElement>),
+        ).finally(() => {
+          pendingSubmitRef.current = null;
+        });
+        return;
+      }
+
+      if (isInputLocked) return;
 
       setInput((current) => insertMessageIntoComposerInput(current, detail.message));
       focusComposer();
@@ -2706,6 +2795,88 @@ export function RightSidebar({
     [activeNotebookPath, kernelService, refreshCheckpointStatuses]
   );
 
+  /** Returns message state safe for useChat by removing persistence-only fields. */
+  const toChatStateMessages = useCallback((chatMessages: ChatMessage[]): UIMessage[] =>
+    chatMessages.map((message) => {
+      const { checkpointId: _checkpointId, ...messageWithoutCheckpoint } = message;
+      return {
+        ...messageWithoutCheckpoint,
+        metadata: normalizeChatMessageMetadata(message.metadata),
+      };
+    }), []);
+
+  /** Finds checkpoint ids that should be undone when restoring to a fork point. */
+  const getForkRestoreCheckpointIds = useCallback(
+    (action: PendingChatForkAction): string[] => {
+      const checkpointIds: string[] = [];
+      for (let index = action.sourceChat.messages.length - 1; index >= action.sourceMessageIndex; index -= 1) {
+        const message = action.sourceChat.messages[index];
+        if (!message || message.role !== "user") continue;
+        const checkpointId =
+          message.checkpointId ?? checkpointRequestByMessageId.get(message.id);
+        if (!checkpointId) continue;
+        if (checkpointStatuses.get(checkpointId) === "reverted") continue;
+        checkpointIds.push(checkpointId);
+      }
+      return checkpointIds;
+    },
+    [checkpointRequestByMessageId, checkpointStatuses]
+  );
+
+  /** Notifies open editors that checkpoint restore may have changed files. */
+  const dispatchForkWorkspaceRestored = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("agentNotebookModified"));
+    if (activeNotebookPath) {
+      window.dispatchEvent(
+        new CustomEvent("orion:agent-file-modified", {
+          detail: { path: activeNotebookPath },
+        })
+      );
+    }
+  }, [activeNotebookPath]);
+
+  /** Restores checkpointed workspace edits newest-to-oldest for a pending fork. */
+  const restoreWorkspaceForFork = useCallback(
+    async (action: PendingChatForkAction): Promise<void> => {
+      if (!kernelService) {
+        throw new Error("Connect to a Jupyter server before restoring files to this point.");
+      }
+
+      const checkpointIds = getForkRestoreCheckpointIds(action);
+      let restoredCount = 0;
+      let conflictCount = 0;
+      for (const checkpointId of checkpointIds) {
+        const result = await restoreEditCheckpoint({
+          kernelService,
+          requestId: checkpointId,
+          direction: "undo",
+        });
+        restoredCount += result.restoredCount;
+        conflictCount += result.conflicts.length;
+      }
+
+      dispatchForkWorkspaceRestored();
+      await refreshCheckpointStatuses();
+
+      if (conflictCount > 0) {
+        toast.warning(
+          `Restored ${restoredCount} item${restoredCount === 1 ? "" : "s"}; ${conflictCount} conflict${conflictCount === 1 ? "" : "s"} skipped.`
+        );
+        return;
+      }
+
+      toast.success(
+        `Restored ${restoredCount} checkpoint item${restoredCount === 1 ? "" : "s"}.`
+      );
+    },
+    [
+      dispatchForkWorkspaceRestored,
+      getForkRestoreCheckpointIds,
+      kernelService,
+      refreshCheckpointStatuses,
+    ]
+  );
+
   /** Applies model-specific raster preview handling for execution evidence. */
   const prepareAgentToolResult = useCallback(
     async (result: unknown): Promise<unknown> => {
@@ -2910,6 +3081,7 @@ export function RightSidebar({
                 activeFilePath,
                 serverInfo: assistant.serverInfo ?? undefined,
                 jupyterServerIsLocal: assistant.jupyterServerIsLocal ?? undefined,
+                rootDirectory: assistant.rootDirectory ?? undefined,
                 clientPlatformOs,
                 chatId: runChatId ?? undefined,
                 subagentDevLogInstance: nextSubagentInstance,
@@ -3443,8 +3615,9 @@ export function RightSidebar({
   setHistoryPopoverOpenRef.current = setIsHistoryPopoverOpen;
 
   /**
-   * Cmd/Ctrl+H opens history; Cmd/Ctrl+Shift+O creates a new chat when the right
-   * sidebar is focused. Bare Cmd/Ctrl+N is reserved by Chrome.
+   * Desktop: Cmd/Ctrl+N creates a new chat; Cmd/Ctrl+Alt+H opens history globally.
+   * Web: Cmd/Ctrl+Shift+O creates a new chat; Cmd/Ctrl+H opens history when the right
+   * sidebar is focused (bare Cmd/Ctrl+N is reserved by Chrome).
    */
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -3453,13 +3626,20 @@ export function RightSidebar({
 
       const hasModKey =
         (event.metaKey && !event.ctrlKey) || (!event.metaKey && event.ctrlKey);
-      if (!hasModKey || event.altKey) return;
+      if (!hasModKey) return;
 
-      const shortcutKey = event.key.toLowerCase();
-      const isNewChatShortcut = event.shiftKey && shortcutKey === "o";
-      const isHistoryShortcut = !event.shiftKey && shortcutKey === "h";
+      const isNewChatShortcut = isDesktopApp
+        ? !event.shiftKey && !event.altKey && event.code === "KeyN"
+        : event.shiftKey && !event.altKey && event.code === "KeyO";
+      const isHistoryShortcut = isDesktopApp
+        ? event.altKey && !event.shiftKey && event.code === "KeyH"
+        : !event.shiftKey && !event.altKey && event.code === "KeyH";
       if (!isNewChatShortcut && !isHistoryShortcut) return;
-      if (!isRightSidebarKeyboardScope(event, sidebarRootRef.current)) return;
+      if (
+        !shouldHandleChatShortcut(event, sidebarRootRef.current, isDesktopApp)
+      ) {
+        return;
+      }
 
       event.preventDefault();
       event.stopPropagation();
@@ -3474,7 +3654,7 @@ export function RightSidebar({
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () =>
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [isSubagentChatView]);
+  }, [isDesktopApp, isSubagentChatView]);
 
   const saveTitle = () => {
     if (!currentChatId || !editedTitle.trim()) {
@@ -3592,6 +3772,150 @@ export function RightSidebar({
       setDraftAttachments([]);
     }
   };
+
+  /** Clears composer state after a fork action has been accepted. */
+  const clearForkComposerState = useCallback((action: PendingChatForkAction) => {
+    if (action.kind === "edit-resend") {
+      setInput("");
+      setEditingState(null);
+    }
+    setDraftReferences([]);
+    setDraftAttachments([]);
+    setEphemeralCostMessage(null);
+  }, []);
+
+  /** Creates a chat fork and optionally sends the edited replacement message. */
+  const executeChatForkAction = useCallback(
+    async (
+      action: PendingChatForkAction,
+      options: { restoreWorkspace: boolean }
+    ): Promise<void> => {
+      if (options.restoreWorkspace) {
+        setIsRestoringForkWorkspace(true);
+        try {
+          await restoreWorkspaceForFork(action);
+        } catch (error) {
+          console.error("Failed to restore workspace before fork:", error);
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : "Failed to restore files to this point."
+          );
+          return;
+        } finally {
+          setIsRestoringForkWorkspace(false);
+        }
+      }
+
+      const now = new Date();
+      const fork = createChatFork({
+        sourceChat: action.sourceChat,
+        sourceMessageIndex: action.sourceMessageIndex,
+        kind: action.kind,
+        forkId: crypto.randomUUID(),
+        now,
+      });
+      const forkMessages = toChatStateMessages(fork.messages);
+
+      flushSync(() => {
+        setChats((prev) => {
+          const next = [fork, ...prev];
+          chatsRef.current = next;
+          return next;
+        });
+        setCurrentChatId(fork.id);
+        setMessages(forkMessages);
+        setActiveSubagentToolCallId(null);
+        setPendingChatForkAction(null);
+        clearForkComposerState(action);
+      });
+      effectiveChatIdRef.current = fork.id;
+      compactionSummaryRef.current = fork.compactionSummary;
+      messagesRef.current = forkMessages;
+      trackedToolCallsRef.current = new Map();
+      pendingKernelToolCallsRef.current = [];
+      pendingServerToolCallsRef.current = [];
+      setShowKernelPrompt(false);
+
+      if (action.kind !== "edit-resend") {
+        toast.success("Chat fork created.");
+        return;
+      }
+
+      const messageText = action.editedText?.trim() ?? "";
+      if (!messageText) return;
+
+      beginAgentTurn();
+      const modelRequestId = crypto.randomUUID();
+      modelRequestIdRef.current = modelRequestId;
+      ensureResearchSessionActive(messageText);
+      forcedSubagentForCurrentTurnRef.current = null;
+
+      const attachments = action.attachments ?? [];
+      const references = [
+        ...(action.references ?? []),
+        ...attachments.map((attachment) => attachment.reference),
+      ].slice(-20);
+      const imageFileParts = attachments
+        .map((attachment) => attachment.imageFilePart)
+        .filter((part): part is FileUIPart => part !== undefined);
+      bodyRef.current = {
+        ...bodyRef.current,
+        chatId: fork.id,
+        modelRequestId,
+      };
+
+      await sendMessage(
+        {
+          text: messageText,
+          ...(imageFileParts.length > 0 ? { files: imageFileParts } : {}),
+          ...(references.length > 0 ? { metadata: { references } } : {}),
+        },
+        {
+          body: buildChatRequestBody({
+            chatId: fork.id,
+            modelRequestId,
+          }),
+        }
+      );
+    },
+    [
+      beginAgentTurn,
+      buildChatRequestBody,
+      clearForkComposerState,
+      ensureResearchSessionActive,
+      restoreWorkspaceForFork,
+      sendMessage,
+      setMessages,
+      toChatStateMessages,
+    ]
+  );
+
+  /** Prompts for optional workspace restore when a fork point has later checkpoints. */
+  const requestOrExecuteChatFork = useCallback(
+    (action: PendingChatForkAction): void => {
+      if (getForkRestoreCheckpointIds(action).length > 0) {
+        setPendingChatForkAction(action);
+        return;
+      }
+
+      void executeChatForkAction(action, { restoreWorkspace: false });
+    },
+    [executeChatForkAction, getForkRestoreCheckpointIds]
+  );
+
+  /** Creates a new chat branch at the selected user message without sending. */
+  const handleForkFromMessage = useCallback(
+    (_message: UIMessage, index: number) => {
+      if (isInputLocked || !currentChat) return;
+      requestOrExecuteChatFork({
+        kind: "fork-from-message",
+        sourceChat: currentChat,
+        sourceMessageIndex: index,
+      });
+    },
+    [currentChat, isInputLocked, requestOrExecuteChatFork]
+  );
 
   // ============================================================================
   // Submission
@@ -3851,191 +4175,20 @@ export function RightSidebar({
       return;
     }
 
-    if (editingState && currentChatId) {
-      beginAgentTurn();
-      const modelRequestId = crypto.randomUUID();
-      modelRequestIdRef.current = modelRequestId;
-      ensureResearchSessionActive(effectiveInput);
-      const currentMessages = messages;
-      const editIndex = editingState.messageIndex;
-      const referencesForEditedMessage = [
-        ...effectiveReferences,
-        ...effectiveAttachments.map((attachment) => attachment.reference),
-      ].slice(-20);
-
-      const newMessages = [...currentMessages];
-      // Update the user message parts with the new text content
-      newMessages[editIndex] = {
-        ...newMessages[editIndex],
-        parts: [{ type: "text" as const, text: effectiveInput }],
-        metadata:
-          referencesForEditedMessage.length > 0
-            ? { references: referencesForEditedMessage }
-            : undefined,
-      };
-      newMessages.splice(editIndex + 1);
-
-      setMessages(newMessages);
-      clearComposer();
-      setEphemeralCostMessage(null);
-      setEditingState(null);
-
-      try {
-        const bodyPayload = buildChatRequestBody({
-          messages: newMessages.map((m) => ({ role: m.role, content: getTextContent(m) })),
-          modelRequestId,
-        });
-
-        const response = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(bodyPayload),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to get response: ${response.statusText}`);
-        }
-
-        // Parse UIMessage stream format using readUIMessageStream
-        const reader = response.body?.getReader();
-        const decoder = new TextDecoder();
-        let assistantResponse = "";
-        const assistantMessageId = Date.now().toString();
-
-        if (reader) {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            const chunk = decoder.decode(value);
-            const lines = chunk.split("\n");
-
-            for (const line of lines) {
-              // UIMessage stream SSE format: "d:" prefix for data events
-              if (line.startsWith("d:")) {
-                try {
-                  const data = JSON.parse(line.substring(2));
-                  // Handle text delta chunks
-                  if (data.type === "text" && data.text) {
-                    assistantResponse += data.text;
-                  } else if (data.type === "text-delta" && data.textDelta) {
-                    assistantResponse += data.textDelta;
-                  }
-
-                  if (assistantResponse) {
-                    setMessages((prev) => {
-                      const updated = [...prev];
-                      const lastMessage = updated[updated.length - 1];
-
-                      if (
-                        lastMessage &&
-                        lastMessage.role === "assistant" &&
-                        lastMessage.id === assistantMessageId
-                      ) {
-                        updated[updated.length - 1] = {
-                          ...lastMessage,
-                          parts: [{ type: "text" as const, text: assistantResponse }],
-                        };
-                      } else {
-                        updated.push({
-                          id: assistantMessageId,
-                          role: "assistant" as const,
-                          parts: [{ type: "text" as const, text: assistantResponse }],
-                        });
-                      }
-
-                      return updated;
-                    });
-                  }
-                } catch {
-                  // Skip unparseable lines
-                }
-              }
-              // Also try legacy "0:" format for backward compatibility
-              if (line.startsWith("0:")) {
-                try {
-                  const content = JSON.parse(line.substring(2));
-                  assistantResponse += content;
-
-                  setMessages((prev) => {
-                    const updated = [...prev];
-                    const lastMessage = updated[updated.length - 1];
-
-                    if (
-                      lastMessage &&
-                      lastMessage.role === "assistant" &&
-                      lastMessage.id === assistantMessageId
-                    ) {
-                      updated[updated.length - 1] = {
-                        ...lastMessage,
-                        parts: [{ type: "text" as const, text: assistantResponse }],
-                      };
-                    } else {
-                      updated.push({
-                        id: assistantMessageId,
-                        role: "assistant" as const,
-                        parts: [{ type: "text" as const, text: assistantResponse }],
-                      });
-                    }
-
-                    return updated;
-                  });
-                } catch (e) {
-                  console.error("Failed to parse stream chunk:", line, e);
-                }
-              }
-            }
-          }
-        }
-
-        setMessages((finalMessages) => {
-          const checkpointRequestId = modelRequestIdRef.current;
-          const checkpointUserMessageIndex = checkpointRequestId
-            ? finalMessages.findLastIndex((candidate) => candidate.role === "user")
-            : -1;
-          const checkpointUserMessageId =
-            checkpointUserMessageIndex >= 0 ? finalMessages[checkpointUserMessageIndex]?.id : undefined;
-          const newChatMessages: ChatMessage[] = finalMessages.map((m, messageIndex) => {
-            const messageForStorage = stripSessionOnlyFileParts(m);
-            const existing = currentChat?.messages.find((msg) => msg.id === m.id);
-            return {
-              ...messageForStorage,
-              metadata: normalizeChatMessageMetadata(m.metadata),
-              timestamp: existing?.timestamp || new Date(),
-              modelUsed: selectedModel,
-              checkpointId:
-                existing?.checkpointId ??
-                (messageIndex === checkpointUserMessageIndex ? checkpointRequestId : undefined),
-            };
-          });
-
-          setChats((prev) =>
-            prev.map((chat) => {
-              if (chat.id === currentChatId) {
-                return { ...chat, messages: newChatMessages, updatedAt: new Date() };
-              }
-              return chat;
-            })
-          );
-          if (checkpointRequestId && checkpointUserMessageId) {
-            setCheckpointRequestByMessageId((current) => {
-              const next = new Map(current);
-              next.set(checkpointUserMessageId, checkpointRequestId);
-              return next;
-            });
-          }
-
-          return finalMessages;
-        });
-      } catch (error) {
-        console.error("Error getting AI response:", error);
-      }
+    if (editingState && currentChat) {
+      requestOrExecuteChatFork({
+        kind: "edit-resend",
+        sourceChat: currentChat,
+        sourceMessageIndex: editingState.messageIndex,
+        editedText: effectiveInput,
+        references: effectiveReferences,
+        attachments: effectiveAttachments,
+      });
     } else {
       handleSubmit(e);
     }
   };
 
-  const customHandleSubmitRef = useRef(customHandleSubmit);
   customHandleSubmitRef.current = customHandleSubmit;
 
   /** Sends the next queued message once the agent finishes its full turn. */
@@ -4065,9 +4218,9 @@ export function RightSidebar({
       attachments: next.attachments,
     };
 
-    void customHandleSubmitRef
-      .current({ preventDefault: () => { } } as React.FormEvent<HTMLFormElement>)
-      .finally(() => {
+    void Promise.resolve(
+      customHandleSubmitRef.current({ preventDefault: () => { } } as React.FormEvent<HTMLFormElement>),
+    ).finally(() => {
         pendingSubmitRef.current = null;
         queueProcessingRef.current = false;
       });
@@ -4269,11 +4422,15 @@ export function RightSidebar({
   // Render
   // ============================================================================
 
+  const businessChatPanelClassName = isBusinessExperience
+    ? "flex min-h-0 flex-1 flex-col border-l border-border/60"
+    : "flex min-h-0 flex-1 flex-col";
+
   if (!isChatsLoaded) {
     return (
-      <div
+      <ChatSurface
         ref={sidebarRootRef}
-        className={`flex w-full min-w-0 flex-col h-full overflow-hidden bg-sidebar ${className || ""}`}
+        className={className}
         {...props}
       >
         <div className="flex items-center justify-center h-full">
@@ -4282,19 +4439,25 @@ export function RightSidebar({
             Loading chat history...
           </div>
         </div>
-      </div>
+      </ChatSurface>
     );
   }
 
   return (
-    <div
+    <ChatSurface
       ref={sidebarRootRef}
-      className={`flex w-full min-w-0 flex-col h-full overflow-hidden bg-sidebar ${className || ""}`}
+      className={className}
       {...props}
     >
       {isSubagentChatView ? (
         <>
-          <div className="sticky top-0 z-10 h-14 bg-sidebar">
+          <div
+            className={
+              isBusinessExperience
+                ? "sticky top-0 z-10 min-h-14 bg-sidebar pb-3 pl-3 pr-2 pt-2"
+                : "sticky top-0 z-10 h-14 bg-sidebar"
+            }
+          >
             <div className="flex h-full min-w-0 items-center gap-2 px-2">
               <Button
                 type="button"
@@ -4323,6 +4486,7 @@ export function RightSidebar({
             </div>
           </div>
 
+          <div className={businessChatPanelClassName}>
           <ChatBody
             key={`subagent-chat-body-${activeSubagentToolCallId}`}
             viewKey={`subagent:${activeSubagentToolCallId}`}
@@ -4369,6 +4533,7 @@ export function RightSidebar({
             activeRules={assistant?.availableRules ?? []}
             onOpenRule={handleOpenRule}
           />
+          </div>
         </>
       ) : (
         <>
@@ -4378,6 +4543,8 @@ export function RightSidebar({
             editedTitle={editedTitle}
             chats={chats}
             currentChatId={currentChatId}
+            showWindowDragHandle={isBusinessExperience && isDesktopApp}
+            relaxedSpacing={isBusinessExperience}
             isHistoryPopoverOpen={isHistoryPopoverOpen}
             onHistoryPopoverOpenChange={setIsHistoryPopoverOpen}
             onTitleChange={setEditedTitle}
@@ -4390,6 +4557,7 @@ export function RightSidebar({
             onExportTranscript={handleExportTranscript}
           />
 
+          <div className={businessChatPanelClassName}>
           <ChatBody
             key="main-chat-body"
             viewKey={`main:${effectiveChatId ?? "no-chat"}`}
@@ -4420,6 +4588,7 @@ export function RightSidebar({
             checkpointStatuses={checkpointStatuses}
             checkpointRequestByMessageId={checkpointRequestByMessageId}
             onRestoreCheckpoint={handleRestoreCheckpoint}
+            onForkFromMessage={handleForkFromMessage}
           />
 
           <ChatTextbox
@@ -4469,6 +4638,7 @@ export function RightSidebar({
             activeRules={assistant?.availableRules ?? []}
             onOpenRule={handleOpenRule}
           />
+          </div>
         </>
       )}
 
@@ -4482,7 +4652,7 @@ export function RightSidebar({
         open={stopConfirmAction !== null}
         onOpenChange={(open) => { if (!open) setStopConfirmAction(null); }}
       >
-        <AlertDialogContent>
+        <AlertDialogContent className="max-w-md">
           <AlertDialogHeader>
             <AlertDialogTitle>Stop current generation?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -4503,6 +4673,63 @@ export function RightSidebar({
         </AlertDialogContent>
       </AlertDialog>
 
-    </div>
+      <AlertDialog
+        open={pendingChatForkAction !== null}
+        onOpenChange={(open) => {
+          if (!open && !isRestoringForkWorkspace) {
+            setPendingChatForkAction(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Fork chat from here?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Orion can keep your current files as they are, or try to restore recorded agent file changes back to this point before creating the fork.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <AlertDialogCancel
+              onClick={() => setPendingChatForkAction(null)}
+              disabled={isRestoringForkWorkspace}
+              shortcut="Escape"
+              className="mt-0 w-full"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                const action = pendingChatForkAction;
+                if (!action) return;
+                void executeChatForkAction(action, { restoreWorkspace: false });
+              }}
+              disabled={isRestoringForkWorkspace}
+              shortcut="Enter"
+              className="w-full"
+            >
+              Keep current workspace
+            </AlertDialogAction>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                const action = pendingChatForkAction;
+                if (!action) return;
+                void executeChatForkAction(action, { restoreWorkspace: true });
+              }}
+              disabled={!kernelService || isRestoringForkWorkspace}
+              title={
+                kernelService
+                  ? undefined
+                  : "Connect to a Jupyter server before restoring files."
+              }
+              className="w-full sm:col-span-2"
+            >
+              Restore files to this point
+            </Button>
+          </div>
+        </AlertDialogContent>
+      </AlertDialog>
+    </ChatSurface>
   );
 }

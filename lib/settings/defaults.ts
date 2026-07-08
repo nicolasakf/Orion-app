@@ -16,6 +16,8 @@ export const DEFAULT_SELECTED_CHAT_MODEL_ID = DEFAULT_TITLE_GENERATION_MODEL_ID;
 export const DEFAULT_SETTINGS: SettingsData = {
   appearance: {
     theme: "system",
+    experienceMode: "business",
+    experienceModeChosen: false,
   },
   chat: {
     titleGenerationModelId: DEFAULT_TITLE_GENERATION_MODEL_ID,

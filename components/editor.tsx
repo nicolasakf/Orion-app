@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 
 import { EmptyEditorCard } from "@/components/empty-editor-card";
 import { EditorLargeFileWarningCard } from "@/components/editor-large-file-warning-card";
-import { WelcomeInstructionsCard } from "@/components/welcome-instructions-card";
 import {
   Dialog,
   DialogContent,
@@ -39,6 +38,10 @@ interface EditorProps {
   filepath: string | null;
   /** Treat notebook files as plain JSON in Monaco instead of the notebook editor. */
   openNotebookAsText?: boolean;
+  /** When true, the empty editor shows business-mode shortcuts and actions. */
+  businessMode?: boolean;
+  /** Opens the business-mode new-analysis naming dialog. */
+  onNewAnalysis?: () => void;
   // Kernel related props
   kernelService?: KernelService | null;
   currentKernel?: KernelInfo | null;
@@ -65,7 +68,7 @@ interface EditorProps {
   /**
    * Called when opening a file fails so the parent can restore the previous selection.
    */
-  onFileLoadError?: (failedFilepath: string) => boolean | void;
+  onFileLoadError?: (failedFilepath: string, error?: unknown) => boolean | void;
   /**
    * Called when the user cancels an editor open before the file content loads.
    */
@@ -73,11 +76,14 @@ interface EditorProps {
   /** True when a workspace folder is selected in the Files panel (not merely connected). */
   hasWorkspace?: boolean;
   hasServerConnection?: boolean;
+  canPromptForRuntime?: boolean;
   onConnectServer?: () => void;
   /** Currently selected workspace folder path, or null when no workspace is open. */
   workspaceDirectory?: string | null;
   /** Files to show in the connected empty-editor state. */
   recentFiles?: EditorFileReference[];
+  /** Projects to show before a project is selected. */
+  recentProjectPaths?: string[];
   /** Opens a file from the connected empty-editor state. */
   onOpenFile?: (file: EditorFileReference) => void;
   /** Changes the selected workspace from the connected empty-editor state. */
@@ -98,6 +104,8 @@ interface EditorProps {
 export function Editor({
   filepath,
   openNotebookAsText = false,
+  businessMode = false,
+  onNewAnalysis,
   kernelService,
   currentKernel,
   kernelStatus,
@@ -114,11 +122,12 @@ export function Editor({
   onNotebookSaveHandlerChange,
   onFileLoadError,
   onFileOpenCancel,
-  hasWorkspace = false,
   hasServerConnection = false,
+  canPromptForRuntime = true,
   onConnectServer,
   workspaceDirectory,
   recentFiles,
+  recentProjectPaths,
   onOpenFile,
   onWorkspaceChange,
   presentationHideAllCellInputs,
@@ -310,6 +319,7 @@ export function Editor({
       <ActiveEditor
         filepath={filepath}
         openNotebookAsText={openNotebookAsText}
+        businessMode={businessMode}
         kernelService={kernelService}
         currentKernel={currentKernel}
         kernelStatus={kernelStatus}
@@ -320,25 +330,26 @@ export function Editor({
         onIsRunningChange={onIsRunningChange}
         onNotebookChange={onNotebookChange}
         onUnsavedChangesChange={onUnsavedChangesChange}
+        onFileLoadError={onFileLoadError}
         onNotebookSnapshotGetterChange={onNotebookSnapshotGetterChange}
         onNotebookSaveHandlerChange={onNotebookSaveHandlerChange}
         presentationHideAllCellInputs={presentationHideAllCellInputs}
         onSetPresentationHideAllCellInputs={onSetPresentationHideAllCellInputs}
         textFileModel={textFileModel}
       />
-    ) : !hasServerConnection || !hasWorkspace ? (
-      <WelcomeInstructionsCard
-        jupyterConnected={hasServerConnection}
-        workspaceOpen={hasWorkspace}
-        onConnectServer={onConnectServer}
-      />
     ) : (
       <EmptyEditorCard
         kernelService={kernelService}
         recentFiles={recentFiles}
+        recentProjectPaths={recentProjectPaths}
         workspaceDirectory={workspaceDirectory}
+        hasServerConnection={hasServerConnection}
+        canPromptForRuntime={canPromptForRuntime}
+        onConnectServer={onConnectServer}
         onOpenFile={onOpenFile}
         onWorkspaceChange={onWorkspaceChange}
+        businessMode={businessMode}
+        onNewAnalysis={onNewAnalysis}
       />
     );
 

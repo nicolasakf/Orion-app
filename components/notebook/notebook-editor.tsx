@@ -165,6 +165,8 @@ interface NotebookEditorProps {
    * Path to the .ipynb file to display (Jupyter-relative path)
    */
   filepath: string;
+  /** Enables business-mode notebook presentation affordances. */
+  businessMode?: boolean;
   // Kernel related props passed from parent
   kernelService?: KernelService | null;
   currentKernel?: KernelInfo | null;
@@ -178,6 +180,7 @@ interface NotebookEditorProps {
   onIsRunningChange?: React.Dispatch<React.SetStateAction<boolean>>;
   onNotebookChange?: (notebook: NotebookType | null) => void;
   onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
+  onFileLoadError?: (failedFilepath: string, error?: unknown) => boolean | void;
   onNotebookSnapshotGetterChange?: (
     getter: OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null,
   ) => void;
@@ -370,6 +373,7 @@ interface ScrollPositionSnapshot {
  */
 export function NotebookEditor({
   filepath,
+  businessMode = false,
   // Destructure new props
   kernelService: parentKernelService,
   currentKernel: parentCurrentKernel,
@@ -381,6 +385,7 @@ export function NotebookEditor({
   onIsRunningChange: parentSetIsRunning,
   onNotebookChange,
   onUnsavedChangesChange,
+  onFileLoadError,
   onNotebookSnapshotGetterChange,
   onNotebookSaveHandlerChange,
   presentationHideAllCellInputs,
@@ -775,6 +780,9 @@ export function NotebookEditor({
         applySelectionState(singleCellSelection(getCellId(withIds.cells[0])));
       } catch (err) {
         console.error("Error loading notebook:", err);
+        const handledExternally = onFileLoadError?.(filepath, err) === true;
+        if (handledExternally) return;
+
         setError(
           `Failed to load the notebook: ${err instanceof Error ? err.message : String(err)
           }`,
@@ -785,7 +793,13 @@ export function NotebookEditor({
     };
 
     loadNotebook();
-  }, [applySelectionState, filepath, parentKernelService, markClean]);
+  }, [
+    applySelectionState,
+    filepath,
+    parentKernelService,
+    markClean,
+    onFileLoadError,
+  ]);
 
   // Notify parent when notebook changes
   useEffect(() => {
@@ -3957,6 +3971,7 @@ export function NotebookEditor({
                 <NotebookAppView
                   notebook={notebook}
                   notebookPath={filepath}
+                  businessMode={businessMode}
                   onNotebookViewRequest={() =>
                     onActiveNotebookViewChange?.("notebook")
                   }

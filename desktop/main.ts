@@ -1,4 +1,4 @@
-import { join } from "path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "path";
 
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 
@@ -19,6 +19,12 @@ import {
 let session: DesktopSession | null = null;
 let mainWindow: BrowserWindow | null = null;
 
+interface NativeProjectFolderPickerResult {
+  absolutePath: string;
+  path: string;
+  name: string;
+}
+
 /** Returns true for the six-digit hex colors Orion sends from the renderer. */
 function isHexWindowBackgroundColor(color: unknown): color is string {
   return typeof color === "string" && /^#[0-9a-fA-F]{6}$/.test(color);
@@ -30,6 +36,19 @@ function resolveDesktopDevUrl(): string | undefined {
     return process.env.ORION_DESKTOP_DEV_URL;
   }
   return app.isPackaged ? undefined : "http://127.0.0.1:3001";
+}
+
+/** Converts a selected native folder into a Jupyter-relative project path. */
+function toJupyterRelativePath(rootDirectory: string, absolutePath: string): string | null {
+  const root = resolve(rootDirectory);
+  const target = resolve(absolutePath);
+  const jupyterPath = relative(root, target);
+
+  if (jupyterPath.startsWith("..") || isAbsolute(jupyterPath)) {
+    return null;
+  }
+
+  return jupyterPath.split(sep).join("/");
 }
 
 /** Creates Orion's main desktop browser window. */
@@ -61,6 +80,42 @@ function setupShellIpc(): void {
     }
     mainWindow?.setBackgroundColor(color);
   });
+  ipcMain.handle(
+    "orion:shell:show-project-folder-picker",
+    async (): Promise<NativeProjectFolderPickerResult | null> => {
+      const activeSession = session;
+      if (!activeSession?.jupyter) {
+        throw new Error("Connect Orion's runtime before opening a project.");
+      }
+
+      const dialogOptions: Electron.OpenDialogOptions = {
+        title: "Choose a project folder",
+        defaultPath: activeSession.jupyterRootDirectory,
+        properties: ["openDirectory"],
+      };
+      const result = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      const selectedPath = result.filePaths[0];
+      if (result.canceled || !selectedPath) return null;
+
+      const projectPath = toJupyterRelativePath(
+        activeSession.jupyterRootDirectory,
+        selectedPath
+      );
+      if (projectPath === null) {
+        throw new Error(
+          "Choose a folder inside the active Jupyter root so Orion can open it."
+        );
+      }
+
+      return {
+        absolutePath: selectedPath,
+        path: projectPath,
+        name: basename(selectedPath),
+      };
+    }
+  );
 }
 
 /** Registers the narrow updater IPC surface exposed by the sandboxed preload. */
@@ -109,11 +164,17 @@ async function boot(): Promise<void> {
   });
   await createWindow(session.url);
 
+  setupDesktopApplicationMenu({
+    onCheckForUpdates: () => {
+      mainWindow?.webContents.send("orion:update:manual-check");
+    },
+    onOpenSettings: () => {
+      mainWindow?.webContents.send("orion:settings:open");
+    },
+  });
+
   if (shouldCheckForDesktopUpdates()) {
     configureDesktopAutoUpdates();
-    setupDesktopApplicationMenu(() => {
-      mainWindow?.webContents.send("orion:update:manual-check");
-    });
   }
 }
 

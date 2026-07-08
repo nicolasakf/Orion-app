@@ -1,9 +1,14 @@
 "use client";
 
 import { Sparkles } from "lucide-react";
-import type { JSX } from "react";
+import { useEffect, type JSX } from "react";
 
-import { dispatchInsertChatMessage } from "@/lib/chat/chat-composer-events";
+import {
+  buildBusinessErrorDedupeKey,
+  dispatchInsertChatMessage,
+  dispatchSubmitChatMessage,
+} from "@/lib/chat/chat-composer-events";
+import { useExperienceMode } from "@/hooks/use-orion-settings";
 import type { NotebookMimeRendererProps } from "./types";
 
 /**
@@ -15,6 +20,51 @@ export function ErrorOutputRenderer({
   actions,
 }: NotebookMimeRendererProps): JSX.Element {
   const cellLabel = `cell #${actions.cellIndex}`;
+  const experienceMode = useExperienceMode();
+  const dedupeKey = buildBusinessErrorDedupeKey(
+    actions.cellIndex,
+    output.ename,
+    output.evalue,
+  );
+
+  useEffect(() => {
+    if (experienceMode !== "business" || actions.isFullScreen) {
+      return;
+    }
+
+    const tracebackSnippet =
+      output.traceback && output.traceback.length > 0
+        ? `\n\nTraceback:\n${output.traceback.join("\n")}`
+        : "";
+
+    dispatchSubmitChatMessage(
+      `This analysis hit an error in ${cellLabel} (${output.ename}: ${output.evalue}). Please fix it, explain what happened in plain language, and rerun the affected step.${tracebackSnippet}`,
+      { dedupeKey },
+    );
+  }, [
+    actions.cellIndex,
+    actions.isFullScreen,
+    cellLabel,
+    dedupeKey,
+    experienceMode,
+    output.ename,
+    output.evalue,
+    output.traceback,
+  ]);
+
+  if (experienceMode === "business") {
+    return (
+      <div className="relative bg-red-50 p-3 dark:bg-red-950/30">
+        <div className="pr-4 text-sm font-bold text-red-600">
+          Orion hit a problem while preparing this result.
+        </div>
+        <p className="mt-1 text-sm leading-6 text-red-700/80 dark:text-red-300/80">
+          I&apos;ve asked the agent to fix it and explain what happened in plain
+          language.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="relative bg-red-50 p-3 dark:bg-red-950/30">

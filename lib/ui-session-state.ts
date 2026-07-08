@@ -7,6 +7,7 @@ export interface PanelVisibilityState {
 
 export interface PanelLayoutState {
   horizontal: [number, number, number];
+  businessHorizontal: [number, number];
   vertical: [number, number];
 }
 
@@ -24,6 +25,7 @@ export const DEFAULT_PANEL_VISIBILITY_STATE: PanelVisibilityState = {
 
 export const DEFAULT_PANEL_LAYOUT_STATE: PanelLayoutState = {
   horizontal: [15, 50, 20],
+  businessHorizontal: [60, 40],
   vertical: [70, 30],
 };
 
@@ -118,6 +120,11 @@ export function loadPanelLayoutState(): PanelLayoutState {
         3,
         DEFAULT_PANEL_LAYOUT_STATE.horizontal
       ) as [number, number, number],
+      businessHorizontal: parsePanelSizeTuple(
+        parsed.businessHorizontal,
+        2,
+        DEFAULT_PANEL_LAYOUT_STATE.businessHorizontal
+      ) as [number, number],
       vertical: parsePanelSizeTuple(
         parsed.vertical,
         2,

@@ -58,6 +58,7 @@ interface ChatRow {
   created_at: string;
   updated_at: string;
   compaction_summary_json: string | null;
+  forked_from_json: string | null;
 }
 
 interface ChatMessageRow {
@@ -126,7 +127,7 @@ export interface ChatCostSummary {
   models: ChatCostSummaryModel[];
 }
 
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
 let database: OrionDatabase | null = null;
 
@@ -141,13 +142,14 @@ function usingFallbackStorage(): boolean {
 /** Creates the durable chat tables that existed before SQLite schema versioning. */
 function createBaseChatSchema(db: OrionDatabase): void {
   db.exec(`
-    create table if not exists chats (
-      id text primary key,
-      title text not null,
-      created_at text not null,
-      updated_at text not null,
-      compaction_summary_json text
-    );
+      create table if not exists chats (
+        id text primary key,
+        title text not null,
+        created_at text not null,
+        updated_at text not null,
+        compaction_summary_json text,
+        forked_from_json text
+      );
 
     create table if not exists chat_messages (
       id text primary key,
@@ -175,6 +177,14 @@ function createBaseChatSchema(db: OrionDatabase): void {
     create index if not exists chats_updated_at_idx on chats(updated_at);
     create index if not exists subagent_sessions_chat_id_idx on subagent_sessions(chat_id);
   `);
+}
+
+/** Returns true when a table column exists in the current SQLite schema. */
+function tableColumnExists(db: OrionDatabase, tableName: string, columnName: string): boolean {
+  const rows = db
+    .prepare("select name from pragma_table_info(?)")
+    .all(tableName) as Array<{ name: string }>;
+  return rows.some((row) => row.name === columnName);
 }
 
 /** Adds local analogs of the hosted usage tables and marks the DB as v1. */
@@ -288,6 +298,19 @@ function migrateToVersion2(db: OrionDatabase): void {
   migrate();
 }
 
+/** Adds persistent chat fork metadata. */
+function migrateToVersion3(db: OrionDatabase): void {
+  const migrate = db.transaction(() => {
+    createBaseChatSchema(db);
+    if (!tableColumnExists(db, "chats", "forked_from_json")) {
+      db.exec("alter table chats add column forked_from_json text;");
+    }
+    db.exec("pragma user_version = 3;");
+  });
+
+  migrate();
+}
+
 /** Runs all pending local SQLite migrations in order. */
 function migrateDatabase(db: OrionDatabase): void {
   const version = db.pragma("user_version", { simple: true }) as number;
@@ -302,6 +325,9 @@ function migrateDatabase(db: OrionDatabase): void {
   }
   if (version < 2) {
     migrateToVersion2(db);
+  }
+  if (version < 3) {
+    migrateToVersion3(db);
   }
 }
 
@@ -351,13 +377,14 @@ export async function saveChat(chat: ChatWire): Promise<void> {
   const transaction = db.transaction((nextChat: ChatWire) => {
     db.prepare(
       `
-        insert into chats (id, title, created_at, updated_at, compaction_summary_json)
-        values (@id, @title, @createdAt, @updatedAt, @compactionSummaryJson)
+        insert into chats (id, title, created_at, updated_at, compaction_summary_json, forked_from_json)
+        values (@id, @title, @createdAt, @updatedAt, @compactionSummaryJson, @forkedFromJson)
         on conflict(id) do update set
           title = excluded.title,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
-          compaction_summary_json = excluded.compaction_summary_json
+          compaction_summary_json = excluded.compaction_summary_json,
+          forked_from_json = excluded.forked_from_json
       `
     ).run({
       id: nextChat.id,
@@ -366,6 +393,9 @@ export async function saveChat(chat: ChatWire): Promise<void> {
       updatedAt: nextChat.updatedAt,
       compactionSummaryJson: nextChat.compactionSummary
         ? JSON.stringify(nextChat.compactionSummary)
+        : null,
+      forkedFromJson: nextChat.forkedFrom
+        ? JSON.stringify(nextChat.forkedFrom)
         : null,
     });
 
@@ -459,6 +489,7 @@ export async function getChatMetas(): Promise<ChatWire[]> {
       compactionSummary: row.compaction_summary_json
         ? CompactionSummaryWireSchema.parse(JSON.parse(row.compaction_summary_json))
         : undefined,
+      forkedFrom: row.forked_from_json ? JSON.parse(row.forked_from_json) : undefined,
     })
   );
 }
@@ -500,6 +531,7 @@ export async function getChat(chatId: string): Promise<ChatWire | undefined> {
     compactionSummary: row.compaction_summary_json
       ? CompactionSummaryWireSchema.parse(JSON.parse(row.compaction_summary_json))
       : undefined,
+    forkedFrom: row.forked_from_json ? JSON.parse(row.forked_from_json) : undefined,
   });
 }
 

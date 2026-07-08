@@ -4,6 +4,8 @@ import * as React from "react";
 import {
   Palette,
   Box,
+  ChevronDown,
+  ChevronRight,
   Key,
   FileJson,
   ExternalLink,
@@ -59,6 +61,7 @@ interface SettingsSidebarProps extends React.ComponentProps<typeof Sidebar> {
   onTabChange: (tab: SettingsTab) => void;
   onAgentSectionChange: (section: AgentSettingsSection) => void;
   showAccountTab?: boolean;
+  businessMode?: boolean;
 }
 
 /** Settings dialog sidebar with navigation items and agent subsections. */
@@ -68,14 +71,31 @@ export function SettingsSidebar({
   onTabChange,
   onAgentSectionChange,
   showAccountTab = false,
+  businessMode = false,
   className,
   ...props
 }: SettingsSidebarProps) {
   const { onOpenChange } = useOpenSettings();
   const { state: updateState, updateAvailable, checkForUpdates, performUpdate } =
     useOrionUpdate();
-  const settingsNav = SETTINGS_NAV_BASE.filter((item) => {
+  const isAdvancedTabActive = !["account", "appearance"].includes(activeTab);
+  const [advancedOpen, setAdvancedOpen] = React.useState(isAdvancedTabActive);
+
+  React.useEffect(() => {
+    if (isAdvancedTabActive) {
+      setAdvancedOpen(true);
+    }
+  }, [isAdvancedTabActive]);
+
+  const visibleSettingsNav = SETTINGS_NAV_BASE.filter((item) => {
     if (item.id === "account" && !showAccountTab) return false;
+    if (businessMode && item.id !== "account" && item.id !== "appearance") {
+      return false;
+    }
+    return true;
+  });
+  const advancedSettingsNav = SETTINGS_NAV_BASE.filter((item) => {
+    if (item.id === "account" || item.id === "appearance") return false;
     return true;
   });
 
@@ -109,7 +129,7 @@ export function SettingsSidebar({
       <SidebarContent>
         <SidebarGroup>
           <SidebarMenu className="gap-1">
-            {settingsNav.map((item) => {
+            {visibleSettingsNav.map((item) => {
               const Icon = item.icon;
               const isAgentTab = item.id === "agent";
               const isActive = isAgentTab
@@ -144,6 +164,61 @@ export function SettingsSidebar({
                 </SidebarMenuItem>
               );
             })}
+            {businessMode ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  type="button"
+                  className="cursor-pointer"
+                  onClick={() => setAdvancedOpen((open) => !open)}
+                >
+                  {advancedOpen ? (
+                    <ChevronDown className="h-4 w-4" />
+                  ) : (
+                    <ChevronRight className="h-4 w-4" />
+                  )}
+                  Advanced
+                </SidebarMenuButton>
+                {advancedOpen ? (
+                  <SidebarMenuSub>
+                    {advancedSettingsNav.map((item) => {
+                      const Icon = item.icon;
+                      const isAgentTab = item.id === "agent";
+                      const isActive = isAgentTab
+                        ? activeTab === "agent"
+                        : activeTab === item.id;
+
+                      return (
+                        <SidebarMenuSubItem key={item.id}>
+                          <SidebarMenuSubButton
+                            isActive={isActive}
+                            onClick={() => onTabChange(item.id)}
+                            className="cursor-pointer"
+                          >
+                            <Icon className="h-4 w-4" />
+                            {item.title}
+                          </SidebarMenuSubButton>
+                          {isAgentTab && activeTab === "agent" ? (
+                            <SidebarMenuSub>
+                              {AGENT_SETTINGS_SECTIONS.map((section) => (
+                                <SidebarMenuSubItem key={section.id}>
+                                  <SidebarMenuSubButton
+                                    isActive={agentSection === section.id}
+                                    onClick={() => onAgentSectionChange(section.id)}
+                                    className="cursor-pointer"
+                                  >
+                                    {section.title}
+                                  </SidebarMenuSubButton>
+                                </SidebarMenuSubItem>
+                              ))}
+                            </SidebarMenuSub>
+                          ) : null}
+                        </SidebarMenuSubItem>
+                      );
+                    })}
+                  </SidebarMenuSub>
+                ) : null}
+              </SidebarMenuItem>
+            ) : null}
           </SidebarMenu>
         </SidebarGroup>
         <SidebarGroup className="mt-auto">

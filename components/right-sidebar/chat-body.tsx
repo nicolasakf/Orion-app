@@ -68,6 +68,7 @@ export interface ChatBodyProps {
   checkpointStatuses?: Map<string, EditCheckpointStatus>;
   checkpointRequestByMessageId?: Map<string, string>;
   onRestoreCheckpoint?: (checkpointId: string, action: CheckpointMessageAction) => void;
+  onForkFromMessage?: (message: UIMessage, index: number) => void;
 }
 
 interface ChatMessageRowProps {
@@ -96,6 +97,7 @@ interface ChatMessageRowProps {
   checkpointStatuses?: Map<string, EditCheckpointStatus>;
   checkpointRequestByMessageId?: Map<string, string>;
   onRestoreCheckpoint?: (checkpointId: string, action: CheckpointMessageAction) => void;
+  onForkFromMessage?: (message: UIMessage, index: number) => void;
 }
 
 type ChatRenderItem =
@@ -715,10 +717,14 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   checkpointStatuses,
   checkpointRequestByMessageId,
   onRestoreCheckpoint,
+  onForkFromMessage,
 }: ChatMessageRowProps) {
   const handleUserClick = React.useCallback(() => {
     onUserMessageClick(message, index);
   }, [index, message, onUserMessageClick]);
+  const handleForkFromMessage = React.useCallback(() => {
+    onForkFromMessage?.(message, index);
+  }, [index, message, onForkFromMessage]);
 
   const costSummary = costSummaryByMessageId?.[message.id];
   const messageCheckpointId = checkpointRequestByMessageId?.get(message.id);
@@ -793,6 +799,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
           checkpointId={actionableCheckpointId}
           checkpointAction={checkpointAction}
           onRestoreCheckpoint={onRestoreCheckpoint}
+          onForkFromMessage={onForkFromMessage ? handleForkFromMessage : undefined}
         />
       ) : costSummary ? (
         <CostSummaryCard
@@ -896,6 +903,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
     return false;
   }
   if (prev.onRestoreCheckpoint !== next.onRestoreCheckpoint) return false;
+  if (prev.onForkFromMessage !== next.onForkFromMessage) return false;
 
   return true;
 });
@@ -929,6 +937,7 @@ export function ChatBody({
   checkpointStatuses,
   checkpointRequestByMessageId,
   onRestoreCheckpoint,
+  onForkFromMessage,
 }: ChatBodyProps) {
   const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = React.useRef(true);
@@ -1116,6 +1125,7 @@ export function ChatBody({
                     checkpointStatuses={checkpointStatuses}
                     checkpointRequestByMessageId={checkpointRequestByMessageId}
                     onRestoreCheckpoint={onRestoreCheckpoint}
+                    onForkFromMessage={onForkFromMessage}
                   />
                 )}
 

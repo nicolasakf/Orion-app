@@ -38,6 +38,16 @@ export interface CompactionSummary {
   tokensSaved: number;
 }
 
+export type ChatForkMode = "edit_resend" | "fork_from_message";
+
+export interface ChatForkMetadata {
+  sourceChatId: string;
+  sourceMessageId: string;
+  sourceMessageIndex: number;
+  mode: ChatForkMode;
+  createdAt: Date;
+}
+
 export interface Chat {
   id: string;
   title: string;
@@ -47,6 +57,8 @@ export interface Chat {
   updatedAt: Date;
   /** Set when the conversation has been compacted. Wire payloads replay from summary. */
   compactionSummary?: CompactionSummary;
+  /** Records the source chat/message when this chat was branched from history. */
+  forkedFrom?: ChatForkMetadata;
 }
 
 /** ChatMessage extends UIMessage with additional Orion-specific fields. */
@@ -65,6 +77,14 @@ export const CompactionSummaryWireSchema = z.object({
   createdAt: DateStringSchema,
   model: z.string(),
   tokensSaved: z.number(),
+});
+
+export const ChatForkMetadataWireSchema = z.object({
+  sourceChatId: z.string(),
+  sourceMessageId: z.string(),
+  sourceMessageIndex: z.number().int().min(0),
+  mode: z.enum(["edit_resend", "fork_from_message"]),
+  createdAt: DateStringSchema,
 });
 
 export const SubagentSessionWireSchema = z
@@ -106,6 +126,7 @@ export const ChatWireSchema = z.object({
   createdAt: DateStringSchema,
   updatedAt: DateStringSchema,
   compactionSummary: CompactionSummaryWireSchema.optional(),
+  forkedFrom: ChatForkMetadataWireSchema.optional(),
 });
 
 export type ChatWire = z.infer<typeof ChatWireSchema>;
@@ -148,6 +169,12 @@ export function deserializeChat(chat: ChatWire): Chat {
           createdAt: new Date(chat.compactionSummary.createdAt),
         }
       : undefined,
+    forkedFrom: chat.forkedFrom
+      ? {
+          ...chat.forkedFrom,
+          createdAt: new Date(chat.forkedFrom.createdAt),
+        }
+      : undefined,
   };
 }
 
@@ -178,6 +205,12 @@ export function serializeChat(chat: Chat): ChatWire {
       ? {
           ...chat.compactionSummary,
           createdAt: chat.compactionSummary.createdAt.toISOString(),
+        }
+      : undefined,
+    forkedFrom: chat.forkedFrom
+      ? {
+          ...chat.forkedFrom,
+          createdAt: chat.forkedFrom.createdAt.toISOString(),
         }
       : undefined,
   };

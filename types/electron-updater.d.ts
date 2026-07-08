@@ -9,8 +9,18 @@ interface OrionDesktopUpdaterBridge {
   onManualCheck: (listener: () => void) => () => void;
 }
 
+interface OrionDesktopProjectFolderPickerResult {
+  absolutePath: string;
+  path: string;
+  name: string;
+}
+
 interface OrionDesktopShellBridge {
   setWindowBackgroundColor: (color: string) => Promise<void>;
+  showProjectFolderPicker: () => Promise<
+    OrionDesktopProjectFolderPickerResult | null
+  >;
+  onOpenSettings: (listener: () => void) => () => void;
 }
 
 declare global {

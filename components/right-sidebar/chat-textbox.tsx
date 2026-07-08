@@ -1311,7 +1311,7 @@ export function ChatTextbox({
   };
 
   return (
-    <div className="px-1.5 mb-2">
+    <div className="mx-auto mb-2 w-full max-w-2xl px-1.5">
       {queuedMessages.length > 0 && (
         <div className="relative z-0 mx-3 mb-[-10px]">
           <Card className="border-border/50 bg-muted/50 px-2.5 pb-3 pt-2 shadow-none">
@@ -2221,10 +2221,11 @@ export function ChatTextbox({
                 </PopoverContent>
               </Popover>
 
-              {/* Model-specific settings cog (only for providers with configurable settings) */}
+              {/* Model intelligence selector (only for providers with configurable settings) */}
               {!readOnly && selectedModelProvider && (selectedModelProvider === "openai" || selectedModelProvider === "anthropic") && (
                 <ModelSettingsPopover
                   provider={selectedModelProvider}
+                  model={selectedLlm}
                   settings={modelSettings}
                   onSettingsChange={onModelSettingsChange}
                 />

@@ -892,7 +892,7 @@ export function LeftSidebar({
                         {!kernelForFiles ? (
                           <div className="flex min-h-[180px] items-center justify-center px-2 py-4">
                             <NoKernelPrompt
-                              description="Connect to a Jupyter server to use the integrated terminal."
+                              description="Connect Orion's runtime to browse workspace files."
                               onConnect={onOpenKernelDropdown}
                               className="max-w-md"
                             />

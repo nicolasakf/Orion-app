@@ -1,8 +1,13 @@
 "use client";
 
 import React, { useMemo } from "react";
-import { LayoutTemplate, Sparkles } from "lucide-react";
+import { BookOpen, LayoutTemplate, Sparkles } from "lucide-react";
 
+import {
+  BUSINESS_APP_PROMPT_CATEGORIES,
+  FEATURED_BUSINESS_APP_PROMPTS,
+  type BusinessAppPromptSuggestion,
+} from "@/components/notebook/business-app-prompt-library";
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
 import type {
@@ -20,11 +25,22 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
   isNotebookCellInAppView,
   isNotebookOutputInAppView,
   type NotebookAppViewReference,
 } from "@/lib/notebook/app-view";
-import { dispatchInsertChatSkill } from "@/lib/chat/chat-composer-events";
+import {
+  dispatchInsertChatMessage,
+  dispatchInsertChatSkill,
+} from "@/lib/chat/chat-composer-events";
 import { cn } from "@/lib/utils";
 import {
   CellExecutionStatus,
@@ -37,6 +53,8 @@ import {
 interface NotebookAppViewProps {
   notebook: NotebookType;
   notebookPath?: string;
+  /** Shows the business-mode empty state when App View has no selected cells. */
+  businessMode?: boolean;
   onNotebookViewRequest?: () => void;
   onRemoveAppViewReference?: (reference: NotebookAppViewReference) => void;
   onOrionUiStateChange?: (
@@ -132,12 +150,140 @@ function AppViewMarkdownContextMenu({
   );
 }
 
+interface BusinessPromptButtonProps {
+  suggestion: BusinessAppPromptSuggestion;
+  onSelect: (prompt: string) => void;
+}
+
+/** Clickable prompt card that inserts its prompt into the chat composer. */
+function BusinessPromptButton({
+  suggestion,
+  onSelect,
+}: BusinessPromptButtonProps): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={`Use prompt suggestion: ${suggestion.title}`}
+      className={cn(
+        "corner-squircle flex min-h-32 w-full items-start gap-3 rounded-md border border-border/70 bg-background/85 px-4 py-3 text-left shadow-sm",
+        "transition-colors hover:border-primary/50 hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+      )}
+      onClick={() => onSelect(suggestion.prompt)}
+    >
+      <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+      <span className="min-w-0">
+        <span className="block text-sm font-medium leading-snug text-foreground">
+          {suggestion.title}
+        </span>
+        <span className="mt-1 block text-xs leading-snug text-muted-foreground">
+          {suggestion.prompt}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+interface BusinessPromptCatalogDialogProps {
+  onSelectPrompt: (prompt: string) => void;
+}
+
+/** Full data-analysis prompt catalog grouped by analysis category. */
+function BusinessPromptCatalogDialog({
+  onSelectPrompt,
+}: BusinessPromptCatalogDialogProps): React.JSX.Element {
+  const [open, setOpen] = React.useState(false);
+
+  const handleSelectPrompt = React.useCallback(
+    (prompt: string) => {
+      onSelectPrompt(prompt);
+      setOpen(false);
+    },
+    [onSelectPrompt],
+  );
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button type="button" variant="outline" className="mt-5">
+          <BookOpen className="mr-2 h-4 w-4" />
+          Browse prompt library
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-4xl">
+        <DialogHeader>
+          <DialogTitle>Prompt Library</DialogTitle>
+        </DialogHeader>
+        <div
+          className="min-h-0 flex-1 overflow-y-auto pr-2"
+          data-prompt-catalog-scroll
+        >
+          <div className="grid gap-6 pb-1">
+            {BUSINESS_APP_PROMPT_CATEGORIES.map((group) => (
+              <section key={group.category} className="text-left">
+                <h4 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {group.category}
+                </h4>
+                <div
+                  aria-label={`${group.category} prompt suggestions`}
+                  className="grid gap-3 md:grid-cols-2"
+                >
+                  {group.suggestions.map((suggestion) => (
+                    <BusinessPromptButton
+                      key={suggestion.title}
+                      suggestion={suggestion}
+                      onSelect={handleSelectPrompt}
+                    />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Featured business-mode prompt suggestions for an empty App View. */
+function BusinessAppViewPromptCarousel(): React.JSX.Element {
+  const handleSelectPrompt = React.useCallback((prompt: string) => {
+    dispatchInsertChatMessage(prompt);
+  }, []);
+
+  return (
+    <div
+      className="flex min-h-full flex-1 items-center justify-center overflow-y-auto p-6"
+      data-notebook-export-root="app"
+    >
+      <div className="mx-auto flex w-full max-w-3xl flex-col items-center py-4 text-center">
+        <h3 className="text-2xl font-semibold text-foreground">
+          What should Orion work on?
+        </h3>
+        <div
+          aria-label="Featured prompt suggestions"
+          className="mt-6 grid w-full gap-3 md:grid-cols-2"
+        >
+          {FEATURED_BUSINESS_APP_PROMPTS.map((suggestion) => (
+            <BusinessPromptButton
+              key={suggestion.title}
+              suggestion={suggestion}
+              onSelect={handleSelectPrompt}
+            />
+          ))}
+        </div>
+        <BusinessPromptCatalogDialog onSelectPrompt={handleSelectPrompt} />
+      </div>
+    </div>
+  );
+}
+
 /**
  * Renders notebook cells and outputs explicitly marked for App View.
  */
 export function NotebookAppView({
   notebook,
   notebookPath,
+  businessMode = false,
   onNotebookViewRequest,
   onRemoveAppViewReference,
   onOrionUiStateChange,
@@ -246,6 +392,10 @@ export function NotebookAppView({
         </main>
       </div>
     );
+  }
+
+  if (businessMode) {
+    return <BusinessAppViewPromptCarousel />;
   }
 
   return (

@@ -30,6 +30,8 @@ describe("UserSettingsDocumentSchema", () => {
     const doc = createDefaultUserSettingsDocument();
     expect(() => UserSettingsDocumentSchema.parse(doc)).not.toThrow();
     expect(doc.settings.agent.context.compactionAutoThreshold).toBe(0.92);
+    expect(doc.settings.appearance.experienceMode).toBe("business");
+    expect(doc.settings.appearance.experienceModeChosen).toBe(false);
     expect(doc.settings.shell.panelLayout.horizontal).toEqual([15, 50, 20]);
     expect(doc.settings.notebook.output.chartColors).toHaveLength(10);
     expect(doc.settings.chat.interactionModes.map((mode) => mode.id)).toEqual([
@@ -70,6 +72,8 @@ describe("settings migrations", () => {
     expect(migrated.settings.chat.titleGenerationModelId).toBe(
       DEFAULT_TITLE_GENERATION_MODEL_ID
     );
+    expect(migrated.settings.appearance.experienceMode).toBe("business");
+    expect(migrated.settings.appearance.experienceModeChosen).toBe(true);
     expect(migrated.settings.agent.context.compactionAutoThreshold).toBe(0.92);
     expect(migrated.settings.agent.toolOutput.textCharBudget).toBe(40_000);
     expect(migrated.settings.shell.mobileBreakpointPx).toBe(768);

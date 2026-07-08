@@ -18,7 +18,7 @@ describe("compactSettingsForPersistence", () => {
   it("keeps only top-level and nested overrides", () => {
     const compacted = compactSettingsForPersistence({
       ...DEFAULT_SETTINGS,
-      appearance: { theme: "light" },
+      appearance: { ...DEFAULT_SETTINGS.appearance, theme: "light" },
       chat: {
         ...DEFAULT_SETTINGS.chat,
         toolApprovalMode: "auto_run",

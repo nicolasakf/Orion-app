@@ -1,15 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   INSERT_CHAT_MESSAGE_EVENT,
   INSERT_CHAT_SKILL_EVENT,
   OPEN_CHAT_SIDEBAR_EVENT,
+  buildBusinessErrorDedupeKey,
   dispatchInsertChatMessage,
   dispatchInsertChatSkill,
+  dispatchSubmitChatMessage,
   getInsertChatMessageDetail,
   getInsertChatSkillDetail,
   insertMessageIntoComposerInput,
   insertSkillIntoComposerInput,
+  resetAutoFixDedupeKeysForTests,
+  shouldDispatchAutoFix,
 } from "@/lib/chat/chat-composer-events";
 
 describe("insertSkillIntoComposerInput", () => {
@@ -129,5 +133,54 @@ describe("dispatchInsertChatMessage", () => {
     expect(getInsertChatMessageDetail(events[1]!)).toEqual({
       message: "Fix this error in cell #2.",
     });
+  });
+});
+
+describe("dispatchSubmitChatMessage", () => {
+  afterEach(() => {
+    resetAutoFixDedupeKeysForTests();
+  });
+
+  it("dispatches submit=true with optional dedupe key", () => {
+    const events: Event[] = [];
+    const listener = (event: Event) => {
+      events.push(event);
+    };
+
+    window.addEventListener(INSERT_CHAT_MESSAGE_EVENT, listener);
+    try {
+      dispatchSubmitChatMessage("Fix this error in cell #2.", {
+        dedupeKey: buildBusinessErrorDedupeKey(2, "ValueError", "bad"),
+      });
+    } finally {
+      window.removeEventListener(INSERT_CHAT_MESSAGE_EVENT, listener);
+    }
+
+    expect(getInsertChatMessageDetail(events[0]!)).toEqual({
+      message: "Fix this error in cell #2.",
+      submit: true,
+      dedupeKey: "business-error:2:ValueError:bad",
+    });
+  });
+
+  it("dedupes repeated auto-fix dispatches", () => {
+    const dedupeKey = buildBusinessErrorDedupeKey(2, "ValueError", "bad");
+    expect(shouldDispatchAutoFix(dedupeKey)).toBe(true);
+    expect(shouldDispatchAutoFix(dedupeKey)).toBe(false);
+
+    const events: Event[] = [];
+    const listener = (event: Event) => {
+      events.push(event);
+    };
+
+    window.addEventListener(INSERT_CHAT_MESSAGE_EVENT, listener);
+    try {
+      dispatchSubmitChatMessage("first");
+      dispatchSubmitChatMessage("second", { dedupeKey });
+    } finally {
+      window.removeEventListener(INSERT_CHAT_MESSAGE_EVENT, listener);
+    }
+
+    expect(events).toHaveLength(1);
   });
 });

@@ -442,8 +442,7 @@ export function RecentFilesCombobox({
             >
               <AlertTriangle className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-400" />
               <p className="leading-snug">
-                This file is not inside the workspace folder open in the Files
-                sidebar.
+                This file is not inside the project folder.
               </p>
             </div>
           )}

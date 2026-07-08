@@ -24,7 +24,7 @@ interface UseTextFileModelOptions {
   openNotebookAsText?: boolean;
   kernelService?: KernelService | null;
   onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
-  onFileLoadError?: (failedFilepath: string) => boolean | void;
+  onFileLoadError?: (failedFilepath: string, error?: unknown) => boolean | void;
 }
 
 export interface TextFileModelState {
@@ -149,7 +149,7 @@ export function useTextFileModel({
         return true;
       } catch (error) {
         console.error("Error loading or processing file:", error);
-        const handledExternally = onFileLoadError?.(targetPath) === true;
+        const handledExternally = onFileLoadError?.(targetPath, error) === true;
         if (handledExternally) return false;
 
         const message =

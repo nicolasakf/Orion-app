@@ -205,6 +205,41 @@ describe("ChatTextbox generation state", () => {
   });
 });
 
+describe("ChatTextbox model intelligence settings", () => {
+  it("selects OpenAI intelligence levels from the composer control", () => {
+    const onModelSettingsChange = vi.fn();
+    renderTextbox({
+      selectedModelProvider: "openai",
+      modelSettings: { reasoningEffort: "low" },
+      onModelSettingsChange,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Intelligence level: Low" }));
+    fireEvent.click(screen.getByRole("button", { name: "High" }));
+
+    expect(onModelSettingsChange).toHaveBeenCalledWith({ reasoningEffort: "high" });
+  });
+
+  it("limits mini OpenAI models to the supported three-level selector", () => {
+    renderTextbox({
+      selectedModelProvider: "openai",
+      selectedModel: "gpt-mini-test",
+      models: [
+        {
+          ...models[0],
+          value: "gpt-mini-test",
+          apiModelId: "gpt-5-mini",
+        },
+      ],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Intelligence level: Medium" }));
+
+    expect(screen.getByRole("button", { name: "High" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Extra High" })).not.toBeInTheDocument();
+  });
+});
+
 describe("ChatTextbox rules", () => {
   it("shows active rules and opens the selected rule", () => {
     const rule: AgentRule = {

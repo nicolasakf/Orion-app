@@ -49,32 +49,36 @@ export function SettingsDialog({
   initialTab,
   initialAgentSection,
 }: SettingsDialogProps) {
-  const [activeTab, setActiveTab] = React.useState<SettingsTab>("providers");
+  const [activeTab, setActiveTab] = React.useState<SettingsTab>("appearance");
   const [agentSection, setAgentSection] = React.useState<AgentSettingsSection>(
     DEFAULT_AGENT_SETTINGS_SECTION
   );
-  const { errorMessage, reloadUserSettings, userSettingsLoadStatus } =
+  const { effectiveSettings, errorMessage, reloadUserSettings, userSettingsLoadStatus } =
     useSettingsContext();
   const { openUserSettingsFile, onOpenChange: setSettingsOpen } = useOpenSettings();
   const { user, refresh } = useCloudUser();
   const showAccountTab = Boolean(user);
+  const isBusinessMode = effectiveSettings.appearance.experienceMode === "business";
   const settingsLoadFailed =
     userSettingsLoadStatus === "failed" && errorMessage;
 
   React.useEffect(() => {
-    if (open && initialTab) {
+    if (!open) return;
+    if (initialTab) {
       if (initialTab === "settings-file") {
         openUserSettingsFile();
         setSettingsOpen(false);
         return;
       }
       setActiveTab(
-        initialTab === "account" && !showAccountTab ? "providers" : initialTab,
+        initialTab === "account" && !showAccountTab ? "appearance" : initialTab,
       );
       if (initialTab === "agent") {
         setAgentSection(initialAgentSection ?? DEFAULT_AGENT_SETTINGS_SECTION);
       }
+      return;
     }
+    setActiveTab("appearance");
   }, [
     open,
     initialTab,
@@ -86,7 +90,7 @@ export function SettingsDialog({
 
   React.useEffect(() => {
     if (showAccountTab || activeTab !== "account") return;
-    setActiveTab("providers");
+    setActiveTab("appearance");
   }, [activeTab, showAccountTab]);
 
   const handleTabChange = React.useCallback(
@@ -97,7 +101,7 @@ export function SettingsDialog({
         return;
       }
       if (tab === "account" && !showAccountTab) {
-        setActiveTab("providers");
+        setActiveTab("appearance");
         return;
       }
       setActiveTab(tab);
@@ -137,7 +141,7 @@ export function SettingsDialog({
       case "settings-file":
         return <SettingsFileTab />;
       default:
-        return <ProvidersTab />;
+        return <AppearanceTab />;
     }
   };
 
@@ -186,6 +190,7 @@ export function SettingsDialog({
               onTabChange={handleTabChange}
               onAgentSectionChange={handleAgentSectionChange}
               showAccountTab={showAccountTab}
+              businessMode={isBusinessMode}
             />
             <SidebarInset className="min-h-0 flex-1 overflow-auto scrollbar-hide">
               {renderTabContent()}

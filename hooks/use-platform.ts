@@ -40,7 +40,9 @@ export function useIsDesktopApp(): boolean {
   const [isDesktopApp, setIsDesktopApp] = useState(false);
 
   useEffect(() => {
-    setIsDesktopApp(Boolean(window.orionDesktopUpdater));
+    setIsDesktopApp(
+      Boolean(window.orionDesktopUpdater || window.orionDesktopShell),
+    );
   }, []);
 
   return isDesktopApp;

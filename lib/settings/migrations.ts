@@ -72,6 +72,17 @@ function stripLegacyAppearanceKeys(settings: Record<string, unknown>): void {
   }
 }
 
+/** Existing on-disk settings predate the first-run experience mode intro dialog. */
+function backfillExperienceModeChosenForExistingUsers(
+  settings: Record<string, unknown>
+): void {
+  const appearance = asObject(settings.appearance);
+  if (!appearance || "experienceModeChosen" in appearance) {
+    return;
+  }
+  appearance.experienceModeChosen = true;
+}
+
 /** Drops legacy notebook table settings removed with the DataTable UI. */
 function stripRemovedTableSettings(settings: Record<string, unknown>): void {
   if ("table" in settings) {
@@ -165,6 +176,7 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
     stripSessionOnlyNotebookKeys(settingsObj);
     stripSessionOnlyLayoutKeys(settingsObj);
     stripRemovedTableSettings(settingsObj);
+    backfillExperienceModeChosenForExistingUsers(settingsObj);
   }
   const parsed = UserSettingsDocumentSchema.safeParse(normalized);
   if (parsed.success) {
@@ -201,6 +213,7 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
   stripSessionOnlyNotebookKeys(partialSettings);
   stripSessionOnlyLayoutKeys(partialSettings);
   stripRemovedTableSettings(partialSettings);
+  backfillExperienceModeChosenForExistingUsers(partialSettings);
 
   const merged = mergeSettings(
     DEFAULT_SETTINGS,

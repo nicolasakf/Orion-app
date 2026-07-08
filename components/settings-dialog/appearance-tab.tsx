@@ -16,7 +16,7 @@ import {
   SettingsInfoSectionTitle,
 } from "@/components/settings-dialog/settings-info-label";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
-import type { EmptyEditorCardContent } from "@/lib/settings/schema";
+import type { EmptyEditorCardContent, ExperienceMode } from "@/lib/settings/schema";
 
 const EMPTY_EDITOR_CARD_OPTIONS: Array<{
   value: EmptyEditorCardContent;
@@ -51,6 +51,16 @@ export function AppearanceTab() {
     }));
   };
 
+  const handleExperienceModeChange = (value: ExperienceMode) => {
+    void setUserSettings((current) => ({
+      ...current,
+      appearance: {
+        ...current.appearance,
+        experienceMode: value,
+      },
+    }));
+  };
+
   return (
     <div className="flex flex-col gap-6 p-6">
       <div className="space-y-2">
@@ -62,24 +72,54 @@ export function AppearanceTab() {
 
       <div className="space-y-6">
         <section className="space-y-3">
-          <h3 className="text-sm font-bold">Theme</h3>
-          <div className="space-y-2 max-w-sm">
-            <Label htmlFor="appearance-theme">Color mode</Label>
-            <Select
-              value={appearance.theme}
-              onValueChange={(value) =>
-                handleThemeChange(value as "light" | "dark" | "system")
-              }
-            >
-              <SelectTrigger id="appearance-theme">
-                <SelectValue placeholder="Select theme" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="system">System</SelectItem>
-                <SelectItem value="light">Light</SelectItem>
-                <SelectItem value="dark">Dark</SelectItem>
-              </SelectContent>
-            </Select>
+          <SettingsInfoSectionTitle
+            title="Experience"
+          />
+          <div className="grid gap-4 sm:grid-cols-2 max-w-2xl">
+            <div className="space-y-2">
+              <SettingsInfoLabel
+                htmlFor="appearance-experience-mode"
+                label="Product experience"
+                description="Pro keeps Orion's notebook-first workflow. Business uses a simpler data-and-chat-first workspace."
+              />
+              <Select
+                value={appearance.experienceMode}
+                onValueChange={(value) =>
+                  handleExperienceModeChange(value as ExperienceMode)
+                }
+              >
+                <SelectTrigger id="appearance-experience-mode">
+                  <SelectValue placeholder="Select experience" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pro">Pro</SelectItem>
+                  <SelectItem value="business">Business</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <SettingsInfoLabel
+                htmlFor="appearance-theme"
+                label="Theme"
+                description="Choose Orion's color mode."
+              />
+              <Select
+                value={appearance.theme}
+                onValueChange={(value) =>
+                  handleThemeChange(value as "light" | "dark" | "system")
+                }
+              >
+                <SelectTrigger id="appearance-theme">
+                  <SelectValue placeholder="Select theme" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="system">System</SelectItem>
+                  <SelectItem value="light">Light</SelectItem>
+                  <SelectItem value="dark">Dark</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
         </section>
 
