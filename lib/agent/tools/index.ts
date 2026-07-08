@@ -146,6 +146,7 @@ export interface JupyterToolSet {
  * @param getChatId              - Optional getter for the current chat session ID (used to associate fresh BashTool terminals with the current chat)
  * @param getWorkspaceDirectory  - Optional getter for the current workspace directory (reserved for future workspace tools)
  * @param getTerminalShell       - Optional getter for the Jupyter terminal shell family used by BashTool
+ * @param getJupyterRootDirectory - Optional getter for the absolute Jupyter root directory
  * @param snapshotProvider       - Optional provider for active in-memory editor content
  * @param checkpointRecorder     - Optional recorder for request-scoped edit checkpoints
  * @returns Complete JupyterToolSet with all tools and shared NotebookManager
@@ -157,6 +158,7 @@ export function createJupyterTools(
   getChatId?: (() => string | null) | null,
   getWorkspaceDirectory?: (() => string | undefined) | null,
   getTerminalShell?: (() => TerminalShell) | null,
+  getJupyterRootDirectory?: (() => string | undefined) | null,
   snapshotProvider?: OpenDocumentSnapshotProvider | null,
   checkpointRecorder?: EditCheckpointRecorder | null
 ): JupyterToolSet {
@@ -176,7 +178,12 @@ export function createJupyterTools(
       ),
 
       // Notebook Management
-      useNotebook: new UseNotebookTool(kernelService, sc, notebookManager),
+      useNotebook: new UseNotebookTool(
+        kernelService,
+        sc,
+        notebookManager,
+        getJupyterRootDirectory
+      ),
       restartNotebook: new RestartNotebookTool(
         kernelService,
         sc,
@@ -232,16 +239,29 @@ export function createJupyterTools(
       executeCode: new ExecuteCodeTool(kernelService, sc, notebookManager),
 
       // Terminal Management (pool-aware)
-      bash: new BashTool(kernelService, sc, pool, getChatId, getTerminalShell),
+      bash: new BashTool(
+        kernelService,
+        sc,
+        pool,
+        getChatId,
+        getTerminalShell,
+        getJupyterRootDirectory
+      ),
       awaitCommand: new AwaitCommandTool(kernelService, sc, pool),
 
       // File Operations
-      readFile: new ReadFileTool(kernelService, sc, snapshotProvider),
+      readFile: new ReadFileTool(
+        kernelService,
+        sc,
+        snapshotProvider,
+        getJupyterRootDirectory
+      ),
       editFile: new EditFileTool(
         kernelService,
         sc,
         snapshotProvider,
-        checkpointRecorder
+        checkpointRecorder,
+        getJupyterRootDirectory
       ),
 
       // Cell Output Inspection

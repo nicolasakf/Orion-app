@@ -11,6 +11,7 @@ import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
 import type { BashParams } from "./types";
 import type { TerminalPool } from "@/lib/shell/terminal-pool";
+import { resolveAgentPath } from "../path-resolver";
 import {
   DEFAULT_FOREGROUND_BUDGET_MS,
   formatTerminalResult,
@@ -132,18 +133,21 @@ export class BashTool extends BaseTool {
   private pool: TerminalPool | null;
   private getChatId: (() => string | null) | null;
   private getTerminalShell: (() => TerminalShell) | null;
+  private getJupyterRootDirectory: (() => string | undefined) | null;
 
   constructor(
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
     pool?: TerminalPool | null,
     getChatId?: (() => string | null) | null,
-    getTerminalShell?: (() => TerminalShell) | null
+    getTerminalShell?: (() => TerminalShell) | null,
+    getJupyterRootDirectory?: (() => string | undefined) | null
   ) {
     super(kernelService, sidecar);
     this.pool = pool ?? null;
     this.getChatId = getChatId ?? null;
     this.getTerminalShell = getTerminalShell ?? null;
+    this.getJupyterRootDirectory = getJupyterRootDirectory ?? null;
   }
 
   /**
@@ -172,9 +176,16 @@ export class BashTool extends BaseTool {
       return `[ERROR: command contains non-ASCII option token "${nonAsciiOptionToken}". Use ASCII flags only (example: "ls -la").]`;
     }
 
+    const resolvedCwd = resolveAgentPath(cwd, {
+      rootDirectory: this.getJupyterRootDirectory?.(),
+    });
+    if (!resolvedCwd.ok) {
+      return resolvedCwd.error;
+    }
+
     const resolvedTerminalName = await this.resolveTerminalName({
       requestedTerminalName: terminalName,
-      cwd,
+      cwd: resolvedCwd.jupyterPath,
     });
     if (!resolvedTerminalName) {
       return "[ERROR: Unable to resolve a terminal for this command.]";
@@ -307,7 +318,10 @@ export class BashTool extends BaseTool {
     const requestedCwd = options.cwd.trim();
     const chatId = this.getChatId?.() ?? null;
     if (this.pool && chatId) {
-      const terminal = await this.pool.createAgentTerminal(chatId, requestedCwd || undefined);
+      const terminal = await this.pool.createAgentTerminal(
+        chatId,
+        requestedCwd || undefined
+      );
       return terminal.name;
     }
 

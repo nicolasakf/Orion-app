@@ -25,6 +25,8 @@ If a prompt file contains answers inline, warn that the suite is not isolated an
 1. Identify the question source requested by the user.
    - Prefer `questions.md` or another question-only file.
    - If the user points at a directory, read only the question file(s), not the answer file(s).
+   - When locating a suite from a natural-language name, search only question files or explicitly exclude answer/evaluator files. For example, use `find public/test-prompts -name questions.md -print` or `rg "<suite terms>" public/test-prompts --glob 'questions.md' --glob '!answers.md' --glob '!answer-key.md' --glob '!expected*.md'`.
+   - Do not run broad searches across prompt-suite directories that can return sibling `answers.md`, `answer-key.md`, `expected*.md`, evaluator notes, or scoring rubrics.
 2. Select the requested test case(s).
    - If the user says “run test N”, read only enough of the question file to extract test N.
    - Do not open the matching answer section.
@@ -35,12 +37,15 @@ If a prompt file contains answers inline, warn that the suite is not isolated an
    - Use `await_command` only on a terminal returned by `bash`/`await_command`.
    - Use notebook tools for notebooks and file tools for non-notebook text files.
    - Use sub-agents only when the prompt asks for them or the task genuinely requires them.
+   - If a prompt explicitly asks to create a new notebook or file and the create operation fails, do not treat an existing artifact at that path as success. Fix an allowed precondition when the suite/harness grants cleanup permission, or report the create failure.
 4. Record observable evidence.
    - Summarize what was done, the final result, and any tool outputs needed for later evaluation.
    - Do not speculate about the hidden expected behavior.
 5. Stop after execution.
    - Do not self-grade against answer keys.
    - Tell the user that evaluation should be performed separately with `test-evaluator`.
+
+If a tool result unexpectedly exposes forbidden answer-key or evaluator-only content, stop the test immediately and report that the execution is contaminated by an answer-boundary violation. Do not continue executing the affected test or suite.
 
 ## Output format
 

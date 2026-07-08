@@ -100,6 +100,9 @@ export interface RunSubagentOptions {
   /** Workspace directory — passed to /api/chat so tool path context is correct. */
   workspaceDirectory?: string;
 
+  /** Absolute Jupyter root directory — lets sub-agents use the same absolute path contract. */
+  rootDirectory?: string;
+
   /** Same editor/Jupyter context as the parent agent (injected into the sub-agent system prompt). */
   notebookPath?: string;
   activeFilePath?: string;

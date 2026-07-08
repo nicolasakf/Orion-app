@@ -118,6 +118,7 @@ async function fetchSubagentStep(
       provider: options.providerId,
       agentMode: true,
       workspaceDirectory: options.workspaceDirectory,
+      rootDirectory: options.rootDirectory,
       notebookPath: options.notebookPath,
       activeFilePath: options.activeFilePath,
       agentRules: options.agentRules ?? [],

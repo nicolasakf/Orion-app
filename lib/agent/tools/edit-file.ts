@@ -15,21 +15,26 @@ import type { KernelSidecar } from "../kernel-sidecar";
 import type { EditCheckpointRecorder } from "../edit-checkpoint-recorder";
 import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { EditFileParams } from "./types";
+import { resolveAgentPath } from "../path-resolver";
 
 export class EditFileTool extends BaseTool {
+  private getJupyterRootDirectory: (() => string | undefined) | null;
+
   constructor(
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
     snapshotProvider?: OpenDocumentSnapshotProvider | null,
-    checkpointRecorder?: EditCheckpointRecorder | null
+    checkpointRecorder?: EditCheckpointRecorder | null,
+    getJupyterRootDirectory?: (() => string | undefined) | null
   ) {
     super(kernelService, sidecar, snapshotProvider, checkpointRecorder);
+    this.getJupyterRootDirectory = getJupyterRootDirectory ?? null;
   }
 
   /**
    * Edit a text file via the Jupyter server contents API.
    *
-   * @param params.filePath - Path relative to the Jupyter root directory
+   * @param params.filePath - Agent-facing file path; absolute paths are normalized to Jupyter-relative paths
    * @param params.mode - "overwrite" replaces entire content; "replace" does targeted substitution
    * @param params.content - Full new content (overwrite mode only)
    * @param params.oldString - Text to find and replace (replace mode only)
@@ -43,14 +48,21 @@ export class EditFileTool extends BaseTool {
       return "[ERROR] filePath is required.";
     }
 
+    const resolvedPath = resolveAgentPath(filePath, {
+      rootDirectory: this.getJupyterRootDirectory?.(),
+    });
+    if (!resolvedPath.ok) {
+      return resolvedPath.error;
+    }
+
     const contents = this.kernelService.getContentsManager();
 
     if (mode === "overwrite") {
-      return this.overwrite(contents, filePath, content);
+      return this.overwrite(contents, resolvedPath.jupyterPath, filePath, content);
     }
 
     if (mode === "replace") {
-      return this.replace(contents, filePath, oldString, newString);
+      return this.replace(contents, resolvedPath.jupyterPath, filePath, oldString, newString);
     }
 
     return `[ERROR] Unknown mode '${mode}'. Use "overwrite" or "replace".`;
@@ -61,12 +73,13 @@ export class EditFileTool extends BaseTool {
    */
   private async overwrite(
     contents: ReturnType<KernelService["getContentsManager"]>,
-    filePath: string,
+    jupyterPath: string,
+    displayPath: string,
     newContent: string
   ): Promise<string> {
-    const beforeContent = await this.readCurrentTextContent(contents, filePath);
+    const beforeContent = await this.readCurrentTextContent(contents, jupyterPath);
     try {
-      await contents.save(filePath, {
+      await contents.save(jupyterPath, {
         type: "file",
         format: "text",
         content: newContent,
@@ -76,7 +89,7 @@ export class EditFileTool extends BaseTool {
         {
           kind: "text_file",
           operation: beforeContent === null ? "insert" : "update",
-          path: filePath,
+          path: jupyterPath,
           before: { content: beforeContent ?? "" },
           after: { content: newContent },
         },
@@ -84,10 +97,10 @@ export class EditFileTool extends BaseTool {
       );
 
       const lineCount = newContent.split("\n").length;
-      return `Successfully wrote ${filePath} (${lineCount} lines).`;
+      return `Successfully wrote ${displayPath} (${lineCount} lines).`;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return `[ERROR] Could not write file '${filePath}': ${message}`;
+      return `[ERROR] Could not write file '${displayPath}': ${message}`;
     }
   }
 
@@ -98,7 +111,8 @@ export class EditFileTool extends BaseTool {
    */
   private async replace(
     contents: ReturnType<KernelService["getContentsManager"]>,
-    filePath: string,
+    jupyterPath: string,
+    displayPath: string,
     oldString: string,
     newString: string
   ): Promise<string> {
@@ -108,42 +122,42 @@ export class EditFileTool extends BaseTool {
 
     let currentContent: string;
     try {
-      const snapshot = this.snapshotProvider?.getTextSnapshot(filePath);
+      const snapshot = this.snapshotProvider?.getTextSnapshot(jupyterPath);
       if (snapshot) {
         currentContent = snapshot.content;
       } else {
-        const model = await contents.get(filePath, {
+        const model = await contents.get(jupyterPath, {
           content: true,
           format: "text",
         });
 
         if (model.content === null || model.content === undefined) {
-          return `[ERROR] File '${filePath}' has no content or is not a text file.`;
+          return `[ERROR] File '${displayPath}' has no content or is not a text file.`;
         }
 
         currentContent = model.content as string;
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return `[ERROR] Could not read file '${filePath}': ${message}`;
+      return `[ERROR] Could not read file '${displayPath}': ${message}`;
     }
 
     // Validate uniqueness
     const occurrences = this.countOccurrences(currentContent, oldString);
 
     if (occurrences === 0) {
-      return `[ERROR] oldString not found in '${filePath}'. No changes made. Double-check whitespace and indentation.`;
+      return `[ERROR] oldString not found in '${displayPath}'. No changes made. Double-check whitespace and indentation.`;
     }
 
     if (occurrences > 1) {
-      return `[ERROR] oldString appears ${occurrences} times in '${filePath}'. Provide more context to make it unique. No changes made.`;
+      return `[ERROR] oldString appears ${occurrences} times in '${displayPath}'. Provide more context to make it unique. No changes made.`;
     }
 
     // Perform the replacement
     const updatedContent = currentContent.replace(oldString, newString);
 
     try {
-      await contents.save(filePath, {
+      await contents.save(jupyterPath, {
         type: "file",
         format: "text",
         content: updatedContent,
@@ -152,7 +166,7 @@ export class EditFileTool extends BaseTool {
         {
           kind: "text_file",
           operation: "update",
-          path: filePath,
+          path: jupyterPath,
           before: { content: currentContent },
           after: { content: updatedContent },
         },
@@ -160,13 +174,13 @@ export class EditFileTool extends BaseTool {
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return `[ERROR] Could not write file '${filePath}': ${message}`;
+      return `[ERROR] Could not write file '${displayPath}': ${message}`;
     }
 
     // Report what changed
     const removedLines = oldString.split("\n").length;
     const addedLines = newString.split("\n").length;
-    return `Successfully edited '${filePath}': replaced ${removedLines}-line block with ${addedLines}-line block.`;
+    return `Successfully edited '${displayPath}': replaced ${removedLines}-line block with ${addedLines}-line block.`;
   }
 
   /**

@@ -540,6 +540,23 @@ async function main(): Promise<void> {
     assert(!prompt.includes("print('x')"), "notebook body cells should not be included in the prompt");
   });
 
+  await runTest("subagent system prompt uses absolute tmp path when root is known", () => {
+    const prompt = buildSubagentSystemPrompt({
+      subagent: {
+        name: "analyst",
+        label: "Analyst",
+        originalNotebookPath: ".agents/subagents/analyst.agent.ipynb",
+        tmpNotebookPath: ".agents/subagents/tmp/analyst/run.ipynb",
+        systemPrompt: "Analyze carefully.",
+      },
+      rootDirectory: "/Users/taylor/project",
+    });
+    assert(
+      prompt.includes('notebookPath: "/Users/taylor/project/.agents/subagents/tmp/analyst/run.ipynb"'),
+      "tmp path should be absolute in use_notebook instruction"
+    );
+  });
+
   await runTest("buildSubagentSlashCommands creates subagent category commands", () => {
     const commands = buildSubagentSlashCommands([
       {

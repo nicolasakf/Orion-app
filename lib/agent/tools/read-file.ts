@@ -11,20 +11,25 @@ import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
 import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { ReadFileParams } from "./types";
+import { resolveAgentPath } from "../path-resolver";
 
 export class ReadFileTool extends BaseTool {
+  private getJupyterRootDirectory: (() => string | undefined) | null;
+
   constructor(
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
-    snapshotProvider?: OpenDocumentSnapshotProvider | null
+    snapshotProvider?: OpenDocumentSnapshotProvider | null,
+    getJupyterRootDirectory?: (() => string | undefined) | null
   ) {
     super(kernelService, sidecar, snapshotProvider);
+    this.getJupyterRootDirectory = getJupyterRootDirectory ?? null;
   }
 
   /**
    * Read a text file from the Jupyter server contents API.
    *
-   * @param params.filePath - Path relative to the Jupyter root directory
+   * @param params.filePath - Agent-facing file path; absolute paths are normalized to Jupyter-relative paths
    * @param params.startLine - 0-based start line (0 = from beginning)
    * @param params.endLine - 0-based end line inclusive (0 = to end of file)
    * @returns Line-numbered file content, optionally sliced to the requested range
@@ -36,8 +41,15 @@ export class ReadFileTool extends BaseTool {
       return "[ERROR] filePath is required.";
     }
 
+    const resolvedPath = resolveAgentPath(filePath, {
+      rootDirectory: this.getJupyterRootDirectory?.(),
+    });
+    if (!resolvedPath.ok) {
+      return resolvedPath.error;
+    }
+
     let rawContent: string;
-    const snapshot = this.snapshotProvider?.getTextSnapshot(filePath);
+    const snapshot = this.snapshotProvider?.getTextSnapshot(resolvedPath.jupyterPath);
     const readFromEditorBuffer = Boolean(snapshot?.dirty);
 
     try {
@@ -45,7 +57,7 @@ export class ReadFileTool extends BaseTool {
         rawContent = snapshot.content;
       } else {
         const contents = this.kernelService.getContentsManager();
-        const model = await contents.get(filePath, {
+        const model = await contents.get(resolvedPath.jupyterPath, {
           content: true,
           format: "text",
         });

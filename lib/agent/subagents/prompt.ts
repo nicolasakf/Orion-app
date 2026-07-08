@@ -1,5 +1,6 @@
 import { buildRulesPromptSection, type AgentRule } from "@/lib/agent/rules";
 import { buildRequiredSkillsPromptSection } from "@/lib/agent/implicit-skills";
+import { isAbsoluteAgentPath, toAgentAbsolutePath } from "@/lib/agent/path-resolver";
 import type { SubagentPromptPayload } from "./types";
 
 export function buildSubagentSystemPrompt(options: {
@@ -7,8 +8,13 @@ export function buildSubagentSystemPrompt(options: {
   envContext?: string;
   agentRules?: AgentRule[];
   forcedSkillNames?: string[];
+  rootDirectory?: string;
 }): string {
-  const { subagent, envContext, agentRules, forcedSkillNames } = options;
+  const { subagent, envContext, agentRules, forcedSkillNames, rootDirectory } = options;
+  const toPromptPath = (path: string): string =>
+    isAbsoluteAgentPath(path) ? path : toAgentAbsolutePath(path, { rootDirectory }) ?? path;
+  const originalNotebookPath = toPromptPath(subagent.originalNotebookPath);
+  const tmpNotebookPath = toPromptPath(subagent.tmpNotebookPath);
   const tripleBacktick = "```";
   const fencedSystemPrompt = `${tripleBacktick}markdown\n${subagent.systemPrompt}\n${tripleBacktick}`;
   const rulesSection = buildRulesPromptSection(agentRules);
@@ -17,10 +23,10 @@ export function buildSubagentSystemPrompt(options: {
 
 ## Sub-agent Notebook
 
-- Original reusable definition: \`${subagent.originalNotebookPath}\` (reference only)
-- Writable temporary run copy: \`${subagent.tmpNotebookPath}\`
+- Original reusable definition: \`${originalNotebookPath}\` (reference only)
+- Writable temporary run copy: \`${tmpNotebookPath}\`
 
-**CRITICAL — never touch the original notebook.** Do not pass \`${subagent.originalNotebookPath}\` to any tool (including \`use_notebook\`, file or notebook editors, or shell) to open, connect, run cells, edit, save, move, or delete. That path is shown only so you know which definition you are running; all notebook work must happen exclusively in the temporary copy above.
+**CRITICAL — never touch the original notebook.** Do not pass \`${originalNotebookPath}\` to any tool (including \`use_notebook\`, file or notebook editors, or shell) to open, connect, run cells, edit, save, move, or delete. That path is shown only so you know which definition you are running; all notebook work must happen exclusively in the temporary copy above.
 
 ## Original Notebook Structure
 
@@ -40,7 +46,7 @@ ${fencedSystemPrompt}`,
     buildRequiredSkillsPromptSection(forcedSkillNames ?? []),
     `## Runtime Instructions
 
-- First, call \`use_notebook\` with \`notebookPath: "${subagent.tmpNotebookPath}"\`, \`notebookName: "${subagent.name}"\`, and \`mode: "connect"\`.
+- First, call \`use_notebook\` with \`notebookPath: "${tmpNotebookPath}"\`, \`notebookName: "${subagent.name}"\`, and \`mode: "connect"\`.
 - Inspect, run, and edit cells in the temporary notebook as needed to complete the delegated task.
 - Do not call \`delegate\`; recursive sub-agent spawning is blocked.
 - Your final response is the only result the parent agent will see. Make it concise, complete, and include relevant notebook paths, outputs, files, links, caveats, etc.

@@ -100,3 +100,60 @@ describe("Research mode prompt", () => {
     expect(prompt).not.toContain("at most 3");
   });
 });
+
+describe("Business View mode prompt", () => {
+  it("injects App View requirements when businessExperienceMode is true", () => {
+    const prompt = buildAgentSystemPrompt({ businessExperienceMode: true });
+
+    expect(prompt).toContain("## Business View Mode");
+    expect(prompt).toContain("Load the `create-app` skill");
+    expect(prompt).toContain("included in App View");
+  });
+
+  it("omits Business View mode guidance in the default experience", () => {
+    expect(buildAgentSystemPrompt()).not.toContain("## Business View Mode");
+    expect(buildResearchModeSystemPrompt()).not.toContain("## Business View Mode");
+  });
+});
+
+describe("agent path prompt contract", () => {
+  it("uses absolute host paths when a Jupyter root is known", () => {
+    const prompt = buildAgentSystemPrompt({
+      rootDirectory: "/Users/taylor",
+      workspaceDirectory: "project",
+      notebookPath: "project/notebooks/analysis.ipynb",
+    });
+
+    expect(prompt).toContain("Jupyter root absolute path: `/Users/taylor`");
+    expect(prompt).toContain("Workspace absolute path: `/Users/taylor/project`");
+    expect(prompt).toContain("Use absolute host paths for all path-like tool inputs");
+    expect(prompt).toContain('notebookPath="/Users/taylor/project/notebooks/analysis.ipynb"');
+    expect(prompt).toContain('cwd: "/Users/taylor/project"');
+    expect(prompt).toContain("including outside the active workspace");
+    expect(prompt).not.toContain("All file paths you reference should be relative");
+    expect(prompt).not.toContain("always prefix the notebookPath with this directory");
+  });
+
+  it("uses absolute open-file hints when a Jupyter root is known", () => {
+    const prompt = buildAskModeSystemPrompt({
+      rootDirectory: "/Users/taylor",
+      workspaceDirectory: "project",
+      activeFilePath: "project/src/app.py",
+    });
+
+    expect(prompt).toContain("When the user says \"this file\", they mean `/Users/taylor/project/src/app.py`");
+    expect(prompt).toContain('read_file` with path="/Users/taylor/project/src/app.py"');
+    expect(prompt).toContain('edit_file` with path="/Users/taylor/project/src/app.py"');
+  });
+
+  it("falls back to Jupyter-relative paths when the root is unavailable", () => {
+    const prompt = buildEditModeSystemPrompt({
+      workspaceDirectory: "project",
+      activeFilePath: "project/src/app.py",
+    });
+
+    expect(prompt).toContain("Absolute host paths are unavailable");
+    expect(prompt).toContain("Use Jupyter-root-relative paths");
+    expect(prompt).toContain('read_file` with path="project/src/app.py"');
+  });
+});

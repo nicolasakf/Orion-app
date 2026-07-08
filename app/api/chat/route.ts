@@ -156,6 +156,8 @@ export async function POST(req: Request) {
     activeFilePath?: string;
     /** Workspace directory relative to Jupyter root (injected into agent system prompt) */
     workspaceDirectory?: string;
+    /** Absolute Jupyter root directory for local managed sessions. */
+    rootDirectory?: string;
     /** Client-generated UUID shared across all LLM calls for the same user message turn. */
     modelRequestId?: string;
     /** "user" (default) or "title_generation" */
@@ -210,6 +212,8 @@ export async function POST(req: Request) {
     automaticContinuationAttempt?: unknown;
     /** Client-provided category for an automatic continuation. */
     automaticContinuationReason?: unknown;
+    /** When true, the user is in Business View and only sees notebook App View. */
+    businessExperienceMode?: boolean;
   };
 
   try {
@@ -238,6 +242,7 @@ export async function POST(req: Request) {
     notebookPath,
     activeFilePath,
     workspaceDirectory,
+    rootDirectory,
     modelRequestId: clientModelRequestId,
     origin,
     modelSettings,
@@ -261,6 +266,7 @@ export async function POST(req: Request) {
     researchNudge: researchNudgeRaw,
     automaticContinuationAttempt: automaticContinuationAttemptRaw,
     automaticContinuationReason: automaticContinuationReasonRaw,
+    businessExperienceMode: businessExperienceModeRaw,
   } = body;
 
   const parsedResearchSession = ResearchSessionSnapshotSchema.safeParse(researchSessionRaw);
@@ -280,6 +286,7 @@ export async function POST(req: Request) {
     typeof automaticContinuationReasonRaw === "string"
       ? automaticContinuationReasonRaw.slice(0, 80)
       : "";
+  const businessExperienceMode = businessExperienceModeRaw === true;
 
   const agentCommunicationStyle: AgentCommunicationStyle =
     AgentCommunicationStyleSchema.parse(rawAgentCommunicationStyle);
@@ -908,7 +915,12 @@ export async function POST(req: Request) {
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
     modelSettings: modelSettings ?? null,
     contextMeta: effectiveMode !== "Ask"
-      ? { notebookPath: notebookPath ?? null, activeFilePath: activeFilePath ?? null, workspaceDirectory: workspaceDirectory ?? null }
+      ? {
+        notebookPath: notebookPath ?? null,
+        activeFilePath: activeFilePath ?? null,
+        workspaceDirectory: workspaceDirectory ?? null,
+        rootDirectory: rootDirectory ?? null,
+      }
       : null,
   });
 
@@ -932,6 +944,7 @@ export async function POST(req: Request) {
           serverInfo,
           jupyterServerIsLocal,
           clientPlatformOs,
+          rootDirectory,
           workspaceDirectory,
           notebookPath,
           activeFilePath,
@@ -941,11 +954,13 @@ export async function POST(req: Request) {
           envContext,
           agentRules,
           forcedSkillNames: missingForcedSkillNames,
+          rootDirectory,
         });
       } else if (effectiveMode === "Research") {
         agentSystemPrompt = buildResearchModeSystemPrompt({
           notebookPath,
           activeFilePath,
+          rootDirectory,
           workspaceDirectory,
           availableSkills,
           availableSubagents,
@@ -960,11 +975,13 @@ export async function POST(req: Request) {
           customSystemPrompt: effectiveInteractionModeConfig.customSystemPrompt,
           enableSkills,
           enableSubagents,
+          businessExperienceMode,
         });
       } else {
         agentSystemPrompt = buildAgentSystemPrompt({
           notebookPath,
           activeFilePath,
+          rootDirectory,
           workspaceDirectory,
           availableSkills,
           availableSubagents,
@@ -979,12 +996,14 @@ export async function POST(req: Request) {
           customSystemPrompt: effectiveInteractionModeConfig.customSystemPrompt,
           enableSkills,
           enableSubagents,
+          businessExperienceMode,
         });
       }
     } else if (effectiveMode === "Ask") {
       agentSystemPrompt = buildAskModeSystemPrompt({
         notebookPath,
         activeFilePath,
+        rootDirectory,
         workspaceDirectory,
         agentRules,
         serverInfo,
@@ -998,6 +1017,7 @@ export async function POST(req: Request) {
       agentSystemPrompt = buildEditModeSystemPrompt({
         notebookPath,
         activeFilePath,
+        rootDirectory,
         workspaceDirectory,
         availableSkills,
         availableSubagents,

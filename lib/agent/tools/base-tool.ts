@@ -174,17 +174,137 @@ export abstract class BaseTool {
    */
   protected async createNotebook(path: string): Promise<NotebookDocument> {
     const contents = this.kernelService.getContentsManager();
-    const parentPath = path.includes("/")
-      ? path.slice(0, path.lastIndexOf("/"))
-      : "";
-    const created = await contents.newUntitled({
-      path: parentPath,
-      type: "notebook",
-    });
-    if (created.path !== path) {
-      await contents.rename(created.path, path);
+    const notebookPath = this.normalizeContentsPath(path);
+
+    if (!notebookPath) {
+      throw new Error("Notebook path is required.");
     }
-    return this.readNotebook(path);
+
+    if (await this.contentsPathExists(contents, notebookPath)) {
+      throw new Error(
+        `Notebook '${notebookPath}' already exists. Create mode requires a new path; remove the stale artifact or choose a different notebookPath.`
+      );
+    }
+
+    const parentPath = notebookPath.includes("/")
+      ? notebookPath.slice(0, notebookPath.lastIndexOf("/"))
+      : "";
+
+    await this.ensureDirectoryExists(contents, parentPath);
+
+    let createdPath: string;
+    try {
+      const created = await contents.newUntitled({
+        path: parentPath,
+        type: "notebook",
+      });
+      createdPath = created.path;
+    } catch (error) {
+      throw new Error(
+        `Could not create notebook in parent directory '${parentPath || "/"}': ${this.errorMessage(error)}`
+      );
+    }
+
+    if (createdPath !== notebookPath) {
+      try {
+        await contents.rename(createdPath, notebookPath);
+      } catch (error) {
+        throw new Error(
+          `Could not rename created notebook '${createdPath}' to '${notebookPath}': ${this.errorMessage(error)}`
+        );
+      }
+    }
+
+    try {
+      return await this.readNotebook(notebookPath);
+    } catch (error) {
+      throw new Error(
+        `Created notebook at '${notebookPath}' but could not read it back: ${this.errorMessage(error)}`
+      );
+    }
+  }
+
+  /** Ensure each segment of a Jupyter-relative directory path exists. */
+  private async ensureDirectoryExists(
+    contents: ReturnType<KernelService["getContentsManager"]>,
+    directoryPath: string
+  ): Promise<void> {
+    const normalizedPath = this.normalizeContentsPath(directoryPath);
+    if (!normalizedPath) return;
+
+    let currentPath = "";
+    for (const segment of normalizedPath.split("/")) {
+      const nextPath = currentPath ? `${currentPath}/${segment}` : segment;
+      try {
+        const model = await contents.get(nextPath, { content: false });
+        if ((model as { type?: string }).type !== "directory") {
+          throw new Error(`Parent path '${nextPath}' exists but is not a directory.`);
+        }
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("exists but is not a directory")) {
+          throw error;
+        }
+        await this.createDirectory(contents, currentPath, nextPath);
+      }
+      currentPath = nextPath;
+    }
+  }
+
+  /** Create one missing Jupyter directory at the requested path. */
+  private async createDirectory(
+    contents: ReturnType<KernelService["getContentsManager"]>,
+    parentPath: string,
+    directoryPath: string
+  ): Promise<void> {
+    let createdPath: string;
+    try {
+      const created = await contents.newUntitled({
+        path: parentPath,
+        type: "directory",
+      });
+      createdPath = created.path;
+    } catch (error) {
+      throw new Error(
+        `Could not create parent directory '${directoryPath}': ${this.errorMessage(error)}`
+      );
+    }
+
+    if (createdPath !== directoryPath) {
+      try {
+        await contents.rename(createdPath, directoryPath);
+      } catch (error) {
+        throw new Error(
+          `Could not rename created directory '${createdPath}' to '${directoryPath}': ${this.errorMessage(error)}`
+        );
+      }
+    }
+  }
+
+  /** Return true when a Jupyter contents path exists. */
+  private async contentsPathExists(
+    contents: ReturnType<KernelService["getContentsManager"]>,
+    path: string
+  ): Promise<boolean> {
+    try {
+      await contents.get(path, { content: false });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Normalize a path for the Jupyter contents API. */
+  private normalizeContentsPath(path: string): string {
+    return path
+      .replace(/\\/g, "/")
+      .split("/")
+      .filter((segment) => segment && segment !== ".")
+      .join("/");
+  }
+
+  /** Format unknown caught values for model-facing tool errors. */
+  private errorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
   }
 
   // ============================================================================

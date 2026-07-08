@@ -15,6 +15,7 @@ import { filterModelInvocableSkills } from "@/lib/skills/discovery";
 import { buildRequiredSkillsPromptSection } from "@/lib/agent/implicit-skills";
 import { buildRulesPromptSection, type AgentRule } from "@/lib/agent/rules";
 import type { AgentCommunicationStyle } from "@/lib/settings/schema";
+import { isAbsoluteAgentPath, toAgentAbsolutePath } from "./path-resolver";
 export { buildSubagentSystemPrompt } from "@/lib/agent/subagents";
 
 /**
@@ -150,6 +151,8 @@ export function buildAgentEnvironmentContextPrompt(options: {
   jupyterServerIsLocal?: boolean;
   /** Browser-detected OS; used for OS line when local server and server OS is unknown */
   clientPlatformOs?: PlatformOS;
+  /** Absolute host path to the Jupyter contents root, when known for local sessions. */
+  rootDirectory?: string;
   workspaceDirectory?: string;
   notebookPath?: string;
   activeFilePath?: string;
@@ -158,6 +161,7 @@ export function buildAgentEnvironmentContextPrompt(options: {
     serverInfo,
     jupyterServerIsLocal,
     clientPlatformOs,
+    rootDirectory,
     workspaceDirectory,
     notebookPath,
     activeFilePath,
@@ -165,6 +169,14 @@ export function buildAgentEnvironmentContextPrompt(options: {
 
   // XOR: if notebook is open, do not treat activeFilePath as the editor file
   const filePath = notebookPath ? undefined : activeFilePath;
+  const toPromptPath = (path: string | undefined): string | undefined => {
+    if (path === undefined) return undefined;
+    if (isAbsoluteAgentPath(path)) return path;
+    return toAgentAbsolutePath(path, { rootDirectory }) ?? path;
+  };
+  const workspacePromptPath = toPromptPath(workspaceDirectory);
+  const notebookPromptPath = toPromptPath(notebookPath);
+  const filePromptPath = toPromptPath(filePath);
 
   const sections: string[] = [];
 
@@ -177,37 +189,49 @@ export function buildAgentEnvironmentContextPrompt(options: {
     sections.push(`## Jupyter Server Environment\n\n${jupyterEnvLines.join("\n")}`);
   }
 
-  if (workspaceDirectory) {
-    sections.push(`## Workspace Directory
+  if (rootDirectory) {
+    sections.push(`## Jupyter Path Context
 
-Your workspace directory is: \`${workspaceDirectory}\`
-- When creating notebooks with \`use_notebook\`, always prefix the notebookPath with this directory (e.g. \`${workspaceDirectory}/new_notebook.ipynb\`).
-- Use \`bash\` for shell commands. For a fresh terminal in this workspace, pass \`terminalName: ""\` and \`cwd: "${workspaceDirectory}"\`; follow the \`bash\` / \`await_command\` tool descriptions for terminal reuse and long-running commands.
-- All file paths you reference should be relative to the Jupyter root, starting with this directory.`);
+Jupyter root absolute path: \`${rootDirectory}\`
+Workspace absolute path: \`${workspacePromptPath ?? rootDirectory}\`
+- Use absolute host paths for all path-like tool inputs, including \`notebookPath\`, \`filePath\`, search/list paths, and fresh \`bash\` \`cwd\` values.
+- Orion can access files anywhere under the Jupyter root, including outside the active workspace.
+- Orion cannot access files outside the Jupyter root. If the user asks for one, say the path is outside the Jupyter root and cannot be accessed.
+- Tool implementations convert absolute paths back to Jupyter-relative paths internally; do not do that conversion yourself.
+- Use \`bash\` for shell commands. For a fresh terminal in this workspace, pass \`terminalName: ""\` and \`cwd: "${workspacePromptPath ?? rootDirectory}"\`; follow the \`bash\` / \`await_command\` tool descriptions for terminal reuse and long-running commands.`);
+  } else if (workspaceDirectory) {
+    sections.push(`## Jupyter Path Context
+
+Workspace directory relative to the Jupyter root: \`${workspaceDirectory}\`
+- Absolute host paths are unavailable for this Jupyter connection because Orion does not know the Jupyter root directory.
+- Use Jupyter-root-relative paths for path-like tool inputs, prefixed with this workspace directory when needed.
+- Use \`bash\` for shell commands. For a fresh terminal in this workspace, pass \`terminalName: ""\` and \`cwd: "${workspaceDirectory}"\`; follow the \`bash\` / \`await_command\` tool descriptions for terminal reuse and long-running commands.`);
   }
 
   if (notebookPath) {
-    const directory = notebookPath.includes("/")
-      ? notebookPath.substring(0, notebookPath.lastIndexOf("/"))
-      : workspaceDirectory ?? "";
+    const notebookDisplayPath = notebookPromptPath ?? notebookPath;
+    const directory = notebookDisplayPath.includes("/")
+      ? notebookDisplayPath.substring(0, notebookDisplayPath.lastIndexOf("/"))
+      : workspacePromptPath ?? workspaceDirectory ?? "";
 
     sections.push(`## Open Notebook
 
-The user currently has a notebook open in the editor at path: \`${notebookPath}\`
-- To work on this notebook, call \`use_notebook\` with notebookName=<notebook-filename>, notebookPath="${notebookPath}", and mode="connect".
+The user currently has a notebook open in the editor at path: \`${notebookDisplayPath}\`
+- To work on this notebook, call \`use_notebook\` with notebookName=<notebook-filename>, notebookPath="${notebookDisplayPath}", and mode="connect".
 - If the user asks to create a **new** notebook, call \`use_notebook\` with a new notebookName, a new notebookPath (e.g. \`${directory}/<descriptive_name>.ipynb\`), and mode="create". Do NOT connect to the existing notebook when the user wants a new one.
 - Official notebook reads see Orion's unsaved editor buffer, and official notebook mutations save the active dirty editor before writing; shell commands read only the saved disk copy.
 - Determine whether to connect or create based on the user's request.`);
   }
 
   if (filePath) {
+    const fileDisplayPath = filePromptPath ?? filePath;
     sections.push(`## Open File
 
-The user currently has a non-notebook file open in the editor at path: \`${filePath}\`
-**This is the file the user is working in.** When the user says "this file", they mean \`${filePath}\`.
+The user currently has a non-notebook file open in the editor at path: \`${fileDisplayPath}\`
+**This is the file the user is working in.** When the user says "this file", they mean \`${fileDisplayPath}\`.
 - This is already known — do not call tools to discover or verify this path.
-- To read this file, use \`read_file\` with path="${filePath}".
-- To edit this file, use \`edit_file\` with path="${filePath}".
+- To read this file, use \`read_file\` with path="${fileDisplayPath}".
+- To edit this file, use \`edit_file\` with path="${fileDisplayPath}".
 - Official reads see Orion's unsaved editor buffer, and official mutation tools save the active dirty editor before writing; shell commands read only the saved disk copy.
 - This is not a notebook — do not call \`use_notebook\`, \`read_notebook\`, or any notebook tools unless the user explicitly asks to work with a notebook.`);
   }
@@ -235,6 +259,19 @@ Core loop:
 - A research step should answer one investigative move, such as loading/schema sanity, missingness checks, one plot family, one relationship question, or one anomaly check.
 - Keep batches flexible when one coherent step needs several cells, but avoid full-notebook scaffolding before the first execution.
 - Finish with a notebook synthesis section covering findings, decisions made along the way, uncertainty, limitations, and useful next steps.`;
+
+const BUSINESS_EXPERIENCE_MODE_SECTION = `## Business View Mode
+
+The user is in Orion Business View. They see only the notebook **App View**—not raw notebook cells, code, or Notebook view.
+
+When you create, edit, or run a notebook in this session:
+- Load the \`create-app\` skill before selecting App View content.
+- Every narrative section, chart, table, metric, or control the user should see MUST be marked for App View via \`metadata.orion.app\` on the relevant markdown cells and code outputs.
+- After adding or updating notebook content, run cells as needed, then update App View selections so the user's App View reflects the work.
+- Prefer \`orion_ui\` outputs for charts, tables, cards, and interactive controls; load \`orion-ui\` when building those.
+- Do not treat notebook-only content as complete—the user cannot see it until it is included in App View.
+
+If App View would still be empty after your changes, keep working until meaningful report content is visible there.`;
 
 function buildSubagentDelegationSection(
   availableSubagents?: Array<{
@@ -269,6 +306,7 @@ ${agentLines}`;
  *
  * @param options.notebookPath - Open notebook path to embed in the prompt (editor context)
  * @param options.activeFilePath - Open non-notebook file path (used when no notebook is open; embedded as Open File)
+ * @param options.rootDirectory - Absolute Jupyter contents root path, when available for local sessions
  * @param options.workspaceDirectory - Workspace directory relative to Jupyter root
  * @param options.availableSkills - Skills to advertise in the system prompt
  * @param options.availableSubagents - Notebook-defined subagents to advertise in the system prompt
@@ -288,6 +326,8 @@ export function buildAgentSystemPrompt(options?: {
   notebookPath?: string;
   /** Open non-notebook file path (editor). Mutually exclusive with notebookPath. */
   activeFilePath?: string;
+  /** Absolute host path to the Jupyter contents root, when available for local sessions. */
+  rootDirectory?: string;
   workspaceDirectory?: string;
   /** Skills available in this session — injected as an Available Skills section */
   availableSkills?: Array<{ name: string; description: string; disableModelInvocation?: boolean }>;
@@ -319,9 +359,12 @@ export function buildAgentSystemPrompt(options?: {
   enableSkills?: boolean;
   /** Whether to advertise notebook-defined sub-agent delegation in this mode. */
   enableSubagents?: boolean;
+  /** When true, the user is in Business View and only sees notebook App View. */
+  businessExperienceMode?: boolean;
 }): string {
   const {
     notebookPath,
+    rootDirectory,
     workspaceDirectory,
     availableSkills,
     availableSubagents,
@@ -335,6 +378,7 @@ export function buildAgentSystemPrompt(options?: {
     communicationStyle,
     customCommunicationStyle,
     customSystemPrompt,
+    businessExperienceMode,
   } = options ?? {};
   const enableSkills = options?.enableSkills ?? true;
   const enableSubagents = options?.enableSubagents ?? true;
@@ -401,12 +445,17 @@ The user explicitly selected the \`${forcedSubagentName}\` sub-agent for this tu
     serverInfo,
     jupyterServerIsLocal,
     clientPlatformOs,
+    rootDirectory,
     workspaceDirectory,
     notebookPath,
     activeFilePath,
   });
   if (envContext) {
     sections.push(envContext);
+  }
+
+  if (businessExperienceMode) {
+    sections.push(BUSINESS_EXPERIENCE_MODE_SECTION);
   }
 
   return sections.join("\n\n");
@@ -422,6 +471,7 @@ export function buildResearchModeSystemPrompt(options?: Parameters<typeof buildA
 interface ModeModePromptOptions {
   notebookPath?: string;
   activeFilePath?: string;
+  rootDirectory?: string;
   workspaceDirectory?: string;
   serverInfo?: JupyterServerInfo | null;
   jupyterServerIsLocal?: boolean;
@@ -458,6 +508,7 @@ export function buildAskModeSystemPrompt(options?: ModeModePromptOptions): strin
     serverInfo: options?.serverInfo,
     jupyterServerIsLocal: options?.jupyterServerIsLocal,
     clientPlatformOs: options?.clientPlatformOs,
+    rootDirectory: options?.rootDirectory,
     workspaceDirectory: options?.workspaceDirectory,
     notebookPath: options?.notebookPath,
     activeFilePath: options?.notebookPath ? undefined : options?.activeFilePath,
@@ -474,6 +525,7 @@ export function buildAskModeSystemPrompt(options?: ModeModePromptOptions): strin
 export function buildEditModeSystemPrompt(options?: {
   notebookPath?: string;
   activeFilePath?: string;
+  rootDirectory?: string;
   workspaceDirectory?: string;
   availableSkills?: Array<{ name: string; description: string; disableModelInvocation?: boolean }>;
   availableSubagents?: Array<{
@@ -558,6 +610,7 @@ The user explicitly selected the \`${options.forcedSubagentName}\` sub-agent for
     serverInfo: options?.serverInfo,
     jupyterServerIsLocal: options?.jupyterServerIsLocal,
     clientPlatformOs: options?.clientPlatformOs,
+    rootDirectory: options?.rootDirectory,
     workspaceDirectory: options?.workspaceDirectory,
     notebookPath: options?.notebookPath,
     activeFilePath,

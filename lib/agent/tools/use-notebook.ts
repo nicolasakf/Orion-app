@@ -17,24 +17,28 @@ import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
 import type { UseNotebookParams } from "./types";
+import { resolveAgentPath } from "../path-resolver";
 
 export class UseNotebookTool extends BaseTool {
   private notebookManager: NotebookManager;
+  private getJupyterRootDirectory: (() => string | undefined) | null;
 
   constructor(
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
-    notebookManager: NotebookManager
+    notebookManager: NotebookManager,
+    getJupyterRootDirectory?: (() => string | undefined) | null
   ) {
     super(kernelService, sidecar);
     this.notebookManager = notebookManager;
+    this.getJupyterRootDirectory = getJupyterRootDirectory ?? null;
   }
 
   /**
    * Connect to or create a notebook file and associate it with a kernel.
    *
    * @param params.notebookName - Human-readable label for this notebook (display only)
-   * @param params.notebookPath - Path to the notebook file (relative to Jupyter root)
+   * @param params.notebookPath - Agent-facing notebook path; absolute paths are normalized to Jupyter-relative paths
    * @param params.mode         - "connect" to attach to existing, "create" to make new
    * @param params.kernelId     - Kernel ID to connect to, or empty string to start a new kernel
    * @returns Status message including the notebookId to use in subsequent calls
@@ -43,9 +47,16 @@ export class UseNotebookTool extends BaseTool {
     const { notebookName, notebookPath, mode, kernelId } = params;
     const trimmedKernelId = kernelId.trim();
     const infoList: string[] = [];
+    const resolvedPath = resolveAgentPath(notebookPath, {
+      rootDirectory: this.getJupyterRootDirectory?.(),
+    });
+    if (!resolvedPath.ok) {
+      return resolvedPath.error;
+    }
+    const jupyterPath = resolvedPath.jupyterPath;
 
     // ---- Check if this path is already registered ----
-    const existing = this.notebookManager.getByPath(notebookPath);
+    const existing = this.notebookManager.getByPath(jupyterPath);
 
     if (existing) {
       if (mode === "create") {
@@ -70,11 +81,11 @@ export class UseNotebookTool extends BaseTool {
         `and deactivating current notebook.`
       );
       this.notebookManager.setCurrentNotebook(existing.id);
-      this.kernelService.setActivePath(notebookPath);
+      this.kernelService.setActivePath(jupyterPath);
 
       // Cell count
       try {
-        const notebook = await this.readNotebook(notebookPath);
+        const notebook = await this.readNotebook(jupyterPath);
         infoList.push(`\nNotebook has ${notebook.cells.length} cells.`);
       } catch (error) {
         infoList.push(
@@ -88,16 +99,30 @@ export class UseNotebookTool extends BaseTool {
     // ---- New notebook registration ----
 
     if (mode === "connect") {
-      const exists = await this.checkNotebookExists(notebookPath);
+      const exists = await this.checkNotebookExists(jupyterPath);
       if (!exists) {
         return `[ERROR] '${notebookPath}' not found on the Jupyter server. Please check the notebook already exists.`;
       }
     } else if (mode === "create") {
-      await this.createNotebook(notebookPath);
+      const exists = await this.checkNotebookExists(jupyterPath);
+      if (exists) {
+        return (
+          `[ERROR] Notebook '${notebookPath}' already exists on the Jupyter server. ` +
+          "Create mode requires a new or cleaned path; do not connect to an existing notebook unless the user asks to reuse it."
+        );
+      }
+
+      try {
+        await this.createNotebook(jupyterPath);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return `[ERROR] Could not create notebook '${notebookPath}': ${message}`;
+      }
+
       infoList.push(`[INFO] Created new notebook at '${notebookPath}'.`);
       if (typeof window !== "undefined") {
         window.dispatchEvent(
-          new CustomEvent("agentNotebookCreated", { detail: { path: notebookPath } })
+          new CustomEvent("agentNotebookCreated", { detail: { path: jupyterPath } })
         );
       }
     }
@@ -114,13 +139,13 @@ export class UseNotebookTool extends BaseTool {
       resolvedKernelId = connectedKernel.id;
       infoList.push(`[INFO] Connected to existing kernel '${resolvedKernelId}'.`);
     } else {
-      const kernel = await this.kernelService.startKernel("python3", notebookPath);
+      const kernel = await this.kernelService.startKernel("python3", jupyterPath);
       resolvedKernelId = kernel.id;
       infoList.push(`[INFO] Started new kernel '${resolvedKernelId}'.`);
     }
 
     // Register in notebook manager — receives the generated UUID
-    const notebookId = this.notebookManager.addNotebook(notebookName, notebookPath, resolvedKernelId);
+    const notebookId = this.notebookManager.addNotebook(notebookName, jupyterPath, resolvedKernelId);
     this.notebookManager.setCurrentNotebook(notebookId);
     infoList.push(
       `[INFO] Successfully activated notebook '${notebookName}' (id: ${notebookId}). ` +
@@ -129,7 +154,7 @@ export class UseNotebookTool extends BaseTool {
 
     // Cell count
     try {
-      const notebook = await this.readNotebook(notebookPath);
+      const notebook = await this.readNotebook(jupyterPath);
       infoList.push(`\nNotebook has ${notebook.cells.length} cells.`);
     } catch (error) {
       infoList.push(

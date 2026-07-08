@@ -53,6 +53,7 @@ import {
 } from "@/lib/agent/subagents";
 import { detectClientPlatformOs, isJupyterServerHostLocal } from "@/lib/utils";
 import { guardExecutionToolResult, isExecutionToolResult } from "./visual-evidence";
+import { resolveAgentPath } from "./path-resolver";
 
 // ============================================================================
 // Types
@@ -109,6 +110,11 @@ function getStringParam(params: unknown, key: string): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function resolveProviderJupyterPath(path: string, rootDirectory?: string | null): string {
+  const resolved = resolveAgentPath(path, { rootDirectory });
+  return resolved.ok ? resolved.jupyterPath : path;
+}
+
 export interface AssistantContextValue {
   // State
   isReady: boolean;
@@ -129,6 +135,8 @@ export interface AssistantContextValue {
   serverInfo: JupyterServerInfo | null;
   /** True when the configured Jupyter server URL is loopback (client-derived). */
   jupyterServerIsLocal: boolean;
+  /** Absolute path to the Jupyter contents root on the Jupyter host, when known. */
+  rootDirectory: string | null;
 
   // Actions
   inspectVariable: (name: string) => Promise<VariableSummary>;
@@ -181,6 +189,7 @@ export type AssistantChatContextValue = Pick<
   | "listDirectoryEntries"
   | "serverInfo"
   | "jupyterServerIsLocal"
+  | "rootDirectory"
   | "executeToolCall"
   | "createTmpSubagentNotebookCopy"
   | "setChatId"
@@ -199,8 +208,10 @@ interface AssistantProviderProps {
   notebook?: NotebookType | null;
   /** Called after the agent modifies the notebook (insert/overwrite/delete cells) */
   onAgentNotebookChange?: () => void;
-  /** Current workspace directory (relative to Jupyter root); forwarded to glob/grep tools to guarantee correct cwd */
+  /** Current workspace directory (relative to Jupyter root) */
   workspaceDirectory?: string;
+  /** Absolute path to the Jupyter contents root on the Jupyter host, when known. */
+  rootDirectory?: string | null;
   /** Supplies live active editor content for read/edit tools before they fall back to disk. */
   openDocumentSnapshots?: OpenDocumentSnapshotProvider;
 }
@@ -211,6 +222,7 @@ export function AssistantProvider({
   notebook: initialNotebook,
   onAgentNotebookChange: onAgentNotebookChangeProp,
   workspaceDirectory,
+  rootDirectory,
   openDocumentSnapshots,
 }: AssistantProviderProps) {
   // Core instances
@@ -244,8 +256,9 @@ export function AssistantProvider({
   const chatIdRef = useRef<string | null>(null);
   // Ref so terminal tools can read latest server OS metadata without stale closures
   const serverInfoRef = useRef<JupyterServerInfo | null>(null);
-  // Ref so glob/grep tools always read the latest workspaceDirectory without stale closures
+  // Ref so registries and tools can read the latest workspaceDirectory without stale closures
   const workspaceDirRef = useRef<string | undefined>(workspaceDirectory);
+  const rootDirectoryRef = useRef<string | undefined>(rootDirectory ?? undefined);
   // Expose the pool via context so TerminalPanel can subscribe to pool state
   const [terminalPool, setTerminalPool] = useState<TerminalPool | null>(null);
   // Use a ref so the executeToolCall callback always has the latest value
@@ -280,6 +293,9 @@ export function AssistantProvider({
   useEffect(() => {
     workspaceDirRef.current = workspaceDirectory;
   }, [workspaceDirectory]);
+  useEffect(() => {
+    rootDirectoryRef.current = rootDirectory ?? undefined;
+  }, [rootDirectory]);
 
   // Initialize sidecar, terminal pool, and tool set when kernel service changes
   useEffect(() => {
@@ -318,6 +334,7 @@ export function AssistantProvider({
             kernelService.getServerSettings().baseUrl
           ),
         }),
+      () => rootDirectoryRef.current,
       {
         getTextSnapshot: (path) =>
           openDocumentSnapshotsRef.current?.getTextSnapshot(path) ?? null,
@@ -671,7 +688,8 @@ export function AssistantProvider({
       let kind: OpenDocumentKind | null = null;
 
       if (toolName === "edit_file") {
-        path = getStringParam(sanitizedParams, "filePath");
+        const filePath = getStringParam(sanitizedParams, "filePath");
+        path = filePath ? resolveProviderJupyterPath(filePath, rootDirectoryRef.current) : null;
         kind = "text";
       } else if (isNotebookMutationTool(toolName)) {
         kind = "notebook";
@@ -920,15 +938,19 @@ export function AssistantProvider({
         }
 
         if (toolName === "edit_file") {
-          const filePath = (sanitizedParams as { filePath?: unknown } | undefined)?.filePath;
-          if (typeof filePath === "string" && isSkillDefinitionPath(filePath)) {
+          const rawFilePath = (sanitizedParams as { filePath?: unknown } | undefined)?.filePath;
+          const filePath =
+            typeof rawFilePath === "string"
+              ? resolveProviderJupyterPath(rawFilePath, rootDirectoryRef.current)
+              : null;
+          if (filePath && isSkillDefinitionPath(filePath)) {
             await refreshSkills();
           }
-          if (typeof filePath === "string" && isRuleFilePath(filePath)) {
+          if (filePath && isRuleFilePath(filePath)) {
             await refreshRules();
           }
           if (
-            typeof filePath === "string" &&
+            filePath &&
             typeof finalResult === "string" &&
             !finalResult.startsWith("[ERROR]")
           ) {
@@ -997,6 +1019,7 @@ export function AssistantProvider({
       availableRules,
       serverInfo,
       jupyterServerIsLocal,
+      rootDirectory: rootDirectory ?? null,
       inspectVariable,
       listVariables,
       listDirectoryEntries,
@@ -1022,6 +1045,7 @@ export function AssistantProvider({
       availableRules,
       serverInfo,
       jupyterServerIsLocal,
+      rootDirectory,
       inspectVariable,
       listVariables,
       listDirectoryEntries,
@@ -1044,6 +1068,7 @@ export function AssistantProvider({
       availableRules,
       serverInfo,
       jupyterServerIsLocal,
+      rootDirectory: rootDirectory ?? null,
       executeToolCall,
       listVariables,
       listDirectoryEntries,
@@ -1058,6 +1083,7 @@ export function AssistantProvider({
       availableRules,
       serverInfo,
       jupyterServerIsLocal,
+      rootDirectory,
       executeToolCall,
       listVariables,
       listDirectoryEntries,

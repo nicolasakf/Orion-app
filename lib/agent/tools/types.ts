@@ -202,38 +202,6 @@ export interface ReadFileParams {
   endLine: number;
 }
 
-/** Parameters for ListDirectoryTool (lists subfolders only, not files) */
-export interface ListDirectoryParams {
-  /** Path relative to Jupyter root; empty string for root */
-  directoryPath: string;
-  /** When true, walk the folder subtree and render an indented tree view */
-  recursive: boolean;
-  /** Maximum recursion depth when recursive is true (1–10) */
-  maxDepth: number;
-}
-
-/** Parameters for GlobFilesTool */
-export interface GlobFilesParams {
-  /** Glob pattern to match file paths against (e.g. `**\/*.py`, `data/**\/*.csv`) */
-  pattern: string;
-  /** Directory relative to Jupyter root to search in; empty string for workspace root */
-  path: string;
-}
-
-/** Parameters for GrepFilesTool */
-export interface GrepFilesParams {
-  /** Regular-expression pattern to search for in file contents */
-  pattern: string;
-  /** Directory relative to Jupyter root to search in; empty string for workspace root */
-  path: string;
-  /**
-   * Glob pattern(s) to restrict which files are searched.
-   * Examples: `*.py`, `*.{ts,tsx}`, `*.ts,*.tsx,*.js`.
-   * Empty string searches all text files.
-   */
-  include: string;
-}
-
 /** Single output read target for ReadCellOutputTool */
 export interface ReadCellOutputTarget {
   cellIndex: number;

@@ -95,7 +95,7 @@ export const orionTools = {
       notebookPath: z
         .string()
         .describe(
-          "Path to the notebook file relative to the Jupyter root (e.g. 'analysis.ipynb', 'notebooks/eda.ipynb')."
+          "Absolute host path to the notebook under the Jupyter root when the system prompt provides a Jupyter root (e.g. '/Users/me/project/notebooks/eda.ipynb'). If the prompt says absolute host paths are unavailable, use a Jupyter-root-relative path instead."
         ),
       mode: z
         .enum(["connect", "create"])
@@ -382,7 +382,7 @@ export const orionTools = {
       cwd: z
         .string()
         .describe(
-          "Working directory relative to the Jupyter root. Only applied when terminalName is empty because that creates a fresh chat terminal."
+          "Absolute host path to a working directory under the Jupyter root when the system prompt provides a Jupyter root. If absolute host paths are unavailable, use a Jupyter-root-relative path. Only applied when terminalName is empty because that creates a fresh chat terminal."
         ),
       background: z
         .boolean()
@@ -424,7 +424,7 @@ export const orionTools = {
       filePath: z
         .string()
         .describe(
-          "Path to the file relative to the Jupyter root (e.g. 'scripts/preprocess.py', 'data/config.yaml')."
+          "Absolute host path to the file under the Jupyter root when the system prompt provides a Jupyter root (e.g. '/Users/me/project/scripts/preprocess.py'). If the prompt says absolute host paths are unavailable, use a Jupyter-root-relative path instead."
         ),
       startLine: z
         .number()
@@ -450,7 +450,7 @@ export const orionTools = {
       filePath: z
         .string()
         .describe(
-          "Path to the file relative to the Jupyter root (e.g. 'scripts/utils.py')."
+          "Absolute host path to the file under the Jupyter root when the system prompt provides a Jupyter root (e.g. '/Users/me/project/scripts/utils.py'). If the prompt says absolute host paths are unavailable, use a Jupyter-root-relative path instead."
         ),
       mode: z
         .enum(["overwrite", "replace"])

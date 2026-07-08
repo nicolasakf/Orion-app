@@ -26,6 +26,7 @@ import { OverwriteCellSourceTool } from "../overwrite-cell-source";
 import { EditOrionMetadataTool } from "../edit-orion-metadata";
 import { BashTool } from "../bash";
 import { ReadCellOutputTool } from "../read-cell-output";
+import { UseNotebookTool } from "../use-notebook";
 import { formatTerminalResult } from "../terminal-command-utils";
 import { CellType, OutputType } from "@/lib/types";
 import type { NotebookType, NotebookOutputType } from "@/lib/types";
@@ -132,6 +133,95 @@ function createStatefulKernelService(
   return { ks, store };
 }
 
+function createNotebookCreationKernelService(options: {
+  initialNotebooks?: Record<string, NotebookType>;
+  initialDirectories?: string[];
+  failNotebookCreate?: boolean;
+} = {}): {
+  ks: KernelService;
+  store: Map<string, NotebookType>;
+  directories: Set<string>;
+  getStartedKernelCount: () => number;
+} {
+  const store = new Map<string, NotebookType>(Object.entries(options.initialNotebooks ?? {}));
+  const directories = new Set<string>(["", ...(options.initialDirectories ?? [])]);
+  let startedKernelCount = 0;
+  let untitledCounter = 0;
+
+  const basename = (path: string): string => path.split("/").filter(Boolean).pop() ?? "";
+  const joinPath = (parent: string, child: string): string => (parent ? `${parent}/${child}` : child);
+  const uniqueUntitledPath = (parent: string, type: "directory" | "notebook"): string => {
+    untitledCounter += 1;
+    const baseName = type === "directory" ? "Untitled Folder" : "Untitled.ipynb";
+    const suffix = untitledCounter === 1 ? "" : ` ${untitledCounter}`;
+    return joinPath(parent, type === "directory" ? `${baseName}${suffix}` : `Untitled${suffix}.ipynb`);
+  };
+
+  const ks = {
+    getContentsManager: () => ({
+      get: async (path: string) => {
+        if (directories.has(path)) {
+          return { content: null, type: "directory", name: basename(path), path };
+        }
+        const nb = store.get(path);
+        if (!nb) throw new Error(`Not found: ${path}`);
+        return { content: nb, type: "notebook", name: basename(path), path };
+      },
+      newUntitled: async (args: { path?: string; type?: "directory" | "notebook" }) => {
+        const parent = args.path ?? "";
+        const type = args.type ?? "notebook";
+        if (!directories.has(parent)) {
+          throw new Error(`Parent directory not found: ${parent}`);
+        }
+        if (type === "notebook" && options.failNotebookCreate) {
+          throw new Error("simulated notebook create failure");
+        }
+        const path = uniqueUntitledPath(parent, type);
+        if (type === "directory") {
+          directories.add(path);
+          return { path, type, name: basename(path) };
+        }
+        store.set(path, makeNotebook([]));
+        return { path, type, name: basename(path), content: store.get(path) };
+      },
+      rename: async (oldPath: string, newPath: string) => {
+        if (store.has(newPath) || directories.has(newPath)) {
+          throw new Error(`Target already exists: ${newPath}`);
+        }
+        const nb = store.get(oldPath);
+        if (nb) {
+          store.delete(oldPath);
+          store.set(newPath, nb);
+          return { path: newPath, type: "notebook", name: basename(newPath), content: nb };
+        }
+        if (directories.has(oldPath)) {
+          directories.delete(oldPath);
+          directories.add(newPath);
+          return { path: newPath, type: "directory", name: basename(newPath) };
+        }
+        throw new Error(`Not found: ${oldPath}`);
+      },
+    }),
+    getStatus: () => "idle" as const,
+    setActivePath: () => true,
+    startKernel: async () => {
+      startedKernelCount += 1;
+      return { id: `kernel-${startedKernelCount}` };
+    },
+    interrupt: async () => {},
+    execute: async () => ({ done: Promise.resolve() }),
+    testConnection: async () => true,
+    shutdown: async () => {},
+  } as unknown as KernelService;
+
+  return {
+    ks,
+    store,
+    directories,
+    getStartedKernelCount: () => startedKernelCount,
+  };
+}
+
 /** Stateful mock KernelService backed by text file contents. */
 function createTextKernelService(
   initial: Record<string, string> = {}
@@ -185,12 +275,15 @@ function createTerminalKernelService(): {
   ks: KernelService;
   live: Set<string>;
   sent: Array<{ name: string; text: string }>;
+  startedCwds: Array<string | undefined>;
 } {
   let counter = 0;
   const live = new Set<string>();
   const sent: Array<{ name: string; text: string }> = [];
+  const startedCwds: Array<string | undefined> = [];
   const ks = {
-    startTerminal: async () => {
+    startTerminal: async (cwd?: string) => {
+      startedCwds.push(cwd);
       const name = String(++counter);
       live.add(name);
       return name;
@@ -207,7 +300,7 @@ function createTerminalKernelService(): {
     refreshTerminalsFromServer: async () => {},
     onTerminalsChanged: () => () => {},
   } as unknown as KernelService;
-  return { ks, live, sent };
+  return { ks, live, sent, startedCwds };
 }
 
 /** Build a minimal notebook with the given cells. */
@@ -526,6 +619,26 @@ await runTest("BashTool creates a fresh terminal for empty terminalName", async 
   }
 });
 
+await runTest("BashTool normalizes absolute cwd before fresh terminal creation", async () => {
+  const { ks, startedCwds } = createTerminalKernelService();
+  const pool = new TerminalPool(ks);
+  const tool = new BashTool(ks, null, pool, () => "chat-1", null, () => "/Users/taylor");
+  try {
+    const result = await tool.execute({
+      command: "pwd",
+      description: "Check the current directory",
+      terminalName: "",
+      cwd: "/Users/taylor/project",
+      background: true,
+    });
+
+    assertIncludes(result, "terminalName:", "should create a terminal");
+    assert(startedCwds[0] === "project", "should pass normalized cwd to terminal creation");
+  } finally {
+    pool.dispose();
+  }
+});
+
 await runTest("BashTool uses a PowerShell marker wrapper on Windows terminals", async () => {
   const { ks, sent } = createTerminalKernelService();
   const pool = new TerminalPool(ks);
@@ -690,6 +803,123 @@ await runTest("reset clears all state", async () => {
 });
 
 // ============================================================================
+// UseNotebookTool
+// ============================================================================
+
+console.log("\n--- UseNotebookTool ---");
+
+await runTest("use_notebook create makes missing parent directories", async () => {
+  const { ks, store, directories } = createNotebookCreationKernelService();
+  const mgr = new NotebookManager();
+  const tool = new UseNotebookTool(ks, null, mgr);
+  const notebookPath = ".tmp/path-resolution/calc-check.ipynb";
+
+  const result = await tool.execute({
+    notebookName: "calc-check",
+    notebookPath,
+    mode: "create",
+    kernelId: "",
+  });
+
+  assertIncludes(result, "Created new notebook", "should confirm create");
+  assertIncludes(result, "Successfully activated", "should activate notebook");
+  assert(directories.has(".tmp"), "should create first parent directory");
+  assert(directories.has(".tmp/path-resolution"), "should create nested parent directory");
+  assert(store.has(notebookPath), "should create notebook at requested path");
+  assert(mgr.getByPath(notebookPath) !== null, "should register the new notebook");
+});
+
+await runTest("use_notebook create normalizes absolute paths before notebook creation", async () => {
+  const { ks, store, directories } = createNotebookCreationKernelService({
+    initialDirectories: ["project"],
+  });
+  const mgr = new NotebookManager();
+  const tool = new UseNotebookTool(ks, null, mgr, () => "/Users/taylor");
+  const notebookPath = "/Users/taylor/project/.tmp/path-resolution/calc-check.ipynb";
+  const expectedJupyterPath = "project/.tmp/path-resolution/calc-check.ipynb";
+
+  const result = await tool.execute({
+    notebookName: "calc-check",
+    notebookPath,
+    mode: "create",
+    kernelId: "",
+  });
+
+  assertIncludes(result, "Created new notebook", "should confirm create");
+  assert(directories.has("project/.tmp"), "should create normalized first parent directory");
+  assert(directories.has("project/.tmp/path-resolution"), "should create normalized nested parent directory");
+  assert(store.has(expectedJupyterPath), "should create notebook at normalized relative path");
+  assert(mgr.getByPath(expectedJupyterPath) !== null, "should register the normalized relative path");
+});
+
+await runTest("use_notebook create rejects an existing unregistered notebook", async () => {
+  const notebookPath = ".tmp/path-resolution/calc-check.ipynb";
+  const { ks, getStartedKernelCount } = createNotebookCreationKernelService({
+    initialDirectories: [".tmp", ".tmp/path-resolution"],
+    initialNotebooks: { [notebookPath]: makeNotebook([]) },
+  });
+  const mgr = new NotebookManager();
+  const tool = new UseNotebookTool(ks, null, mgr);
+
+  const result = await tool.execute({
+    notebookName: "calc-check",
+    notebookPath,
+    mode: "create",
+    kernelId: "",
+  });
+
+  assertIncludes(result, "[ERROR]", "should return an error");
+  assertIncludes(result, "already exists", "should explain the stale target");
+  assertIncludes(result, "Create mode requires", "should tell the agent not to connect");
+  assert(mgr.size === 0, "should not register an existing notebook after failed create");
+  assert(getStartedKernelCount() === 0, "should not start a kernel after failed create");
+});
+
+await runTest("use_notebook create failure does not register or activate", async () => {
+  const notebookPath = ".tmp/path-resolution/calc-check.ipynb";
+  const { ks, store, getStartedKernelCount } = createNotebookCreationKernelService({
+    failNotebookCreate: true,
+  });
+  const mgr = new NotebookManager();
+  const tool = new UseNotebookTool(ks, null, mgr);
+
+  const result = await tool.execute({
+    notebookName: "calc-check",
+    notebookPath,
+    mode: "create",
+    kernelId: "",
+  });
+
+  assertIncludes(result, "[ERROR]", "should return a create error");
+  assertIncludes(result, "Could not create notebook", "should identify create failure");
+  assert(store.size === 0, "should not leave a created notebook");
+  assert(mgr.size === 0, "should not register after create failure");
+  assert(getStartedKernelCount() === 0, "should not start a kernel after create failure");
+});
+
+await runTest("use_notebook create still prevents duplicate registered notebooks", async () => {
+  const notebookPath = "registered.ipynb";
+  const { ks, getStartedKernelCount } = createNotebookCreationKernelService({
+    initialNotebooks: { [notebookPath]: makeNotebook([]) },
+  });
+  const mgr = new NotebookManager();
+  const registeredId = mgr.addNotebook("registered", notebookPath, "k1");
+  const tool = new UseNotebookTool(ks, null, mgr);
+
+  const result = await tool.execute({
+    notebookName: "registered",
+    notebookPath,
+    mode: "create",
+    kernelId: "",
+  });
+
+  assertIncludes(result, "already registered", "should warn about duplicate registration");
+  assertIncludes(result, registeredId, "should include the existing notebook id");
+  assert(mgr.size === 1, "should keep a single registered notebook");
+  assert(getStartedKernelCount() === 0, "should not start another kernel");
+});
+
+// ============================================================================
 // File Tools
 // ============================================================================
 
@@ -739,6 +969,17 @@ await runTest("read_file falls back to disk when no editor snapshot exists", asy
   assertNotIncludes(result, "source: editor buffer", "should not mark disk reads");
 });
 
+await runTest("read_file normalizes absolute paths before ContentsManager reads", async () => {
+  const { ks } = createTextKernelService({ "project/script.py": "disk_value = 1\n" });
+  const tool = new ReadFileTool(ks, null, createSnapshotProvider({}), () => "/Users/taylor");
+  const result = await tool.execute({
+    filePath: "/Users/taylor/project/script.py",
+    startLine: 0,
+    endLine: 0,
+  });
+  assertIncludes(result, "disk_value = 1", "should read the normalized relative path");
+});
+
 await runTest("edit_file replace uses active editor buffer as base", async () => {
   const { ks, store } = createTextKernelService({ "script.py": "disk_value = 1\n" });
   const snapshots = createSnapshotProvider({
@@ -754,6 +995,20 @@ await runTest("edit_file replace uses active editor buffer as base", async () =>
   });
   assertIncludes(result, "Successfully edited", "should confirm edit");
   assert(store.get("script.py") === "buffer_value = 3\n", "should save patched buffer content");
+});
+
+await runTest("edit_file normalizes absolute paths before ContentsManager writes", async () => {
+  const { ks, store } = createTextKernelService({ "project/script.py": "old\n" });
+  const tool = new EditFileTool(ks, null, createSnapshotProvider({}), null, () => "/Users/taylor");
+  const result = await tool.execute({
+    filePath: "/Users/taylor/project/script.py",
+    mode: "replace",
+    content: "",
+    oldString: "old",
+    newString: "new",
+  });
+  assertIncludes(result, "Successfully edited", "should confirm edit");
+  assert(store.get("project/script.py") === "new\n", "should write the normalized relative path");
 });
 
 // ============================================================================
