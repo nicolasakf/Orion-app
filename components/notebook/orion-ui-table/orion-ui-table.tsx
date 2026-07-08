@@ -24,6 +24,7 @@ import {
   EyeOff,
   Filter,
   HelpCircle,
+  Info,
   Maximize2,
   Plus,
   RotateCcw,
@@ -2009,14 +2010,20 @@ function TableBody({
                 )}
                 style={{ width, maxWidth: width }}
               >
-                <div className="flex items-center gap-1">
+                <div className="flex min-w-0 items-center gap-1">
                   <button
                     type="button"
-                    className="truncate"
+                    className="min-w-0 truncate"
                     onDoubleClick={() => onColumnStats(column.key)}
                   >
                     {column.label}
                   </button>
+                  {column.description ? (
+                    <ColumnDescriptionTooltip
+                      columnLabel={column.label}
+                      description={column.description}
+                    />
+                  ) : null}
                   <Button
                     type="button"
                     variant="ghost"
@@ -2159,6 +2166,36 @@ function TableBody({
         )}
       </tbody>
     </table>
+  );
+}
+
+/** Info affordance for a table column description. */
+function ColumnDescriptionTooltip({
+  columnLabel,
+  description,
+}: {
+  columnLabel: string;
+  description: string;
+}): React.JSX.Element {
+  return (
+    <Tooltip delayDuration={0}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className={cn(
+            "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm",
+            "text-muted-foreground transition-colors hover:text-foreground",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          )}
+          aria-label={`About ${columnLabel}`}
+        >
+          <Info className="h-3.5 w-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
+        {description}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

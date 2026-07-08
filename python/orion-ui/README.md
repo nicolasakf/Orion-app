@@ -56,12 +56,22 @@ entire DataFrame to the frontend:
 ```python
 import orion_ui as ui
 
-ui.table(df, source="df", page_size=50)
+ui.table(
+    df,
+    source="df",
+    page_size=50,
+    column_descriptions={
+        "score": "Priority score from 1 to 10.",
+        "status": "Current account status.",
+    },
+)
 ```
 
 Table filtering, sorting, grouping, stats, and export requests run in the
 Python kernel. Saved table views are stored on the notebook output metadata as
 structured operations plus a readable pandas expression.
+Column descriptions, when provided, appear as info-icon tooltips in table
+headers.
 
 `class_name` adds semantic CSS hooks for Orion UI in Notebook View and App View. Do not write CSS into notebook metadata; if a notebook needs custom styling, include it in the relevant cell source/output and scope selectors to rendered markdown/output areas. Orion also exposes JupyterLab-compatible rendered-content selectors such as `.jp-MarkdownOutput`, `.jp-RenderedHTMLCommon`, and `.jp-OutputArea-output` for cell-authored styles. Do not rely on arbitrary Tailwind classes generated at runtime.
 

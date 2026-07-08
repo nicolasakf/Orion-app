@@ -199,6 +199,43 @@ class OrionUiTests(unittest.TestCase):
         self.assertNotIn("rows", props["columns"][0])
 
     @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_payload_contains_column_descriptions(self):
+        df = pd.DataFrame({"status": ["active"], "score": [9]})
+
+        component = ui.table(
+            df,
+            source="df",
+            column_descriptions={
+                "__index__": "Original DataFrame index.",
+                "status": "Current account status.",
+                "score": "Priority score from 1 to 10.",
+            },
+        )
+        table_id = component.props["tableId"]
+        window = _table.get_table_window(table_id)
+        props = component._repr_mimebundle_()[ui.ORION_UI_MIME_TYPE]["root"]["props"]
+
+        self.assertEqual(
+            props["initialWindow"]["columns"][0]["description"],
+            "Original DataFrame index.",
+        )
+        self.assertEqual(
+            props["columns"][0]["description"],
+            "Current account status.",
+        )
+        self.assertEqual(
+            window["columns"][2]["description"],
+            "Priority score from 1 to 10.",
+        )
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_column_description_values_must_be_strings(self):
+        df = pd.DataFrame({"status": ["active"]})
+
+        with self.assertRaises(TypeError):
+            ui.table(df, source="df", column_descriptions={"status": 1})
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
     def test_table_backend_filters_sorts_groups_and_generates_expression(self):
         df = pd.DataFrame(
             {

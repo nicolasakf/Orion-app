@@ -30,6 +30,7 @@ class TableRegistration:
     source: str
     show_index: bool
     max_cell_chars: int
+    column_descriptions: Dict[str, str]
 
 
 def _import_pandas() -> Any:
@@ -87,18 +88,44 @@ def _json_scalar(value: Any, max_chars: int) -> JsonValue:
     return text[:max_chars] + "..." if len(text) > max_chars else text
 
 
-def _column_metadata(df: Any) -> List[Dict[str, JsonValue]]:
+def _normalize_column_descriptions(
+    column_descriptions: Optional[Mapping[str, str]],
+) -> Dict[str, str]:
+    """Return validated column descriptions keyed by serialized column name."""
+    if column_descriptions is None:
+        return {}
+    if not isinstance(column_descriptions, Mapping):
+        raise TypeError("ui.table column_descriptions must be a mapping of column names to strings.")
+
+    normalized: Dict[str, str] = {}
+    for column, description in column_descriptions.items():
+        if not isinstance(description, str):
+            raise TypeError("ui.table column_descriptions values must be strings.")
+        if description:
+            normalized[str(column)] = description
+    return normalized
+
+
+def _column_metadata(
+    df: Any,
+    column_descriptions: Optional[Mapping[str, str]] = None,
+) -> List[Dict[str, JsonValue]]:
     """Return lightweight column descriptors for a DataFrame."""
+    descriptions = column_descriptions or {}
     columns: List[Dict[str, JsonValue]] = []
     for column in df.columns:
         series = df[column]
+        key = str(column)
+        metadata: Dict[str, JsonValue] = {
+            "key": key,
+            "label": key,
+            "dtype": str(series.dtype),
+            "nullCount": int(series.isna().sum()),
+        }
+        if key in descriptions:
+            metadata["description"] = descriptions[key]
         columns.append(
-            {
-                "key": str(column),
-                "label": str(column),
-                "dtype": str(series.dtype),
-                "nullCount": int(series.isna().sum()),
-            }
+            metadata
         )
     return columns
 
@@ -241,8 +268,16 @@ def _table_columns(registration: TableRegistration, df: Any) -> List[Dict[str, J
     """Return visible table columns, including the index pseudo-column when enabled."""
     columns: List[Dict[str, JsonValue]] = []
     if registration.show_index:
-        columns.append({"key": "__index__", "label": "Index", "dtype": "index", "isIndex": True})
-    columns.extend(_column_metadata(df))
+        index_column: Dict[str, JsonValue] = {
+            "key": "__index__",
+            "label": "Index",
+            "dtype": "index",
+            "isIndex": True,
+        }
+        if "__index__" in registration.column_descriptions:
+            index_column["description"] = registration.column_descriptions["__index__"]
+        columns.append(index_column)
+    columns.extend(_column_metadata(df, registration.column_descriptions))
     return columns
 
 
@@ -435,6 +470,7 @@ def register_table(
     source: str,
     show_index: bool,
     max_cell_chars: int,
+    column_descriptions: Optional[Mapping[str, str]] = None,
 ) -> TableRegistration:
     """Validate and register a DataFrame for backend table operations."""
     if not isinstance(source, str) or not source.strip():
@@ -448,6 +484,7 @@ def register_table(
         source=source.strip(),
         show_index=bool(show_index),
         max_cell_chars=max(20, int(max_cell_chars)),
+        column_descriptions=_normalize_column_descriptions(column_descriptions),
     )
     _TABLES[table_id] = registration
     ensure_comm_target()
@@ -473,7 +510,7 @@ def table_payload(
         "showIndex": registration.show_index,
         "maxCellChars": registration.max_cell_chars,
         "shape": [int(registration.dataframe.shape[0]), int(registration.dataframe.shape[1])],
-        "columns": _column_metadata(registration.dataframe),
+        "columns": _column_metadata(registration.dataframe, registration.column_descriptions),
         "initialWindow": initial,
     }
 

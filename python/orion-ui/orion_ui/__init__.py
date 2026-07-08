@@ -457,6 +457,7 @@ def table(
     page_size: int = 50,
     show_index: bool = True,
     max_cell_chars: int = 200,
+    column_descriptions: Optional[Mapping[str, str]] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create an interactive backend-backed table for a pandas DataFrame.
@@ -481,6 +482,10 @@ def table(
     max_cell_chars : int, optional
         Maximum characters serialized for one non-scalar cell. Default is
         ``200``.
+    column_descriptions : mapping of str to str or None, optional
+        Per-column descriptions shown in Orion table headers as info tooltips.
+        Keys should match DataFrame column names after string conversion. Use
+        ``"__index__"`` to describe the index column. Default is ``None``.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -496,6 +501,7 @@ def table(
         source=source,
         show_index=show_index,
         max_cell_chars=max_cell_chars,
+        column_descriptions=column_descriptions,
     )
     payload = _table_runtime.table_payload(
         registration,

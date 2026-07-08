@@ -278,6 +278,30 @@ describe("OrionUiOutputRenderer", () => {
     expect(screen.getByText("of 2")).toBeInTheDocument();
   });
 
+  it("renders table column descriptions as header info tooltips", async () => {
+    const value = tablePayload();
+    const initialWindow = value.root.props.initialWindow;
+    value.root.props.initialWindow = {
+      ...initialWindow,
+      columns: initialWindow.columns.map((column) =>
+        column.key === "score"
+          ? { ...column, description: "Final score from the scoring model." }
+          : column,
+      ),
+    };
+
+    renderOrionUiOutput({ value });
+
+    const infoButton = screen.getByRole("button", { name: "About score" });
+    expect(infoButton).toBeInTheDocument();
+
+    fireEvent.focus(infoButton);
+
+    expect(
+      await screen.findAllByText("Final score from the scoring model."),
+    ).not.toHaveLength(0);
+  });
+
   it("renders the paginated table footer status bar", () => {
     renderOrionUiOutput({ value: tablePayload() });
 

@@ -15,6 +15,7 @@ export const OrionTableColumnSchema = z
     label: z.string(),
     dtype: z.string().optional(),
     isIndex: z.boolean().optional(),
+    description: z.string().optional(),
   })
   .passthrough();
 
