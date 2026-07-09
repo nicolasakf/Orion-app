@@ -11,6 +11,7 @@ import {
   Pencil,
   ChevronsDownUp,
   ChevronsUpDown,
+  GripVertical,
 } from "lucide-react";
 import {
   cn,
@@ -67,6 +68,7 @@ import {
   normalizePinnedModelKeys,
   parseModelSelectionKey,
 } from "@/lib/agent/model-selection-key";
+import { dispatchPinnedModelsChanged } from "@/lib/chat/model-selector-events";
 
 interface ModelRow {
   model_id: string;
@@ -272,6 +274,12 @@ function ModelListRow({
   showProviderLogo,
   onEditLabel,
   onTogglePin,
+  reorderable = false,
+  isDragOver = false,
+  onDragStart,
+  onDragOver,
+  onDragLeave,
+  onDrop,
 }: {
   model: DisplayModelRow;
   hasCustomLabel: boolean;
@@ -279,10 +287,37 @@ function ModelListRow({
   showProviderLogo: boolean;
   onEditLabel: () => void;
   onTogglePin: () => void;
+  reorderable?: boolean;
+  isDragOver?: boolean;
+  onDragStart?: (e: React.DragEvent) => void;
+  onDragOver?: (e: React.DragEvent) => void;
+  onDragLeave?: () => void;
+  onDrop?: (e: React.DragEvent) => void;
 }) {
   return (
-    <div className="corner-squircle group flex items-center justify-between py-1 px-2 rounded hover:bg-accent/50 min-h-8">
+    <div
+      className={cn(
+        "corner-squircle group flex items-center justify-between py-1 px-2 rounded hover:bg-accent/50 min-h-8",
+        isDragOver && "bg-accent"
+      )}
+      onDragOver={reorderable ? onDragOver : undefined}
+      onDragLeave={reorderable ? onDragLeave : undefined}
+      onDrop={reorderable ? onDrop : undefined}
+    >
       <div className="flex items-center gap-2 min-w-0">
+        {reorderable && onDragStart ? (
+          <div
+            draggable
+            onDragStart={onDragStart}
+            className="cursor-grab touch-none text-muted-foreground opacity-50 hover:opacity-70 shrink-0"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
+            aria-label="Drag to reorder"
+            title="Drag to reorder"
+          >
+            <GripVertical className="h-3.5 w-3.5" />
+          </div>
+        ) : null}
         {showProviderLogo ? (
           <ProviderLogo
             providerId={model.provider_id}
@@ -340,6 +375,7 @@ interface ModelsTabProps {
 /** Models tab: search, refresh, and pin models shown in the chat model selector. */
 export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
   const { effectiveSettings, setUserSettings } = useOrionSettings();
+  const isBusinessMode = effectiveSettings.appearance.experienceMode === "business";
   const [models, setModels] = useState<ModelRow[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -353,6 +389,7 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
     null
   );
   const [labelDraft, setLabelDraft] = useState("");
+  const [dragOverIndex, setDragOverIndex] = React.useState<number | null>(null);
   const initializedProvidersRef = React.useRef<Set<string>>(new Set());
 
   const visibleProviderIds = React.useMemo(
@@ -604,6 +641,72 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
     closeLabelDialog();
   };
 
+  const canReorderPinned =
+    !isSearchActive && !groupByProvider && listViewPinnedModels.length > 1;
+
+  const pinnedModelsListKey = React.useMemo(
+    () => pinnedModelIds.join("\0"),
+    [pinnedModelIds]
+  );
+
+  React.useEffect(() => {
+    setDragOverIndex(null);
+  }, [isSearchActive, groupByProvider, pinnedModelsListKey]);
+
+  /** Reorders pinned models in settings and notifies the chat model selector. */
+  const reorderPinnedModels = (dragIndex: number, dropIndex: number) => {
+    const visibleKeys = listViewPinnedModels.map((model) =>
+      formatModelSelectionKey(model.provider_id, model.model_id)
+    );
+    const nextVisibleOrder = [...visibleKeys];
+    const [moved] = nextVisibleOrder.splice(dragIndex, 1);
+    nextVisibleOrder.splice(dropIndex, 0, moved);
+
+    void setUserSettings((current) => {
+      const userPinned = current.chat.pinnedModelIds ?? [];
+      const basePinned =
+        userPinned.length > 0
+          ? normalizePinnedModelKeys(userPinned, allModels)
+          : pinnedModelIds;
+      const visibleSet = new Set(nextVisibleOrder);
+      const trailing = basePinned.filter((key) => !visibleSet.has(key));
+      const nextPinned = [...nextVisibleOrder, ...trailing];
+
+      return {
+        ...current,
+        chat: {
+          ...current.chat,
+          pinnedModelIds: nextPinned,
+        },
+      };
+    }).then(() => {
+      dispatchPinnedModelsChanged();
+    });
+  };
+
+  const handlePinnedDragStart = (e: React.DragEvent, index: number) => {
+    e.dataTransfer.setData("text/plain", index.toString());
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handlePinnedDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverIndex(index);
+  };
+
+  const handlePinnedDragLeave = () => {
+    setDragOverIndex(null);
+  };
+
+  const handlePinnedDrop = (e: React.DragEvent, dropIndex: number) => {
+    e.preventDefault();
+    setDragOverIndex(null);
+    const dragIndex = parseInt(e.dataTransfer.getData("text/plain"), 10);
+    if (isNaN(dragIndex) || dragIndex === dropIndex) return;
+    reorderPinnedModels(dragIndex, dropIndex);
+  };
+
   const setModelPinned = (providerId: string, modelId: string, pinned: boolean) => {
     const pinKey = formatModelSelectionKey(providerId, modelId);
     void setUserSettings((current) => {
@@ -625,6 +728,8 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
           pinnedModelIds: nextPinned,
         },
       };
+    }).then(() => {
+      dispatchPinnedModelsChanged();
     });
   };
 
@@ -690,27 +795,31 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
 
   return (
     <div className="flex flex-col gap-4 p-6">
-      {/* Agent section */}
-      <div className="space-y-2">
-        <h2 className="text-lg font-semibold">Agent</h2>
-        <div className="flex items-center justify-between max-w-xl">
-          <SettingsInfoHeading
-            label="Tool approval"
-            description="Whether tools require confirmation before running."
-          />
-          <Select value={toolApprovalMode} onValueChange={handleToolApprovalModeChange}>
-            <SelectTrigger className="w-[140px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="always_ask">Always ask</SelectItem>
-              <SelectItem value="auto_run">Auto-run</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
+      {!isBusinessMode ? (
+        <>
+          {/* Agent section */}
+          <div className="space-y-2">
+            <h2 className="text-lg font-semibold">Agent</h2>
+            <div className="flex items-center justify-between max-w-xl">
+              <SettingsInfoHeading
+                label="Tool approval"
+                description="Whether tools require confirmation before running."
+              />
+              <Select value={toolApprovalMode} onValueChange={handleToolApprovalModeChange}>
+                <SelectTrigger className="w-[140px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="always_ask">Always ask</SelectItem>
+                  <SelectItem value="auto_run">Auto-run</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
 
-      <div className="border-t" />
+          <div className="border-t" />
+        </>
+      ) : null}
 
       {/* Title generation section */}
       <div className="space-y-2">
@@ -895,7 +1004,7 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
         </div>
       ) : (
         <div className="flex flex-col gap-0.5">
-          {listViewPinnedModels.map((model) => {
+          {listViewPinnedModels.map((model, index) => {
             const pinned = isModelPinned(model.provider_id, model.model_id);
             return (
               <ModelListRow
@@ -908,6 +1017,12 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
                 onTogglePin={() =>
                   setModelPinned(model.provider_id, model.model_id, !pinned)
                 }
+                reorderable={canReorderPinned}
+                isDragOver={dragOverIndex === index}
+                onDragStart={(e) => handlePinnedDragStart(e, index)}
+                onDragOver={(e) => handlePinnedDragOver(e, index)}
+                onDragLeave={handlePinnedDragLeave}
+                onDrop={(e) => handlePinnedDrop(e, index)}
               />
             );
           })}

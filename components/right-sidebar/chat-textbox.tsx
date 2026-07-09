@@ -41,6 +41,7 @@ import {
   findModelBySelectionKey,
   formatModelSelectionKey,
 } from "@/lib/agent/model-selection-key";
+import { PINNED_MODELS_CHANGED_EVENT } from "@/lib/chat/model-selector-events";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -1187,6 +1188,31 @@ export function ChatTextbox({
     return pinned;
   }, [models, pinnedModelIds]);
 
+  /** Bumps when pins change so cmdk remounts and drops stale filter/list state. */
+  const pinnedModelsListKey = React.useMemo(
+    () => pinnedModelIds.join("\0"),
+    [pinnedModelIds]
+  );
+
+  React.useEffect(() => {
+    setModelSearchQuery("");
+    setDragOverIndex(null);
+    setHighlightedModelIndex(0);
+  }, [pinnedModelsListKey]);
+
+  React.useEffect(() => {
+    const refreshPinnedModelsList = () => {
+      setModelSearchQuery("");
+      setDragOverIndex(null);
+      setHighlightedModelIndex(0);
+    };
+
+    window.addEventListener(PINNED_MODELS_CHANGED_EVENT, refreshPinnedModelsList);
+    return () => {
+      window.removeEventListener(PINNED_MODELS_CHANGED_EVENT, refreshPinnedModelsList);
+    };
+  }, []);
+
   const visiblePinnedModels = React.useMemo(() => {
     const query = modelSearchQuery.trim().toLowerCase();
     if (query.length === 0) return pinnedModels;
@@ -2087,7 +2113,7 @@ export function ChatTextbox({
                   }}
                 >
                   {highlightedModel ? <ModelDetailCard model={highlightedModel} /> : null}
-                  <Command shouldFilter={false}>
+                  <Command key={pinnedModelsListKey} shouldFilter={false}>
                     <div className="flex items-center gap-0">
                       <div className="flex-1 min-w-0">
                         <CommandInput
