@@ -69,6 +69,10 @@ import {
   summarizeResearchSessionForPrompt,
 } from "@/lib/agent/research-session";
 import { resolveImplicitForcedSkillNames } from "@/lib/agent/implicit-skills";
+import {
+  buildChatApiErrorPayload,
+  serializeChatApiErrorPayload,
+} from "@/lib/chat/chat-api-errors";
 
 /** Standard request duration limit in seconds */
 export const maxDuration = 300;
@@ -1163,6 +1167,8 @@ export async function POST(req: Request) {
 
     return result.toUIMessageStreamResponse({
       sendReasoning: true,
+      onError: (error) =>
+        serializeChatApiErrorPayload(buildChatApiErrorPayload(error, providerId)),
     });
   } catch (error: unknown) {
     if (chatSession) {
@@ -1181,37 +1187,30 @@ export async function POST(req: Request) {
       phase: error instanceof GatewayConfigError ? "gateway" : "unknown",
     });
     console.error(error);
-    let statusCode = 500;
-    let title = "API Error";
-    let message =
-      "An unexpected error occurred. Please check the server logs for more details.";
-
     if (error instanceof GatewayConfigError) {
-      statusCode = 400;
-      title = "Configuration Error";
-      message = error.message;
-    } else if (
-      error !== null &&
-      typeof error === "object" &&
-      ("name" in error || "constructor" in error)
-    ) {
-      const err = error as { name?: string; constructor?: { name?: string }; status?: number; message?: string };
-      if (err.name === "AIError" || err.constructor?.name?.includes("APIError")) {
-        statusCode = err.status ?? 400;
-        title = err.name ?? "API Error";
-        message = err.message ?? message;
-
-        if (statusCode === 401) {
-          title = "Authentication Error";
-          message = `The ${providerId} credential is invalid or expired. Update it in Settings -> Providers.`;
-        } else if (statusCode === 429) {
-          title = "Rate Limit Exceeded";
-          message = `The ${providerId} provider rate limit was exceeded.`;
+      return new Response(
+        JSON.stringify({
+          title: "Configuration Error",
+          message: error.message,
+        }),
+        {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
         }
-      }
+      );
     }
 
-    return new Response(JSON.stringify({ title, message }), {
+    const payload = buildChatApiErrorPayload(error, providerId);
+    const statusCode =
+      error !== null &&
+      typeof error === "object" &&
+      ("status" in error || "statusCode" in error)
+        ? ((error as { status?: number; statusCode?: number }).statusCode ??
+          (error as { status?: number }).status ??
+          500)
+        : 500;
+
+    return new Response(JSON.stringify(payload), {
       status: statusCode,
       headers: { "Content-Type": "application/json" },
     });
