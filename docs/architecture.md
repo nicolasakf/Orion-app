@@ -10,7 +10,7 @@ orion/
 │   ├── api/
 │   │   ├── chat/route.ts         # AI chat endpoint (streaming, BYOK)
 │   │   ├── models/route.ts       # Static model catalog endpoint
-│   │   └── credentials/          # ChatGPT OAuth device flow routes
+│   │   └── credentials/          # ChatGPT OAuth browser/device flow routes
 │   ├── layout.tsx                # Root layout (providers, theme)
 │   └── page.tsx                  # App shell — mounts editor + chat sidebar
 │
@@ -78,7 +78,8 @@ orion/
 │   │   ├── defaults.ts
 │   │   └── user-storage.ts       # Client facade for settings + credential summaries
 │   └── credentials/
-│       └── chatgpt-oauth.ts      # ChatGPT OAuth device flow client
+│       ├── chatgpt-oauth.ts      # ChatGPT OAuth device flow client
+│       └── chatgpt-browser-oauth.server.ts # ChatGPT OAuth browser flow callback
 │
 ├── contexts/                     # React contexts (settings, view mode, layout)
 ├── hooks/                        # Shared React hooks
@@ -138,7 +139,7 @@ Three credential types are supported. Complete records are stored server-side in
 | Type | How to configure |
 |---|---|
 | API key | Settings → Providers → enter key for OpenAI / Anthropic / Google / xAI |
-| ChatGPT OAuth | Settings → Providers → Connect ChatGPT (device flow via `/api/credentials/oauth/`) |
+| ChatGPT OAuth | Settings → Providers → Connect ChatGPT (browser flow with device-code fallback via `/api/credentials/oauth/`) |
 | Local endpoint | Settings → Providers → configure Ollama or LM Studio with a base URL and model ID |
 
 The browser receives only safe configured-state summaries. Chat, compaction, title-generation, and sub-agent requests identify the `provider` and `model`; the local server resolves the credential and refreshes expiring ChatGPT OAuth tokens before creating the provider model.

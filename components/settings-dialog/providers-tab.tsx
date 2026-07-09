@@ -12,6 +12,7 @@ import {
   Copy,
   RefreshCw,
   Plus,
+  Monitor,
 } from "lucide-react";
 
 import {
@@ -230,7 +231,16 @@ function normalizeLocalModelDraftRows(rows: LocalModelDraftRow[]): LocalModelDra
   return normalized;
 }
 
-// ── Device Flow State ─────────────────────────────────────────────────────────
+// ── ChatGPT OAuth State ───────────────────────────────────────────────────────
+
+type OAuthFlowMode = "browser" | "device";
+
+interface BrowserFlowState {
+  phase: "starting" | "ready" | "awaiting" | "success" | "failed";
+  flowId?: string;
+  authorizationUrl?: string;
+  error?: string;
+}
 
 interface DeviceFlowState {
   phase: "idle" | "starting" | "awaiting" | "success" | "failed";
@@ -240,7 +250,203 @@ interface DeviceFlowState {
   intervalSecs?: number;
 }
 
-// ── ChatGPT OAuth Device Flow UI ──────────────────────────────────────────────
+// ── ChatGPT OAuth Flow UI ─────────────────────────────────────────────────────
+
+interface BrowserFlowPanelProps {
+  onCredential: () => void;
+  onCancel: () => void;
+  onUseDeviceCode: () => void;
+}
+
+function BrowserFlowPanel({
+  onCredential,
+  onCancel,
+  onUseDeviceCode,
+}: BrowserFlowPanelProps) {
+  const [flow, setFlow] = useState<BrowserFlowState>({ phase: "starting" });
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flowIdRef = useRef<string | undefined>(undefined);
+  const completedRef = useRef(false);
+  const cancelledRef = useRef(false);
+
+  useEffect(() => {
+    cancelledRef.current = false;
+
+    async function start() {
+      setFlow({ phase: "starting" });
+      try {
+        const res = await fetch("/api/credentials/oauth/browser/start", { method: "POST" });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({})) as { message?: string };
+          throw new Error(data.message ?? "Failed to start browser sign-in.");
+        }
+        const data = await res.json() as {
+          flowId: string;
+          authorizationUrl: string;
+          expiresAt: number;
+        };
+
+        if (cancelledRef.current) return;
+        flowIdRef.current = data.flowId;
+        setFlow({
+          phase: "ready",
+          flowId: data.flowId,
+          authorizationUrl: data.authorizationUrl,
+        });
+      } catch (err) {
+        if (cancelledRef.current) return;
+        const message = err instanceof Error ? err.message : "Failed to start browser sign-in.";
+        toast.error(message);
+        setFlow({ phase: "failed", error: message });
+      }
+    }
+
+    void start();
+
+    return () => {
+      cancelledRef.current = true;
+      if (pollRef.current) clearTimeout(pollRef.current);
+      const flowId = flowIdRef.current;
+      if (flowId && !completedRef.current) {
+        void fetch("/api/credentials/oauth/browser/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ flowId }),
+        }).catch(() => undefined);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!flow.flowId || flow.phase === "success" || flow.phase === "failed") return;
+
+    const { flowId } = flow;
+
+    async function poll() {
+      if (cancelledRef.current) return;
+
+      try {
+        const res = await fetch("/api/credentials/oauth/browser/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ flowId }),
+        });
+        const data = await res.json() as {
+          status: "pending" | "success" | "failed";
+          message?: string;
+        };
+
+        if (cancelledRef.current) return;
+
+        if (data.status === "success") {
+          completedRef.current = true;
+          setFlow((prev) => ({ ...prev, phase: "success" }));
+          onCredential();
+          return;
+        }
+
+        if (data.status === "failed") {
+          const message = data.message ?? "Browser sign-in failed.";
+          setFlow((prev) => ({ ...prev, phase: "failed", error: message }));
+          toast.error(message);
+          return;
+        }
+
+        pollRef.current = setTimeout(() => void poll(), 1500);
+      } catch {
+        if (cancelledRef.current) return;
+        pollRef.current = setTimeout(() => void poll(), 2000);
+      }
+    }
+
+    pollRef.current = setTimeout(() => void poll(), 1000);
+    return () => {
+      if (pollRef.current) clearTimeout(pollRef.current);
+    };
+  }, [flow.flowId, flow.phase, onCredential]);
+
+  const handleOpenBrowser = useCallback(() => {
+    if (!flow.authorizationUrl) return;
+    setFlow((prev) => ({ ...prev, phase: "awaiting" }));
+  }, [flow.authorizationUrl]);
+
+  if (flow.phase === "starting") {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Preparing browser sign-in…
+      </div>
+    );
+  }
+
+  if (flow.phase === "failed") {
+    return (
+      <div className="space-y-2">
+        <p className="text-sm text-destructive">{flow.error ?? "Browser sign-in failed."}</p>
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={onUseDeviceCode} className="text-xs">
+            Use device code
+          </Button>
+          <Button variant="ghost" size="sm" onClick={onCancel} className="text-xs">
+            Close
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (flow.phase === "success") {
+    return (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
+        <Check className="h-3.5 w-3.5" />
+        ChatGPT connected.
+      </div>
+    );
+  }
+
+  if (!flow.authorizationUrl) return null;
+
+  return (
+    <div className="space-y-3">
+      <Button
+        variant="outline"
+        size="sm"
+        className="text-xs gap-1.5"
+        asChild
+      >
+        <a
+          href={flow.authorizationUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={handleOpenBrowser}
+        >
+          <ExternalLink className="h-3 w-3" />
+          Open ChatGPT sign-in
+        </a>
+      </Button>
+
+      {flow.phase === "awaiting" ? (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin" />
+          Waiting for browser sign-in…
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Complete sign-in in the browser tab.
+        </p>
+      )}
+
+      <div className="flex flex-wrap gap-2">
+        <Button variant="ghost" size="sm" onClick={onUseDeviceCode} className="text-xs">
+          Use device code
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onCancel} className="text-xs">
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 interface DeviceFlowPanelProps {
   onCredential: () => void;
@@ -371,7 +577,7 @@ function DeviceFlowPanel({ onCredential, onCancel }: DeviceFlowPanelProps) {
     return (
       <div className="space-y-3">
         <p className="text-sm text-muted-foreground">
-          Enter this code at the verification URL to connect your ChatGPT account:
+          Enter this code at the verification URL after enabling device code authorization in ChatGPT:
         </p>
 
         {/* User code display */}
@@ -512,7 +718,7 @@ function ProviderRow({
   const [showKey, setShowKey] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
-  const [showDeviceFlow, setShowDeviceFlow] = useState(false);
+  const [oauthFlow, setOauthFlow] = useState<OAuthFlowMode | null>(null);
 
   const hasApiKey = credential?.type === "api_key";
   const hasOAuth = credential?.type === "chatgpt_oauth";
@@ -695,7 +901,7 @@ function ProviderRow({
   const handleDeviceCredential = useCallback(
     () => {
       onSaveOAuthCredential(provider.id);
-      setShowDeviceFlow(false);
+      setOauthFlow(null);
       toast.success("ChatGPT account connected successfully.");
     },
     [onSaveOAuthCredential, provider.id]
@@ -753,7 +959,7 @@ function ProviderRow({
 
         {/* Actions */}
         <div className="flex items-center gap-2 shrink-0">
-          {!credential && !isEditing && !showDeviceFlow && (
+          {!credential && !isEditing && !oauthFlow && (
             <>
               <Button
                 variant="outline"
@@ -826,7 +1032,7 @@ function ProviderRow({
               </Button>
             </>
           )}
-          {hasOAuth && !showDeviceFlow && (
+          {hasOAuth && !oauthFlow && (
             <Button
               variant="ghost"
               size="sm"
@@ -1036,28 +1242,34 @@ function ProviderRow({
         </div>
       )}
 
-      {/* ChatGPT OAuth — device flow trigger or panel */}
+      {/* ChatGPT OAuth — browser flow with device-code fallback */}
       {provider.supportsOAuth && !hasOAuth && !isEditing && (
         <div className="pl-8">
-          {!showDeviceFlow ? (
+          {!oauthFlow ? (
             <>
               <Button
                 variant="outline"
                 size="sm"
                 className="text-xs gap-1.5"
-                onClick={() => setShowDeviceFlow(true)}
+                onClick={() => setOauthFlow("browser")}
               >
-                <ExternalLink className="h-3 w-3" />
+                <Monitor className="h-3 w-3" />
                 Connect ChatGPT Plus / Pro
               </Button>
               <p className="text-xs text-muted-foreground mt-1">
-                Use your ChatGPT subscription to access Codex models.
+                Browser sign-in is recommended. Device code is available for headless setups.
               </p>
             </>
+          ) : oauthFlow === "browser" ? (
+            <BrowserFlowPanel
+              onCredential={handleDeviceCredential}
+              onCancel={() => setOauthFlow(null)}
+              onUseDeviceCode={() => setOauthFlow("device")}
+            />
           ) : (
             <DeviceFlowPanel
               onCredential={handleDeviceCredential}
-              onCancel={() => setShowDeviceFlow(false)}
+              onCancel={() => setOauthFlow(null)}
             />
           )}
         </div>
@@ -1276,7 +1488,7 @@ export function ProvidersTab() {
     [reloadUserSettings, setUserSettings]
   );
 
-  /** Reload settings after the server persists an OAuth credential from the device flow. */
+  /** Reload settings after the server persists an OAuth credential. */
   const handleSaveOAuthCredential = useCallback(
     (_provider: ProviderId) => {
       void reloadUserSettings();

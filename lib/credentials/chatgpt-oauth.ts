@@ -5,10 +5,9 @@
  * Adapted from OpenCode's codex.ts (MIT):
  * https://github.com/sst/opencode/blob/main/packages/opencode/src/plugin/codex.ts
  *
- * We use the **device authorization flow** (not the browser redirect flow) because
- * the OAuth client ID `app_EMoamEEZ73f0CkXaXp7hrann` has `http://localhost:1455/auth/callback`
- * registered as its redirect URI — OpenAI rejects any other redirect URI. The device flow
- * requires no redirect URI, so it works correctly from a web app.
+ * The device authorization flow is the fallback for headless or remote environments.
+ * Desktop browser sign-in lives in `chatgpt-browser-oauth.server.ts` and uses the
+ * registered `http://localhost:1455/auth/callback` redirect URI.
  *
  * Flow:
  * 1. POST /api/accounts/deviceauth/usercode → get user_code + device_auth_id

@@ -63,4 +63,4 @@ Sub-agents can optionally declare a model in Orion metadata. If omitted, they in
 
 ## ChatGPT OAuth
 
-The ChatGPT OAuth device flow is available without app login. The start and poll routes operate on local credentials; successful polling persists tokens directly to `~/.orion/credentials.json` and returns only a sanitized configured-state summary to the browser.
+ChatGPT OAuth is available without app login. Browser sign-in uses a local Codex callback on `http://localhost:1455/auth/callback`; device code sign-in remains available for headless or remote environments. Successful authorization persists tokens directly to `~/.orion/credentials.json` and returns only a sanitized configured-state summary to the browser.
