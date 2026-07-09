@@ -7,6 +7,7 @@ import {
   Download,
   FileCode,
   FileText,
+  Folder,
   FolderSearch,
   Loader2,
   MoreHorizontal,
@@ -20,9 +21,11 @@ import {
 import { toast } from "sonner";
 
 import { Editor } from "@/components/editor";
+import { LeftSidebar } from "@/components/left-sidebar/left-sidebar";
 import { RecentFilesCombobox } from "@/components/recent-files-combobox";
 import { RightSidebar } from "@/components/right-sidebar/right-sidebar";
 import { SettingsMenu } from "@/components/settings-menu";
+import { ToolbarButton } from "@/components/common/toolbar-button";
 import {
   ResizableHandle,
   ResizablePanel,
@@ -46,6 +49,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { AssistantProvider } from "@/lib/agent";
 import { useNotebookViewMode } from "@/contexts/notebook-view-mode-context";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
@@ -247,6 +255,16 @@ interface BusinessShellProps {
   shouldFocusEditorAfterSelect: (file: BusinessShellFile) => boolean;
   requestEditorFocus: () => void;
   onWorkspaceChange: (path: string | null) => void;
+  onWorkspacePathRenamed: (payload: {
+    oldPath: string;
+    newPath: string;
+    newName: string;
+    itemType: "file" | "folder";
+  }) => void;
+  onWorkspacePathDeleted: (payload: {
+    path: string;
+    itemType: "file" | "folder";
+  }) => void;
   onKernelStatusChange: React.Dispatch<React.SetStateAction<KernelStatus>>;
   onCurrentKernelChange: React.Dispatch<React.SetStateAction<KernelInfo | null>>;
   onIsRunningChange: React.Dispatch<React.SetStateAction<boolean>>;
@@ -303,6 +321,8 @@ export function BusinessShell({
   shouldFocusEditorAfterSelect,
   requestEditorFocus,
   onWorkspaceChange,
+  onWorkspacePathRenamed,
+  onWorkspacePathDeleted,
   onKernelStatusChange,
   onCurrentKernelChange,
   onIsRunningChange,
@@ -318,8 +338,9 @@ export function BusinessShell({
 }: BusinessShellProps) {
   const { effectiveSettings, setUserSettings } = useOrionSettings();
   const { setNotebookViewMode } = useNotebookViewMode();
-  useBusinessReportRefreshErrors(notebook);
+  useBusinessReportRefreshErrors(currentFile.path);
   const [newAnalysisDialogOpen, setNewAnalysisDialogOpen] = React.useState(false);
+  const [fileTreePopoverOpen, setFileTreePopoverOpen] = React.useState(false);
   const [analysisName, setAnalysisName] = React.useState(defaultAnalysisName);
   const [isCreatingAnalysis, setIsCreatingAnalysis] = React.useState(false);
   const analysisNameInputRef = React.useRef<HTMLInputElement>(null);
@@ -426,6 +447,15 @@ export function BusinessShell({
     }
   }, [analysisName, kernelService, onOpenFile, workspaceDirectory]);
 
+  /** Opens a file from the popup tree and closes the popup. */
+  const handleFileTreeSelect = React.useCallback(
+    (file: BusinessShellFile) => {
+      setFileTreePopoverOpen(false);
+      onOpenFile(file);
+    },
+    [onOpenFile],
+  );
+
   /** Opens the active file, or the current project folder, in the OS native file manager. */
   const handleRevealTarget = React.useCallback(() => {
     if (!kernelService || revealTargetPath === null) {
@@ -516,8 +546,8 @@ export function BusinessShell({
                   />
                 ) : null}
 
-                <div className="corner-squircle ml-1 flex h-11 min-w-0 flex-1 items-center justify-between gap-2 rounded-md border bg-background px-2 shadow-md">
-                  <div className="min-w-0 flex-1">
+                <div className="corner-squircle ml-1 flex h-11 min-w-0 flex-1 items-center gap-2 rounded-md border bg-background px-2 shadow-md">
+                  <div className="flex min-w-0 flex-1 items-center gap-1.5">
                     <RecentFilesCombobox
                       currentFile={currentFile}
                       recentFiles={recentFiles}
@@ -529,6 +559,40 @@ export function BusinessShell({
                       shouldFocusEditorAfterSelect={shouldFocusEditorAfterSelect}
                       requestEditorFocus={requestEditorFocus}
                     />
+                    <Popover
+                      open={fileTreePopoverOpen}
+                      onOpenChange={setFileTreePopoverOpen}
+                    >
+                      <PopoverTrigger asChild>
+                        <ToolbarButton
+                          type="button"
+                          toolTipLabel="Browse files"
+                          aria-label="Browse workspace files"
+                          className="shrink-0"
+                        >
+                          <Folder className="h-4 w-4" />
+                        </ToolbarButton>
+                      </PopoverTrigger>
+                      <PopoverContent
+                        align="start"
+                        side="bottom"
+                        sideOffset={8}
+                        className="h-[min(72vh,640px)] w-[min(92vw,520px)] max-h-[calc(100vh-6rem)] overflow-hidden p-0"
+                      >
+                        <LeftSidebar
+                          currentFile={currentFile}
+                          onFileSelect={handleFileTreeSelect}
+                          kernelService={kernelService}
+                          workspaceDirectory={workspaceDirectory}
+                          onWorkspaceChange={onWorkspaceChange}
+                          onWorkspacePathRenamed={onWorkspacePathRenamed}
+                          onWorkspacePathDeleted={onWorkspacePathDeleted}
+                          onOpenKernelDropdown={onOpenKernelDropdown}
+                          bareFilesOnly
+                          className="h-full bg-popover"
+                        />
+                      </PopoverContent>
+                    </Popover>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {isNotebookOpen ? (

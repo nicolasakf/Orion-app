@@ -9,7 +9,14 @@ import {
   type FileUIPart,
   DefaultChatTransport,
 } from "ai";
-import { Bot, ChevronLeft } from "lucide-react";
+import {
+  Bot,
+  ChartNoAxesCombined,
+  ChevronLeft,
+  FileText,
+  FolderSearch,
+  Workflow,
+} from "lucide-react";
 
 import { toast } from "sonner";
 import {
@@ -112,7 +119,7 @@ import { getSubagentStepDescription } from "./tool-invocation-helpers";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { ModelCatalogEntry } from "@/lib/agent/model-catalog";
 import { ChatToolbar } from "./chat-toolbar";
-import { ChatBody } from "./chat-body";
+import { ChatBody, type ChatPromptSuggestion } from "./chat-body";
 import { ChatSurface } from "./chat-surface";
 import { createCostSummaryMessageId } from "./cost-summary-card";
 import { ChatTextbox, type ReferenceTab } from "./chat-textbox";
@@ -154,6 +161,33 @@ import {
 } from "@/lib/agent/model-selection-key";
 
 const MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS = 1;
+
+const BUSINESS_EMPTY_CHAT_PROMPTS: readonly ChatPromptSuggestion[] = [
+  {
+    title: "Understand this project",
+    prompt:
+      "Review this project and summarize the available information, where it came from, and how it could be used.",
+    icon: FolderSearch,
+  },
+  {
+    title: "Explore the data",
+    prompt:
+      "Review the data to identify important patterns, changes over time, and findings that merit closer attention.",
+    icon: ChartNoAxesCombined,
+  },
+  {
+    title: "Create a report",
+    prompt:
+      "Create a clear report that highlights the most important findings, key changes, and areas that need attention.",
+    icon: FileText,
+  },
+  {
+    title: "Automate a routine task",
+    prompt:
+      "Set up a repeatable task to complete this work automatically whenever it is needed.",
+    icon: Workflow,
+  },
+];
 
 /**
  * Extract assistant text from `/api/chat` stream responses for title generation.
@@ -703,7 +737,7 @@ export function RightSidebar({
   const [editingState, setEditingState] = useState<EditingState | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sidebarRootRef = useRef<HTMLDivElement>(null);
-  const createNewChatRef = useRef<() => void>(() => {});
+  const createNewChatRef = useRef<() => void>(() => { });
   const [models, setModels] = useState<LLM[]>([]);
   const [modelRows, setModelRows] = useState<ModelCatalogEntry[]>([]);
   const [modelsCatalogLoaded, setModelsCatalogLoaded] = useState(false);
@@ -825,8 +859,8 @@ export function RightSidebar({
       userPinned.length > 0
         ? userPinned
         : modelRows
-            .filter((m) => m.pinned_by_default)
-            .map((m) => formatModelSelectionKey(m.provider_id, m.model_id));
+          .filter((m) => m.pinned_by_default)
+          .map((m) => formatModelSelectionKey(m.provider_id, m.model_id));
     return normalizePinnedModelKeys(base, modelRows);
   }, [effectiveSettings.chat.pinnedModelIds, modelRows]);
 
@@ -840,13 +874,13 @@ export function RightSidebar({
       const endpointModels = isLocalProvider(providerId)
         ? normalizeLocalEndpointModels(providerId, credential)
         : [
-            {
-              modelId: credential.modelId,
-              label: credential.label ?? credential.modelId,
-              enabled: true,
-            },
-            ...(credential.models ?? []),
-          ];
+          {
+            modelId: credential.modelId,
+            label: credential.label ?? credential.modelId,
+            enabled: true,
+          },
+          ...(credential.models ?? []),
+        ];
 
       for (const model of endpointModels) {
         if (model.enabled === false) continue;
@@ -922,8 +956,8 @@ export function RightSidebar({
     const pinnedSelectionForStoredModel =
       parseModelSelectionKey(selectedModel) === null
         ? pinnedModelIds.find(
-            (pinKey) => parseModelSelectionKey(pinKey)?.modelId === selectedModel
-          )
+          (pinKey) => parseModelSelectionKey(pinKey)?.modelId === selectedModel
+        )
         : undefined;
     if (pinnedSelectionForStoredModel) {
       setSelectedModel(pinnedSelectionForStoredModel);
@@ -1659,7 +1693,7 @@ export function RightSidebar({
   } | null>(null);
   const customHandleSubmitRef = useRef<
     (event: React.FormEvent<HTMLFormElement>) => unknown
-  >(() => {});
+  >(() => { });
   const queueProcessingRef = useRef(false);
   const prevAgentTurnActiveRef = useRef(false);
   /** Starts a fresh model turn and clears UI-level cancellation state. */
@@ -2522,7 +2556,7 @@ export function RightSidebar({
         };
         void Promise.resolve(
           customHandleSubmitRef.current({
-            preventDefault: () => {},
+            preventDefault: () => { },
           } as React.FormEvent<HTMLFormElement>),
         ).finally(() => {
           pendingSubmitRef.current = null;
@@ -4143,11 +4177,11 @@ export function RightSidebar({
               forcedSkillNames: selectedSkills.skillNames,
               ...(activatesEdaProfile && researchModeConfig
                 ? {
-                    interactionMode: researchModeConfig.id,
-                    interactionModeConfig: researchModeConfig,
-                    agentMode: true,
-                    researchSession: researchSessionRef.current,
-                  }
+                  interactionMode: researchModeConfig.id,
+                  interactionModeConfig: researchModeConfig,
+                  agentMode: true,
+                  researchSession: researchSessionRef.current,
+                }
                 : activatesEdaProfile
                   ? { researchSession: researchSessionRef.current }
                   : {}),
@@ -4221,9 +4255,9 @@ export function RightSidebar({
     void Promise.resolve(
       customHandleSubmitRef.current({ preventDefault: () => { } } as React.FormEvent<HTMLFormElement>),
     ).finally(() => {
-        pendingSubmitRef.current = null;
-        queueProcessingRef.current = false;
-      });
+      pendingSubmitRef.current = null;
+      queueProcessingRef.current = false;
+    });
   }, [isAgentTurnActive, markCurrentEditCheckpointStatus, messageQueue]);
 
   const handleStopGeneration = useCallback(() => {
@@ -4487,52 +4521,52 @@ export function RightSidebar({
           </div>
 
           <div className={businessChatPanelClassName}>
-          <ChatBody
-            key={`subagent-chat-body-${activeSubagentToolCallId}`}
-            viewKey={`subagent:${activeSubagentToolCallId}`}
-            messages={activeSubagentSession.messages}
-            error={undefined}
-            isLoading={activeSubagentSession.status === "running"}
-            isAgentTurnActive={activeSubagentSession.status === "running"}
-            groupConsecutiveAssistantActivity
-            toolTimings={toolTimings}
-            onUserMessageClick={() => { }}
-            editingState={null}
-          />
+            <ChatBody
+              key={`subagent-chat-body-${activeSubagentToolCallId}`}
+              viewKey={`subagent:${activeSubagentToolCallId}`}
+              messages={activeSubagentSession.messages}
+              error={undefined}
+              isLoading={activeSubagentSession.status === "running"}
+              isAgentTurnActive={activeSubagentSession.status === "running"}
+              groupConsecutiveAssistantActivity
+              toolTimings={toolTimings}
+              onUserMessageClick={() => { }}
+              editingState={null}
+            />
 
-          <ChatTextbox
-            input=""
-            handleInputChange={() => { }}
-            handleSubmit={(event) => event.preventDefault()}
-            onStop={() => { }}
-            isLoading={false}
-            interactionMode={interactionMode}
-            interactionModes={interactionModeConfigs}
-            selectedModel={selectedModel}
-            editingState={null}
-            textareaRef={textareaRef}
-            onInteractionModeChange={handleInteractionModeChange}
-            onModelChange={handleModelChange}
-            onCancelEdit={() => { }}
-            models={modelsWithAccess}
-            pinnedModelIds={pinnedModelIds}
-            onReorderPinned={handleReorderPinned}
-            onOpenModelsSettings={() => openWithTab("models")}
-            onOpenInteractionModesSettings={() => openWithTab("agent", "modes")}
-            onOpenProvidersSettings={handleOpenProvidersSettings}
-            onConfigureProvider={handleConfigureProvider}
-            selectedModelProvider={modelInfo?.provider}
-            modelSettings={modelSettingsMap[selectedModel] ?? {}}
-            onModelSettingsChange={(settings) =>
-              handleModelSettingsChange(selectedModel, settings)
-            }
-            hasMessages={activeSubagentSession.messages.length > 0}
-            readOnly
-            readOnlyPlaceholder="Sub-agent chat is read-only"
-            onOpenSlashDefinition={handleOpenSlashDefinition}
-            activeRules={assistant?.availableRules ?? []}
-            onOpenRule={handleOpenRule}
-          />
+            <ChatTextbox
+              input=""
+              handleInputChange={() => { }}
+              handleSubmit={(event) => event.preventDefault()}
+              onStop={() => { }}
+              isLoading={false}
+              interactionMode={interactionMode}
+              interactionModes={interactionModeConfigs}
+              selectedModel={selectedModel}
+              editingState={null}
+              textareaRef={textareaRef}
+              onInteractionModeChange={handleInteractionModeChange}
+              onModelChange={handleModelChange}
+              onCancelEdit={() => { }}
+              models={modelsWithAccess}
+              pinnedModelIds={pinnedModelIds}
+              onReorderPinned={handleReorderPinned}
+              onOpenModelsSettings={() => openWithTab("models")}
+              onOpenInteractionModesSettings={() => openWithTab("agent", "modes")}
+              onOpenProvidersSettings={handleOpenProvidersSettings}
+              onConfigureProvider={handleConfigureProvider}
+              selectedModelProvider={modelInfo?.provider}
+              modelSettings={modelSettingsMap[selectedModel] ?? {}}
+              onModelSettingsChange={(settings) =>
+                handleModelSettingsChange(selectedModel, settings)
+              }
+              hasMessages={activeSubagentSession.messages.length > 0}
+              readOnly
+              readOnlyPlaceholder="Sub-agent chat is read-only"
+              onOpenSlashDefinition={handleOpenSlashDefinition}
+              activeRules={assistant?.availableRules ?? []}
+              onOpenRule={handleOpenRule}
+            />
           </div>
         </>
       ) : (
@@ -4558,86 +4592,89 @@ export function RightSidebar({
           />
 
           <div className={businessChatPanelClassName}>
-          <ChatBody
-            key="main-chat-body"
-            viewKey={`main:${effectiveChatId ?? "no-chat"}`}
-            messages={visibleMessages}
-            error={error}
-            isLoading={isLoading}
-            isAgentTurnActive={isAgentTurnActive}
-            onUserMessageClick={handleUserMessageClick}
-            editingState={editingState}
-            showKernelPrompt={showKernelPrompt}
-            onOpenKernelDropdown={onOpenKernelDropdown}
-            onDismissKernelPrompt={() => setShowKernelPrompt(false)}
-            pendingApprovalIds={pendingApprovalIds}
-            onApprove={handleApprove}
-            onReject={handleReject}
-            toolApprovalMode={toolApprovalMode}
-            onToolApprovalModeChange={handleToolApprovalModeChange}
-            subagentProgress={subagentProgress}
-            subagentReportPaths={subagentReportPaths}
-            toolTimings={toolTimings}
-            groupConsecutiveAssistantActivity
-            onOpenSubagentChat={setActiveSubagentToolCallId}
-            onOpenSubagentReport={handleOpenSubagentReport}
-            costSummaryByMessageId={costSummaryByMessageId}
-            onDismissCostSummary={dismissCostSummary}
-            onRefreshCostSummary={refreshCostSummary}
-            isRefreshingCostSummary={isRefreshingCostSummary}
-            checkpointStatuses={checkpointStatuses}
-            checkpointRequestByMessageId={checkpointRequestByMessageId}
-            onRestoreCheckpoint={handleRestoreCheckpoint}
-            onForkFromMessage={handleForkFromMessage}
-          />
+            <ChatBody
+              key="main-chat-body"
+              viewKey={`main:${effectiveChatId ?? "no-chat"}`}
+              messages={visibleMessages}
+              error={error}
+              isLoading={isLoading}
+              isAgentTurnActive={isAgentTurnActive}
+              onUserMessageClick={handleUserMessageClick}
+              editingState={editingState}
+              showKernelPrompt={showKernelPrompt}
+              onOpenKernelDropdown={onOpenKernelDropdown}
+              onDismissKernelPrompt={() => setShowKernelPrompt(false)}
+              pendingApprovalIds={pendingApprovalIds}
+              onApprove={handleApprove}
+              onReject={handleReject}
+              toolApprovalMode={toolApprovalMode}
+              onToolApprovalModeChange={handleToolApprovalModeChange}
+              subagentProgress={subagentProgress}
+              subagentReportPaths={subagentReportPaths}
+              toolTimings={toolTimings}
+              groupConsecutiveAssistantActivity
+              onOpenSubagentChat={setActiveSubagentToolCallId}
+              onOpenSubagentReport={handleOpenSubagentReport}
+              costSummaryByMessageId={costSummaryByMessageId}
+              onDismissCostSummary={dismissCostSummary}
+              onRefreshCostSummary={refreshCostSummary}
+              isRefreshingCostSummary={isRefreshingCostSummary}
+              checkpointStatuses={checkpointStatuses}
+              checkpointRequestByMessageId={checkpointRequestByMessageId}
+              onRestoreCheckpoint={handleRestoreCheckpoint}
+              onForkFromMessage={handleForkFromMessage}
+              emptyPromptSuggestions={
+                isBusinessExperience ? BUSINESS_EMPTY_CHAT_PROMPTS : undefined
+              }
+            />
 
-          <ChatTextbox
-            input={input}
-            handleInputChange={handleInputChange}
-            handleSubmit={customHandleSubmit}
-            onStop={handleStopGeneration}
-            isLoading={isInputLocked}
-            interactionMode={interactionMode}
-            interactionModes={interactionModeConfigs}
-            selectedModel={selectedModel}
-            editingState={editingState}
-            textareaRef={textareaRef}
-            onInteractionModeChange={handleInteractionModeChange}
-            onModelChange={handleModelChange}
-            onCancelEdit={handleCancelEdit}
-            models={modelsWithAccess}
-            pinnedModelIds={pinnedModelIds}
-            onReorderPinned={handleReorderPinned}
-            onOpenModelsSettings={() => openWithTab("models")}
-            onOpenInteractionModesSettings={() => openWithTab("agent", "modes")}
-            onOpenProvidersSettings={handleOpenProvidersSettings}
-            onConfigureProvider={handleConfigureProvider}
-            selectedModelProvider={modelInfo?.provider}
-            modelSettings={modelSettingsMap[selectedModel] ?? {}}
-            onModelSettingsChange={(settings) =>
-              handleModelSettingsChange(selectedModel, settings)
-            }
-            activeSlashCommand={activeSlashCommand}
-            extraSlashCommands={[...subagentSlashCommands, ...skillSlashCommands]}
-            onOpenSlashDefinition={handleOpenSlashDefinition}
-            onImmediateSlashCommand={handleImmediateSlashCommand}
-            hasMessages={visibleMessages.length > 0}
-            contextEstimate={contextEstimate}
-            onCompact={runCompaction}
-            isOverContextBudget={isCompacting}
-            referenceOptions={referenceOptions}
-            references={draftReferences}
-            onReferencesChange={setDraftReferences}
-            attachments={draftAttachments}
-            onAttachmentsChange={setDraftAttachments}
-            onAttachFiles={handleAttachFiles}
-            onReferenceSearch={refreshReferenceSearch}
-            disabledReferenceTabs={disabledReferenceTabs}
-            queuedMessages={messageQueue}
-            onRemoveQueuedMessage={handleRemoveQueuedMessage}
-            activeRules={assistant?.availableRules ?? []}
-            onOpenRule={handleOpenRule}
-          />
+            <ChatTextbox
+              input={input}
+              handleInputChange={handleInputChange}
+              handleSubmit={customHandleSubmit}
+              onStop={handleStopGeneration}
+              isLoading={isInputLocked}
+              interactionMode={interactionMode}
+              interactionModes={interactionModeConfigs}
+              selectedModel={selectedModel}
+              editingState={editingState}
+              textareaRef={textareaRef}
+              onInteractionModeChange={handleInteractionModeChange}
+              onModelChange={handleModelChange}
+              onCancelEdit={handleCancelEdit}
+              models={modelsWithAccess}
+              pinnedModelIds={pinnedModelIds}
+              onReorderPinned={handleReorderPinned}
+              onOpenModelsSettings={() => openWithTab("models")}
+              onOpenInteractionModesSettings={() => openWithTab("agent", "modes")}
+              onOpenProvidersSettings={handleOpenProvidersSettings}
+              onConfigureProvider={handleConfigureProvider}
+              selectedModelProvider={modelInfo?.provider}
+              modelSettings={modelSettingsMap[selectedModel] ?? {}}
+              onModelSettingsChange={(settings) =>
+                handleModelSettingsChange(selectedModel, settings)
+              }
+              activeSlashCommand={activeSlashCommand}
+              extraSlashCommands={[...subagentSlashCommands, ...skillSlashCommands]}
+              onOpenSlashDefinition={handleOpenSlashDefinition}
+              onImmediateSlashCommand={handleImmediateSlashCommand}
+              hasMessages={visibleMessages.length > 0}
+              contextEstimate={contextEstimate}
+              onCompact={runCompaction}
+              isOverContextBudget={isCompacting}
+              referenceOptions={referenceOptions}
+              references={draftReferences}
+              onReferencesChange={setDraftReferences}
+              attachments={draftAttachments}
+              onAttachmentsChange={setDraftAttachments}
+              onAttachFiles={handleAttachFiles}
+              onReferenceSearch={refreshReferenceSearch}
+              disabledReferenceTabs={disabledReferenceTabs}
+              queuedMessages={messageQueue}
+              onRemoveQueuedMessage={handleRemoveQueuedMessage}
+              activeRules={assistant?.availableRules ?? []}
+              onOpenRule={handleOpenRule}
+            />
           </div>
         </>
       )}

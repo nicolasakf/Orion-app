@@ -3,27 +3,24 @@
 import * as React from "react";
 import { toast } from "sonner";
 
-import {
-  buildBusinessErrorDedupeKey,
-  dispatchSubmitChatMessage,
-} from "@/lib/chat/chat-composer-events";
+import { dispatchInsertChatMessage } from "@/lib/chat/chat-composer-events";
 import {
   RUN_ALL_STOPPED_ON_ERROR_EVENT_NAME,
   type RunAllStoppedOnErrorEventDetail,
 } from "@/lib/notebook/notebook-execution-events";
-import type { NotebookType } from "@/lib/types";
 
-import {
-  buildBusinessReportRefreshFixPrompt,
-  getNotebookCellErrorContext,
-} from "./business-report-refresh";
+const NOTEBOOK_CELL_MENTION_EVENT = "orion:mention-notebook-cell";
+const BUSINESS_REPORT_REFRESH_DRAFT = "Fix the error in this cell.";
 
-/** Listens for refresh-report failures and auto-submits a fix request to the agent. */
+/**
+ * Adds a failed report cell and a repair prompt to the chat draft after a
+ * Business-mode refresh stops on an error. The user chooses whether to submit.
+ */
 export function useBusinessReportRefreshErrors(
-  notebook: NotebookType | null,
+  notebookPath: string,
 ): void {
-  const notebookRef = React.useRef(notebook);
-  notebookRef.current = notebook;
+  const notebookPathRef = React.useRef(notebookPath);
+  notebookPathRef.current = notebookPath;
 
   React.useEffect(() => {
     const handleRunAllStoppedOnError = (event: Event) => {
@@ -32,18 +29,23 @@ export function useBusinessReportRefreshErrors(
         return;
       }
 
-      const error = getNotebookCellErrorContext(notebookRef.current, detail.cellIndex);
-      const dedupeKey = buildBusinessErrorDedupeKey(
-        detail.cellIndex,
-        error?.ename,
-        error?.evalue,
-      );
-      const prompt = buildBusinessReportRefreshFixPrompt(detail.cellIndex, error);
+      const currentNotebookPath = notebookPathRef.current;
+      if (currentNotebookPath) {
+        window.dispatchEvent(
+          new CustomEvent(NOTEBOOK_CELL_MENTION_EVENT, {
+            detail: {
+              notebookPath: currentNotebookPath,
+              cellIndex: detail.cellIndex,
+              preview: `Notebook cell ${detail.cellIndex} failed to run.`,
+            },
+          }),
+        );
+      }
 
       toast.error("Couldn't refresh the report", {
-        description: "Orion is working on fixing the problem.",
+        description: "A suggested fix was added to the chat draft.",
       });
-      dispatchSubmitChatMessage(prompt, { dedupeKey });
+      dispatchInsertChatMessage(BUSINESS_REPORT_REFRESH_DRAFT);
     };
 
     window.addEventListener(

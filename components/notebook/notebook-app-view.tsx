@@ -1,13 +1,8 @@
 "use client";
 
 import React, { useMemo } from "react";
-import { BookOpen, LayoutTemplate, Sparkles } from "lucide-react";
+import { LayoutTemplate, Sparkles } from "lucide-react";
 
-import {
-  BUSINESS_APP_PROMPT_CATEGORIES,
-  FEATURED_BUSINESS_APP_PROMPTS,
-  type BusinessAppPromptSuggestion,
-} from "@/components/notebook/business-app-prompt-library";
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
 import type {
@@ -25,22 +20,11 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import {
   isNotebookCellInAppView,
   isNotebookOutputInAppView,
   type NotebookAppViewReference,
 } from "@/lib/notebook/app-view";
-import {
-  dispatchInsertChatMessage,
-  dispatchInsertChatSkill,
-} from "@/lib/chat/chat-composer-events";
+import { dispatchInsertChatSkill } from "@/lib/chat/chat-composer-events";
 import { cn } from "@/lib/utils";
 import {
   CellExecutionStatus,
@@ -87,6 +71,13 @@ type NotebookAppViewItem =
     outputIndex: number;
   };
 
+interface NotebookAppViewItemOptions {
+  /** Includes markdown cells with source even when not selected for App View. */
+  includeAllMarkdown?: boolean;
+  /** Includes every code-cell output, regardless of App View metadata. */
+  includeAllOutputs?: boolean;
+}
+
 /** Extracts notebook cell source as a single markdown string. */
 function sourceToString(source: string[] | undefined): string {
   return Array.isArray(source) ? source.join("") : "";
@@ -95,10 +86,14 @@ function sourceToString(source: string[] | undefined): string {
 /** Collects App View items in notebook source order. */
 function getNotebookAppViewItems(
   notebook: NotebookType,
+  options: NotebookAppViewItemOptions = {},
 ): NotebookAppViewItem[] {
+  const { includeAllMarkdown = false, includeAllOutputs = false } = options;
+
   return notebook.cells.flatMap<NotebookAppViewItem>((cell, cellIndex) => {
     if (cell.cell_type === CellType.MARKDOWN) {
-      return isNotebookCellInAppView(cell)
+      return isNotebookCellInAppView(cell) ||
+        (includeAllMarkdown && sourceToString(cell.source).trim().length > 0)
         ? [{ kind: "markdown" as const, cell, cellIndex }]
         : [];
     }
@@ -108,7 +103,7 @@ function getNotebookAppViewItems(
     }
 
     return cell.outputs.flatMap((output, outputIndex) =>
-      isNotebookOutputInAppView(cell, outputIndex)
+      includeAllOutputs || isNotebookOutputInAppView(cell, outputIndex)
         ? [
           {
             kind: "output" as const,
@@ -120,6 +115,16 @@ function getNotebookAppViewItems(
         ]
         : [],
     );
+  });
+}
+
+/** Returns true when the notebook has any user-visible source or output content. */
+function notebookHasContent(notebook: NotebookType): boolean {
+  return notebook.cells.some((cell) => {
+    const hasSource = sourceToString(cell.source).trim().length > 0;
+    const hasOutputs =
+      cell.cell_type === CellType.CODE && Boolean(cell.outputs?.length);
+    return hasSource || hasOutputs;
   });
 }
 
@@ -150,128 +155,37 @@ function AppViewMarkdownContextMenu({
   );
 }
 
-interface BusinessPromptButtonProps {
-  suggestion: BusinessAppPromptSuggestion;
-  onSelect: (prompt: string) => void;
-}
-
-/** Clickable prompt card that inserts its prompt into the chat composer. */
-function BusinessPromptButton({
-  suggestion,
-  onSelect,
-}: BusinessPromptButtonProps): React.JSX.Element {
-  return (
-    <button
-      type="button"
-      aria-label={`Use prompt suggestion: ${suggestion.title}`}
-      className={cn(
-        "corner-squircle flex min-h-32 w-full items-start gap-3 rounded-md border border-border/70 bg-background/85 px-4 py-3 text-left shadow-sm",
-        "transition-colors hover:border-primary/50 hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-      )}
-      onClick={() => onSelect(suggestion.prompt)}
-    >
-      <Sparkles className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-      <span className="min-w-0">
-        <span className="block text-sm font-medium leading-snug text-foreground">
-          {suggestion.title}
-        </span>
-        <span className="mt-1 block text-xs leading-snug text-muted-foreground">
-          {suggestion.prompt}
-        </span>
-      </span>
-    </button>
-  );
-}
-
-interface BusinessPromptCatalogDialogProps {
-  onSelectPrompt: (prompt: string) => void;
-}
-
-/** Full data-analysis prompt catalog grouped by analysis category. */
-function BusinessPromptCatalogDialog({
-  onSelectPrompt,
-}: BusinessPromptCatalogDialogProps): React.JSX.Element {
-  const [open, setOpen] = React.useState(false);
-
-  const handleSelectPrompt = React.useCallback(
-    (prompt: string) => {
-      onSelectPrompt(prompt);
-      setOpen(false);
-    },
-    [onSelectPrompt],
-  );
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button type="button" variant="outline" className="mt-5">
-          <BookOpen className="mr-2 h-4 w-4" />
-          Browse prompt library
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="flex max-h-[85vh] flex-col overflow-hidden sm:max-w-4xl">
-        <DialogHeader>
-          <DialogTitle>Prompt Library</DialogTitle>
-        </DialogHeader>
-        <div
-          className="min-h-0 flex-1 overflow-y-auto pr-2"
-          data-prompt-catalog-scroll
-        >
-          <div className="grid gap-6 pb-1">
-            {BUSINESS_APP_PROMPT_CATEGORIES.map((group) => (
-              <section key={group.category} className="text-left">
-                <h4 className="mb-2 px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  {group.category}
-                </h4>
-                <div
-                  aria-label={`${group.category} prompt suggestions`}
-                  className="grid gap-3 md:grid-cols-2"
-                >
-                  {group.suggestions.map((suggestion) => (
-                    <BusinessPromptButton
-                      key={suggestion.title}
-                      suggestion={suggestion}
-                      onSelect={handleSelectPrompt}
-                    />
-                  ))}
-                </div>
-              </section>
-            ))}
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-/** Featured business-mode prompt suggestions for an empty App View. */
-function BusinessAppViewPromptCarousel(): React.JSX.Element {
-  const handleSelectPrompt = React.useCallback((prompt: string) => {
-    dispatchInsertChatMessage(prompt);
-  }, []);
-
+/** Empty notebook message shown in business-mode App View. */
+function BusinessEmptyNotebookState(): React.JSX.Element {
   return (
     <div
       className="flex min-h-full flex-1 items-center justify-center overflow-y-auto p-6"
       data-notebook-export-root="app"
     >
-      <div className="mx-auto flex w-full max-w-3xl flex-col items-center py-4 text-center">
+      <div className="mx-auto max-w-sm text-center">
         <h3 className="text-2xl font-semibold text-foreground">
-          What should Orion work on?
+          This file is empty
         </h3>
-        <div
-          aria-label="Featured prompt suggestions"
-          className="mt-6 grid w-full gap-3 md:grid-cols-2"
-        >
-          {FEATURED_BUSINESS_APP_PROMPTS.map((suggestion) => (
-            <BusinessPromptButton
-              key={suggestion.title}
-              suggestion={suggestion}
-              onSelect={handleSelectPrompt}
-            />
-          ))}
-        </div>
-        <BusinessPromptCatalogDialog onSelectPrompt={handleSelectPrompt} />
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          Use the chat to ask Orion to start working on it.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Business-mode fallback when a notebook has content but no renderable items. */
+function BusinessNoAppViewContentState(): React.JSX.Element {
+  return (
+    <div
+      className="flex min-h-full flex-1 items-center justify-center overflow-y-auto p-6"
+      data-notebook-export-root="app"
+    >
+      <div className="mx-auto max-w-sm text-center">
+        <h3 className="text-lg font-medium text-foreground">No outputs yet</h3>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          Use the chat to run or build something for this file.
+        </p>
       </div>
     </div>
   );
@@ -294,6 +208,17 @@ export function NotebookAppView({
   const appViewItems = useMemo(
     () => getNotebookAppViewItems(notebook),
     [notebook],
+  );
+  const hasContent = useMemo(() => notebookHasContent(notebook), [notebook]);
+  const displayItems = useMemo(
+    () =>
+      businessMode && appViewItems.length === 0 && hasContent
+        ? getNotebookAppViewItems(notebook, {
+          includeAllMarkdown: true,
+          includeAllOutputs: true,
+        })
+        : appViewItems,
+    [appViewItems, businessMode, hasContent, notebook],
   );
 
   /** Requests that the chat composer attach the selected App View output. */
@@ -330,14 +255,14 @@ export function NotebookAppView({
     [onRemoveAppViewReference],
   );
 
-  if (appViewItems.length > 0) {
+  if (displayItems.length > 0) {
     return (
       <div
         className="orion-app-view min-h-0 flex-1 overflow-y-auto bg-sidebar"
         data-notebook-export-root="app"
       >
         <main className="mx-auto flex min-h-full w-full max-w-7xl flex-col gap-6 p-4">
-          {appViewItems.map((item) =>
+          {displayItems.map((item) =>
             item.kind === "markdown" ? (
               <AppViewMarkdownContextMenu
                 key={`markdown-${item.cellIndex}`}
@@ -395,7 +320,11 @@ export function NotebookAppView({
   }
 
   if (businessMode) {
-    return <BusinessAppViewPromptCarousel />;
+    return hasContent ? (
+      <BusinessNoAppViewContentState />
+    ) : (
+      <BusinessEmptyNotebookState />
+    );
   }
 
   return (

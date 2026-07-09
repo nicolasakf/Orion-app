@@ -293,10 +293,7 @@ export function ChatToolbar({
         <div className="flex shrink-0 items-center gap-1">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <ToolbarButton
-                toolTipLabel="Chat options"
-                disabled={!currentChatId}
-              >
+              <ToolbarButton disabled={!currentChatId}>
                 <MoreHorizontal className="h-4 w-4" />
               </ToolbarButton>
             </DropdownMenuTrigger>

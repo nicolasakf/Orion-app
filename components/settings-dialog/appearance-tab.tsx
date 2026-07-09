@@ -40,6 +40,7 @@ export function AppearanceTab() {
   const fileTree = effectiveSettings.fileTree;
   const editor = effectiveSettings.editor;
   const emptyEditor = editor.emptyEditor;
+  const isBusinessMode = appearance.experienceMode === "business";
 
   const handleThemeChange = (value: "light" | "dark" | "system") => {
     void setUserSettings((current) => ({
@@ -331,26 +332,28 @@ export function AppearanceTab() {
               />
             </div>
 
-            <div className="corner-squircle flex items-center justify-between rounded-md border p-3 sm:col-span-3">
-              <SettingsInfoLabel
-                htmlFor="editor-autosave"
-                label="Autosave"
-                description="Periodically saves dirty files open in the editor."
-              />
-              <Switch
-                id="editor-autosave"
-                checked={editor.autosaveEnabled}
-                onCheckedChange={(checked) =>
-                  void setUserSettings((current) => ({
-                    ...current,
-                    editor: {
-                      ...current.editor,
-                      autosaveEnabled: checked,
-                    },
-                  }))
-                }
-              />
-            </div>
+            {!isBusinessMode ? (
+              <div className="corner-squircle flex items-center justify-between rounded-md border p-3 sm:col-span-3">
+                <SettingsInfoLabel
+                  htmlFor="editor-autosave"
+                  label="Autosave"
+                  description="Periodically saves dirty files open in the editor."
+                />
+                <Switch
+                  id="editor-autosave"
+                  checked={editor.autosaveEnabled}
+                  onCheckedChange={(checked) =>
+                    void setUserSettings((current) => ({
+                      ...current,
+                      editor: {
+                        ...current.editor,
+                        autosaveEnabled: checked,
+                      },
+                    }))
+                  }
+                />
+              </div>
+            ) : null}
 
             <div className="space-y-2 sm:col-span-3">
               <SettingsInfoLabel

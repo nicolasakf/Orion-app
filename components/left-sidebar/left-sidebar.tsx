@@ -307,6 +307,7 @@ export function LeftSidebar({
   onToggleTerminalPanel,
   isTerminalPanelOpen = false,
   mobileFilesOnly = false,
+  bareFilesOnly = false,
   className,
   ...props
 }: {
@@ -354,6 +355,8 @@ export function LeftSidebar({
   isTerminalPanelOpen?: boolean;
   /** When true, only the workspace file tree is shown (mobile full-screen files). Hides the sidebar tab bar and Ctrl/Cmd+K → Search. */
   mobileFilesOnly?: boolean;
+  /** When true, renders only the file browser content without accordion/card chrome. */
+  bareFilesOnly?: boolean;
   className?: string;
 } & React.HTMLAttributes<HTMLDivElement>) {
   const { effectiveSettings } = useOrionSettings();
@@ -744,6 +747,69 @@ export function LeftSidebar({
   const kernelForFiles =
     serverAvailable && kernelService ? kernelService : null;
 
+  /** Renders the files view body shared by the accordion and bare file-tree popup. */
+  const renderFilesContent = (contentClassName?: string) => (
+    <div className={cn("px-2 pt-2", contentClassName)}>
+      {!kernelForFiles ? (
+        <div className="flex min-h-[180px] items-center justify-center px-2 py-4">
+          <NoKernelPrompt
+            description="Connect Orion's runtime to browse workspace files."
+            onConnect={onOpenKernelDropdown}
+            className="max-w-md"
+          />
+        </div>
+      ) : !hasWorkspace ? (
+        <WorkspacePicker
+          contentsManager={kernelForFiles.getContentsManager()}
+          onSelectWorkspace={(path) => onWorkspaceChange?.(path)}
+          onFetchChildren={fetchAndCacheChildren}
+        />
+      ) : loading ? (
+        <FileTree
+          items={[]}
+          loading={true}
+          fontSize={fileTreeFontSize}
+        />
+      ) : fileTreeData.length > 0 ? (
+        <FileTree
+          items={fileTreeData}
+          showHiddenFiles={showHiddenFiles}
+          defaultCollapsed={true}
+          contentsManager={kernelForFiles.getContentsManager()}
+          onFileSelect={onFileSelect}
+          onTreeChange={refreshFolder}
+          onFetchChildren={fetchAndCacheChildren}
+          onRevealInFinder={handleRevealInFinder}
+          onPathRenamed={onWorkspacePathRenamed}
+          onPathDeleted={onWorkspacePathDeleted}
+          revealLabel={revealLabel}
+          workspaceDirectory={workspaceDirectory}
+          fontSize={fileTreeFontSize}
+        />
+      ) : (
+        <div className="p-4 text-center text-muted-foreground text-sm">
+          No files found.
+        </div>
+      )}
+    </div>
+  );
+
+  if (bareFilesOnly) {
+    return (
+      <div
+        className={cn(
+          "flex h-full w-full min-w-0 flex-col bg-sidebar",
+          className
+        )}
+        {...props}
+      >
+        <div className="min-h-0 flex-1 overflow-auto no-overscroll-x">
+          {renderFilesContent("p-2")}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
@@ -888,52 +954,7 @@ export function LeftSidebar({
                     </StickyAccordionHeaderWithToolbar>
 
                     <AccordionContent>
-                      <div className="px-2 pt-2">
-                        {!kernelForFiles ? (
-                          <div className="flex min-h-[180px] items-center justify-center px-2 py-4">
-                            <NoKernelPrompt
-                              description="Connect Orion's runtime to browse workspace files."
-                              onConnect={onOpenKernelDropdown}
-                              className="max-w-md"
-                            />
-                          </div>
-                        ) : !hasWorkspace ? (
-                          // Connected but no workspace selected — show picker
-                          <WorkspacePicker
-                            contentsManager={kernelForFiles.getContentsManager()}
-                            onSelectWorkspace={(path) => onWorkspaceChange?.(path)}
-                            onFetchChildren={fetchAndCacheChildren}
-                          />
-                        ) : loading ? (
-                          <FileTree
-                            items={[]}
-                            loading={true}
-                            fontSize={fileTreeFontSize}
-                          />
-                        ) : fileTreeData.length > 0 ? (
-                          <>
-                            <FileTree
-                              items={fileTreeData}
-                              showHiddenFiles={showHiddenFiles}
-                              defaultCollapsed={true}
-                              contentsManager={kernelForFiles.getContentsManager()}
-                              onFileSelect={onFileSelect}
-                              onTreeChange={refreshFolder}
-                              onFetchChildren={fetchAndCacheChildren}
-                              onRevealInFinder={handleRevealInFinder}
-                              onPathRenamed={onWorkspacePathRenamed}
-                              onPathDeleted={onWorkspacePathDeleted}
-                              revealLabel={revealLabel}
-                              workspaceDirectory={workspaceDirectory}
-                              fontSize={fileTreeFontSize}
-                            />
-                          </>
-                        ) : (
-                          <div className="p-4 text-center text-muted-foreground text-sm">
-                            No files found.
-                          </div>
-                        )}
-                      </div>
+                      {renderFilesContent()}
                     </AccordionContent>
                   </AccordionItem>
                 );

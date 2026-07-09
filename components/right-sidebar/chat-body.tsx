@@ -3,7 +3,7 @@
 import * as React from "react";
 import { type UIMessage, isToolUIPart } from "ai";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, AtSign } from "lucide-react";
+import { ArrowDown, AtSign, type LucideIcon } from "lucide-react";
 import { ToolInvocationCard } from "./tool-invocation-card";
 import { DelegateInvocationCard } from "./delegate-invocation-card";
 import { AssistantActivityGroup } from "./assistant-activity-group";
@@ -12,6 +12,7 @@ import { AssistantMessage } from "./assistant-message";
 import { LoadingMessage } from "@/components/common/loading-message";
 import { ErrorCard } from "../common/error-card";
 import { NoKernelPrompt } from "../common/no-kernel-prompt";
+import { parseChatApiErrorMessage } from "@/lib/chat/chat-api-errors";
 import { ThinkingBlock } from "./thinking-block";
 import { CostSummaryCard, type CostSummaryMessageData } from "./cost-summary-card";
 import {
@@ -30,8 +31,15 @@ import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
 import type { EditingState } from "./types";
 import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
+import { dispatchInsertChatMessage } from "@/lib/chat/chat-composer-events";
 
 type CheckpointMessageAction = "restore" | "redo";
+
+export interface ChatPromptSuggestion {
+  title: string;
+  prompt: string;
+  icon: LucideIcon;
+}
 
 export interface ChatBodyProps {
   viewKey?: string;
@@ -69,6 +77,8 @@ export interface ChatBodyProps {
   checkpointRequestByMessageId?: Map<string, string>;
   onRestoreCheckpoint?: (checkpointId: string, action: CheckpointMessageAction) => void;
   onForkFromMessage?: (message: UIMessage, index: number) => void;
+  /** Optional prompt suggestions rendered when this chat has no rows. */
+  emptyPromptSuggestions?: readonly ChatPromptSuggestion[];
 }
 
 interface ChatMessageRowProps {
@@ -103,15 +113,21 @@ interface ChatMessageRowProps {
 type ChatRenderItem =
   | { type: "message"; message: UIMessage; messageIndex: number }
   | {
-      type: "activityRun";
-      items: AssistantActivityMessagePart[];
-      firstMessageIndex: number;
-      lastMessageIndex: number;
-      hasFollowingText: boolean;
-    }
+    type: "activityRun";
+    items: AssistantActivityMessagePart[];
+    firstMessageIndex: number;
+    lastMessageIndex: number;
+    hasFollowingText: boolean;
+  }
   | { type: "kernelPrompt" }
   | { type: "loading" }
-  | { type: "error"; message: string | undefined };
+  | {
+    type: "error";
+    title?: string;
+    message: string | undefined;
+    actionUrl?: string;
+    actionLabel?: string;
+  };
 
 type ConversationSelectionSource = "assistant" | "tool";
 
@@ -908,6 +924,58 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   return true;
 });
 
+interface EmptyChatPromptStateProps {
+  suggestions: readonly ChatPromptSuggestion[];
+}
+
+/** Empty business-chat prompt launcher. */
+function EmptyChatPromptState({
+  suggestions,
+}: EmptyChatPromptStateProps): React.JSX.Element {
+  const handleSuggestionClick = React.useCallback((prompt: string) => {
+    dispatchInsertChatMessage(prompt);
+  }, []);
+
+  return (
+    <div className="flex h-full min-h-[24rem] items-center justify-center px-2 py-8">
+      <div className="mx-auto flex w-full max-w-xl flex-col items-center text-center">
+        <h2 className="text-2xl font-semibold text-foreground">
+          What should Orion work on?
+        </h2>
+        <div
+          aria-label="Prompt suggestions"
+          className="mt-6 grid w-full gap-2 text-left"
+        >
+          {suggestions.map((suggestion) => {
+            const Icon = suggestion.icon;
+            return (
+              <button
+                key={suggestion.title}
+                type="button"
+                aria-label={`Use prompt suggestion: ${suggestion.title}`}
+                className="corner-squircle flex w-full items-start gap-3 rounded-md border border-border/70 bg-background/80 px-3 py-2.5 text-left shadow-sm transition-colors hover:border-primary/50 hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => handleSuggestionClick(suggestion.prompt)}
+              >
+                <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-sm bg-muted text-muted-foreground">
+                  <Icon aria-hidden="true" className="size-3.5" />
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium leading-snug text-foreground">
+                    {suggestion.title}
+                  </span>
+                  <span className="mt-1 block text-xs leading-snug text-muted-foreground">
+                    {suggestion.prompt}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ChatBody({
   viewKey = "chat",
   messages,
@@ -938,6 +1006,7 @@ export function ChatBody({
   checkpointRequestByMessageId,
   onRestoreCheckpoint,
   onForkFromMessage,
+  emptyPromptSuggestions,
 }: ChatBodyProps) {
   const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = React.useRef(true);
@@ -945,17 +1014,14 @@ export function ChatBody({
   const [isAtBottom, setIsAtBottom] = React.useState(true);
   const showError = !isLoading && error && messages.at(-1)?.role === "user";
 
-  let errorMessage = error?.message;
-
-  if (showError && error?.message) {
-    try {
-      const parsedError = JSON.parse(error.message);
-      errorMessage = `${parsedError.title}: ${parsedError.message}`;
-    } catch (e) {
-      // Not a JSON error message, so we'll leave it as is.
-      // This can happen for network errors or other non-API issues.
-    }
-  }
+  const parsedApiError = React.useMemo(
+    () => parseChatApiErrorMessage(error?.message),
+    [error?.message]
+  );
+  const errorMessage = parsedApiError?.message ?? error?.message;
+  const errorTitle = parsedApiError?.title;
+  const errorActionUrl = parsedApiError?.actionUrl;
+  const errorActionLabel = parsedApiError?.actionLabel;
 
   const rowItems = React.useMemo<ChatRenderItem[]>(() => {
     const rows: ChatRenderItem[] = buildAssistantActivityMessageBlocks(messages, {
@@ -969,7 +1035,13 @@ export function ChatBody({
       rows.push({ type: "loading" });
     }
     if (showError) {
-      rows.push({ type: "error", message: errorMessage });
+      rows.push({
+        type: "error",
+        title: errorTitle,
+        message: errorMessage,
+        actionUrl: errorActionUrl,
+        actionLabel: errorActionLabel,
+      });
     }
 
     return rows;
@@ -980,6 +1052,9 @@ export function ChatBody({
     isLoading,
     showError,
     errorMessage,
+    errorTitle,
+    errorActionUrl,
+    errorActionLabel,
   ]);
 
   const rowVirtualizer = useVirtualizer({
@@ -1007,6 +1082,8 @@ export function ChatBody({
     paddingEnd: 16,
   });
   const virtualItems = rowVirtualizer.getVirtualItems();
+  const showEmptyPromptState =
+    rowItems.length === 0 && Boolean(emptyPromptSuggestions?.length);
 
   /** Check whether a scroll container is close enough to its bottom edge. */
   const isElementAtBottom = React.useCallback((element: HTMLDivElement) => {
@@ -1079,6 +1156,9 @@ export function ChatBody({
         className="h-full min-w-0 overflow-x-hidden overflow-y-auto px-4"
         onScroll={updateBottomState}
       >
+        {showEmptyPromptState && emptyPromptSuggestions ? (
+          <EmptyChatPromptState suggestions={emptyPromptSuggestions} />
+        ) : null}
         <div
           className="relative min-w-0"
           style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
@@ -1164,7 +1244,12 @@ export function ChatBody({
                 {item.type === "error" && (
                   <div className="flex justify-end">
                     <div className="max-w-[80%]">
-                      <ErrorCard message={item.message} />
+                      <ErrorCard
+                        title={item.title}
+                        message={item.message}
+                        actionUrl={item.actionUrl}
+                        actionLabel={item.actionLabel}
+                      />
                     </div>
                   </div>
                 )}

@@ -4,13 +4,11 @@ import {
   fireEvent,
   render,
   screen,
-  within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NotebookAppView } from "@/components/notebook/notebook-app-view";
 import {
-  INSERT_CHAT_MESSAGE_EVENT,
   INSERT_CHAT_SKILL_EVENT,
 } from "@/lib/chat/chat-composer-events";
 import {
@@ -155,36 +153,25 @@ describe("NotebookAppView", () => {
     expect(screen.getByText("No cells in App View yet")).toBeInTheDocument();
   });
 
-  it("shows business prompt suggestions in the business empty state", () => {
+  it("shows the business empty-file state for an empty notebook", () => {
     render(
       <NotebookAppView
         businessMode
         notebook={{
           ...makeNotebook(),
-          cells: makeNotebook().cells.map((cell) => ({
-            ...cell,
-            metadata: { orion: { id: cell.metadata?.orion?.id } },
-          })),
+          cells: [],
         }}
       />,
     );
 
-    expect(screen.getByText("What should Orion work on?")).toBeInTheDocument();
+    expect(screen.getByText("This file is empty")).toBeInTheDocument();
     expect(
-      screen.getAllByRole("button", { name: /Use prompt suggestion:/ }),
-    ).toHaveLength(4);
-    expect(
-      screen.getByRole("button", {
-        name: "Use prompt suggestion: Summarize this dataset",
-      }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Browse prompt library" }),
+      screen.getByText("Use the chat to ask Orion to start working on it."),
     ).toBeInTheDocument();
     expect(screen.queryByText("No cells in App View yet")).not.toBeInTheDocument();
   });
 
-  it("opens the full business prompt library catalog", () => {
+  it("shows all markdown cells and outputs in business mode when nothing is selected", () => {
     render(
       <NotebookAppView
         businessMode
@@ -198,60 +185,37 @@ describe("NotebookAppView", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Browse prompt library" }));
-
-    const dialog = screen.getByRole("dialog", {
-      name: "Prompt Library",
-    });
-
-    expect(within(dialog).getByText("Data Overview")).toBeInTheDocument();
-    expect(within(dialog).getByText("Cleaning")).toBeInTheDocument();
-    expect(within(dialog).getByText("Exploration")).toBeInTheDocument();
-    expect(within(dialog).getByText("Segmentation")).toBeInTheDocument();
-    expect(within(dialog).getByText("Time Series")).toBeInTheDocument();
-    expect(within(dialog).getByText("Business Metrics")).toBeInTheDocument();
-    expect(within(dialog).getByText("Statistics")).toBeInTheDocument();
-    expect(within(dialog).getByText("Modeling")).toBeInTheDocument();
-    expect(within(dialog).getByText("Visualization")).toBeInTheDocument();
-    expect(within(dialog).getByText("Reporting")).toBeInTheDocument();
-    expect(
-      within(dialog).getAllByRole("button", {
-        name: /Use prompt suggestion:/,
-      }),
-    ).toHaveLength(50);
+    expect(screen.getByText("# Intro")).toBeInTheDocument();
+    expect(screen.getByText("# Hidden")).toBeInTheDocument();
+    expect(screen.getAllByTestId("output")).toHaveLength(2);
+    expect(screen.getByText("output 1:0")).toBeInTheDocument();
+    expect(screen.getByText("output 1:1")).toBeInTheDocument();
+    expect(screen.queryByText("This file is empty")).not.toBeInTheDocument();
   });
 
-  it("inserts a business prompt suggestion into chat", () => {
-    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
-
+  it("shows a business no-outputs state for content without renderable App View items", () => {
     render(
       <NotebookAppView
         businessMode
         notebook={{
           ...makeNotebook(),
-          cells: makeNotebook().cells.map((cell) => ({
-            ...cell,
-            metadata: { orion: { id: cell.metadata?.orion?.id } },
-          })),
+          cells: [
+            {
+              cell_type: CellType.CODE,
+              source: ["print('hello')"],
+              metadata: { orion: { id: "code" } },
+              execution_count: null,
+              outputs: [],
+            },
+          ],
         }}
       />,
     );
 
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "Use prompt suggestion: Summarize this dataset",
-      }),
-    );
-
-    expect(dispatchSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: INSERT_CHAT_MESSAGE_EVENT,
-        detail: {
-          message:
-            "Analyze the active dataset and create a clear overview covering row counts, columns, data types, key metrics, missing values, and the first questions worth investigating.",
-        },
-      }),
-    );
+    expect(screen.getByText("No outputs yet")).toBeInTheDocument();
+    expect(
+      screen.getByText("Use the chat to run or build something for this file."),
+    ).toBeInTheDocument();
   });
 
   it("offers the create-app skill shortcut in the empty state", () => {
