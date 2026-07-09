@@ -130,7 +130,7 @@ type ActiveFile = {
 };
 
 type UnsavedDialogIntent =
-  | { type: "reload" }
+  | { type: "reload"; bypassCache?: boolean }
   | { type: "switch-file"; file: ActiveFile }
   | { type: "navigate-history"; file: ActiveFile; index: number }
   | { type: "close-file" };
@@ -667,6 +667,30 @@ export default function Page() {
   // Flag set before an intentional window.location.reload() to skip beforeunload warning
   const intentionalReloadRef = useRef(false);
 
+  /** Reloads the app after any required unsaved-change confirmation has completed. */
+  const performReload = useCallback((bypassCache = false) => {
+    intentionalReloadRef.current = true;
+    if (bypassCache && window.orionDesktopShell?.reloadIgnoringCache) {
+      void window.orionDesktopShell.reloadIgnoringCache().catch(() => {
+        window.location.reload();
+      });
+      return;
+    }
+    window.location.reload();
+  }, []);
+
+  /** Requests a reload, showing the unsaved-change dialog before continuing when needed. */
+  const requestReload = useCallback(
+    (bypassCache = false) => {
+      if (hasUnsavedChanges) {
+        setUnsavedDialogIntent({ type: "reload", bypassCache });
+        return;
+      }
+      performReload(bypassCache);
+    },
+    [hasUnsavedChanges, performReload],
+  );
+
   useEffect(() => {
     const shouldAutosave =
       effectiveSettings.editor.autosaveEnabled || isBusinessExperience;
@@ -729,28 +753,32 @@ export default function Page() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [hasUnsavedChanges]);
 
-  // Intercept Ctrl/Cmd+R and F5 to show our custom reload dialog
+  // Intercept Ctrl/Cmd+R and F5 to show our custom reload dialog.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
       const isReloadShortcut =
         e.key === "F5" ||
-        ((e.ctrlKey || e.metaKey) && e.key === "r") ||
-        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "R");
+        ((e.ctrlKey || e.metaKey) && !e.altKey && key === "r");
 
       if (!isReloadShortcut) return;
-
-      if (!hasUnsavedChanges) return; // No unsaved changes — allow normal reload
 
       e.preventDefault();
       e.stopPropagation();
 
-      setUnsavedDialogIntent({ type: "reload" });
+      requestReload(e.shiftKey);
     };
 
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () =>
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [hasUnsavedChanges]);
+  }, [requestReload]);
+
+  useEffect(() => {
+    return window.orionDesktopShell?.onReloadRequested?.((options) => {
+      requestReload(options?.bypassCache === true);
+    });
+  }, [requestReload]);
 
   const { checked: isSaved, showCheckmark: showSavedCheckmark } =
     useCheckmarkedFeedback();
@@ -1429,8 +1457,7 @@ export default function Page() {
 
     window.dispatchEvent(new CustomEvent("saveFile"));
     if (unsavedDialogIntent.type === "reload") {
-      intentionalReloadRef.current = true;
-      window.location.reload();
+      performReload(unsavedDialogIntent.bypassCache);
       return;
     }
     if (unsavedDialogIntent.type === "switch-file") {
@@ -1454,8 +1481,7 @@ export default function Page() {
     setUnsavedDialogIntent(null);
 
     if (unsavedDialogIntent.type === "reload") {
-      intentionalReloadRef.current = true;
-      window.location.reload();
+      performReload(unsavedDialogIntent.bypassCache);
       return;
     }
     if (unsavedDialogIntent.type === "switch-file") {
@@ -2993,6 +3019,8 @@ export default function Page() {
                   }
                   requestEditorFocus={requestEditorFocus}
                   onWorkspaceChange={setWorkspaceDirectory}
+                  onWorkspacePathRenamed={handleWorkspacePathRenamed}
+                  onWorkspacePathDeleted={handleWorkspacePathDeleted}
                   onKernelStatusChange={setKernelStatus}
                   onCurrentKernelChange={setCurrentKernel}
                   onIsRunningChange={setIsRunning}

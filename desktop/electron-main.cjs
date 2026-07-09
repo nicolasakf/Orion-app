@@ -5,8 +5,7 @@ const { spawnSync } = require("child_process");
 const root = join(__dirname, "..");
 const compiledMain = join(root, "dist", "desktop", "desktop", "main.js");
 const sourceRoots = [
-  join(root, "desktop", "main.ts"),
-  join(root, "desktop", "preload.ts"),
+  join(root, "desktop"),
   join(root, "lib", "desktop"),
   join(root, "lib", "cli"),
   join(root, "lib", "kernel", "launcher-connection.ts"),

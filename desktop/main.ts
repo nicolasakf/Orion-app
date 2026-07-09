@@ -80,6 +80,9 @@ function setupShellIpc(): void {
     }
     mainWindow?.setBackgroundColor(color);
   });
+  ipcMain.handle("orion:shell:reload-ignoring-cache", () => {
+    mainWindow?.webContents.reloadIgnoringCache();
+  });
   ipcMain.handle(
     "orion:shell:show-project-folder-picker",
     async (): Promise<NativeProjectFolderPickerResult | null> => {
@@ -170,6 +173,9 @@ async function boot(): Promise<void> {
     },
     onOpenSettings: () => {
       mainWindow?.webContents.send("orion:settings:open");
+    },
+    onReload: (options) => {
+      mainWindow?.webContents.send("orion:reload:requested", options);
     },
   });
 

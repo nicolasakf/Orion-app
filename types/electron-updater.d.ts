@@ -20,7 +20,11 @@ interface OrionDesktopShellBridge {
   showProjectFolderPicker: () => Promise<
     OrionDesktopProjectFolderPickerResult | null
   >;
+  reloadIgnoringCache: () => Promise<void>;
   onOpenSettings: (listener: () => void) => () => void;
+  onReloadRequested: (
+    listener: (options?: { bypassCache?: boolean }) => void
+  ) => () => void;
 }
 
 declare global {

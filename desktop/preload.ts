@@ -24,9 +24,19 @@ contextBridge.exposeInMainWorld("orionDesktopShell", {
     ipcRenderer.invoke("orion:shell:set-background-color", color),
   showProjectFolderPicker: () =>
     ipcRenderer.invoke("orion:shell:show-project-folder-picker"),
+  reloadIgnoringCache: (): Promise<void> =>
+    ipcRenderer.invoke("orion:shell:reload-ignoring-cache"),
   onOpenSettings: (listener: () => void) => {
     const handler = () => listener();
     ipcRenderer.on("orion:settings:open", handler);
     return () => ipcRenderer.removeListener("orion:settings:open", handler);
+  },
+  onReloadRequested: (listener: (options?: { bypassCache?: boolean }) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      options?: { bypassCache?: boolean }
+    ) => listener(options);
+    ipcRenderer.on("orion:reload:requested", handler);
+    return () => ipcRenderer.removeListener("orion:reload:requested", handler);
   },
 });
