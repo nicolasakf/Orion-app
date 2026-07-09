@@ -1003,7 +1003,7 @@ function EmptyChatPromptState({
                 >
                   <div className="min-h-0 overflow-hidden">
                     <div
-                      className={`mt-1 grid gap-0.5 py-1 transition-opacity duration-150 ${
+                      className={`mt-1 grid gap-0.5 py-1 pl-9 transition-opacity duration-150 ${
                         isExpanded ? "opacity-100" : "pointer-events-none opacity-0"
                       }`}
                     >
@@ -1013,7 +1013,7 @@ function EmptyChatPromptState({
                           type="button"
                           tabIndex={isExpanded ? 0 : -1}
                           aria-label={`Use prompt suggestion: ${suggestion.title}`}
-                          className="w-full rounded-md px-2 py-1.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:text-foreground"
+                          className="w-full rounded-md px-2 py-1.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:text-foreground"
                           onClick={() => handleSuggestionClick(suggestion.prompt)}
                         >
                           {suggestion.title}
