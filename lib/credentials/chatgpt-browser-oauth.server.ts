@@ -298,22 +298,84 @@ function sendHtml(res: ServerResponse, status: number, html: string): void {
   res.end(html);
 }
 
+/** Standalone OAuth pages cannot use Next.js font bundles; load Saira from Google Fonts. */
+const OAUTH_PAGE_FONT_FAMILY = "'Saira', sans-serif";
+const OAUTH_PAGE_FONT_STYLESHEET =
+  "https://fonts.googleapis.com/css2?family=Saira:ital,wght@0,100..900;1,100..900&display=swap";
+
+/** Inline Orion mark so the localhost callback page does not depend on Next static assets. */
+const OAUTH_PAGE_LOGO_SVG = `<svg class="logo" viewBox="0 0 2000 2000" aria-hidden="true" focusable="false">
+  <path d="M1178.88,1309.51c-10.02,0-19.5-4.85-25.36-12.98-5.86-8.13-7.47-18.66-4.3-28.16l192.29-576.86c7.53-22.59,3.74-47.42-10.18-66.74-13.92-19.32-36.28-30.76-60.1-30.76h-370.61c-10.02,0-19.5-4.85-25.36-12.98-5.86-8.13-7.47-18.66-4.3-28.16l79.5-238.5c4.26-12.79,16.18-21.38,29.66-21.38h477.01c10.02,0,19.5,4.85,25.36,12.98,5.86,8.13,7.46,18.66,4.3,28.16l-33.28,99.85c-7.53,22.59-3.74,47.42,10.18,66.74,13.92,19.32,36.28,30.76,60.1,30.76h132.1c10.02,0,19.5,4.85,25.36,12.98,5.86,8.13,7.47,18.66,4.3,28.16l-238.5,715.51c-4.26,12.79-16.18,21.38-29.66,21.38h-238.5Z"/>
+  <path d="M542.87,1707.02c-10.02,0-19.5-4.85-25.36-12.98-5.86-8.13-7.47-18.66-4.3-28.16l33.28-99.85c7.53-22.59,3.74-47.42-10.18-66.74s-36.28-30.76-60.1-30.76h-132.1c-10.02,0-19.5-4.85-25.36-12.98-5.86-8.13-7.46-18.66-4.3-28.16l238.5-715.51c4.26-12.79,16.18-21.38,29.66-21.38h238.5c10.02,0,19.5,4.85,25.36,12.98,5.86,8.13,7.46,18.66,4.3,28.16l-192.29,576.86c-7.53,22.59-3.74,47.42,10.18,66.74,13.92,19.32,36.28,30.76,60.1,30.76h370.61c10.02,0,19.5,4.85,25.36,12.98,5.86,8.13,7.47,18.66,4.3,28.16l-79.5,238.5c-4.26,12.79-16.18,21.38-29.66,21.38h-477.01Z"/>
+</svg>`;
+
+/** Renders a branded HTML status page for the localhost OAuth callback. */
 function renderOAuthPage(title: string, message: string): string {
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${escapeHtml(title)}</title>
+  <meta name="color-scheme" content="light dark" />
+  <title>${escapeHtml(title)} · Orion</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="${OAUTH_PAGE_FONT_STYLESHEET}" />
   <style>
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #0f172a; color: #f8fafc; }
-    main { max-width: 420px; padding: 32px; text-align: center; }
-    h1 { margin: 0 0 12px; font-size: 24px; }
-    p { margin: 0; color: #cbd5e1; line-height: 1.5; }
+    :root {
+      --background: hsl(0 0% 99%);
+      --foreground: hsl(0 0% 3.9%);
+      --muted-foreground: hsl(0 0% 45.1%);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --background: hsl(0 0% 3.9%);
+        --foreground: hsl(0 0% 98%);
+        --muted-foreground: hsl(0 0% 63.9%);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: ${OAUTH_PAGE_FONT_FAMILY};
+      background: var(--background);
+      color: var(--foreground);
+      -webkit-font-smoothing: antialiased;
+    }
+    main {
+      max-width: 420px;
+      padding: 32px;
+      text-align: center;
+    }
+    .logo {
+      display: block;
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 24px;
+      fill: currentColor;
+      color: var(--foreground);
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 24px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+      line-height: 1.25;
+    }
+    p {
+      margin: 0;
+      color: var(--muted-foreground);
+      font-size: 15px;
+      line-height: 1.5;
+    }
   </style>
 </head>
 <body>
   <main>
+    ${OAUTH_PAGE_LOGO_SVG}
     <h1>${escapeHtml(title)}</h1>
     <p>${escapeHtml(message)}</p>
   </main>

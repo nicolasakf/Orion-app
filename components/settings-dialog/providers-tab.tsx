@@ -253,77 +253,34 @@ interface DeviceFlowState {
 // ── ChatGPT OAuth Flow UI ─────────────────────────────────────────────────────
 
 interface BrowserFlowPanelProps {
+  initialFlow: BrowserFlowState;
   onCredential: () => void;
   onCancel: () => void;
   onUseDeviceCode: () => void;
 }
 
 function BrowserFlowPanel({
+  initialFlow,
   onCredential,
   onCancel,
   onUseDeviceCode,
 }: BrowserFlowPanelProps) {
-  const [flow, setFlow] = useState<BrowserFlowState>({ phase: "starting" });
+  const [flow, setFlow] = useState<BrowserFlowState>(initialFlow);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const flowIdRef = useRef<string | undefined>(undefined);
-  const completedRef = useRef(false);
-  const cancelledRef = useRef(false);
 
+  // The parent starts the request from the button click so the popup remains user initiated.
   useEffect(() => {
-    cancelledRef.current = false;
-
-    async function start() {
-      setFlow({ phase: "starting" });
-      try {
-        const res = await fetch("/api/credentials/oauth/browser/start", { method: "POST" });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({})) as { message?: string };
-          throw new Error(data.message ?? "Failed to start browser sign-in.");
-        }
-        const data = await res.json() as {
-          flowId: string;
-          authorizationUrl: string;
-          expiresAt: number;
-        };
-
-        if (cancelledRef.current) return;
-        flowIdRef.current = data.flowId;
-        setFlow({
-          phase: "ready",
-          flowId: data.flowId,
-          authorizationUrl: data.authorizationUrl,
-        });
-      } catch (err) {
-        if (cancelledRef.current) return;
-        const message = err instanceof Error ? err.message : "Failed to start browser sign-in.";
-        toast.error(message);
-        setFlow({ phase: "failed", error: message });
-      }
-    }
-
-    void start();
-
-    return () => {
-      cancelledRef.current = true;
-      if (pollRef.current) clearTimeout(pollRef.current);
-      const flowId = flowIdRef.current;
-      if (flowId && !completedRef.current) {
-        void fetch("/api/credentials/oauth/browser/cancel", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ flowId }),
-        }).catch(() => undefined);
-      }
-    };
-  }, []);
+    setFlow(initialFlow);
+  }, [initialFlow]);
 
   useEffect(() => {
     if (!flow.flowId || flow.phase === "success" || flow.phase === "failed") return;
 
     const { flowId } = flow;
+    let cancelled = false;
 
     async function poll() {
-      if (cancelledRef.current) return;
+      if (cancelled) return;
 
       try {
         const res = await fetch("/api/credentials/oauth/browser/status", {
@@ -336,10 +293,9 @@ function BrowserFlowPanel({
           message?: string;
         };
 
-        if (cancelledRef.current) return;
+        if (cancelled) return;
 
         if (data.status === "success") {
-          completedRef.current = true;
           setFlow((prev) => ({ ...prev, phase: "success" }));
           onCredential();
           return;
@@ -354,17 +310,19 @@ function BrowserFlowPanel({
 
         pollRef.current = setTimeout(() => void poll(), 1500);
       } catch {
-        if (cancelledRef.current) return;
+        if (cancelled) return;
         pollRef.current = setTimeout(() => void poll(), 2000);
       }
     }
 
     pollRef.current = setTimeout(() => void poll(), 1000);
     return () => {
+      cancelled = true;
       if (pollRef.current) clearTimeout(pollRef.current);
     };
   }, [flow.flowId, flow.phase, onCredential]);
 
+  /** Opens the authorization URL only when the automatic browser window was blocked or closed. */
   const handleOpenBrowser = useCallback(() => {
     if (!flow.authorizationUrl) return;
     setFlow((prev) => ({ ...prev, phase: "awaiting" }));
@@ -408,32 +366,33 @@ function BrowserFlowPanel({
 
   return (
     <div className="space-y-3">
-      <Button
-        variant="outline"
-        size="sm"
-        className="text-xs gap-1.5"
-        asChild
-      >
-        <a
-          href={flow.authorizationUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={handleOpenBrowser}
-        >
-          <ExternalLink className="h-3 w-3" />
-          Open ChatGPT sign-in
-        </a>
-      </Button>
-
-      {flow.phase === "awaiting" ? (
+      {flow.phase === "ready" ? (
+        <>
+          <p className="text-xs text-muted-foreground">
+            The sign-in window was blocked or closed. Open it manually, or use a device code instead.
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            className="text-xs gap-1.5"
+            asChild
+          >
+            <a
+              href={flow.authorizationUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={handleOpenBrowser}
+            >
+              <ExternalLink className="h-3 w-3" />
+              Open ChatGPT sign-in
+            </a>
+          </Button>
+        </>
+      ) : (
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />
           Waiting for browser sign-in…
         </div>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          Complete sign-in in the browser tab.
-        </p>
       )}
 
       <div className="flex flex-wrap gap-2">
@@ -719,6 +678,9 @@ function ProviderRow({
   const [isSaving, setIsSaving] = useState(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [oauthFlow, setOauthFlow] = useState<OAuthFlowMode | null>(null);
+  const [browserFlow, setBrowserFlow] = useState<BrowserFlowState>({ phase: "starting" });
+  const browserOAuthWindowRef = useRef<Window | null>(null);
+  const browserOAuthStartCancelledRef = useRef(false);
 
   const hasApiKey = credential?.type === "api_key";
   const hasOAuth = credential?.type === "chatgpt_oauth";
@@ -906,6 +868,104 @@ function ProviderRow({
     },
     [onSaveOAuthCredential, provider.id]
   );
+
+  /** Cancels the active browser flow and closes the temporary sign-in popup. */
+  const stopBrowserOAuth = useCallback(() => {
+    browserOAuthStartCancelledRef.current = true;
+    const popup = browserOAuthWindowRef.current;
+    if (popup && !popup.closed) popup.close();
+    browserOAuthWindowRef.current = null;
+
+    if (browserFlow.flowId) {
+      void fetch("/api/credentials/oauth/browser/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ flowId: browserFlow.flowId }),
+      }).catch(() => undefined);
+    }
+  }, [browserFlow.flowId]);
+
+  /** Starts browser sign-in from the click event so popup blockers do not require a second click. */
+  const handleStartBrowserOAuth = useCallback(() => {
+    const popup = window.open(
+      "about:blank",
+      "orion-chatgpt-oauth",
+      "popup=yes,width=520,height=720",
+    );
+    browserOAuthWindowRef.current = popup;
+    browserOAuthStartCancelledRef.current = false;
+    setBrowserFlow({ phase: "starting" });
+    setOauthFlow("browser");
+
+    void (async () => {
+      let flowId: string | undefined;
+      try {
+        const res = await fetch("/api/credentials/oauth/browser/start", { method: "POST" });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({})) as { message?: string };
+          throw new Error(data.message ?? "Failed to start browser sign-in.");
+        }
+        const data = await res.json() as {
+          flowId: string;
+          authorizationUrl: string;
+          expiresAt: number;
+        };
+        flowId = data.flowId;
+
+        if (browserOAuthStartCancelledRef.current) {
+          void fetch("/api/credentials/oauth/browser/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ flowId }),
+          }).catch(() => undefined);
+          return;
+        }
+
+        if (popup && !popup.closed) {
+          popup.location.assign(data.authorizationUrl);
+          popup.focus();
+          setBrowserFlow({
+            phase: "awaiting",
+            flowId,
+            authorizationUrl: data.authorizationUrl,
+          });
+          return;
+        }
+
+        setBrowserFlow({
+          phase: "ready",
+          flowId,
+          authorizationUrl: data.authorizationUrl,
+        });
+      } catch (error) {
+        if (popup && !popup.closed) popup.close();
+        browserOAuthWindowRef.current = null;
+        if (flowId) {
+          void fetch("/api/credentials/oauth/browser/cancel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ flowId }),
+          }).catch(() => undefined);
+        }
+        if (browserOAuthStartCancelledRef.current) return;
+        const message = error instanceof Error ? error.message : "Failed to start browser sign-in.";
+        toast.error(message);
+        setBrowserFlow({ phase: "failed", error: message });
+      }
+    })();
+  }, []);
+
+  /** Stops browser authorization before switching to the device-code fallback. */
+  const handleUseDeviceCode = useCallback(() => {
+    stopBrowserOAuth();
+    setOauthFlow("device");
+  }, [stopBrowserOAuth]);
+
+  /** Stops browser authorization when the user closes its settings panel. */
+  const handleCancelBrowserOAuth = useCallback(() => {
+    stopBrowserOAuth();
+    setOauthFlow(null);
+  }, [stopBrowserOAuth]);
 
   return (
     <div className="space-y-3">
@@ -1251,7 +1311,7 @@ function ProviderRow({
                 variant="outline"
                 size="sm"
                 className="text-xs gap-1.5"
-                onClick={() => setOauthFlow("browser")}
+                onClick={handleStartBrowserOAuth}
               >
                 <Monitor className="h-3 w-3" />
                 Connect ChatGPT Plus / Pro
@@ -1262,9 +1322,10 @@ function ProviderRow({
             </>
           ) : oauthFlow === "browser" ? (
             <BrowserFlowPanel
+              initialFlow={browserFlow}
               onCredential={handleDeviceCredential}
-              onCancel={() => setOauthFlow(null)}
-              onUseDeviceCode={() => setOauthFlow("device")}
+              onCancel={handleCancelBrowserOAuth}
+              onUseDeviceCode={handleUseDeviceCode}
             />
           ) : (
             <DeviceFlowPanel
