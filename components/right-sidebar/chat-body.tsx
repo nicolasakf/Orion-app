@@ -3,12 +3,13 @@
 import * as React from "react";
 import { type UIMessage, isToolUIPart } from "ai";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, AtSign, type LucideIcon } from "lucide-react";
+import { ArrowDown, AtSign, ChevronDown } from "lucide-react";
 import { ToolInvocationCard } from "./tool-invocation-card";
 import { DelegateInvocationCard } from "./delegate-invocation-card";
 import { AssistantActivityGroup } from "./assistant-activity-group";
 import { UserMessage } from "./user-message";
 import { AssistantMessage } from "./assistant-message";
+import type { BusinessPromptCategory } from "./business-prompt-library";
 import { LoadingMessage } from "@/components/common/loading-message";
 import { ErrorCard } from "../common/error-card";
 import { NoKernelPrompt } from "../common/no-kernel-prompt";
@@ -34,12 +35,6 @@ import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
 import { dispatchInsertChatMessage } from "@/lib/chat/chat-composer-events";
 
 type CheckpointMessageAction = "restore" | "redo";
-
-export interface ChatPromptSuggestion {
-  title: string;
-  prompt: string;
-  icon: LucideIcon;
-}
 
 export interface ChatBodyProps {
   viewKey?: string;
@@ -77,8 +72,10 @@ export interface ChatBodyProps {
   checkpointRequestByMessageId?: Map<string, string>;
   onRestoreCheckpoint?: (checkpointId: string, action: CheckpointMessageAction) => void;
   onForkFromMessage?: (message: UIMessage, index: number) => void;
-  /** Optional prompt suggestions rendered when this chat has no rows. */
-  emptyPromptSuggestions?: readonly ChatPromptSuggestion[];
+  /** Optional prompt categories rendered when this chat has no rows. */
+  emptyPromptCategories?: readonly BusinessPromptCategory[];
+  /** Resets the prompt library when an empty chat is started again. */
+  emptyPromptLibraryKey?: string;
 }
 
 interface ChatMessageRowProps {
@@ -925,49 +922,107 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
 });
 
 interface EmptyChatPromptStateProps {
-  suggestions: readonly ChatPromptSuggestion[];
+  categories: readonly BusinessPromptCategory[];
 }
 
-/** Empty business-chat prompt launcher. */
+/** Renders a compact accordion prompt library for an empty business chat. */
 function EmptyChatPromptState({
-  suggestions,
+  categories,
 }: EmptyChatPromptStateProps): React.JSX.Element {
+  const [expandedCategoryId, setExpandedCategoryId] = React.useState<
+    BusinessPromptCategory["id"] | null
+  >(null);
+
   const handleSuggestionClick = React.useCallback((prompt: string) => {
     dispatchInsertChatMessage(prompt);
   }, []);
+
+  const handleCategoryClick = React.useCallback(
+    (categoryId: BusinessPromptCategory["id"]) => {
+      setExpandedCategoryId((current) =>
+        current === categoryId ? null : categoryId
+      );
+    },
+    []
+  );
 
   return (
     <div className="flex h-full min-h-[24rem] items-center justify-center px-2 py-8">
       <div className="mx-auto flex w-full max-w-xl flex-col items-center text-center">
         <h2 className="text-2xl font-semibold text-foreground">
-          What should Orion work on?
+          What should Orion do?
         </h2>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Choose an area to see suggested starting points.
+        </p>
         <div
-          aria-label="Prompt suggestions"
+          aria-label="Prompt categories"
           className="mt-6 grid w-full gap-2 text-left"
         >
-          {suggestions.map((suggestion) => {
-            const Icon = suggestion.icon;
+          {categories.map((category) => {
+            const CategoryIcon = category.icon;
+            const isExpanded = expandedCategoryId === category.id;
+            const promptListId = `prompt-category-${category.id}`;
+
             return (
-              <button
-                key={suggestion.title}
-                type="button"
-                aria-label={`Use prompt suggestion: ${suggestion.title}`}
-                className="corner-squircle flex w-full items-start gap-3 rounded-md border border-border/70 bg-background/80 px-3 py-2.5 text-left shadow-sm transition-colors hover:border-primary/50 hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                onClick={() => handleSuggestionClick(suggestion.prompt)}
-              >
-                <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-sm bg-muted text-muted-foreground">
-                  <Icon aria-hidden="true" className="size-3.5" />
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-sm font-medium leading-snug text-foreground">
-                    {suggestion.title}
+              <div key={category.id}>
+                <button
+                  type="button"
+                  aria-expanded={isExpanded}
+                  aria-controls={promptListId}
+                  aria-label={`Toggle prompt category: ${category.title}`}
+                  className="corner-squircle flex w-full items-start gap-3 rounded-md border border-border/70 bg-background/80 px-3 py-2.5 text-left shadow-sm transition-colors hover:border-primary/50 hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  onClick={() => handleCategoryClick(category.id)}
+                >
+                  <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-sm bg-muted text-muted-foreground">
+                    <CategoryIcon aria-hidden="true" className="size-3.5" />
                   </span>
-                  <span className="mt-1 block text-xs leading-snug text-muted-foreground">
-                    {suggestion.prompt}
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-sm font-medium leading-snug text-foreground">
+                      {category.title}
+                    </span>
+                    <span className="mt-1 block text-xs leading-snug text-muted-foreground">
+                      {category.description}
+                    </span>
                   </span>
-                </span>
-              </button>
+                  <ChevronDown
+                    aria-hidden="true"
+                    className={`mt-1 size-4 shrink-0 text-muted-foreground transition-transform ${
+                      isExpanded ? "rotate-180" : ""
+                    }`}
+                  />
+                </button>
+                <div
+                  id={promptListId}
+                  role="region"
+                  aria-label={`Prompt suggestions for ${category.title}`}
+                  aria-hidden={!isExpanded}
+                  className={`grid overflow-hidden transition-[grid-template-rows] duration-200 ease-out ${
+                    isExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+                  }`}
+                >
+                  <div className="min-h-0 overflow-hidden">
+                    <div
+                      className={`mt-1 grid gap-0.5 py-1 transition-opacity duration-150 ${
+                        isExpanded ? "opacity-100" : "pointer-events-none opacity-0"
+                      }`}
+                    >
+                      {category.prompts.map((suggestion) => (
+                        <button
+                          key={suggestion.id}
+                          type="button"
+                          tabIndex={isExpanded ? 0 : -1}
+                          aria-label={`Use prompt suggestion: ${suggestion.title}`}
+                          className="w-full rounded-md px-2 py-1.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:text-foreground"
+                          onClick={() => handleSuggestionClick(suggestion.prompt)}
+                        >
+                          {suggestion.title}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
             );
           })}
         </div>
@@ -1006,7 +1061,8 @@ export function ChatBody({
   checkpointRequestByMessageId,
   onRestoreCheckpoint,
   onForkFromMessage,
-  emptyPromptSuggestions,
+  emptyPromptCategories,
+  emptyPromptLibraryKey,
 }: ChatBodyProps) {
   const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = React.useRef(true);
@@ -1083,7 +1139,7 @@ export function ChatBody({
   });
   const virtualItems = rowVirtualizer.getVirtualItems();
   const showEmptyPromptState =
-    rowItems.length === 0 && Boolean(emptyPromptSuggestions?.length);
+    rowItems.length === 0 && Boolean(emptyPromptCategories?.length);
 
   /** Check whether a scroll container is close enough to its bottom edge. */
   const isElementAtBottom = React.useCallback((element: HTMLDivElement) => {
@@ -1156,8 +1212,11 @@ export function ChatBody({
         className="h-full min-w-0 overflow-x-hidden overflow-y-auto px-4"
         onScroll={updateBottomState}
       >
-        {showEmptyPromptState && emptyPromptSuggestions ? (
-          <EmptyChatPromptState suggestions={emptyPromptSuggestions} />
+        {showEmptyPromptState && emptyPromptCategories ? (
+          <EmptyChatPromptState
+            key={emptyPromptLibraryKey ?? viewKey}
+            categories={emptyPromptCategories}
+          />
         ) : null}
         <div
           className="relative min-w-0"

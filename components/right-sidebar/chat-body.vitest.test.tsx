@@ -1,40 +1,13 @@
 import * as React from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChartNoAxesCombined, FileText, FolderSearch, Workflow } from "lucide-react";
 
-import {
-  ChatBody,
-  type ChatPromptSuggestion,
-} from "@/components/right-sidebar/chat-body";
+import { BUSINESS_PROMPT_CATEGORIES } from "@/components/right-sidebar/business-prompt-library";
+import { ChatBody } from "@/components/right-sidebar/chat-body";
 import { INSERT_CHAT_MESSAGE_EVENT } from "@/lib/chat/chat-composer-events";
 
-const suggestions: readonly ChatPromptSuggestion[] = [
-  {
-    title: "Understand this project",
-    prompt:
-      "Review this project and summarize the available information, where it came from, and how it could be used.",
-    icon: FolderSearch,
-  },
-  {
-    title: "Explore the data",
-    prompt:
-      "Review the data to identify important patterns, changes over time, and findings that merit closer attention.",
-    icon: ChartNoAxesCombined,
-  },
-  {
-    title: "Create a report",
-    prompt:
-      "Create a clear report that highlights the most important findings, key changes, and areas that need attention.",
-    icon: FileText,
-  },
-  {
-    title: "Automate a routine task",
-    prompt:
-      "Set up a repeatable task to complete this work automatically whenever it is needed.",
-    icon: Workflow,
-  },
-];
+const projectCategory = BUSINESS_PROMPT_CATEGORIES[0]!;
+const firstProjectPrompt = projectCategory.prompts[0]!;
 
 afterEach(() => {
   cleanup();
@@ -57,46 +30,127 @@ function renderEmptyChatBody(
   );
 }
 
-describe("ChatBody empty prompt suggestions", () => {
-  it("renders empty prompt suggestions when provided for an empty chat", () => {
-    renderEmptyChatBody({ emptyPromptSuggestions: suggestions });
+describe("ChatBody empty prompt library", () => {
+  it("provides five questionnaire prompts in each business category", () => {
+    expect(BUSINESS_PROMPT_CATEGORIES).toHaveLength(4);
 
-    expect(screen.getByText("What should Orion work on?")).toBeInTheDocument();
+    for (const category of BUSINESS_PROMPT_CATEGORIES) {
+      expect(category.prompts).toHaveLength(5);
+      for (const prompt of category.prompts) {
+        expect(prompt.prompt).toContain("Start by asking");
+      }
+    }
+  });
+
+  it("renders the prompt categories for an empty chat", () => {
+    renderEmptyChatBody({ emptyPromptCategories: BUSINESS_PROMPT_CATEGORIES });
+
+    expect(screen.getByText("What would you like to do?")).toBeInTheDocument();
     expect(
-      screen.getAllByRole("button", { name: /Use prompt suggestion:/ }),
+      screen.getAllByRole("button", { name: /Toggle prompt category:/ }),
     ).toHaveLength(4);
   });
 
-  it("inserts a selected suggestion into the chat composer", () => {
+  it("expands a category in place with compact prompt titles", () => {
+    renderEmptyChatBody({ emptyPromptCategories: BUSINESS_PROMPT_CATEGORIES });
+
+    const categoryButton = screen.getByRole("button", {
+      name: `Toggle prompt category: ${projectCategory.title}`,
+    });
+    expect(categoryButton).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(categoryButton);
+
+    expect(categoryButton).toHaveAttribute("aria-expanded", "true");
+    expect(
+      screen.getAllByRole("button", { name: /Use prompt suggestion:/ }),
+    ).toHaveLength(5);
+    expect(screen.getByText(firstProjectPrompt.title)).toBeInTheDocument();
+    expect(screen.queryByText(firstProjectPrompt.prompt)).not.toBeInTheDocument();
+
+    fireEvent.click(categoryButton);
+
+    expect(categoryButton).toHaveAttribute("aria-expanded", "false");
+    expect(
+      screen.queryByRole("button", {
+        name: `Use prompt suggestion: ${firstProjectPrompt.title}`,
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("inserts a selected nested prompt into the chat composer", () => {
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
-    renderEmptyChatBody({ emptyPromptSuggestions: suggestions });
+    renderEmptyChatBody({ emptyPromptCategories: BUSINESS_PROMPT_CATEGORIES });
 
     fireEvent.click(
       screen.getByRole("button", {
-        name: "Use prompt suggestion: Understand this project",
+        name: `Toggle prompt category: ${projectCategory.title}`,
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Use prompt suggestion: ${firstProjectPrompt.title}`,
       }),
     );
 
     expect(dispatchSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         type: INSERT_CHAT_MESSAGE_EVENT,
-        detail: { message: suggestions[0].prompt },
+        detail: { message: firstProjectPrompt.prompt },
       }),
     );
   });
 
-  it("does not render suggestions without the business empty-state prop", () => {
-    renderEmptyChatBody();
+  it("resets an open category when the prompt library is reset", () => {
+    const { rerender } = renderEmptyChatBody({
+      viewKey: "chat-one",
+      emptyPromptLibraryKey: "library-one",
+      emptyPromptCategories: BUSINESS_PROMPT_CATEGORIES,
+    });
 
-    expect(screen.queryByText("What should Orion work on?")).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `Toggle prompt category: ${projectCategory.title}`,
+      }),
+    );
+    expect(
+      screen.getByRole("button", {
+        name: `Use prompt suggestion: ${firstProjectPrompt.title}`,
+      }),
+    ).toBeInTheDocument();
+
+    rerender(
+      <ChatBody
+        viewKey="chat-one"
+        messages={[]}
+        error={undefined}
+        isLoading={false}
+        onUserMessageClick={() => undefined}
+        editingState={null}
+        emptyPromptCategories={BUSINESS_PROMPT_CATEGORIES}
+        emptyPromptLibraryKey="library-two"
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", {
+        name: `Toggle prompt category: ${projectCategory.title}`,
+      }),
+    ).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("does not render suggestions while another row is visible", () => {
+  it("does not render the library without the business empty-state prop", () => {
+    renderEmptyChatBody();
+
+    expect(screen.queryByText("What would you like to do?")).not.toBeInTheDocument();
+  });
+
+  it("does not render the library while another row is visible", () => {
     renderEmptyChatBody({
-      emptyPromptSuggestions: suggestions,
+      emptyPromptCategories: BUSINESS_PROMPT_CATEGORIES,
       isLoading: true,
     });
 
-    expect(screen.queryByText("What should Orion work on?")).not.toBeInTheDocument();
+    expect(screen.queryByText("What would you like to do?")).not.toBeInTheDocument();
   });
 });

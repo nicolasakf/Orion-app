@@ -9,14 +9,7 @@ import {
   type FileUIPart,
   DefaultChatTransport,
 } from "ai";
-import {
-  Bot,
-  ChartNoAxesCombined,
-  ChevronLeft,
-  FileText,
-  FolderSearch,
-  Workflow,
-} from "lucide-react";
+import { Bot, ChevronLeft } from "lucide-react";
 
 import { toast } from "sonner";
 import {
@@ -119,7 +112,8 @@ import { getSubagentStepDescription } from "./tool-invocation-helpers";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { ModelCatalogEntry } from "@/lib/agent/model-catalog";
 import { ChatToolbar } from "./chat-toolbar";
-import { ChatBody, type ChatPromptSuggestion } from "./chat-body";
+import { ChatBody } from "./chat-body";
+import { BUSINESS_PROMPT_CATEGORIES } from "./business-prompt-library";
 import { ChatSurface } from "./chat-surface";
 import { createCostSummaryMessageId } from "./cost-summary-card";
 import { ChatTextbox, type ReferenceTab } from "./chat-textbox";
@@ -161,33 +155,6 @@ import {
 } from "@/lib/agent/model-selection-key";
 
 const MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS = 1;
-
-const BUSINESS_EMPTY_CHAT_PROMPTS: readonly ChatPromptSuggestion[] = [
-  {
-    title: "Understand this project",
-    prompt:
-      "Review this project and summarize the available information, where it came from, and how it could be used.",
-    icon: FolderSearch,
-  },
-  {
-    title: "Explore the data",
-    prompt:
-      "Review the data to identify important patterns, changes over time, and findings that merit closer attention.",
-    icon: ChartNoAxesCombined,
-  },
-  {
-    title: "Create a report",
-    prompt:
-      "Create a clear report that highlights the most important findings, key changes, and areas that need attention.",
-    icon: FileText,
-  },
-  {
-    title: "Automate a routine task",
-    prompt:
-      "Set up a repeatable task to complete this work automatically whenever it is needed.",
-    icon: Workflow,
-  },
-];
 
 /**
  * Extract assistant text from `/api/chat` stream responses for title generation.
@@ -762,6 +729,7 @@ export function RightSidebar({
     modelLabels: Record<string, string>;
   } | null>(null);
   const [isRefreshingCostSummary, setIsRefreshingCostSummary] = useState(false);
+  const [emptyPromptLibraryResetCount, setEmptyPromptLibraryResetCount] = useState(0);
 
   /** Shared request id for model calls triggered by the current user turn. */
   const modelRequestIdRef = useRef<string | undefined>(undefined);
@@ -3608,6 +3576,8 @@ export function RightSidebar({
       return;
     }
 
+    setEmptyPromptLibraryResetCount((count) => count + 1);
+
     const isEmpty = !currentChat?.messages?.length;
 
     if (isEmpty && currentChatId) {
@@ -4407,6 +4377,8 @@ export function RightSidebar({
     // Use microtask to let stop propagate before switching
     queueMicrotask(() => {
       if (action.type === "new-chat") {
+        setEmptyPromptLibraryResetCount((count) => count + 1);
+
         // Inline createNewChat logic (without the isInputLocked guard)
         const isEmpty = !currentChat?.messages?.length;
         if (isEmpty && currentChatId) {
@@ -4623,9 +4595,10 @@ export function RightSidebar({
               checkpointRequestByMessageId={checkpointRequestByMessageId}
               onRestoreCheckpoint={handleRestoreCheckpoint}
               onForkFromMessage={handleForkFromMessage}
-              emptyPromptSuggestions={
-                isBusinessExperience ? BUSINESS_EMPTY_CHAT_PROMPTS : undefined
+              emptyPromptCategories={
+                isBusinessExperience ? BUSINESS_PROMPT_CATEGORIES : undefined
               }
+              emptyPromptLibraryKey={`${effectiveChatId ?? "no-chat"}:${emptyPromptLibraryResetCount}`}
             />
 
             <ChatTextbox
