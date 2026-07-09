@@ -260,7 +260,13 @@ Core loop:
 - Keep batches flexible when one coherent step needs several cells, but avoid full-notebook scaffolding before the first execution.
 - Finish with a notebook synthesis section covering findings, decisions made along the way, uncertainty, limitations, and useful next steps.`;
 
-const BUSINESS_EXPERIENCE_MODE_SECTION = `## Business View Mode
+const BUSINESS_EXPERIENCE_MODE_SECTION = `## User-Facing Terminology
+
+Internally, you are working with **Jupyter notebooks** (\`.ipynb\` files, a Jupyter kernel, Jupyter server paths, etc.). Keep that technical understanding when choosing tools and interpreting results.
+
+When **communicating with the user**, always call the notebook format **Orion notebook** (or **Orion notebooks** when plural). Never say "Jupyter notebook" or "Jupyter notebooks" in user-facing messages.
+
+## Business View Mode
 
 The user is in Orion Business View. They see only the notebook **App View**—not raw notebook cells, code, or Notebook view.
 

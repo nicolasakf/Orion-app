@@ -28,6 +28,24 @@ const rules: AgentRule[] = [
   },
 ];
 
+describe("user-facing terminology", () => {
+  it("injects Orion notebook terminology only in Business View mode", () => {
+    const businessPrompt = buildAgentSystemPrompt({ businessExperienceMode: true });
+    const defaultPrompt = buildAgentSystemPrompt();
+    const researchPrompt = buildResearchModeSystemPrompt();
+
+    expect(businessPrompt).toContain("## User-Facing Terminology");
+    expect(businessPrompt).toContain("Internally, you are working with **Jupyter notebooks**");
+    expect(businessPrompt).toContain("Orion notebook");
+    expect(businessPrompt).toContain('Never say "Jupyter notebook"');
+
+    expect(defaultPrompt).not.toContain("## User-Facing Terminology");
+    expect(researchPrompt).not.toContain("## User-Facing Terminology");
+    expect(buildAskModeSystemPrompt()).not.toContain("## User-Facing Terminology");
+    expect(buildEditModeSystemPrompt()).not.toContain("## User-Facing Terminology");
+  });
+});
+
 describe("agent rule prompt injection", () => {
   it("injects workspace rules into Agent, Ask, and Edit prompts", () => {
     for (const prompt of [
