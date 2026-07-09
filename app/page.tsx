@@ -3180,6 +3180,10 @@ export default function Page() {
                                   }
                                 />
                               ) : null}
+                              <div
+                                aria-hidden="true"
+                                className="electron-window-drag min-w-8 flex-1 self-stretch"
+                              />
                             </div>
                             <div className="flex shrink-0 items-center gap-2">
                               {/* Jupyter Server Connection */}

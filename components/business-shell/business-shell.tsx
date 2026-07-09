@@ -593,6 +593,10 @@ export function BusinessShell({
                         />
                       </PopoverContent>
                     </Popover>
+                    <div
+                      aria-hidden="true"
+                      className="electron-window-drag h-10 min-w-8 flex-1"
+                    />
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {isNotebookOpen ? (
