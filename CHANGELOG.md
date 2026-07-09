@@ -4,6 +4,32 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.12.0] - 2026-07-09
+
+### Added
+
+- Business experience mode with chat forking, accordion prompt library, and refined empty-chat UX
+- ChatGPT browser OAuth credentials with device-code fallback
+- Desktop native menus and guarded reload shortcuts
+- Chat structured API errors with billing action links
+- Notebook App View table-of-contents rail in business mode
+- Agent: merge Orion metadata when inserting or overwriting cells; resolve absolute paths against Jupyter root
+- Orion UI: column descriptions on `ui.table()`
+- UI: scrollable shortcut lists on the empty editor card
+
+### Changed
+
+- Agent: Orion notebook terminology in Business View
+- Chat: reorder pinned models and refresh selector on change
+- Business: refine experience mode UX and error recovery
+
+### Fixed
+
+- Credentials: harden ChatGPT browser OAuth sign-in flow
+- Desktop: draggable title bar gaps in header toolbars
+
+[0.12.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.12.0
+
 ## [0.11.3] - 2026-07-06
 
 ### Added
