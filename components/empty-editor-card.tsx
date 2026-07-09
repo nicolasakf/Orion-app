@@ -13,6 +13,10 @@ import type { ContentsManager } from "@jupyterlab/services";
 
 import { CustomIcon } from "@/components/common/custom-icon";
 import { FileIcon } from "@/components/common/file-icon";
+import {
+  ScrollGradientOverlays,
+  useScrollEdgeIndicators,
+} from "@/components/right-sidebar/scroll-edge-gradient";
 import { Button } from "@/components/ui/button";
 import {
   Breadcrumb,
@@ -44,6 +48,12 @@ import { openNativeProjectFolderPicker } from "@/lib/local/project-folder-picker
 import type { EmptyEditorCardContent } from "@/lib/settings/schema";
 import { cn } from "@/lib/utils";
 import { dispatchWorkspaceFilesChanged } from "@/lib/workspace/workspace-events";
+import {
+  MAX_RECENT_FILE_PATHS,
+} from "@/lib/workspace/recent-files";
+import {
+  MAX_RECENT_PROJECT_PATHS,
+} from "@/lib/workspace/recent-projects";
 
 interface EmptyEditorFile {
   name: string;
@@ -256,9 +266,66 @@ interface EmptyEditorShortcutCardProps {
   recentFiles: EmptyEditorFile[];
   pinnedFilePaths: string[];
   pinnedWorkspacePaths: string[];
-  maxItems: number;
+  /** How many shortcut rows are visible before the list scrolls. */
+  visibleItemCount: number;
   onOpenFile?: (file: EmptyEditorFile) => void;
   onWorkspaceChange?: (path: string) => void;
+}
+
+/** Approximate row height for empty-editor shortcut buttons (px). */
+const SHORTCUT_ITEM_HEIGHT_PX = 48;
+
+/** Gap between shortcut rows (matches `space-y-1`). */
+const SHORTCUT_ITEM_GAP_PX = 4;
+
+/** Max scroll viewport height for a given number of visible shortcut rows. */
+function shortcutListMaxHeight(visibleItemCount: number): number {
+  return (
+    visibleItemCount * SHORTCUT_ITEM_HEIGHT_PX +
+    Math.max(0, visibleItemCount - 1) * SHORTCUT_ITEM_GAP_PX
+  );
+}
+
+interface ShortcutScrollListProps {
+  itemCount: number;
+  visibleItemCount: number;
+  emptyMessage: string;
+  children: React.ReactNode;
+}
+
+/** Scrollable shortcut list with hidden scrollbar and edge gradients. */
+function ShortcutScrollList({
+  itemCount,
+  visibleItemCount,
+  emptyMessage,
+  children,
+}: ShortcutScrollListProps) {
+  const { scrollRef, scrollEdges } = useScrollEdgeIndicators({
+    active: itemCount > 0,
+    contentKey: itemCount,
+  });
+  const listMaxHeight = shortcutListMaxHeight(visibleItemCount);
+
+  if (itemCount === 0) {
+    return (
+      <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+        {emptyMessage}
+      </p>
+    );
+  }
+
+  return (
+    <div className="relative min-h-0">
+      <div
+        ref={scrollRef}
+        className="scrollbar-hide space-y-1 overflow-y-auto"
+        style={{ maxHeight: listMaxHeight }}
+      >
+        {children}
+      </div>
+      <ScrollGradientOverlays edges={scrollEdges} />
+    </div>
+  );
 }
 
 /**
@@ -269,12 +336,12 @@ function EmptyEditorShortcutCard({
   recentFiles,
   pinnedFilePaths,
   pinnedWorkspacePaths,
-  maxItems,
+  visibleItemCount,
   onOpenFile,
   onWorkspaceChange,
 }: EmptyEditorShortcutCardProps) {
   if (section.content === "recent_files") {
-    const files = recentFiles.slice(0, maxItems);
+    const files = recentFiles.slice(0, MAX_RECENT_FILE_PATHS);
 
     return (
       <section className="corner-squircle min-w-0 rounded-md border border-sidebar-border bg-transparent p-4">
@@ -282,39 +349,37 @@ function EmptyEditorShortcutCard({
           {section.icon}
           {section.title}
         </div>
-        {files.length > 0 ? (
-          <div className="space-y-1">
-            {files.map((file) => (
-              <button
-                key={file.path}
-                type="button"
-                className={cn(
-                  "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                  "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                )}
-                onClick={() => onOpenFile?.(file)}
-              >
-                <FileIcon filename={file.name} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium">{file.name}</span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {file.path}
-                  </span>
+        <ShortcutScrollList
+          itemCount={files.length}
+          visibleItemCount={visibleItemCount}
+          emptyMessage={section.emptyMessage}
+        >
+          {files.map((file) => (
+            <button
+              key={file.path}
+              type="button"
+              className={cn(
+                "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              )}
+              onClick={() => onOpenFile?.(file)}
+            >
+              <FileIcon filename={file.name} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{file.name}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {file.path}
                 </span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-            {section.emptyMessage}
-          </p>
-        )}
+              </span>
+            </button>
+          ))}
+        </ShortcutScrollList>
       </section>
     );
   }
 
   if (section.content === "pinned_files") {
-    const files = pinnedFilePaths.slice(0, maxItems).map((path) => ({
+    const files = pinnedFilePaths.map((path) => ({
       name: path.split("/").pop() ?? path,
       path,
     }));
@@ -325,38 +390,34 @@ function EmptyEditorShortcutCard({
           {section.icon}
           {section.title}
         </div>
-        {files.length > 0 ? (
-          <div className="space-y-1">
-            {files.map((file) => (
-              <button
-                key={file.path}
-                type="button"
-                className={cn(
-                  "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                  "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                )}
-                onClick={() => onOpenFile?.(file)}
-              >
-                <FileIcon filename={file.name} />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium">{file.name}</span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {file.path}
-                  </span>
+        <ShortcutScrollList
+          itemCount={files.length}
+          visibleItemCount={visibleItemCount}
+          emptyMessage={section.emptyMessage}
+        >
+          {files.map((file) => (
+            <button
+              key={file.path}
+              type="button"
+              className={cn(
+                "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              )}
+              onClick={() => onOpenFile?.(file)}
+            >
+              <FileIcon filename={file.name} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">{file.name}</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {file.path}
                 </span>
-              </button>
-            ))}
-          </div>
-        ) : (
-          <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-            {section.emptyMessage}
-          </p>
-        )}
+              </span>
+            </button>
+          ))}
+        </ShortcutScrollList>
       </section>
     );
   }
-
-  const workspaces = pinnedWorkspacePaths.slice(0, maxItems);
 
   return (
     <section className="corner-squircle min-w-0 rounded-md border border-sidebar-border bg-transparent p-4">
@@ -364,36 +425,34 @@ function EmptyEditorShortcutCard({
         {section.icon}
         {section.title}
       </div>
-      {workspaces.length > 0 ? (
-        <div className="space-y-1">
-          {workspaces.map((path) => (
-            <button
-              key={path}
-              type="button"
-              className={cn(
-                "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              )}
-              title={path}
-              onClick={() => onWorkspaceChange?.(path)}
-            >
-              <Folder className="h-4 w-4 shrink-0 fill-[#ff4800] text-black/60" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium">
-                  {workspacePathLabel(path)}
-                </span>
-                <span className="block truncate text-xs text-muted-foreground">
-                  {path}
-                </span>
+      <ShortcutScrollList
+        itemCount={pinnedWorkspacePaths.length}
+        visibleItemCount={visibleItemCount}
+        emptyMessage={section.emptyMessage}
+      >
+        {pinnedWorkspacePaths.map((path) => (
+          <button
+            key={path}
+            type="button"
+            className={cn(
+              "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+              "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            )}
+            title={path}
+            onClick={() => onWorkspaceChange?.(path)}
+          >
+            <Folder className="h-4 w-4 shrink-0 fill-[#ff4800] text-black/60" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium">
+                {workspacePathLabel(path)}
               </span>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-          {section.emptyMessage}
-        </p>
-      )}
+              <span className="block truncate text-xs text-muted-foreground">
+                {path}
+              </span>
+            </span>
+          </button>
+        ))}
+      </ShortcutScrollList>
     </section>
   );
 }
@@ -402,7 +461,8 @@ interface ProjectShortcutCardProps {
   title: string;
   emptyMessage: string;
   projectPaths: string[];
-  maxItems: number;
+  /** How many project rows are visible before the list scrolls. */
+  visibleItemCount: number;
   onWorkspaceChange?: (path: string) => void;
   headerIcon?: React.ReactNode;
 }
@@ -412,48 +472,44 @@ function ProjectShortcutCard({
   title,
   emptyMessage,
   projectPaths,
-  maxItems,
+  visibleItemCount,
   onWorkspaceChange,
   headerIcon = <Folder className="h-4 w-4 text-muted-foreground" />,
 }: ProjectShortcutCardProps) {
-  const projects = projectPaths.slice(0, maxItems);
-
   return (
     <section className="corner-squircle min-w-0 rounded-md border border-sidebar-border bg-transparent p-4">
       <div className="mb-3 flex items-center gap-2 text-sm font-medium text-muted-foreground">
         {headerIcon}
         {title}
       </div>
-      {projects.length > 0 ? (
-        <div className="space-y-1">
-          {projects.map((path) => (
-            <button
-              key={path}
-              type="button"
-              className={cn(
-                "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              )}
-              title={path || "Server root"}
-              onClick={() => onWorkspaceChange?.(path)}
-            >
-              <Folder className="h-4 w-4 shrink-0 fill-[#ff4800] text-black/60" />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-medium">
-                  {workspacePathLabel(path)}
-                </span>
-                <span className="block truncate text-xs text-muted-foreground">
-                  {path || "Server root"}
-                </span>
+      <ShortcutScrollList
+        itemCount={projectPaths.length}
+        visibleItemCount={visibleItemCount}
+        emptyMessage={emptyMessage}
+      >
+        {projectPaths.map((path) => (
+          <button
+            key={path}
+            type="button"
+            className={cn(
+              "corner-squircle flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+              "hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            )}
+            title={path || "Server root"}
+            onClick={() => onWorkspaceChange?.(path)}
+          >
+            <Folder className="h-4 w-4 shrink-0 fill-[#ff4800] text-black/60" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium">
+                {workspacePathLabel(path)}
               </span>
-            </button>
-          ))}
-        </div>
-      ) : (
-        <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
-          {emptyMessage}
-        </p>
-      )}
+              <span className="block truncate text-xs text-muted-foreground">
+                {path || "Server root"}
+              </span>
+            </span>
+          </button>
+        ))}
+      </ShortcutScrollList>
     </section>
   );
 }
@@ -627,15 +683,15 @@ export function EmptyEditorCard({
             <ProjectShortcutCard
               title="Recent projects"
               emptyMessage="No recent projects"
-              projectPaths={recentProjectPaths}
-              maxItems={emptyEditorSettings.maxItems}
+              projectPaths={recentProjectPaths.slice(0, MAX_RECENT_PROJECT_PATHS)}
+              visibleItemCount={emptyEditorSettings.maxItems}
               onWorkspaceChange={onWorkspaceChange}
             />
             <ProjectShortcutCard
               title="Pinned projects"
               emptyMessage="No pinned projects"
               projectPaths={pinnedWorkspacePaths}
-              maxItems={emptyEditorSettings.maxItems}
+              visibleItemCount={emptyEditorSettings.maxItems}
               onWorkspaceChange={onWorkspaceChange}
               headerIcon={<Pin className="h-4 w-4 text-muted-foreground" />}
             />
@@ -695,7 +751,7 @@ export function EmptyEditorCard({
               recentFiles={recentFiles}
               pinnedFilePaths={effectiveSettings.workspace.pinnedFilePaths}
               pinnedWorkspacePaths={pinnedWorkspacePaths}
-              maxItems={emptyEditorSettings.maxItems}
+              visibleItemCount={emptyEditorSettings.maxItems}
               onOpenFile={onOpenFile}
               onWorkspaceChange={onWorkspaceChange}
             />

@@ -68,6 +68,14 @@ import {
   filterPinnedFilePathsAfterDelete,
   updatePinnedFilePathsAfterRename,
 } from "@/lib/settings/pinned-files";
+import {
+  MAX_RECENT_FILE_PATHS,
+  RECENT_FILES_STORAGE_KEY,
+} from "@/lib/workspace/recent-files";
+import {
+  MAX_RECENT_PROJECT_PATHS,
+  RECENT_PROJECTS_STORAGE_KEY,
+} from "@/lib/workspace/recent-projects";
 import { EditorReloadDialog } from "@/components/editor-reload-dialog";
 import { FileNotFoundDialog } from "@/components/file-not-found-dialog";
 import { useJupyterShellReady } from "@/hooks/use-jupyter-shell-ready";
@@ -142,10 +150,6 @@ type EditorNavigationState = {
 
 const ACTIVE_FILE_SESSION_KEY = "activeFile";
 const WORKSPACE_DIRECTORY_SESSION_KEY = "workspaceDirectory";
-/** Persists open-file history across sessions and browser tabs. */
-const RECENT_FILES_STORAGE_KEY = "recentFiles";
-/** Persists project history across sessions and browser tabs. */
-const RECENT_PROJECTS_STORAGE_KEY = "recentProjects";
 const PUBLISHED_IMPORT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
@@ -1021,7 +1025,10 @@ export default function Page() {
   const addToRecentProjects = useCallback(
     (path: string) => {
       setRecentProjectPaths((previous) => {
-        const next = [path, ...previous.filter((item) => item !== path)].slice(0, 10);
+        const next = [path, ...previous.filter((item) => item !== path)].slice(
+          0,
+          MAX_RECENT_PROJECT_PATHS,
+        );
         saveRecentProjectsToStorage(next);
         return next;
       });
@@ -1040,7 +1047,7 @@ export default function Page() {
         // Remove existing entry if it exists
         const filtered = prevFiles.filter((f) => f.path !== file.path);
         // Add to beginning of list
-        const newFiles = [file, ...filtered].slice(0, 10); // Keep only last 10 files
+        const newFiles = [file, ...filtered].slice(0, MAX_RECENT_FILE_PATHS);
 
         // Save to local storage
         saveRecentFilesToStorage(newFiles);
