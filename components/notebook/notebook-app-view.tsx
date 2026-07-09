@@ -20,10 +20,19 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
+  HoverCard,
+  HoverCardContent,
+  HoverCardTrigger,
+} from "@/components/ui/hover-card";
+import {
   isNotebookCellInAppView,
   isNotebookOutputInAppView,
   type NotebookAppViewReference,
 } from "@/lib/notebook/app-view";
+import {
+  buildNotebookMinimap,
+  type NotebookMinimapSection,
+} from "@/components/notebook/notebook-minimap";
 import { dispatchInsertChatSkill } from "@/lib/chat/chat-composer-events";
 import { cn } from "@/lib/utils";
 import {
@@ -78,6 +87,14 @@ interface NotebookAppViewItemOptions {
   includeAllOutputs?: boolean;
 }
 
+interface NotebookTocItem {
+  id: string;
+  title: string;
+  level: number;
+  cellIndex: number;
+  preview: string | null;
+}
+
 /** Extracts notebook cell source as a single markdown string. */
 function sourceToString(source: string[] | undefined): string {
   return Array.isArray(source) ? source.join("") : "";
@@ -126,6 +143,153 @@ function notebookHasContent(notebook: NotebookType): boolean {
       cell.cell_type === CellType.CODE && Boolean(cell.outputs?.length);
     return hasSource || hasOutputs;
   });
+}
+
+/** Converts markdown source into a compact plain-text TOC preview. */
+function getMarkdownHeadingPreview(markdown: string): string | null {
+  const markdownLines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const headingLineIndex = markdownLines.findIndex((line) =>
+    /^#{1,6}\s+/.test(line.trim()),
+  );
+  const sectionBodyLines =
+    headingLineIndex >= 0
+      ? markdownLines.slice(headingLineIndex + 1)
+      : markdownLines;
+  const withoutHeading = sectionBodyLines.join("\n").trim();
+
+  const preview = withoutHeading
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^[\s>*#-]+/gm, "")
+    .replace(/[*_`~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!preview) {
+    return null;
+  }
+
+  return preview.length > 150
+    ? `${preview.slice(0, 147).trim()}...`
+    : preview;
+}
+
+/** Flattens the notebook minimap tree into heading-only TOC rows. */
+function flattenNotebookTocSections(
+  sections: NotebookMinimapSection[],
+  notebook: NotebookType,
+  visibleCellIndices: Set<number>,
+): NotebookTocItem[] {
+  const items: NotebookTocItem[] = [];
+
+  const visit = (section: NotebookMinimapSection) => {
+    if (
+      section.headingText !== null &&
+      section.headingCellIndex !== null &&
+      visibleCellIndices.has(section.headingCellIndex)
+    ) {
+      const headingCell = notebook.cells[section.headingCellIndex];
+      const markdown =
+        headingCell?.cell_type === CellType.MARKDOWN
+          ? sourceToString(headingCell.source)
+          : "";
+
+      items.push({
+        id: section.id,
+        title: section.headingText,
+        level: section.headingLevel,
+        cellIndex: section.headingCellIndex,
+        preview: getMarkdownHeadingPreview(markdown),
+      });
+    }
+
+    section.children.forEach(visit);
+  };
+
+  sections.forEach(visit);
+  return items;
+}
+
+/** Compact business App View-only table-of-contents rail with hover previews. */
+function NotebookAppViewTocRail({
+  items,
+  onNavigate,
+}: {
+  items: NotebookTocItem[];
+  onNavigate: (cellIndex: number) => void;
+}): React.JSX.Element | null {
+  const [hoveredItemId, setHoveredItemId] = React.useState<string | null>(null);
+  const hoveredIndex = items.findIndex((item) => item.id === hoveredItemId);
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  return (
+    <div
+      className="scrollbar-hide flex max-h-[70vh] flex-col items-start overflow-y-auto px-1 py-1"
+      aria-label="App View table of contents"
+      onMouseLeave={() => setHoveredItemId(null)}
+    >
+      {items.map((item, index) => {
+        const isHovered = item.id === hoveredItemId;
+        const hoverDistance =
+          hoveredIndex === -1
+            ? Number.POSITIVE_INFINITY
+            : Math.abs(index - hoveredIndex);
+        const widthClass =
+          hoverDistance === 0
+            ? "w-7"
+            : hoverDistance === 1
+              ? "w-5"
+              : hoverDistance === 2
+                ? "w-4"
+                : item.level <= 1
+                  ? "w-3.5"
+                  : "w-2.5";
+
+        return (
+          <HoverCard key={item.id} openDelay={80} closeDelay={40}>
+            <HoverCardTrigger asChild>
+              <button
+                type="button"
+                className="group flex h-4 w-8 items-center bg-transparent p-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                aria-label={`Go to ${item.title}`}
+                onMouseEnter={() => setHoveredItemId(item.id)}
+                onFocus={() => setHoveredItemId(item.id)}
+                onBlur={() => setHoveredItemId(null)}
+                onClick={() => onNavigate(item.cellIndex)}
+              >
+                <span
+                  className={cn(
+                    "h-0.5 rounded-full transition-all duration-150 ease-out",
+                    widthClass,
+                    isHovered
+                      ? "bg-foreground"
+                      : "bg-muted-foreground/35 group-hover:bg-muted-foreground/50",
+                  )}
+                />
+              </button>
+            </HoverCardTrigger>
+            <HoverCardContent
+              side="right"
+              align="center"
+              sideOffset={6}
+              className="w-64 px-3 py-2"
+            >
+              <p className="truncate text-xs font-medium">{item.title}</p>
+              {item.preview ? (
+                <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
+                  {item.preview}
+                </p>
+              ) : null}
+            </HoverCardContent>
+          </HoverCard>
+        );
+      })}
+    </div>
+  );
 }
 
 interface AppViewMarkdownContextMenuProps {
@@ -205,6 +369,7 @@ export function NotebookAppView({
   onOrionUiTableRequest,
   onOrionUiTableMetadataChange,
 }: NotebookAppViewProps): React.JSX.Element {
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
   const appViewItems = useMemo(
     () => getNotebookAppViewItems(notebook),
     [notebook],
@@ -220,6 +385,36 @@ export function NotebookAppView({
         : appViewItems,
     [appViewItems, businessMode, hasContent, notebook],
   );
+  const visibleCellIndices = useMemo(
+    () => new Set(displayItems.map((item) => item.cellIndex)),
+    [displayItems],
+  );
+  const tocItems = useMemo(
+    () =>
+      businessMode
+        ? flattenNotebookTocSections(
+            buildNotebookMinimap(notebook.cells),
+            notebook,
+            visibleCellIndices,
+          )
+        : [],
+    [businessMode, notebook, visibleCellIndices],
+  );
+  const showTocRail = businessMode && tocItems.length > 0;
+
+  /** Scrolls the App View surface to a rendered cell. */
+  const handleTocNavigate = React.useCallback((cellIndex: number) => {
+    const targetElement =
+      rootRef.current?.querySelector<HTMLElement>(
+        `[data-app-view-cell-index="${cellIndex}"]`,
+      ) ?? null;
+
+    if (!targetElement) {
+      return;
+    }
+
+    targetElement.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, []);
 
   /** Requests that the chat composer attach the selected App View output. */
   const handleMentionOutput = React.useCallback(
@@ -257,64 +452,85 @@ export function NotebookAppView({
 
   if (displayItems.length > 0) {
     return (
-      <div
-        className="orion-app-view min-h-0 flex-1 overflow-y-auto bg-sidebar"
-        data-notebook-export-root="app"
-      >
-        <main className="mx-auto flex min-h-full w-full max-w-7xl flex-col gap-6 p-4">
-          {displayItems.map((item) =>
-            item.kind === "markdown" ? (
-              <AppViewMarkdownContextMenu
-                key={`markdown-${item.cellIndex}`}
-                onRemove={
-                  onRemoveAppViewReference
-                    ? () =>
-                        onRemoveAppViewReference({
-                          kind: "markdown",
-                          cellIndex: item.cellIndex,
-                        })
-                    : undefined
-                }
-              >
-                <div className="jp-Cell jp-MarkdownCell">
-                  <MarkdownRenderer source={sourceToString(item.cell.source)} />
+      <div className="relative flex min-h-0 flex-1 bg-sidebar">
+        {showTocRail ? (
+          <div className="absolute left-4 top-1/2 z-40 -translate-y-1/2">
+            <NotebookAppViewTocRail
+              items={tocItems}
+              onNavigate={handleTocNavigate}
+            />
+          </div>
+        ) : null}
+        <div
+          ref={rootRef}
+          className="orion-app-view min-h-0 flex-1 overflow-y-auto bg-sidebar"
+          data-notebook-export-root="app"
+        >
+          <main
+            className={cn(
+              "mx-auto flex min-h-full w-full max-w-7xl flex-col gap-6 p-4",
+              showTocRail && "pl-10",
+            )}
+          >
+            {displayItems.map((item) =>
+              item.kind === "markdown" ? (
+                <AppViewMarkdownContextMenu
+                  key={`markdown-${item.cellIndex}`}
+                  onRemove={
+                    onRemoveAppViewReference
+                      ? () =>
+                          onRemoveAppViewReference({
+                            kind: "markdown",
+                            cellIndex: item.cellIndex,
+                          })
+                      : undefined
+                  }
+                >
+                  <div
+                    className="jp-Cell jp-MarkdownCell"
+                    data-app-view-cell-index={item.cellIndex}
+                  >
+                    <MarkdownRenderer source={sourceToString(item.cell.source)} />
+                  </div>
+                </AppViewMarkdownContextMenu>
+              ) : (
+                <div
+                  key={`output-${item.cellIndex}-${item.outputIndex}`}
+                  className="jp-Cell jp-CodeCell"
+                  data-app-view-cell-index={item.cellIndex}
+                  data-app-view-output-index={item.outputIndex}
+                >
+                  {item.cell.metadata?.orion?.cellState?.executionInfo
+                    ?.status === CellExecutionStatus.QUEUED ? (
+                    <QueuedOutputSkeleton />
+                  ) : (
+                    <OutputRenderer
+                      output={item.output}
+                      notebookMetadata={notebook.metadata}
+                      cellIndex={item.cellIndex}
+                      outputIndex={item.outputIndex}
+                      onMentionOutput={
+                        notebookPath ? handleMentionOutput : undefined
+                      }
+                      onToggleOutputAppView={
+                        onRemoveAppViewReference ? handleRemoveOutput : undefined
+                      }
+                      isInAppView
+                      onOrionUiStateChange={(key, value, outputId) =>
+                        onOrionUiStateChange?.(key, value, outputId)
+                      }
+                      onOrionUiAction={onOrionUiAction}
+                      onOrionUiTableRequest={onOrionUiTableRequest}
+                      onOrionUiTableMetadataChange={
+                        onOrionUiTableMetadataChange
+                      }
+                    />
+                  )}
                 </div>
-              </AppViewMarkdownContextMenu>
-            ) : (
-              <div
-                key={`output-${item.cellIndex}-${item.outputIndex}`}
-                className="jp-Cell jp-CodeCell"
-              >
-                {item.cell.metadata?.orion?.cellState?.executionInfo
-                  ?.status === CellExecutionStatus.QUEUED ? (
-                  <QueuedOutputSkeleton />
-                ) : (
-                  <OutputRenderer
-                    output={item.output}
-                    notebookMetadata={notebook.metadata}
-                    cellIndex={item.cellIndex}
-                    outputIndex={item.outputIndex}
-                    onMentionOutput={
-                      notebookPath ? handleMentionOutput : undefined
-                    }
-                    onToggleOutputAppView={
-                      onRemoveAppViewReference ? handleRemoveOutput : undefined
-                    }
-                    isInAppView
-                    onOrionUiStateChange={(key, value, outputId) =>
-                      onOrionUiStateChange?.(key, value, outputId)
-                    }
-                    onOrionUiAction={onOrionUiAction}
-                    onOrionUiTableRequest={onOrionUiTableRequest}
-                    onOrionUiTableMetadataChange={
-                      onOrionUiTableMetadataChange
-                    }
-                  />
-                )}
-              </div>
-            ),
-          )}
-        </main>
+              ),
+            )}
+          </main>
+        </div>
       </div>
     );
   }

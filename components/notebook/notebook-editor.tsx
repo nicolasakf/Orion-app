@@ -735,6 +735,10 @@ export function NotebookEditor({
   const notebookScrollbarVisible = useOrionSetting(
     (s) => s.notebook.scrollbarVisible,
   );
+  const notebookMinimapSections = useMemo(
+    () => (notebook ? buildNotebookMinimap(notebook.cells) : []),
+    [notebook],
+  );
 
   // Track execution count
   // const executionCountRef = useRef(0); // Now from props
@@ -1803,7 +1807,6 @@ export function NotebookEditor({
 
   useEffect(() => {
     if (notebook) {
-      const sections = buildNotebookMinimap(notebook.cells);
       // Initialize refs array with the correct length
       const currentCellIds = new Set(
         notebook.cells
@@ -1817,11 +1820,11 @@ export function NotebookEditor({
       // Broadcast the updated minimap data to any listeners (e.g. page.tsx → LeftSidebar)
       window.dispatchEvent(
         new CustomEvent("notebookMinimapUpdate", {
-          detail: { sections, notebook },
+          detail: { sections: notebookMinimapSections, notebook },
         }),
       );
     }
-  }, [notebook]);
+  }, [notebook, notebookMinimapSections]);
 
   // Keep the minimap highlight synced with the editor's current selected cell.
   useEffect(() => {
