@@ -123,6 +123,7 @@ These keys may exist for compatibility or recovery, but should generally not be 
 
 ## Authoring guidance
 
+- When inserting or overwriting a cell and the metadata merge is already known, prefer the `orionMetadataJson` field on `insert_cell` or `overwrite_cell_source`; use `edit_orion_metadata` for metadata-only changes and advanced operations.
 - Prefer additive updates that preserve unrelated sibling keys.
 - Never touch `cells[i].metadata.orion.id` under any circumstance.
 - Keep Orion metadata small, deterministic, and free of secrets.

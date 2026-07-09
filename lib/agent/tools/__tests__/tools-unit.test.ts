@@ -1421,7 +1421,10 @@ function makeInsertTool(initial?: Record<string, NotebookType>) {
 
 await runTest("append at -1 adds cell to end", async () => {
   const { tool, store } = makeInsertTool();
-  const result = await tool.execute({ cells: [{ cellType: "code", cellSource: "new_cell = 1" }], startIndex: -1 });
+  const result = await tool.execute({
+    cells: [{ cellType: "code", cellSource: "new_cell = 1", orionMetadataJson: "" }],
+    startIndex: -1,
+  });
   assertIncludes(result, "inserted successfully", "should confirm insertion");
   assertIncludes(result, "Cell source changes:", "should include source delta section");
   assertIncludes(result, "Cell 1: +1 -0 lines", "should include inserted-cell line delta");
@@ -1434,7 +1437,10 @@ await runTest("append at -1 adds cell to end", async () => {
 
 await runTest("insert at index 0 prepends cell", async () => {
   const { tool, store } = makeInsertTool();
-  await tool.execute({ cells: [{ cellType: "code", cellSource: "prepended = True" }], startIndex: 0 });
+  await tool.execute({
+    cells: [{ cellType: "code", cellSource: "prepended = True", orionMetadataJson: "" }],
+    startIndex: 0,
+  });
   const nb = store.get("nb.ipynb")!;
   assert(nb.cells[0].source[0] === "prepended = True", "first cell should be the new one");
   assert(nb.cells[1].source[0] === "existing = True", "original should shift to index 1");
@@ -1442,19 +1448,59 @@ await runTest("insert at index 0 prepends cell", async () => {
 
 await runTest("inserts markdown cell correctly", async () => {
   const { tool, store } = makeInsertTool();
-  await tool.execute({ cells: [{ cellType: "markdown", cellSource: "# Title" }], startIndex: -1 });
+  await tool.execute({
+    cells: [{ cellType: "markdown", cellSource: "# Title", orionMetadataJson: "" }],
+    startIndex: -1,
+  });
   const nb = store.get("nb.ipynb")!;
   const last = nb.cells[nb.cells.length - 1];
   assert(last.cell_type === CellType.MARKDOWN, "cell type should be markdown");
+});
+
+await runTest("insert_cell merges Orion metadata into new cells", async () => {
+  const { tool, store } = makeInsertTool();
+  const result = await tool.execute({
+    cells: [
+      {
+        cellType: "markdown",
+        cellSource: "# App title",
+        orionMetadataJson: "{\"app\":{\"enabled\":true,\"title\":\"Dashboard\"}}",
+      },
+    ],
+    startIndex: -1,
+  });
+  assertIncludes(result, "Orion metadata changes:", "should mention metadata changes");
+  const nb = store.get("nb.ipynb")!;
+  const inserted = nb.cells[nb.cells.length - 1];
+  assert(inserted.metadata?.orion?.id, "should preserve generated Orion id");
+  assert(inserted.metadata?.orion?.app?.enabled === true, "should mark cell for App View");
+  assert(inserted.metadata?.orion?.app?.title === "Dashboard", "should merge app title");
+});
+
+await runTest("insert_cell rejects invalid Orion metadata JSON", async () => {
+  const { tool, store } = makeInsertTool();
+  const result = await tool.execute({
+    cells: [
+      {
+        cellType: "markdown",
+        cellSource: "# App title",
+        orionMetadataJson: "[]",
+      },
+    ],
+    startIndex: -1,
+  });
+  assertIncludes(result, "[ERROR]", "should reject non-object metadata JSON");
+  const nb = store.get("nb.ipynb")!;
+  assert(nb.cells.length === 1, "should not insert when metadata is invalid");
 });
 
 await runTest("inserts multiple cells at once in order", async () => {
   const { tool, store } = makeInsertTool();
   const result = await tool.execute({
     cells: [
-      { cellType: "markdown", cellSource: "## Section" },
-      { cellType: "code", cellSource: "a = 1" },
-      { cellType: "code", cellSource: "b = 2" },
+      { cellType: "markdown", cellSource: "## Section", orionMetadataJson: "" },
+      { cellType: "code", cellSource: "a = 1", orionMetadataJson: "" },
+      { cellType: "code", cellSource: "b = 2", orionMetadataJson: "" },
     ],
     startIndex: -1,
   });
@@ -1470,7 +1516,10 @@ await runTest("no active notebook returns error", async () => {
   const ks = createStatefulKernelService({}).ks;
   const mgr = new NotebookManager();
   const tool = new InsertCellTool(ks, null, mgr);
-  const result = await tool.execute({ cells: [{ cellType: "code", cellSource: "x" }], startIndex: -1 });
+  const result = await tool.execute({
+    cells: [{ cellType: "code", cellSource: "x", orionMetadataJson: "" }],
+    startIndex: -1,
+  });
   assertIncludes(result, "[ERROR]", "should return error when no notebook active");
 });
 
@@ -1554,7 +1603,9 @@ function makeOverwriteTool() {
 
 await runTest("overwrites cell source", async () => {
   const { tool, store } = makeOverwriteTool();
-  const result = await tool.execute({ cells: [{ cellIndex: 1, newSource: "z = 99" }] });
+  const result = await tool.execute({
+    cells: [{ cellIndex: 1, newSource: "z = 99", orionMetadataJson: "" }],
+  });
   assertIncludes(result, "overwritten successfully", "should confirm overwrite");
   const nb = store.get("nb.ipynb")!;
   assert(nb.cells[1].source[0] === "z = 99", "source should be updated");
@@ -1578,7 +1629,9 @@ await runTest("overwrite_cell_source preserves unsaved editor-buffer cells", asy
     mgr,
     createSnapshotProvider({ notebooks: { "buffered_overwrite.ipynb": bufferNotebook } })
   );
-  await tool.execute({ cells: [{ cellIndex: 1, newSource: "agent cell 1" }] });
+  await tool.execute({
+    cells: [{ cellIndex: 1, newSource: "agent cell 1", orionMetadataJson: "" }],
+  });
   const saved = store.get("buffered_overwrite.ipynb")!;
   assert(saved.cells[0].source[0] === "unsaved cell 0", "should preserve unsaved cell");
   assert(saved.cells[1].source[0] === "agent cell 1", "should apply agent edit");
@@ -1586,17 +1639,66 @@ await runTest("overwrite_cell_source preserves unsaved editor-buffer cells", asy
 
 await runTest("clears outputs and execution_count for code cells", async () => {
   const { tool, store } = makeOverwriteTool();
-  await tool.execute({ cells: [{ cellIndex: 1, newSource: "z = 99" }] });
+  await tool.execute({
+    cells: [{ cellIndex: 1, newSource: "z = 99", orionMetadataJson: "" }],
+  });
   const nb = store.get("nb.ipynb")!;
   const cell = nb.cells[1];
   assert(cell.outputs?.length === 0, "outputs should be cleared");
   assert(cell.execution_count === null, "execution_count should be null");
 });
 
+await runTest("overwrite_cell_source merges Orion metadata into edited cells", async () => {
+  const { tool, store } = makeOverwriteTool();
+  store.get("nb.ipynb")!.cells[1].metadata = { orion: { id: "existing-code-cell" } };
+  const beforeId = store.get("nb.ipynb")!.cells[1].metadata?.orion?.id;
+  const result = await tool.execute({
+    cells: [
+      {
+        cellIndex: 1,
+        newSource: "z = 99",
+        orionMetadataJson: "{\"app\":{\"outputs\":{\"0\":{\"enabled\":true}}}}",
+      },
+    ],
+  });
+  assertIncludes(result, "Orion metadata changes:", "should mention metadata changes");
+  const nb = store.get("nb.ipynb")!;
+  const cell = nb.cells[1];
+  assert(cell.metadata?.orion?.id === beforeId, "should preserve Orion id");
+  assert(
+    cell.metadata?.orion?.app?.outputs?.["0"]?.enabled === true,
+    "should mark output for App View"
+  );
+});
+
+await runTest("overwrite_cell_source rejects protected Orion id changes", async () => {
+  const { tool, store } = makeOverwriteTool();
+  store.get("nb.ipynb")!.cells[1].metadata = { orion: { id: "existing-code-cell" } };
+  const original = store.get("nb.ipynb")!.cells[1].source[0];
+  const result = await tool.execute({
+    cells: [
+      {
+        cellIndex: 1,
+        newSource: "z = 99",
+        orionMetadataJson: "{\"id\":\"different\"}",
+      },
+    ],
+  });
+  assertIncludes(result, "[ERROR]", "should reject id changes");
+  const nb = store.get("nb.ipynb")!;
+  assert(nb.cells[1].source[0] === original, "should not save source when metadata is invalid");
+});
+
 await runTest("generates diff showing changed lines", async () => {
   const { tool } = makeOverwriteTool();
   const result = await tool.execute({
-    cells: [{ cellIndex: 1, newSource: "x = 1\ny = 20\nprint(x + y)" }],
+    cells: [
+      {
+        cellIndex: 1,
+        newSource: "x = 1\ny = 20\nprint(x + y)",
+        orionMetadataJson: "",
+      },
+    ],
   });
   assertIncludes(result, "diff", "result should mention diff");
   assertIncludes(result, "Cell 1: +1 -1 lines", "should include source line delta");
@@ -1607,13 +1709,17 @@ await runTest("generates diff showing changed lines", async () => {
 await runTest("no-change overwrite reports no changes detected", async () => {
   const { tool } = makeOverwriteTool();
   const original = "x = 1\ny = 2\nprint(x + y)";
-  const result = await tool.execute({ cells: [{ cellIndex: 1, newSource: original }] });
+  const result = await tool.execute({
+    cells: [{ cellIndex: 1, newSource: original, orionMetadataJson: "" }],
+  });
   assertIncludes(result, "no changes detected", "should report no changes");
 });
 
 await runTest("out-of-range index returns error", async () => {
   const { tool } = makeOverwriteTool();
-  const result = await tool.execute({ cells: [{ cellIndex: 99, newSource: "x = 1" }] });
+  const result = await tool.execute({
+    cells: [{ cellIndex: 99, newSource: "x = 1", orionMetadataJson: "" }],
+  });
   assertIncludes(result, "[ERROR]", "should return error");
 });
 
@@ -1621,8 +1727,8 @@ await runTest("overwrites multiple cells in one call", async () => {
   const { tool, store } = makeOverwriteTool();
   const result = await tool.execute({
     cells: [
-      { cellIndex: 0, newSource: "## New title" },
-      { cellIndex: 1, newSource: "only = True" },
+      { cellIndex: 0, newSource: "## New title", orionMetadataJson: "" },
+      { cellIndex: 1, newSource: "only = True", orionMetadataJson: "" },
     ],
   });
   assertIncludes(result, "Cell 0 overwritten", "should mention first cell");

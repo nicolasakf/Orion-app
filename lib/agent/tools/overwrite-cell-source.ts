@@ -15,6 +15,7 @@ import {
   type CellSourceDelta,
 } from "@/lib/notebook/cell-source-diff";
 import { NotebookManager } from "./notebook-manager";
+import { mergeCellOrionMetadataJson } from "./orion-metadata-merge";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
 import type { EditCheckpointRecorder } from "../edit-checkpoint-recorder";
@@ -63,6 +64,16 @@ export class OverwriteCellSourceTool extends BaseTool {
       }
     }
 
+    for (const { cellIndex, orionMetadataJson } of cells) {
+      const previewCell = JSON.parse(JSON.stringify(notebook.cells[cellIndex]));
+      const metadataError = mergeCellOrionMetadataJson(
+        previewCell,
+        orionMetadataJson ?? "",
+        `Cell ${cellIndex}`,
+      );
+      if (metadataError) return metadataError;
+    }
+
     const messages: string[] = [];
     const checkpointEntries: Array<{
       cellIndex: number;
@@ -73,8 +84,9 @@ export class OverwriteCellSourceTool extends BaseTool {
       afterCell: unknown;
     }> = [];
     const sourceDeltas: CellSourceDelta[] = [];
+    const metadataMessages: string[] = [];
 
-    for (const { cellIndex, newSource } of cells) {
+    for (const { cellIndex, newSource, orionMetadataJson } of cells) {
       const cell = notebook.cells[cellIndex];
       const cellId = this.getCellOrionId(cell);
       const oldSource = this.normalizeCellSource(cell.source);
@@ -85,6 +97,16 @@ export class OverwriteCellSourceTool extends BaseTool {
       if (cell.cell_type === "code") {
         cell.outputs = [];
         cell.execution_count = null;
+      }
+
+      const metadataError = mergeCellOrionMetadataJson(
+        cell,
+        orionMetadataJson ?? "",
+        `Cell ${cellIndex}`,
+      );
+      if (metadataError) return metadataError;
+      if ((orionMetadataJson ?? "").trim()) {
+        metadataMessages.push(`Cell ${cellIndex}: merged Orion metadata`);
       }
 
       const delta = computeCellSourceDelta(cellIndex, oldSource, newSource);
@@ -137,6 +159,9 @@ export class OverwriteCellSourceTool extends BaseTool {
     return [
       messages.join("\n\n---\n\n"),
       formatCellSourceDeltaSummary(sourceDeltas),
+      metadataMessages.length > 0
+        ? `Orion metadata changes:\n${metadataMessages.join("\n")}`
+        : "",
       formatCellSourceDeltaDiffs(sourceDeltas),
     ].filter(Boolean).join("\n\n");
   }

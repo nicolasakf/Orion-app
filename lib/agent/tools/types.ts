@@ -98,6 +98,8 @@ export interface ReadCellParams {
 export interface InsertCellSpec {
   cellType: "code" | "markdown";
   cellSource: string;
+  /** JSON object merged into metadata.orion; empty string skips metadata edits. */
+  orionMetadataJson: string;
 }
 
 /** Parameters for InsertCellTool */
@@ -116,6 +118,8 @@ export interface DeleteCellParams {
 export interface OverwriteCellSourceEntry {
   cellIndex: number;
   newSource: string;
+  /** JSON object merged into metadata.orion; empty string skips metadata edits. */
+  orionMetadataJson: string;
 }
 
 /** Parameters for OverwriteCellSourceTool */

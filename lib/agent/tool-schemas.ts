@@ -182,7 +182,7 @@ export const orionTools = {
 
   insert_cell: tool({
     description:
-      "Insert one or more code or markdown cells at a specific position in the notebook. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Existing cells at or after the index are shifted down. In Research mode, prefer one coherent research step at a time and interleave markdown observations/decisions with evidence cells.",
+      "Insert one or more code or markdown cells at a specific position in the notebook. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Existing cells at or after the index are shifted down. Each cell can also merge a JSON object into metadata.orion via orionMetadataJson, which is the easiest way to mark inserted App View markdown cells with {\"app\":{\"enabled\":true}}. In Research mode, prefer one coherent research step at a time and interleave markdown observations/decisions with evidence cells.",
     inputSchema: z.object({
       cells: z
         .array(
@@ -193,6 +193,11 @@ export const orionTools = {
             cellSource: z
               .string()
               .describe("Source code or markdown content for the cell."),
+            orionMetadataJson: z
+              .string()
+              .describe(
+                "JSON object to recursively merge into this new cell's metadata.orion. Use \"\" for no metadata edits. For App View markdown cells, pass \"{\\\"app\\\":{\\\"enabled\\\":true}}\". For a future first code output, pass \"{\\\"app\\\":{\\\"outputs\\\":{\\\"0\\\":{\\\"enabled\\\":true}}}}\"."
+              ),
           })
         )
         .min(1)
@@ -229,7 +234,7 @@ export const orionTools = {
 
   overwrite_cell_source: tool({
     description:
-      "Replace the source code of one or more existing cells. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. In Research mode, edit the next coherent research step or a focused fix, then run it before adding new analysis.",
+      "Replace the source code of one or more existing cells. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. Each entry can also merge a JSON object into metadata.orion via orionMetadataJson, which is the easiest way to keep or add App View inclusion while editing source. In Research mode, edit the next coherent research step or a focused fix, then run it before adding new analysis.",
     inputSchema: z.object({
       cells: z
         .array(
@@ -240,6 +245,11 @@ export const orionTools = {
               .min(0)
               .describe("Zero-based index of the cell to overwrite."),
             newSource: z.string().describe("New source content for that cell."),
+            orionMetadataJson: z
+              .string()
+              .describe(
+                "JSON object to recursively merge into this cell's metadata.orion after the source update. Use \"\" for no metadata edits. For App View markdown cells, pass \"{\\\"app\\\":{\\\"enabled\\\":true}}\". For code output 0, pass \"{\\\"app\\\":{\\\"outputs\\\":{\\\"0\\\":{\\\"enabled\\\":true}}}}\"."
+              ),
           })
         )
         .min(1)

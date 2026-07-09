@@ -27,8 +27,9 @@ For sliders, selects, forms, action buttons, interactive tables, and other runti
    - Code outputs render when `cells[i].metadata.orion.app.outputs["<outputIndex>"].enabled` is `true`.
    - Interactive UI should usually be an `orion_ui` output produced by a code cell.
 3. If richer layout or cards are needed, edit the markdown/code cell content or add an `orion_ui` output rather than authoring App View layout metadata.
-4. Write cell-level `metadata.orion.app` with `edit_orion_metadata`.
-5. Preserve unrelated `metadata.orion` siblings and existing cell metadata.
+4. When inserting or overwriting a cell that should also be selected for App View, pass the cell-level `metadata.orion.app` merge in that same `insert_cell` or `overwrite_cell_source` call with `orionMetadataJson`.
+5. Use `edit_orion_metadata` for existing cells/outputs when no source edit is needed, for metadata-only follow-up after execution, or for advanced metadata operations.
+6. Preserve unrelated `metadata.orion` siblings and existing cell metadata.
 
 Before writing metadata, load or consult `orion-metadata` for the current supported field shapes. That skill is the source of truth for `metadata.orion`.
 
@@ -67,6 +68,7 @@ When including all outputs for a code cell, mark each existing output index indi
 
 ## Metadata editing guidance
 
+- Prefer `orionMetadataJson` on `insert_cell` or `overwrite_cell_source` when the source change and App View selection are known together. Use an empty string when no metadata merge is needed.
 - Prefer cell-level edits at path `["app"]` or `["app", "outputs", "<index>"]`.
 - Do not write notebook-level `metadata.orion.appView.schema`, `appView.grid`, or `appView.layout`; App View ignores those fields.
 - Do not write `metadata.orion.css` or `metadata.orion.appView.css`; style content in cell source/output code instead.

@@ -388,6 +388,7 @@ async function main() {
           {
             cellType: "code",
             cellSource: 'print("Hello from Orion tools test!")',
+            orionMetadataJson: "",
           },
         ],
         startIndex: -1,
@@ -402,6 +403,7 @@ async function main() {
           {
             cellType: "markdown",
             cellSource: "# Integration Test\nThis notebook was created by tests.",
+            orionMetadataJson: "",
           },
         ],
         startIndex: 0,
@@ -440,6 +442,7 @@ async function main() {
           {
             cellIndex: lastIndex,
             newSource: 'x = 42\nprint(f"The answer is {x}")',
+            orionMetadataJson: "",
           },
         ],
       });
@@ -450,9 +453,9 @@ async function main() {
     await runTest("InsertCellTool: insert multiple cells at once", async () => {
       const result = await tools.insertCell.execute({
         cells: [
-          { cellType: "markdown", cellSource: "## Section A" },
-          { cellType: "code", cellSource: "a = 1" },
-          { cellType: "code", cellSource: "b = 2" },
+          { cellType: "markdown", cellSource: "## Section A", orionMetadataJson: "" },
+          { cellType: "code", cellSource: "a = 1", orionMetadataJson: "" },
+          { cellType: "code", cellSource: "b = 2", orionMetadataJson: "" },
         ],
         startIndex: -1,
       });
@@ -619,14 +622,15 @@ async function main() {
     await runTest("read_cell_output setup: insert and execute output cells", async () => {
       await tools.insertCell.execute({
         cells: [
-          { cellType: "code", cellSource: 'print("hello from cell 0")' },
-          { cellType: "code", cellSource: "6 * 7" },
+          { cellType: "code", cellSource: 'print("hello from cell 0")', orionMetadataJson: "" },
+          { cellType: "code", cellSource: "6 * 7", orionMetadataJson: "" },
           {
             cellType: "code",
             cellSource: [
               "import pandas as pd",
               "pd.DataFrame({'name': ['Alice', 'Bob'], 'score': [95, 87]})",
             ].join("\n"),
+            orionMetadataJson: "",
           },
           {
             cellType: "code",
@@ -637,6 +641,7 @@ async function main() {
               "ax.plot([1, 2, 3], [4, 5, 6])",
               "plt.show()",
             ].join("\n"),
+            orionMetadataJson: "",
           },
           {
             cellType: "code",
@@ -646,8 +651,9 @@ async function main() {
               "fig.update_layout(title='Q1', xaxis_title='Month', yaxis_title='$')",
               "fig.show()",
             ].join("\n"),
+            orionMetadataJson: "",
           },
-          { cellType: "code", cellSource: "raise ValueError('test error')" },
+          { cellType: "code", cellSource: "raise ValueError('test error')", orionMetadataJson: "" },
         ],
         startIndex: -1,
       });

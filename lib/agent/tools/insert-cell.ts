@@ -14,6 +14,7 @@ import {
   formatCellSourceDeltaSummary,
 } from "@/lib/notebook/cell-source-diff";
 import { NotebookManager } from "./notebook-manager";
+import { mergeCellOrionMetadataJson } from "./orion-metadata-merge";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
 import type { EditCheckpointRecorder } from "../edit-checkpoint-recorder";
@@ -58,12 +59,25 @@ export class InsertCellTool extends BaseTool {
     // Validate and normalize index
     const actualIndex = this.validateInsertionIndex(startIndex, totalCells);
 
-    // Create the new cells and insert them consecutively
+    // Create the new cells and apply any requested Orion metadata merges.
     const newCells = cells.map((cell) =>
       cell.cellType === "code"
         ? this.createCodeCell(cell.cellSource || "")
         : this.createMarkdownCell(cell.cellSource || "")
     );
+    const metadataMessages: string[] = [];
+    for (let offset = 0; offset < newCells.length; offset += 1) {
+      const error = mergeCellOrionMetadataJson(
+        newCells[offset]!,
+        cells[offset]?.orionMetadataJson ?? "",
+        `Cell ${actualIndex + offset}`,
+      );
+      if (error) return error;
+      if ((cells[offset]?.orionMetadataJson ?? "").trim()) {
+        metadataMessages.push(`Cell ${actualIndex + offset}: merged Orion metadata`);
+      }
+    }
+
     const sourceDeltas = newCells.map((cell, offset) =>
       computeCellSourceDelta(
         actualIndex + offset,
@@ -114,6 +128,11 @@ export class InsertCellTool extends BaseTool {
     infoList.push(`Notebook now has ${newTotalCells} cells`);
     infoList.push("");
     infoList.push(formatCellSourceDeltaSummary(sourceDeltas));
+    if (metadataMessages.length > 0) {
+      infoList.push("");
+      infoList.push("Orion metadata changes:");
+      infoList.push(metadataMessages.join("\n"));
+    }
     infoList.push("");
     infoList.push(formatCellSourceDeltaDiffs(sourceDeltas));
 
