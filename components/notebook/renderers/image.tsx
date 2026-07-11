@@ -28,6 +28,7 @@ function ImageOutputWrapper({
     onMentionOutput,
     onToggleOutputAppView,
     isInAppView,
+    businessMode,
     onOpenFullScreen,
     isFullScreen,
   } = actions;
@@ -70,6 +71,7 @@ function ImageOutputWrapper({
       onMentionOutput={onMentionOutput}
       onToggleAppView={onToggleOutputAppView}
       isInAppView={!!isInAppView}
+      businessMode={businessMode}
       onOpenFullScreen={onOpenFullScreen}
       presentationMenu={actions.presentationMenu ?? undefined}
     >

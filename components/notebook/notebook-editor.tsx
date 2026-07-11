@@ -167,6 +167,8 @@ interface NotebookEditorProps {
   filepath: string;
   /** Enables business-mode notebook presentation affordances. */
   businessMode?: boolean;
+  /** Enables direct App View cell interactions from the Business shell's Edit toggle. */
+  businessEditMode?: boolean;
   // Kernel related props passed from parent
   kernelService?: KernelService | null;
   currentKernel?: KernelInfo | null;
@@ -374,6 +376,7 @@ interface ScrollPositionSnapshot {
 export function NotebookEditor({
   filepath,
   businessMode = false,
+  businessEditMode = false,
   // Destructure new props
   kernelService: parentKernelService,
   currentKernel: parentCurrentKernel,
@@ -1151,9 +1154,13 @@ export function NotebookEditor({
 
   /**
    * Persists the active dirty notebook after capturing mounted Monaco cell text.
+   * Explicit source overrides win over mounted editor text for immediate App View saves.
    */
   const saveOpenNotebookIfDirty = useCallback(
-    async (path: string): Promise<OpenDocumentSaveResult> => {
+    async (
+      path: string,
+      sourceOverrides?: ReadonlyMap<CellId, string>,
+    ): Promise<OpenDocumentSaveResult> => {
       if (path !== filepath) return { status: "not-open" };
       if (!isUnsavedRef.current) return { status: "clean" };
       const currentNotebook = notebookRef.current;
@@ -1167,6 +1174,9 @@ export function NotebookEditor({
       try {
         const dirtyVersionToSave = dirtyVersionRef.current;
         capturePendingCellSources();
+        sourceOverrides?.forEach((source, cellId) => {
+          pendingCellChangesRef.current.set(cellId, source);
+        });
         const notebookToSave = applyPendingChanges(currentNotebook);
 
         const contentsManager = parentKernelService.getContentsManager();
@@ -1210,6 +1220,73 @@ export function NotebookEditor({
       filepath,
       markClean,
       parentKernelService,
+    ],
+  );
+
+  /**
+   * Persists an inline Business-mode markdown edit without exposing notebook controls.
+   */
+  const handleSaveBusinessMarkdownCell = useCallback(
+    async (cellIndex: number, source: string): Promise<void> => {
+      const currentNotebook = notebookRef.current;
+      const cell = currentNotebook?.cells[cellIndex];
+      if (!currentNotebook || !cell || cell.cell_type !== CellType.MARKDOWN) {
+        throw new Error("This markdown content is no longer available to save.");
+      }
+
+      const cellId = getCellId(cell);
+      if (!cellId) {
+        throw new Error("This markdown content is missing its notebook identity.");
+      }
+
+      capturePendingCellSources();
+      const persistedSource = cell.source.join("");
+      if (
+        normalizeSourceForDirtyCheck(source) ===
+        normalizeSourceForDirtyCheck(persistedSource)
+      ) {
+        return;
+      }
+
+      const previousPendingSource = pendingCellChangesRef.current.get(cellId);
+      const wasModified = modifiedCellsRef.current.has(cellId);
+      const wasDirty = isUnsavedRef.current;
+      pendingCellChangesRef.current.set(cellId, source);
+      modifiedCellsRef.current.add(cellId);
+      markDirty();
+
+      const result = await saveOpenNotebookIfDirty(
+        filepath,
+        new Map([[cellId, source]]),
+      );
+      if (result.status === "saved" || result.status === "clean") {
+        return;
+      }
+
+      if (previousPendingSource === undefined) {
+        pendingCellChangesRef.current.delete(cellId);
+      } else {
+        pendingCellChangesRef.current.set(cellId, previousPendingSource);
+      }
+      if (!wasModified) {
+        modifiedCellsRef.current.delete(cellId);
+      }
+      if (!wasDirty) {
+        markClean();
+      }
+
+      throw new Error(
+        result.status === "error"
+          ? result.message
+          : "Could not save this markdown content.",
+      );
+    },
+    [
+      capturePendingCellSources,
+      filepath,
+      markClean,
+      markDirty,
+      saveOpenNotebookIfDirty,
     ],
   );
 
@@ -3310,6 +3387,22 @@ export function NotebookEditor({
     [applyPendingChanges, capturePendingCellSources, markDirty],
   );
 
+  /** Restores a markdown cell or output that was just removed from App View metadata. */
+  const handleRestoreAppViewReference = useCallback(
+    (reference: NotebookAppViewReference) => {
+      capturePendingCellSources();
+      setNotebook((prevNotebook) => {
+        if (!prevNotebook) return null;
+        return addNotebookAppViewReference(
+          applyPendingChanges(prevNotebook),
+          reference,
+        );
+      });
+      markDirty();
+    },
+    [applyPendingChanges, capturePendingCellSources, markDirty],
+  );
+
   // Effect for handling global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -3975,10 +4068,16 @@ export function NotebookEditor({
                   notebook={notebook}
                   notebookPath={filepath}
                   businessMode={businessMode}
+                  businessEditMode={businessEditMode}
+                  undoRemovalEnabled={activeNotebookView === "app"}
+                  onSaveMarkdownCell={
+                    businessMode ? handleSaveBusinessMarkdownCell : undefined
+                  }
                   onNotebookViewRequest={() =>
                     onActiveNotebookViewChange?.("notebook")
                   }
                   onRemoveAppViewReference={handleRemoveAppViewReference}
+                  onRestoreAppViewReference={handleRestoreAppViewReference}
                   onOrionUiStateChange={handleOrionUiStateChange}
                   onOrionUiAction={handleOrionUiAction}
                   onOrionUiTableRequest={handleOrionUiTableRequest}

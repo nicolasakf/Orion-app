@@ -282,6 +282,8 @@ interface OutputRendererProps {
     metadata: OrionTableOutputMetadata,
   ) => void;
   isInAppView?: boolean;
+  /** When true, App View toggle labels are shortened for Business View. */
+  businessMode?: boolean;
   /** Whether this output is collapsed (for text-based outputs) */
   isCollapsed?: boolean;
   /** Callback to toggle the collapsed state (only provided for text-based outputs) */
@@ -308,6 +310,7 @@ export function OutputRenderer({
   onOrionUiTableRequest,
   onOrionUiTableMetadataChange,
   isInAppView,
+  businessMode = false,
   isCollapsed,
   onToggleCollapse,
   scrollCollapsedToEnd,
@@ -436,6 +439,7 @@ export function OutputRenderer({
             onMentionOutput={onMentionOutput}
             onToggleAppView={onToggleOutputAppView}
             isInAppView={!!isInAppView}
+            businessMode={businessMode}
             onOpenFullScreen={openFullScreen}
             isCollapsed={isCollapsed}
             onToggleCollapse={
@@ -443,7 +447,9 @@ export function OutputRenderer({
             }
             presentationMenu={sharedPresentationMenu ?? undefined}
           >
-            {content}
+            <div className="orion-output-context-menu-trigger min-w-0 w-full">
+              {content}
+            </div>
           </OutputContextMenu>
         );
       }
@@ -456,6 +462,7 @@ export function OutputRenderer({
       onMentionOutput,
       onToggleOutputAppView,
       isInAppView,
+      businessMode,
       cellIndex,
       outputIndex,
       openFullScreen,
@@ -480,6 +487,7 @@ export function OutputRenderer({
       onOrionUiTableRequest,
       onOrionUiTableMetadataChange,
       isInAppView: !!isInAppView,
+      businessMode,
       onOpenFullScreen: openFullScreen,
       presentationMenu: sharedPresentationMenu,
     }),
@@ -496,6 +504,7 @@ export function OutputRenderer({
       onOrionUiTableRequest,
       onOrionUiTableMetadataChange,
       isInAppView,
+      businessMode,
       openFullScreen,
       sharedPresentationMenu,
     ],

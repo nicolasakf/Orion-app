@@ -11,11 +11,13 @@ import {
   FolderSearch,
   Loader2,
   MoreHorizontal,
+  Pencil,
   Pin,
   PlugZap,
   Plus,
   RefreshCw,
   Share2,
+  Square,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -245,6 +247,7 @@ interface BusinessShellProps {
   recentFilesOpen: boolean;
   onRecentFilesOpenChange: (open: boolean) => void;
   onOpenKernelDropdown: () => void;
+  onStopKernel: () => void | Promise<void>;
   onToggleFocusMode: () => void;
   onOpenFile: (file: BusinessShellFile) => void;
   onCloseFile: (event: React.MouseEvent) => void;
@@ -311,6 +314,7 @@ export function BusinessShell({
   recentFilesOpen,
   onRecentFilesOpenChange,
   onOpenKernelDropdown,
+  onStopKernel,
   onToggleFocusMode,
   onOpenFile,
   onCloseFile,
@@ -340,7 +344,12 @@ export function BusinessShell({
   const { setNotebookViewMode } = useNotebookViewMode();
   useBusinessReportRefreshErrors(currentFile.path);
   const [newAnalysisDialogOpen, setNewAnalysisDialogOpen] = React.useState(false);
+  const [
+    presentationHideAllCellInputs,
+    setPresentationHideAllCellInputs,
+  ] = React.useState(false);
   const [fileTreePopoverOpen, setFileTreePopoverOpen] = React.useState(false);
+  const [businessEditMode, setBusinessEditMode] = React.useState(false);
   const [analysisName, setAnalysisName] = React.useState(defaultAnalysisName);
   const [isCreatingAnalysis, setIsCreatingAnalysis] = React.useState(false);
   const analysisNameInputRef = React.useRef<HTMLInputElement>(null);
@@ -378,6 +387,10 @@ export function BusinessShell({
     }
   }, [currentFile.path, setNotebookViewMode]);
 
+  React.useEffect(() => {
+    setBusinessEditMode(false);
+  }, [currentFile.path]);
+
   const isNotebookOpen =
     currentFile.openAsText !== true && currentFile.path.toLowerCase().endsWith(".ipynb");
   const canRefreshReport =
@@ -385,6 +398,11 @@ export function BusinessShell({
     Boolean(currentKernel) &&
     kernelStatus === "connected" &&
     !isRunning;
+  const canControlKernel =
+    Boolean(currentKernel) &&
+    kernelStatus !== "disconnected" &&
+    kernelStatus !== "connecting";
+  const showStopReportRefresh = isNotebookOpen && isRunning;
   const businessExportOptions = React.useMemo(
     () =>
       NOTEBOOK_EXPORT_OPTIONS.filter((option) =>
@@ -441,7 +459,7 @@ export function BusinessShell({
       setNewAnalysisDialogOpen(false);
     } catch (error) {
       console.error("Failed to create analysis notebook:", error);
-      toast.error("Failed to create a new analysis. See console for details.");
+      toast.error("Failed to create a new notebook. See console for details.");
     } finally {
       setIsCreatingAnalysis(false);
     }
@@ -601,6 +619,22 @@ export function BusinessShell({
                   <div className="flex shrink-0 items-center gap-2">
                     {isNotebookOpen ? (
                       <>
+                        {showStopReportRefresh ? (
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            size="sm"
+                            className="h-8 gap-1.5"
+                            onClick={() => void onStopKernel()}
+                            disabled={!canControlKernel}
+                            aria-label="Stop refresh"
+                            title="Interrupt kernel"
+                          >
+                            <Square className="h-4 w-4" />
+                            Stop
+                          </Button>
+                        ) : null}
+
                         <Button
                           type="button"
                           variant="ghost"
@@ -617,6 +651,34 @@ export function BusinessShell({
                             <RefreshCw className="h-4 w-4" />
                           )}
                           Refresh
+                        </Button>
+
+                        <Button
+                          type="button"
+                          variant={businessEditMode ? "secondary" : "ghost"}
+                          size="sm"
+                          className={cn(
+                            "h-8 gap-1.5",
+                            businessEditMode &&
+                              "bg-blue-500/10 text-blue-700 hover:bg-blue-500/15 hover:text-blue-700 dark:text-blue-300 dark:hover:text-blue-300",
+                          )}
+                          onClick={() =>
+                            setBusinessEditMode((current) => !current)
+                          }
+                          aria-pressed={businessEditMode}
+                          aria-label={
+                            businessEditMode
+                              ? "Finish editing report"
+                              : "Edit report"
+                          }
+                          title={
+                            businessEditMode
+                              ? "Finish editing report"
+                              : "Edit report content"
+                          }
+                        >
+                          <Pencil className="h-4 w-4" />
+                          {businessEditMode ? "Done" : "Edit"}
                         </Button>
 
                         <Button
@@ -680,7 +742,7 @@ export function BusinessShell({
                             disabled={isCreatingAnalysis || !kernelService}
                           >
                             <Plus className="h-4 w-4" />
-                            {isCreatingAnalysis ? "Creating..." : "New analysis"}
+                            {isCreatingAnalysis ? "Creating..." : "New notebook"}
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={handleRevealTarget}
@@ -755,6 +817,7 @@ export function BusinessShell({
                 filepath={currentFile.path}
                 openNotebookAsText={currentFile.openAsText === true}
                 businessMode
+                businessEditMode={businessEditMode}
                 onNewAnalysis={openNewAnalysisDialog}
                 hasWorkspace={hasWorkspaceOpen}
                 hasServerConnection={hasServerConnection}
@@ -779,8 +842,8 @@ export function BusinessShell({
                 onNotebookSnapshotGetterChange={onNotebookSnapshotGetterChange}
                 onTextSaveHandlerChange={onTextSaveHandlerChange}
                 onNotebookSaveHandlerChange={onNotebookSaveHandlerChange}
-                presentationHideAllCellInputs={true}
-                onSetPresentationHideAllCellInputs={() => undefined}
+                presentationHideAllCellInputs={presentationHideAllCellInputs}
+                onSetPresentationHideAllCellInputs={setPresentationHideAllCellInputs}
                 onFileLoadError={onFileLoadError}
                 onFileOpenCancel={onFileOpenCancel}
               />
@@ -816,11 +879,11 @@ export function BusinessShell({
       <Dialog open={newAnalysisDialogOpen} onOpenChange={setNewAnalysisDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>New analysis</DialogTitle>
+            <DialogTitle>New notebook</DialogTitle>
             <DialogDescription>
               {workspaceDirectory === "" || workspaceDirectory === null
-                ? "Create a new analysis notebook at the server root."
-                : `Create a new analysis notebook in "${workspaceDirectory}".`}
+                ? "Create a new notebook at the server root."
+                : `Create a new notebook in "${workspaceDirectory}".`}
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-2 py-2">

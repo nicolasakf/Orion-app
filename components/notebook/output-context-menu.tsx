@@ -10,6 +10,7 @@ import {
   Trash2,
   ChevronsDownUp,
   ChevronsUpDown,
+  X,
 } from "lucide-react";
 import {
   ContextMenu,
@@ -36,6 +37,8 @@ interface OutputContextMenuProps {
   onMentionOutput?: (cellIndex: number, outputIndex: number) => void;
   onToggleAppView?: (cellIndex: number, outputIndex: number) => void;
   isInAppView?: boolean;
+  /** When true, the remove action label is shortened for Business View. */
+  businessMode?: boolean;
   /** When provided, shows "Open in full screen" option */
   onOpenFullScreen?: () => void;
   /** When provided, shows a collapse/expand toggle option (for text outputs) */
@@ -59,13 +62,14 @@ export function OutputContextMenu({
   onMentionOutput,
   onToggleAppView,
   isInAppView = false,
+  businessMode = false,
   onOpenFullScreen,
   onToggleCollapse,
   isCollapsed,
   presentationMenu,
 }: OutputContextMenuProps) {
   const showPresentationSubmenu =
-    presentationMenu && presentationMenu.options.length > 1;
+    !businessMode && presentationMenu && presentationMenu.options.length > 1;
 
   return (
     <ContextMenu>
@@ -145,10 +149,18 @@ export function OutputContextMenu({
           <ContextMenuItem
             onClick={() => onToggleAppView(cellIndex, outputIndex)}
           >
-            <LayoutTemplate
-              className={cn("mr-2 h-4 w-4", isInAppView && "!text-[#ff4800]")}
-            />
-            {isInAppView ? "Remove from App View" : "Add to App View"}
+            {isInAppView && businessMode ? (
+              <X className="mr-2 h-4 w-4" />
+            ) : (
+              <LayoutTemplate
+                className={cn("mr-2 h-4 w-4", isInAppView && "!text-[#ff4800]")}
+              />
+            )}
+            {isInAppView
+              ? businessMode
+                ? "Remove"
+                : "Remove from App View"
+              : "Add to App View"}
           </ContextMenuItem>
         ) : null}
 

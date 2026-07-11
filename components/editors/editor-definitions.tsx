@@ -40,6 +40,7 @@ const baseDefinitionById = Object.fromEntries(
 function NotebookEditorSurface({
   filepath,
   businessMode,
+  businessEditMode,
   kernelService,
   currentKernel,
   kernelStatus,
@@ -70,6 +71,7 @@ function NotebookEditorSurface({
     <NotebookEditor
       filepath={filepath}
       businessMode={businessMode}
+      businessEditMode={businessEditMode}
       kernelService={kernelService}
       currentKernel={currentKernel}
       kernelStatus={kernelStatus}

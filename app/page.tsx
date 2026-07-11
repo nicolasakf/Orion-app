@@ -3014,6 +3014,7 @@ export default function Page() {
                       ? openConnectionDialog
                       : () => setIsKernelDropdownOpen(true)
                   }
+                  onStopKernel={handleStopKernel}
                   onToggleFocusMode={toggleFocusMode}
                   onOpenFile={handleFileSelect}
                   onCloseFile={handleCloseFile}

@@ -1,7 +1,13 @@
 "use client";
 
 import React, { useMemo } from "react";
-import { LayoutTemplate, Sparkles } from "lucide-react";
+import {
+  AtSign,
+  LayoutTemplate,
+  Loader2,
+  Sparkles,
+  X,
+} from "lucide-react";
 
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
@@ -13,10 +19,12 @@ import type {
 import { OutputRenderer } from "@/components/notebook/output-renderer";
 import { QueuedOutputSkeleton } from "@/components/notebook/queued-output-skeleton";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -48,8 +56,15 @@ interface NotebookAppViewProps {
   notebookPath?: string;
   /** Shows the business-mode empty state when App View has no selected cells. */
   businessMode?: boolean;
+  /** Enables direct App View cell interactions from the Business shell's Edit toggle. */
+  businessEditMode?: boolean;
+  /** Enables App View-specific keyboard shortcuts while the view is visible. */
+  undoRemovalEnabled?: boolean;
+  /** Saves a Business-mode markdown edit and resolves only after it is persisted. */
+  onSaveMarkdownCell?: (cellIndex: number, source: string) => Promise<void>;
   onNotebookViewRequest?: () => void;
   onRemoveAppViewReference?: (reference: NotebookAppViewReference) => void;
+  onRestoreAppViewReference?: (reference: NotebookAppViewReference) => void;
   onOrionUiStateChange?: (
     key: string,
     value: OrionUiLocalValue,
@@ -98,6 +113,16 @@ interface NotebookTocItem {
 /** Extracts notebook cell source as a single markdown string. */
 function sourceToString(source: string[] | undefined): string {
   return Array.isArray(source) ? source.join("") : "";
+}
+
+/** Returns true when keyboard input belongs to a text-editing control. */
+function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest(
+      'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]',
+    ),
+  );
 }
 
 /** Collects App View items in notebook source order. */
@@ -276,11 +301,11 @@ function NotebookAppViewTocRail({
               side="right"
               align="center"
               sideOffset={6}
-              className="w-64 px-3 py-2"
+              className="max-h-96 w-80 overflow-y-auto px-4 py-3"
             >
-              <p className="truncate text-xs font-medium">{item.title}</p>
+              <p className="truncate text-sm font-medium">{item.title}</p>
               {item.preview ? (
-                <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-muted-foreground">
+                <p className="mt-1.5 line-clamp-6 text-xs leading-5 text-muted-foreground">
                   {item.preview}
                 </p>
               ) : null}
@@ -294,28 +319,196 @@ function NotebookAppViewTocRail({
 
 interface AppViewMarkdownContextMenuProps {
   children: React.ReactNode;
+  onMention?: () => void;
   onRemove?: () => void;
+  businessMode?: boolean;
 }
 
 /** Context menu for markdown items rendered inside App View. */
 function AppViewMarkdownContextMenu({
   children,
+  onMention,
   onRemove,
+  businessMode = false,
 }: AppViewMarkdownContextMenuProps): React.JSX.Element {
-  if (!onRemove) {
+  if (!onMention && !onRemove) {
     return <>{children}</>;
   }
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuTrigger asChild>
+        <div>{children}</div>
+      </ContextMenuTrigger>
       <ContextMenuContent className="w-48">
-        <ContextMenuItem onClick={onRemove}>
-          <LayoutTemplate className="mr-2 h-4 w-4 !text-[#ff4800]" />
-          Remove from App View
-        </ContextMenuItem>
+        {onMention ? (
+          <ContextMenuItem onClick={onMention}>
+            <AtSign className="mr-2 h-4 w-4" />
+            Mention cell in chat
+          </ContextMenuItem>
+        ) : null}
+        {onMention && onRemove ? <ContextMenuSeparator /> : null}
+        {onRemove ? (
+          <ContextMenuItem onClick={onRemove}>
+            {businessMode ? (
+              <X className="mr-2 h-4 w-4" />
+            ) : (
+              <LayoutTemplate className="mr-2 h-4 w-4 !text-[#ff4800]" />
+            )}
+            {businessMode ? "Remove" : "Remove from App View"}
+          </ContextMenuItem>
+        ) : null}
       </ContextMenuContent>
     </ContextMenu>
+  );
+}
+
+interface BusinessMarkdownCellProps {
+  cellIndex: number;
+  source: string;
+  isEditMode: boolean;
+  isEditing: boolean;
+  canStartEditing: boolean;
+  onStartEditing: () => void;
+  onCancelEditing: () => void;
+  onFinishEditing: () => void;
+  onSave: (source: string) => Promise<void>;
+}
+
+/**
+ * Renders a Business-mode markdown block with a deliberately small inline editor.
+ */
+function BusinessMarkdownCell({
+  cellIndex,
+  source,
+  isEditMode,
+  isEditing,
+  canStartEditing,
+  onStartEditing,
+  onCancelEditing,
+  onFinishEditing,
+  onSave,
+}: BusinessMarkdownCellProps): React.JSX.Element {
+  const [draft, setDraft] = React.useState(source);
+  const [saveError, setSaveError] = React.useState<string | null>(null);
+  const [isSaving, setIsSaving] = React.useState(false);
+  const wasEditingRef = React.useRef(isEditing);
+
+  React.useEffect(() => {
+    if (isEditing && !wasEditingRef.current) {
+      setDraft(source);
+      setSaveError(null);
+    }
+    wasEditingRef.current = isEditing;
+  }, [isEditing, source]);
+
+  /** Saves the current markdown draft and leaves editing mode only on success. */
+  const handleSave = React.useCallback(async () => {
+    if (isSaving) return;
+
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(draft);
+      onFinishEditing();
+    } catch (error) {
+      setSaveError(
+        error instanceof Error ? error.message : "Could not save this content.",
+      );
+    } finally {
+      setIsSaving(false);
+    }
+  }, [draft, isSaving, onFinishEditing, onSave]);
+
+  /** Handles the keyboard shortcuts available while editing a markdown block. */
+  const handleEditorKeyDown = React.useCallback(
+    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (!isSaving) onCancelEditing();
+        return;
+      }
+
+      if (
+        event.key === "Enter" &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.nativeEvent.isComposing
+      ) {
+        event.preventDefault();
+        void handleSave();
+      }
+    },
+    [handleSave, isSaving, onCancelEditing],
+  );
+
+  /** Starts editing a markdown block only while the Business Edit mode is active. */
+  const handleMarkdownClick = React.useCallback(
+    (event: React.MouseEvent<HTMLDivElement>) => {
+      if (!isEditMode || isEditing || !canStartEditing) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      onStartEditing();
+    },
+    [canStartEditing, isEditMode, isEditing, onStartEditing],
+  );
+
+  if (isEditing) {
+    return (
+      <div
+        className="jp-Cell jp-MarkdownCell corner-squircle rounded-md border border-border bg-background p-3 shadow-sm"
+        data-app-view-cell-index={cellIndex}
+      >
+        <Textarea
+          autoFocus
+          aria-label={`Edit markdown cell ${cellIndex + 1}`}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={handleEditorKeyDown}
+          disabled={isSaving}
+          className="min-h-40 resize-y bg-sidebar text-sm leading-6"
+        />
+        {saveError ? (
+          <p className="mt-2 text-sm text-destructive" role="alert">
+            {saveError}
+          </p>
+        ) : null}
+        <div className="mt-3 flex justify-end gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onCancelEditing}
+            disabled={isSaving}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void handleSave()}
+            disabled={isSaving}
+          >
+            {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Save
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn(
+        "jp-Cell jp-MarkdownCell",
+        isEditMode && canStartEditing &&
+          "cursor-text transition-opacity hover:opacity-50",
+      )}
+      data-app-view-cell-index={cellIndex}
+      onClickCapture={handleMarkdownClick}
+    >
+      <MarkdownRenderer source={source} />
+    </div>
   );
 }
 
@@ -362,14 +555,23 @@ export function NotebookAppView({
   notebook,
   notebookPath,
   businessMode = false,
+  businessEditMode = false,
+  undoRemovalEnabled = false,
+  onSaveMarkdownCell,
   onNotebookViewRequest,
   onRemoveAppViewReference,
+  onRestoreAppViewReference,
   onOrionUiStateChange,
   onOrionUiAction,
   onOrionUiTableRequest,
   onOrionUiTableMetadataChange,
 }: NotebookAppViewProps): React.JSX.Element {
   const rootRef = React.useRef<HTMLDivElement | null>(null);
+  const [editingMarkdownCellIndex, setEditingMarkdownCellIndex] =
+    React.useState<number | null>(null);
+  const removedReferenceHistoryRef = React.useRef<NotebookAppViewReference[]>(
+    [],
+  );
   const appViewItems = useMemo(
     () => getNotebookAppViewItems(notebook),
     [notebook],
@@ -401,6 +603,78 @@ export function NotebookAppView({
     [businessMode, notebook, visibleCellIndices],
   );
   const showTocRail = businessMode && tocItems.length > 0;
+
+  React.useEffect(() => {
+    removedReferenceHistoryRef.current = [];
+  }, [notebookPath]);
+
+  React.useEffect(() => {
+    setEditingMarkdownCellIndex(null);
+  }, [businessEditMode, businessMode, notebookPath]);
+
+  /** Returns true when the reference currently belongs to App View metadata. */
+  const isReferenceSelected = React.useCallback(
+    (reference: NotebookAppViewReference) => {
+      const cell = notebook.cells[reference.cellIndex];
+      if (!cell) return false;
+
+      return reference.kind === "markdown"
+        ? isNotebookCellInAppView(cell)
+        : isNotebookOutputInAppView(cell, reference.outputIndex);
+    },
+    [notebook.cells],
+  );
+
+  /** Removes a reference and stores it so Cmd/Ctrl+Z can restore it. */
+  const removeAppViewReference = React.useCallback(
+    (reference: NotebookAppViewReference) => {
+      if (isReferenceSelected(reference)) {
+        removedReferenceHistoryRef.current.push(reference);
+      }
+      onRemoveAppViewReference?.(reference);
+    },
+    [isReferenceSelected, onRemoveAppViewReference],
+  );
+
+  /** Restores the most recent App View removal. */
+  const restoreLastRemovedReference = React.useCallback(() => {
+    const reference = removedReferenceHistoryRef.current.pop();
+    if (!reference) return false;
+
+    onRestoreAppViewReference?.(reference);
+    return true;
+  }, [onRestoreAppViewReference]);
+
+  React.useEffect(() => {
+    if (!undoRemovalEnabled || !onRestoreAppViewReference) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.altKey || event.shiftKey) return;
+      if (!(event.metaKey || event.ctrlKey)) return;
+      if (event.key.toLowerCase() !== "z") return;
+      if (
+        isEditableKeyboardTarget(event.target) ||
+        isEditableKeyboardTarget(document.activeElement)
+      ) {
+        return;
+      }
+
+      if (restoreLastRemovedReference()) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, { capture: true });
+    };
+  }, [
+    onRestoreAppViewReference,
+    restoreLastRemovedReference,
+    undoRemovalEnabled,
+  ]);
 
   /** Scrolls the App View surface to a rendered cell. */
   const handleTocNavigate = React.useCallback((cellIndex: number) => {
@@ -438,23 +712,70 @@ export function NotebookAppView({
     [notebook.cells, notebookPath],
   );
 
+  /** Requests that the chat composer attach the selected App View markdown cell. */
+  const handleMentionMarkdownCell = React.useCallback(
+    (cellIndex: number) => {
+      if (!notebookPath) return;
+
+      window.dispatchEvent(
+        new CustomEvent("orion:mention-notebook-cell", {
+          detail: {
+            notebookPath,
+            cellIndex,
+            preview: sourceToString(notebook.cells[cellIndex]?.source),
+          },
+        }),
+      );
+    },
+    [notebook.cells, notebookPath],
+  );
+
   /** Removes an output from App View through the editor-owned metadata path. */
   const handleRemoveOutput = React.useCallback(
     (cellIndex: number, outputIndex: number) => {
-      onRemoveAppViewReference?.({
+      removeAppViewReference({
         kind: "output",
         cellIndex,
         outputIndex,
       });
     },
-    [onRemoveAppViewReference],
+    [removeAppViewReference],
+  );
+
+  /** Starts editing a single Business-mode markdown block. */
+  const handleStartEditingMarkdownCell = React.useCallback(
+    (cellIndex: number) => {
+      if (
+        !businessEditMode ||
+        !onSaveMarkdownCell ||
+        editingMarkdownCellIndex !== null
+      ) {
+        return;
+      }
+      setEditingMarkdownCellIndex(cellIndex);
+    },
+    [businessEditMode, editingMarkdownCellIndex, onSaveMarkdownCell],
+  );
+
+  /** Leaves the current Business-mode markdown editor without persisting its draft. */
+  const handleCancelEditingMarkdownCell = React.useCallback(() => {
+    setEditingMarkdownCellIndex(null);
+  }, []);
+
+  /** Persists a Business-mode markdown edit through the editor-owned callback. */
+  const handleSaveMarkdownCell = React.useCallback(
+    async (cellIndex: number, source: string) => {
+      if (!onSaveMarkdownCell) return;
+      await onSaveMarkdownCell(cellIndex, source);
+    },
+    [onSaveMarkdownCell],
   );
 
   if (displayItems.length > 0) {
     return (
       <div className="relative flex min-h-0 flex-1 bg-sidebar">
         {showTocRail ? (
-          <div className="absolute left-4 top-1/2 z-40 -translate-y-1/2">
+          <div className="absolute left-1 top-1/2 z-40 -translate-y-1/2">
             <NotebookAppViewTocRail
               items={tocItems}
               onNavigate={handleTocNavigate}
@@ -472,33 +793,84 @@ export function NotebookAppView({
               showTocRail && "pl-10",
             )}
           >
-            {displayItems.map((item) =>
-              item.kind === "markdown" ? (
-                <AppViewMarkdownContextMenu
-                  key={`markdown-${item.cellIndex}`}
-                  onRemove={
-                    onRemoveAppViewReference
-                      ? () =>
-                          onRemoveAppViewReference({
-                            kind: "markdown",
-                            cellIndex: item.cellIndex,
-                          })
-                      : undefined
-                  }
-                >
-                  <div
-                    className="jp-Cell jp-MarkdownCell"
-                    data-app-view-cell-index={item.cellIndex}
+            {displayItems.map((item) => {
+              if (item.kind === "markdown") {
+                const source = sourceToString(item.cell.source);
+                const hasBusinessMarkdownEditor =
+                  businessMode && Boolean(onSaveMarkdownCell);
+
+                return (
+                  <AppViewMarkdownContextMenu
+                    key={`markdown-${item.cellIndex}`}
+                    businessMode={businessMode}
+                    onMention={
+                      notebookPath
+                        ? () => handleMentionMarkdownCell(item.cellIndex)
+                        : undefined
+                    }
+                    onRemove={
+                      onRemoveAppViewReference
+                        ? () =>
+                            removeAppViewReference({
+                              kind: "markdown",
+                              cellIndex: item.cellIndex,
+                            })
+                        : undefined
+                    }
                   >
-                    <MarkdownRenderer source={sourceToString(item.cell.source)} />
-                  </div>
-                </AppViewMarkdownContextMenu>
-              ) : (
+                    {hasBusinessMarkdownEditor ? (
+                      <BusinessMarkdownCell
+                        cellIndex={item.cellIndex}
+                        source={source}
+                        isEditMode={businessEditMode}
+                        isEditing={
+                          businessEditMode &&
+                          editingMarkdownCellIndex === item.cellIndex
+                        }
+                        canStartEditing={editingMarkdownCellIndex === null}
+                        onStartEditing={() =>
+                          handleStartEditingMarkdownCell(item.cellIndex)
+                        }
+                        onCancelEditing={handleCancelEditingMarkdownCell}
+                        onFinishEditing={handleCancelEditingMarkdownCell}
+                        onSave={(nextSource) =>
+                          handleSaveMarkdownCell(item.cellIndex, nextSource)
+                        }
+                      />
+                    ) : (
+                      <div
+                        className="jp-Cell jp-MarkdownCell"
+                        data-app-view-cell-index={item.cellIndex}
+                      >
+                        <MarkdownRenderer source={source} />
+                      </div>
+                    )}
+                  </AppViewMarkdownContextMenu>
+                );
+              }
+
+              const canMentionOutput =
+                businessMode && businessEditMode && Boolean(notebookPath);
+
+              return (
                 <div
                   key={`output-${item.cellIndex}-${item.outputIndex}`}
-                  className="jp-Cell jp-CodeCell"
+                  className={cn(
+                    "jp-Cell jp-CodeCell",
+                    canMentionOutput &&
+                      "cursor-pointer transition-opacity hover:opacity-50",
+                  )}
                   data-app-view-cell-index={item.cellIndex}
                   data-app-view-output-index={item.outputIndex}
+                  onClickCapture={
+                    canMentionOutput
+                      ? (event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          handleMentionOutput(item.cellIndex, item.outputIndex);
+                        }
+                      : undefined
+                  }
                 >
                   {item.cell.metadata?.orion?.cellState?.executionInfo
                     ?.status === CellExecutionStatus.QUEUED ? (
@@ -509,11 +881,14 @@ export function NotebookAppView({
                       notebookMetadata={notebook.metadata}
                       cellIndex={item.cellIndex}
                       outputIndex={item.outputIndex}
+                      businessMode={businessMode}
                       onMentionOutput={
                         notebookPath ? handleMentionOutput : undefined
                       }
                       onToggleOutputAppView={
-                        onRemoveAppViewReference ? handleRemoveOutput : undefined
+                        onRemoveAppViewReference
+                          ? handleRemoveOutput
+                          : undefined
                       }
                       isInAppView
                       onOrionUiStateChange={(key, value, outputId) =>
@@ -527,8 +902,8 @@ export function NotebookAppView({
                     />
                   )}
                 </div>
-              ),
-            )}
+              );
+            })}
           </main>
         </div>
       </div>

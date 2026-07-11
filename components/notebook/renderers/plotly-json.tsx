@@ -498,6 +498,7 @@ export function PlotlyJsonOutputRenderer({
     onMentionOutput,
     onToggleOutputAppView,
     isInAppView,
+    businessMode,
     onOpenFullScreen,
     isFullScreen,
   } = actions;
@@ -816,6 +817,7 @@ export function PlotlyJsonOutputRenderer({
       onMentionOutput={onMentionOutput}
       onToggleAppView={onToggleOutputAppView}
       isInAppView={!!isInAppView}
+      businessMode={businessMode}
       onOpenFullScreen={onOpenFullScreen}
       presentationMenu={actions.presentationMenu ?? undefined}
     >

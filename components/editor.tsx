@@ -40,6 +40,8 @@ interface EditorProps {
   openNotebookAsText?: boolean;
   /** When true, the empty editor shows business-mode shortcuts and actions. */
   businessMode?: boolean;
+  /** Enables direct App View cell interactions from the Business shell's Edit toggle. */
+  businessEditMode?: boolean;
   /** Opens the business-mode new-analysis naming dialog. */
   onNewAnalysis?: () => void;
   // Kernel related props
@@ -105,6 +107,7 @@ export function Editor({
   filepath,
   openNotebookAsText = false,
   businessMode = false,
+  businessEditMode = false,
   onNewAnalysis,
   kernelService,
   currentKernel,
@@ -320,6 +323,7 @@ export function Editor({
         filepath={filepath}
         openNotebookAsText={openNotebookAsText}
         businessMode={businessMode}
+        businessEditMode={businessEditMode}
         kernelService={kernelService}
         currentKernel={currentKernel}
         kernelStatus={kernelStatus}

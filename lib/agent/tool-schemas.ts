@@ -234,7 +234,7 @@ export const orionTools = {
 
   overwrite_cell_source: tool({
     description:
-      "Replace the source code of one or more existing cells. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. Each entry can also merge a JSON object into metadata.orion via orionMetadataJson, which is the easiest way to keep or add App View inclusion while editing source. In Research mode, edit the next coherent research step or a focused fix, then run it before adding new analysis.",
+      "Replace the source code of one or more existing cells. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. Each entry can also merge a JSON object into metadata.orion via orionMetadataJson, which is the easiest way to keep or add App View inclusion while editing source. In Research mode, edit the next coherent research step or a focused fix, then run it before adding a new notebook.",
     inputSchema: z.object({
       cells: z
         .array(

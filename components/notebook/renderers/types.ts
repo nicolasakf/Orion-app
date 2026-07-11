@@ -41,6 +41,8 @@ export interface NotebookOutputActionHandlers {
     metadata: OrionTableOutputMetadata,
   ) => void;
   isInAppView?: boolean;
+  /** When true, App View toggle labels are shortened for Business View. */
+  businessMode?: boolean;
   /** Opens the output in a full-screen dialog (provided by OutputRenderer). */
   onOpenFullScreen?: () => void;
   /** When true, the renderer is displayed inside the full-screen dialog. */

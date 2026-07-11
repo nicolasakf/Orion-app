@@ -4,13 +4,14 @@ import * as React from "react";
 import { toast } from "sonner";
 
 import { dispatchInsertChatMessage } from "@/lib/chat/chat-composer-events";
+import { buildNotebookErrorRepairPrompt } from "@/lib/notebook/error-repair-prompt";
 import {
   RUN_ALL_STOPPED_ON_ERROR_EVENT_NAME,
   type RunAllStoppedOnErrorEventDetail,
 } from "@/lib/notebook/notebook-execution-events";
 
 const NOTEBOOK_CELL_MENTION_EVENT = "orion:mention-notebook-cell";
-const BUSINESS_REPORT_REFRESH_DRAFT = "Fix the error in this cell.";
+const BUSINESS_REPORT_REFRESH_DRAFT = buildNotebookErrorRepairPrompt("this cell");
 
 /**
  * Adds a failed report cell and a repair prompt to the chat draft after a

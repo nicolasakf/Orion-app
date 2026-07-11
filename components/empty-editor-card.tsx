@@ -719,7 +719,7 @@ export function EmptyEditorCard({
               onClick={() => onNewAnalysis?.()}
             >
               <Plus className="h-4 w-4" />
-              New analysis
+              New notebook
             </Button>
           ) : (
             <DropdownMenu>

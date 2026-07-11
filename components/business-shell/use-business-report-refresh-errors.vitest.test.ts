@@ -47,7 +47,10 @@ describe("useBusinessReportRefreshErrors", () => {
     });
     expect(events[1]).toMatchObject({
       type: INSERT_CHAT_MESSAGE_EVENT,
-      detail: { message: "Fix the error in this cell." },
+      detail: {
+        message:
+          "Fix the error in this cell, then run the whole notebook to make sure it completes successfully.",
+      },
     });
     expect((events[1] as CustomEvent<{ submit?: boolean }>).detail.submit).toBeUndefined();
   });

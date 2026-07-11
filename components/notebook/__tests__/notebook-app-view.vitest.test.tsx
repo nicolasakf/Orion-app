@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -218,6 +219,207 @@ describe("NotebookAppView", () => {
     ).toBeInTheDocument();
   });
 
+  it("only enables direct markdown editing while Business Edit mode is active", () => {
+    const onSaveMarkdownCell = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(
+      <NotebookAppView
+        businessMode
+        notebook={makeNotebook()}
+        onSaveMarkdownCell={onSaveMarkdownCell}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("markdown"));
+    expect(
+      screen.queryByRole("textbox", { name: "Edit markdown cell 1" }),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <NotebookAppView
+        businessMode
+        businessEditMode
+        notebook={makeNotebook()}
+        onSaveMarkdownCell={onSaveMarkdownCell}
+      />,
+    );
+
+    const markdown = screen.getByTestId("markdown");
+    expect(markdown.parentElement).toHaveClass(
+      "transition-opacity",
+      "hover:opacity-50",
+    );
+    fireEvent.click(markdown);
+
+    expect(
+      screen.getByRole("textbox", { name: "Edit markdown cell 1" }),
+    ).toBeInTheDocument();
+
+    rerender(
+      <NotebookAppView
+        businessMode
+        notebook={makeNotebook()}
+        onSaveMarkdownCell={onSaveMarkdownCell}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("textbox", { name: "Edit markdown cell 1" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("saves a business markdown edit with the target cell index", async () => {
+    const onSaveMarkdownCell = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <NotebookAppView
+        businessMode
+        businessEditMode
+        notebook={makeNotebook()}
+        onSaveMarkdownCell={onSaveMarkdownCell}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("markdown"));
+    const editor = screen.getByRole("textbox", {
+      name: "Edit markdown cell 1",
+    });
+    fireEvent.change(editor, { target: { value: "# Revised\n\nDetails" } });
+    fireEvent.keyDown(editor, { key: "Enter", metaKey: true });
+
+    await waitFor(() => {
+      expect(onSaveMarkdownCell).toHaveBeenCalledWith(0, "# Revised\n\nDetails");
+    });
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("textbox", { name: "Edit markdown cell 1" }),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  it("cancels a business markdown edit without saving", () => {
+    const onSaveMarkdownCell = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <NotebookAppView
+        businessMode
+        businessEditMode
+        notebook={makeNotebook()}
+        onSaveMarkdownCell={onSaveMarkdownCell}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("markdown"));
+    fireEvent.change(screen.getByRole("textbox"), {
+      target: { value: "Discard me" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(onSaveMarkdownCell).not.toHaveBeenCalled();
+    expect(screen.getByTestId("markdown")).toHaveTextContent("# Intro");
+  });
+
+  it("cancels a business markdown edit with Escape", () => {
+    const onSaveMarkdownCell = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <NotebookAppView
+        businessMode
+        businessEditMode
+        notebook={makeNotebook()}
+        onSaveMarkdownCell={onSaveMarkdownCell}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("markdown"));
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Escape" });
+
+    expect(onSaveMarkdownCell).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("keeps a failed business markdown edit open with its draft", async () => {
+    const onSaveMarkdownCell = vi
+      .fn()
+      .mockRejectedValue(new Error("Notebook could not be saved."));
+
+    render(
+      <NotebookAppView
+        businessMode
+        businessEditMode
+        notebook={makeNotebook()}
+        onSaveMarkdownCell={onSaveMarkdownCell}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("markdown"));
+    const editor = screen.getByRole("textbox", {
+      name: "Edit markdown cell 1",
+    });
+    fireEvent.change(editor, { target: { value: "# Keep this draft" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Notebook could not be saved.",
+    );
+    expect(editor).toHaveValue("# Keep this draft");
+  });
+
+  it("mentions a business output on click while Edit mode is active", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    const onOrionUiAction = vi.fn();
+
+    render(
+      <NotebookAppView
+        businessMode
+        businessEditMode
+        notebook={makeNotebook()}
+        notebookPath="/workspace/demo.ipynb"
+        onOrionUiAction={onOrionUiAction}
+      />,
+    );
+
+    const output = screen.getByTestId("output");
+    expect(output.parentElement).toHaveClass(
+      "transition-opacity",
+      "hover:opacity-50",
+    );
+    fireEvent.click(output);
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "orion:mention-notebook-output",
+        detail: expect.objectContaining({
+          notebookPath: "/workspace/demo.ipynb",
+          cellIndex: 1,
+          outputIndex: 0,
+        }),
+      }),
+    );
+    expect(onOrionUiAction).not.toHaveBeenCalled();
+  });
+
+  it("preserves ordinary output interactions outside Business Edit mode", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    dispatchSpy.mockClear();
+    const onOrionUiAction = vi.fn();
+
+    render(
+      <NotebookAppView
+        businessMode
+        notebook={makeNotebook()}
+        notebookPath="/workspace/demo.ipynb"
+        onOrionUiAction={onOrionUiAction}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("output"));
+
+    expect(onOrionUiAction).toHaveBeenCalledWith({ type: "submit" });
+    expect(dispatchSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "orion:mention-notebook-output" }),
+    );
+  });
+
   it("offers the create-app skill shortcut in the empty state", () => {
     const dispatchSpy = vi.spyOn(window, "dispatchEvent");
 
@@ -341,5 +543,56 @@ describe("NotebookAppView", () => {
       cellIndex: 1,
       outputIndex: 0,
     });
+  });
+
+  it("offers markdown cell mention from the App View context menu", async () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+
+    render(
+      <NotebookAppView
+        notebook={makeNotebook()}
+        notebookPath="/workspace/demo.ipynb"
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByTestId("markdown"));
+    fireEvent.click(await screen.findByText("Mention cell in chat"));
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "orion:mention-notebook-cell",
+        detail: {
+          notebookPath: "/workspace/demo.ipynb",
+          cellIndex: 0,
+          preview: "# Intro",
+        },
+      }),
+    );
+  });
+
+  it("restores the last App View removal on Cmd+Z", () => {
+    const onRemoveAppViewReference = vi.fn();
+    const onRestoreAppViewReference = vi.fn();
+
+    render(
+      <NotebookAppView
+        notebook={makeNotebook()}
+        undoRemovalEnabled
+        onRemoveAppViewReference={onRemoveAppViewReference}
+        onRestoreAppViewReference={onRestoreAppViewReference}
+      />,
+    );
+
+    const outputProps = outputRendererMock.mock.calls[0]?.[0];
+    outputProps.onToggleOutputAppView?.(1, 0);
+    fireEvent.keyDown(window, { key: "z", metaKey: true });
+
+    const reference = {
+      kind: "output",
+      cellIndex: 1,
+      outputIndex: 0,
+    };
+    expect(onRemoveAppViewReference).toHaveBeenCalledWith(reference);
+    expect(onRestoreAppViewReference).toHaveBeenCalledWith(reference);
   });
 });

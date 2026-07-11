@@ -14,6 +14,8 @@ export interface EditorRuntimeProps {
   filepath: string;
   openNotebookAsText?: boolean;
   businessMode?: boolean;
+  /** Enables direct App View cell interactions from the Business shell's Edit toggle. */
+  businessEditMode?: boolean;
   kernelService?: KernelService | null;
   currentKernel?: KernelInfo | null;
   kernelStatus?: KernelStatus;

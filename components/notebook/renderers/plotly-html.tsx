@@ -21,6 +21,7 @@ export function PlotlyHtmlOutputRenderer({
     onMentionOutput,
     onToggleOutputAppView,
     isInAppView,
+    businessMode,
   } = actions;
   const canShowContextMenu = !!(
     onClearOutput ||
@@ -57,6 +58,7 @@ export function PlotlyHtmlOutputRenderer({
       onMentionOutput={onMentionOutput}
       onToggleAppView={onToggleOutputAppView}
       isInAppView={!!isInAppView}
+      businessMode={businessMode}
       onOpenFullScreen={actions.onOpenFullScreen}
       presentationMenu={actions.presentationMenu ?? undefined}
     >

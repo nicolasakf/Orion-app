@@ -1,0 +1,81 @@
+import * as React from "react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { OutputRenderer } from "@/components/notebook/output-renderer";
+import { OutputType } from "@/lib/types";
+
+vi.mock("next-themes", () => ({
+  useTheme: () => ({ theme: "light" }),
+}));
+
+afterEach(() => {
+  cleanup();
+});
+
+describe("OutputRenderer context menu", () => {
+  it.each([
+    {
+      name: "plain-text",
+      data: { "text/plain": ["plain output"] },
+      triggerText: "plain output",
+    },
+    {
+      name: "HTML table",
+      data: {
+        "text/html": [
+          "<table><thead><tr><th>Name</th></tr></thead><tbody><tr><td>Alice</td></tr></tbody></table>",
+        ],
+      },
+      triggerText: "Alice",
+    },
+  ])("opens the shared menu for $name renderer output", async ({ data, triggerText }) => {
+    const onToggleOutputAppView = vi.fn();
+
+    render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data,
+          metadata: {},
+        }}
+        cellIndex={2}
+        outputIndex={1}
+        isInAppView
+        onToggleOutputAppView={onToggleOutputAppView}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByText(triggerText));
+
+    const removeItem = await screen.findByText("Remove from App View");
+    fireEvent.click(removeItem);
+
+    expect(onToggleOutputAppView).toHaveBeenCalledWith(2, 1);
+  });
+
+  it("hides the Presentation submenu in business mode", async () => {
+    render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: {
+            "text/html": ["<p>Rendered HTML</p>"],
+            "text/plain": ["plain fallback"],
+          },
+          metadata: {},
+        }}
+        cellIndex={2}
+        outputIndex={1}
+        businessMode
+        isInAppView
+        onToggleOutputAppView={vi.fn()}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByText("Rendered HTML"));
+
+    expect(await screen.findByText("Remove")).toBeInTheDocument();
+    expect(screen.queryByText("Presentation")).not.toBeInTheDocument();
+  });
+});
