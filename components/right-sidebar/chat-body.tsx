@@ -950,11 +950,8 @@ function EmptyChatPromptState({
     <div className="flex h-full min-h-[24rem] items-center justify-center px-2 py-8">
       <div className="mx-auto flex w-full max-w-xl flex-col items-center text-center">
         <h2 className="text-2xl font-semibold text-foreground">
-          What should Orion do?
+          What should Orion work on?
         </h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          Choose an area to see suggested starting points.
-        </p>
         <div
           aria-label="Prompt categories"
           className="mt-6 grid w-full gap-2 text-left"
@@ -987,9 +984,8 @@ function EmptyChatPromptState({
                   </span>
                   <ChevronDown
                     aria-hidden="true"
-                    className={`mt-1 size-4 shrink-0 text-muted-foreground transition-transform ${
-                      isExpanded ? "rotate-180" : ""
-                    }`}
+                    className={`mt-1 size-4 shrink-0 text-muted-foreground transition-transform ${isExpanded ? "rotate-180" : ""
+                      }`}
                   />
                 </button>
                 <div
@@ -997,15 +993,13 @@ function EmptyChatPromptState({
                   role="region"
                   aria-label={`Prompt suggestions for ${category.title}`}
                   aria-hidden={!isExpanded}
-                  className={`grid overflow-hidden transition-[grid-template-rows] duration-200 ease-out ${
-                    isExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-                  }`}
+                  className={`grid overflow-hidden transition-[grid-template-rows] duration-200 ease-out ${isExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+                    }`}
                 >
                   <div className="min-h-0 overflow-hidden">
                     <div
-                      className={`mt-1 grid gap-0.5 py-1 pl-9 transition-opacity duration-150 ${
-                        isExpanded ? "opacity-100" : "pointer-events-none opacity-0"
-                      }`}
+                      className={`mt-1 grid gap-0.5 py-1 pl-9 transition-opacity duration-150 ${isExpanded ? "opacity-100" : "pointer-events-none opacity-0"
+                        }`}
                     >
                       {category.prompts.map((suggestion) => (
                         <button

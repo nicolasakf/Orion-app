@@ -45,7 +45,7 @@ describe("ChatBody empty prompt library", () => {
   it("renders the prompt categories for an empty chat", () => {
     renderEmptyChatBody({ emptyPromptCategories: BUSINESS_PROMPT_CATEGORIES });
 
-    expect(screen.getByText("What should Orion do?")).toBeInTheDocument();
+    expect(screen.getByText("What should Orion work on?")).toBeInTheDocument();
     expect(
       screen.getAllByRole("button", { name: /Toggle prompt category:/ }),
     ).toHaveLength(4);
@@ -142,7 +142,7 @@ describe("ChatBody empty prompt library", () => {
   it("does not render the library without the business empty-state prop", () => {
     renderEmptyChatBody();
 
-    expect(screen.queryByText("What should Orion do?")).not.toBeInTheDocument();
+    expect(screen.queryByText("What should Orion work on?")).not.toBeInTheDocument();
   });
 
   it("does not render the library while another row is visible", () => {
@@ -151,6 +151,6 @@ describe("ChatBody empty prompt library", () => {
       isLoading: true,
     });
 
-    expect(screen.queryByText("What should Orion do?")).not.toBeInTheDocument();
+    expect(screen.queryByText("What should Orion work on?")).not.toBeInTheDocument();
   });
 });
