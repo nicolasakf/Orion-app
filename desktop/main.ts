@@ -1,6 +1,6 @@
 import { basename, isAbsolute, join, relative, resolve, sep } from "path";
 
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 
 import { parseDesktopOptions } from "../lib/desktop/options";
 import { runDesktopSmoke, startDesktopSession, type DesktopSession } from "../lib/desktop/launcher";
@@ -18,6 +18,7 @@ import {
 
 let session: DesktopSession | null = null;
 let mainWindow: BrowserWindow | null = null;
+const appWindows = new Set<BrowserWindow>();
 
 interface NativeProjectFolderPickerResult {
   absolutePath: string;
@@ -51,11 +52,16 @@ function toJupyterRelativePath(rootDirectory: string, absolutePath: string): str
   return jupyterPath.split(sep).join("/");
 }
 
-/** Creates Orion's main desktop browser window. */
-async function createWindow(url: string): Promise<void> {
-  mainWindow = new BrowserWindow({
-    width: 1440,
-    height: 960,
+const OAUTH_POPUP_WINDOW_NAMES = new Set([
+  "orion-chatgpt-oauth",
+  "orion-cloud-google-oauth",
+]);
+
+/** Shared BrowserWindow options for Orion desktop shells. */
+function getDesktopBrowserWindowOptions(): Electron.BrowserWindowConstructorOptions {
+  return {
+    width: 1920,
+    height: 1200,
     minWidth: 960,
     minHeight: 640,
     title: "Orion",
@@ -67,25 +73,134 @@ async function createWindow(url: string): Promise<void> {
       sandbox: true,
       preload: join(__dirname, "preload.js"),
     },
+  };
+}
+
+/** Parses `window.open` feature strings such as `popup=yes,width=520,height=720`. */
+function parsePopupWindowFeatures(features: string): { width: number; height: number } {
+  const widthMatch = features.match(/(?:^|,)\s*width=(\d+)/);
+  const heightMatch = features.match(/(?:^|,)\s*height=(\d+)/);
+  return {
+    width: widthMatch ? Number(widthMatch[1]) : 520,
+    height: heightMatch ? Number(heightMatch[1]) : 720,
+  };
+}
+
+/** Returns compact popup options for OAuth and other auxiliary windows. */
+function getOAuthPopupBrowserWindowOptions(
+  features: string
+): Electron.BrowserWindowConstructorOptions {
+  const { width, height } = parsePopupWindowFeatures(features);
+  return {
+    ...getDesktopBrowserWindowOptions(),
+    width,
+    height,
+    minWidth: width,
+    minHeight: height,
+  };
+}
+
+/** Returns true when a renderer `window.open` target should stay inside Orion. */
+function isOrionAppUrl(url: string, appBaseUrl: string): boolean {
+  if (url === "" || url === "about:blank") {
+    return true;
+  }
+
+  try {
+    return new URL(url).origin === new URL(appBaseUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+/** Tracks app windows so secondary windows stay alive until they are closed. */
+function registerAppWindow(appWindow: BrowserWindow): void {
+  appWindows.add(appWindow);
+  appWindow.on("closed", () => {
+    appWindows.delete(appWindow);
+    if (mainWindow === appWindow) {
+      mainWindow = appWindows.values().next().value ?? null;
+    }
+  });
+}
+
+/** Returns the focused Orion window, falling back to the primary window. */
+function getActiveAppWindow(): BrowserWindow | null {
+  const focusedWindow = BrowserWindow.getFocusedWindow();
+  if (focusedWindow && appWindows.has(focusedWindow)) {
+    return focusedWindow;
+  }
+  return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+}
+
+/** Resolves the app window that sent a shell IPC request. */
+function getShellIpcWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow | null {
+  const senderWindow = BrowserWindow.fromWebContents(event.sender);
+  if (senderWindow && appWindows.has(senderWindow)) {
+    return senderWindow;
+  }
+  return getActiveAppWindow();
+}
+
+/** Routes renderer-initiated window opens to matching Electron window chrome. */
+function setupWindowOpenHandler(window: BrowserWindow, appBaseUrl: string): void {
+  window.webContents.setWindowOpenHandler(({ url, frameName, features }) => {
+    const isNamedOAuthPopup = OAUTH_POPUP_WINDOW_NAMES.has(frameName);
+    const isPopupRequest = features.includes("popup=yes") || isNamedOAuthPopup;
+
+    if (isOrionAppUrl(url, appBaseUrl)) {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: isPopupRequest
+          ? getOAuthPopupBrowserWindowOptions(features)
+          : getDesktopBrowserWindowOptions(),
+      };
+    }
+
+    if (isPopupRequest || url === "about:blank") {
+      return {
+        action: "allow",
+        overrideBrowserWindowOptions: getOAuthPopupBrowserWindowOptions(features),
+      };
+    }
+
+    void shell.openExternal(url);
+    return { action: "deny" };
   });
 
-  await mainWindow.loadURL(url);
+  window.webContents.on("did-create-window", (childWindow) => {
+    setupWindowOpenHandler(childWindow, appBaseUrl);
+  });
+}
+
+/** Opens an Orion desktop browser window with shared shell configuration. */
+async function openDesktopAppWindow(url: string): Promise<BrowserWindow> {
+  const appWindow = new BrowserWindow(getDesktopBrowserWindowOptions());
+  registerAppWindow(appWindow);
+  setupWindowOpenHandler(appWindow, url);
+  await appWindow.loadURL(url);
+  return appWindow;
+}
+
+/** Creates Orion's main desktop browser window. */
+async function createWindow(url: string): Promise<void> {
+  mainWindow = await openDesktopAppWindow(url);
 }
 
 /** Registers shell appearance controls exposed by the sandboxed preload. */
 function setupShellIpc(): void {
-  ipcMain.handle("orion:shell:set-background-color", (_event, color: unknown) => {
+  ipcMain.handle("orion:shell:set-background-color", (event, color: unknown) => {
     if (!isHexWindowBackgroundColor(color)) {
       throw new Error("Invalid Electron window background color.");
     }
-    mainWindow?.setBackgroundColor(color);
+    getShellIpcWindow(event)?.setBackgroundColor(color);
   });
-  ipcMain.handle("orion:shell:reload-ignoring-cache", () => {
-    mainWindow?.webContents.reloadIgnoringCache();
+  ipcMain.handle("orion:shell:reload-ignoring-cache", (event) => {
+    getShellIpcWindow(event)?.webContents.reloadIgnoringCache();
   });
   ipcMain.handle(
     "orion:shell:show-project-folder-picker",
-    async (): Promise<NativeProjectFolderPickerResult | null> => {
+    async (event): Promise<NativeProjectFolderPickerResult | null> => {
       const activeSession = session;
       if (!activeSession?.jupyter) {
         throw new Error("Connect Orion's runtime before opening a project.");
@@ -96,8 +211,9 @@ function setupShellIpc(): void {
         defaultPath: activeSession.jupyterRootDirectory,
         properties: ["openDirectory"],
       };
-      const result = mainWindow
-        ? await dialog.showOpenDialog(mainWindow, dialogOptions)
+      const parentWindow = getShellIpcWindow(event);
+      const result = parentWindow
+        ? await dialog.showOpenDialog(parentWindow, dialogOptions)
         : await dialog.showOpenDialog(dialogOptions);
       const selectedPath = result.filePaths[0];
       if (result.canceled || !selectedPath) return null;
@@ -128,8 +244,10 @@ function setupUpdaterIpc(): void {
   ipcMain.handle("orion:update:download", () => downloadDesktopUpdate());
   ipcMain.handle("orion:update:restart", () => restartAndInstallDesktopUpdate());
   subscribeToDesktopUpdates((nextState) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("orion:update:state", nextState);
+    for (const appWindow of appWindows) {
+      if (!appWindow.isDestroyed()) {
+        appWindow.webContents.send("orion:update:state", nextState);
+      }
     }
   });
 }
@@ -169,13 +287,19 @@ async function boot(): Promise<void> {
 
   setupDesktopApplicationMenu({
     onCheckForUpdates: () => {
-      mainWindow?.webContents.send("orion:update:manual-check");
+      getActiveAppWindow()?.webContents.send("orion:update:manual-check");
+    },
+    onNewWindow: () => {
+      if (!session) {
+        return;
+      }
+      void openDesktopAppWindow(session.url);
     },
     onOpenSettings: () => {
-      mainWindow?.webContents.send("orion:settings:open");
+      getActiveAppWindow()?.webContents.send("orion:settings:open");
     },
     onReload: (options) => {
-      mainWindow?.webContents.send("orion:reload:requested", options);
+      getActiveAppWindow()?.webContents.send("orion:reload:requested", options);
     },
   });
 

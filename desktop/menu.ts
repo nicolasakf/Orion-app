@@ -2,8 +2,14 @@ import { app, Menu, type MenuItemConstructorOptions } from "electron";
 
 interface DesktopApplicationMenuHandlers {
   onCheckForUpdates: () => void;
+  onNewWindow: () => void;
   onOpenSettings: () => void;
   onReload: (options?: { bypassCache?: boolean }) => void;
+}
+
+/** Returns the platform accelerator for opening another Orion window. */
+function getNewWindowAccelerator(): string {
+  return process.platform === "darwin" ? "Command+Shift+N" : "Control+Shift+N";
 }
 
 /** Builds the native Edit menu so standard text shortcuts keep working. */
@@ -82,12 +88,18 @@ function buildWindowMenu(): MenuItemConstructorOptions {
 /** Builds and installs the desktop application menu with settings and update actions. */
 export function setupDesktopApplicationMenu({
   onCheckForUpdates,
+  onNewWindow,
   onOpenSettings,
   onReload,
 }: DesktopApplicationMenuHandlers): void {
   const checkForUpdatesItem: MenuItemConstructorOptions = {
     label: "Check for Updates...",
     click: onCheckForUpdates,
+  };
+  const newWindowItem: MenuItemConstructorOptions = {
+    label: "New Window",
+    accelerator: getNewWindowAccelerator(),
+    click: onNewWindow,
   };
   const openSettingsItem: MenuItemConstructorOptions = {
     label: "Settings...",
@@ -120,7 +132,11 @@ export function setupDesktopApplicationMenu({
         },
         {
           label: "File",
-          submenu: [{ role: "close" }],
+          submenu: [
+            newWindowItem,
+            { type: "separator" },
+            { role: "close" },
+          ],
         },
         editMenu,
         viewMenu,
@@ -130,6 +146,8 @@ export function setupDesktopApplicationMenu({
         {
           label: "File",
           submenu: [
+            newWindowItem,
+            { type: "separator" },
             openSettingsItem,
             checkForUpdatesItem,
             { type: "separator" },

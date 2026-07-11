@@ -57,9 +57,10 @@ describe("desktop application menu", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
 
     const onCheckForUpdates = vi.fn();
+    const onNewWindow = vi.fn();
     const onOpenSettings = vi.fn();
     const onReload = vi.fn();
-    setupDesktopApplicationMenu({ onCheckForUpdates, onOpenSettings, onReload });
+    setupDesktopApplicationMenu({ onCheckForUpdates, onNewWindow, onOpenSettings, onReload });
 
     expect(setApplicationMenu).toHaveBeenCalledTimes(1);
     const template = getLatestTemplate();
@@ -90,8 +91,18 @@ describe("desktop application menu", () => {
     forceReloadItem?.click?.();
     expect(onReload).toHaveBeenLastCalledWith({ bypassCache: true });
     expect(template.find((item) => item.label === "File")?.submenu).toEqual([
+      expect.objectContaining({
+        label: "New Window",
+        accelerator: "Command+Shift+N",
+      }),
+      { type: "separator" },
       expect.objectContaining({ role: "close" }),
     ]);
+    const newWindowItem = template
+      .find((item) => item.label === "File")
+      ?.submenu?.find((item) => item.label === "New Window");
+    newWindowItem?.click?.();
+    expect(onNewWindow).toHaveBeenCalledTimes(1);
     expectEditMenuRoles(template);
     expect(
       template
@@ -118,12 +129,19 @@ describe("desktop application menu", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     const onCheckForUpdates = vi.fn();
+    const onNewWindow = vi.fn();
     const onOpenSettings = vi.fn();
     const onReload = vi.fn();
-    setupDesktopApplicationMenu({ onCheckForUpdates, onOpenSettings, onReload });
+    setupDesktopApplicationMenu({ onCheckForUpdates, onNewWindow, onOpenSettings, onReload });
 
     const template = getLatestTemplate();
     expect(template[0]?.label).toBe("File");
+    const newWindowItem = template[0]?.submenu?.find((item) => item.label === "New Window");
+    expect(newWindowItem).toEqual(
+      expect.objectContaining({ accelerator: "Control+Shift+N" })
+    );
+    newWindowItem?.click?.();
+    expect(onNewWindow).toHaveBeenCalledTimes(1);
     expect(
       template[0]?.submenu?.some((item) => item.label === "Check for Updates...")
     ).toBe(true);
