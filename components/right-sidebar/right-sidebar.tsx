@@ -142,8 +142,10 @@ import type {
 } from "./types";
 import type { SettingsTab } from "@/components/settings-dialog/types";
 import {
+  loadModelSettingsMapFromSession,
   loadSelectedModelFromSession,
   resolveSelectedModelFallback,
+  saveModelSettingsMapToSession,
   saveSelectedModelToSession,
 } from "./model-selection";
 import {
@@ -718,7 +720,9 @@ export function RightSidebar({
   const toolApprovalMode = isBusinessExperience
     ? "auto_run"
     : effectiveSettings.chat.toolApprovalMode;
-  const [modelSettingsMap, setModelSettingsMap] = useState<ModelSettingsMap>({});
+  const [modelSettingsMap, setModelSettingsMap] = useState<ModelSettingsMap>(
+    loadModelSettingsMapFromSession
+  );
   const [isCompacting, setIsCompacting] = useState(false);
   const [checkpointStatuses, setCheckpointStatuses] = useState<Map<string, EditCheckpointStatus>>(new Map());
   const [checkpointRequestByMessageId, setCheckpointRequestByMessageId] = useState<Map<string, string>>(new Map());
@@ -994,7 +998,11 @@ export function RightSidebar({
   /** Update settings for a specific model */
   const handleModelSettingsChange = useCallback(
     (modelId: string, settings: ModelSettings) => {
-      setModelSettingsMap((prev) => ({ ...prev, [modelId]: settings }));
+      setModelSettingsMap((prev) => {
+        const next = { ...prev, [modelId]: settings };
+        saveModelSettingsMapToSession(next);
+        return next;
+      });
     },
     []
   );

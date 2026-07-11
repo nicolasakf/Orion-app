@@ -1,7 +1,10 @@
 import { DEFAULT_SELECTED_CHAT_MODEL_ID } from "@/lib/settings/defaults";
 import { findModelBySelectionKey } from "@/lib/agent/model-selection-key";
 
+import type { ModelSettingsMap } from "./types";
+
 const SESSION_MODEL_KEY = "orion:selectedModel";
+const SESSION_MODEL_SETTINGS_KEY = "orion:modelSettings";
 
 /** Browser-tab fallback used only when no selected chat model is stored. */
 export const SESSION_FALLBACK_CHAT_MODEL_ID = DEFAULT_SELECTED_CHAT_MODEL_ID;
@@ -38,6 +41,51 @@ export function saveSelectedModelToSession(modelId: string): void {
 
   try {
     window.sessionStorage.setItem(SESSION_MODEL_KEY, modelId);
+  } catch {
+    // Losing session persistence is non-fatal; the UI can still use React state.
+  }
+}
+
+function parseModelSettingsMap(value: unknown): ModelSettingsMap {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+
+  const result: ModelSettingsMap = {};
+  for (const [modelId, settings] of Object.entries(value)) {
+    if (
+      typeof modelId === "string" &&
+      settings &&
+      typeof settings === "object" &&
+      !Array.isArray(settings)
+    ) {
+      result[modelId] = settings;
+    }
+  }
+
+  return result;
+}
+
+/** Reads per-model intelligence settings stored for the current browser tab. */
+export function loadModelSettingsMapFromSession(): ModelSettingsMap {
+  if (typeof window === "undefined") return {};
+
+  try {
+    const stored = window.sessionStorage.getItem(SESSION_MODEL_SETTINGS_KEY);
+    if (!stored) return {};
+    return parseModelSettingsMap(JSON.parse(stored));
+  } catch {
+    return {};
+  }
+}
+
+/** Saves per-model intelligence settings for the current browser tab. */
+export function saveModelSettingsMapToSession(settingsMap: ModelSettingsMap): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.setItem(
+      SESSION_MODEL_SETTINGS_KEY,
+      JSON.stringify(settingsMap)
+    );
   } catch {
     // Losing session persistence is non-fatal; the UI can still use React state.
   }
