@@ -11,12 +11,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   SettingsInfoLabel,
   SettingsInfoSectionTitle,
 } from "@/components/settings-dialog/settings-info-label";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
-import type { EmptyEditorCardContent, ExperienceMode } from "@/lib/settings/schema";
+import type {
+  EmptyEditorCardContent,
+  ExperienceMode,
+  ThemeSetting,
+} from "@/lib/settings/schema";
 
 const EMPTY_EDITOR_CARD_OPTIONS: Array<{
   value: EmptyEditorCardContent;
@@ -26,6 +31,67 @@ const EMPTY_EDITOR_CARD_OPTIONS: Array<{
   { value: "pinned_files", label: "Pinned files" },
   { value: "pinned_workspaces", label: "Pinned workspaces" },
 ];
+
+const EXPERIENCE_MODE_OPTIONS: Array<{
+  value: ExperienceMode;
+  label: string;
+}> = [
+  { value: "pro", label: "Pro" },
+  { value: "business", label: "Business" },
+];
+
+const THEME_OPTIONS: Array<{
+  value: ThemeSetting;
+  label: string;
+}> = [
+  { value: "system", label: "System" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+];
+
+interface SettingsTabsFieldProps<T extends string> {
+  ariaLabel: string;
+  value: T;
+  options: Array<{
+    value: T;
+    label: string;
+  }>;
+  onValueChange: (value: T) => void;
+}
+
+/** Segmented tabs for short mutually-exclusive appearance settings. */
+function SettingsTabsField<T extends string>({
+  ariaLabel,
+  value,
+  options,
+  onValueChange,
+}: SettingsTabsFieldProps<T>) {
+  return (
+    <Tabs
+      value={value}
+      onValueChange={(nextValue) => onValueChange(nextValue as T)}
+      aria-label={ariaLabel}
+      className="w-full"
+    >
+      <TabsList
+        className="grid h-9 w-full"
+        style={{
+          gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
+        }}
+      >
+        {options.map((option) => (
+          <TabsTrigger
+            key={option.value}
+            value={option.value}
+            className="h-7 px-2 text-xs"
+          >
+            {option.label}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+    </Tabs>
+  );
+}
 
 /** Keeps autosave intervals valid while the user edits the milliseconds field. */
 function clampAutosaveIntervalMs(value: number): number {
@@ -42,7 +108,7 @@ export function AppearanceTab() {
   const emptyEditor = editor.emptyEditor;
   const isBusinessMode = appearance.experienceMode === "business";
 
-  const handleThemeChange = (value: "light" | "dark" | "system") => {
+  const handleThemeChange = (value: ThemeSetting) => {
     void setUserSettings((current) => ({
       ...current,
       appearance: {
@@ -83,20 +149,12 @@ export function AppearanceTab() {
                 label="Product experience"
                 description="Pro keeps Orion's notebook-first workflow. Business uses a simpler data-and-chat-first workspace."
               />
-              <Select
+              <SettingsTabsField
+                ariaLabel="Product experience"
                 value={appearance.experienceMode}
-                onValueChange={(value) =>
-                  handleExperienceModeChange(value as ExperienceMode)
-                }
-              >
-                <SelectTrigger id="appearance-experience-mode">
-                  <SelectValue placeholder="Select experience" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="pro">Pro</SelectItem>
-                  <SelectItem value="business">Business</SelectItem>
-                </SelectContent>
-              </Select>
+                options={EXPERIENCE_MODE_OPTIONS}
+                onValueChange={handleExperienceModeChange}
+              />
             </div>
 
             <div className="space-y-2">
@@ -105,21 +163,12 @@ export function AppearanceTab() {
                 label="Theme"
                 description="Choose Orion's color mode."
               />
-              <Select
+              <SettingsTabsField
+                ariaLabel="Theme"
                 value={appearance.theme}
-                onValueChange={(value) =>
-                  handleThemeChange(value as "light" | "dark" | "system")
-                }
-              >
-                <SelectTrigger id="appearance-theme">
-                  <SelectValue placeholder="Select theme" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="system">System</SelectItem>
-                  <SelectItem value="light">Light</SelectItem>
-                  <SelectItem value="dark">Dark</SelectItem>
-                </SelectContent>
-              </Select>
+                options={THEME_OPTIONS}
+                onValueChange={handleThemeChange}
+              />
             </div>
           </div>
         </section>
