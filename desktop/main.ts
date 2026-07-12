@@ -209,7 +209,7 @@ function setupShellIpc(): void {
       const dialogOptions: Electron.OpenDialogOptions = {
         title: "Choose a project folder",
         defaultPath: activeSession.jupyterRootDirectory,
-        properties: ["openDirectory"],
+        properties: ["openDirectory", "createDirectory"],
       };
       const parentWindow = getShellIpcWindow(event);
       const result = parentWindow
