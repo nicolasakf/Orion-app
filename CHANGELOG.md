@@ -4,6 +4,22 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.13.0] - 2026-07-12
+
+### Added
+
+- Business: report edit mode and App View interactions
+- Chat: persist model intelligence settings in session
+- Desktop: multi-window support and OAuth popups
+- Desktop: create folders in the project picker dialog
+
+### Changed
+
+- Settings: segmented tabs for appearance controls
+- Chat: refine empty prompt library headline
+
+[0.13.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.13.0
+
 ## [0.12.0] - 2026-07-09
 
 ### Added
