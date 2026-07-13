@@ -4,6 +4,19 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.14.0] - 2026-07-12
+
+### Added
+
+- Onboarding: multi-step first-run flow for sign-in, workspace mode, and inference provider
+- Models: GPT-5.6 Terra and Luna; default chat model is Terra
+
+### Changed
+
+- Chat: polish model settings labels and UI copy
+
+[0.14.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.14.0
+
 ## [0.13.0] - 2026-07-12
 
 ### Added
