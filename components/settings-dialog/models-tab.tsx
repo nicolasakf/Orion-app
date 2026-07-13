@@ -118,7 +118,8 @@ function resolveBaseModelLabel(
   return model.label;
 }
 
-function compareModelsByRecency(a: ModelRow, b: ModelRow): number {
+/** Orders models by newest release first, with a stable key-based tie-breaker. */
+function compareModelsByReleaseDate(a: ModelRow, b: ModelRow): number {
   const dateDiff =
     new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   if (dateDiff !== 0) return dateDiff;
@@ -233,7 +234,7 @@ function filterAndRankModelsBySearch<T extends DisplayModelRow>(
     .filter(({ score }) => score > 0)
     .sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
-      return compareModelsByRecency(a.model, b.model);
+      return compareModelsByReleaseDate(a.model, b.model);
     })
     .map(({ model }) => model);
 }
@@ -546,7 +547,7 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
   /** Stable display order for grouped view so pin toggles do not reshuffle within a provider. */
   const sortedModels = React.useMemo(() => {
     if (isSearchActive) return filteredModels;
-    return [...filteredModels].sort(compareModelsByRecency);
+    return [...filteredModels].sort(compareModelsByReleaseDate);
   }, [filteredModels, isSearchActive]);
 
   const listViewPinnedModels = React.useMemo(() => {
@@ -572,7 +573,7 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
         )
     );
     if (isSearchActive) return unpinned;
-    return unpinned.sort(compareModelsByRecency);
+    return unpinned.sort(compareModelsByReleaseDate);
   }, [filteredModels, pinnedModelIds, isSearchActive]);
 
   const modelsByProvider = React.useMemo(() => {

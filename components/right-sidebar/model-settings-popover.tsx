@@ -238,6 +238,9 @@ export function ModelSettingsPopover({
         style={{ fontSize: chatFontSize }}
       >
         <div className="flex flex-col gap-0.5">
+          <span className="px-2 pb-0.5 pt-1 text-xs font-medium text-muted-foreground">
+            Intelligence
+          </span>
           {levels.map((level, index) => {
             const isSelected = level.value === selectedLevel.value;
             return (

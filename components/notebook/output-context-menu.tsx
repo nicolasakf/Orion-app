@@ -141,7 +141,7 @@ export function OutputContextMenu({
             onClick={() => onMentionOutput(cellIndex, outputIndex)}
           >
             <AtSign className="mr-2 h-4 w-4" />
-            Mention output in chat
+            {businessMode ? "Mention in chat" : "Mention output in chat"}
           </ContextMenuItem>
         ) : null}
 

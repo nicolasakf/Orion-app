@@ -3616,7 +3616,6 @@ export function RightSidebar({
     };
     setChats((prev) => [newChat, ...prev]);
     setCurrentChatId(newChat.id);
-    setDraftReferences([]);
     setDraftAttachments([]);
     setMessageQueue([]);
   };
@@ -4413,7 +4412,6 @@ export function RightSidebar({
           };
           setChats((prev) => [newChat, ...prev]);
           setCurrentChatId(newChat.id);
-          setDraftReferences([]);
           setDraftAttachments([]);
         }
       } else if (action.type === "switch-chat") {

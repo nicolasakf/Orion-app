@@ -344,7 +344,7 @@ function AppViewMarkdownContextMenu({
         {onMention ? (
           <ContextMenuItem onClick={onMention}>
             <AtSign className="mr-2 h-4 w-4" />
-            Mention cell in chat
+            {businessMode ? "Mention in chat" : "Mention cell in chat"}
           </ContextMenuItem>
         ) : null}
         {onMention && onRemove ? <ContextMenuSeparator /> : null}
