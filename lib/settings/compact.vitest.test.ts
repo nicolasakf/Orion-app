@@ -51,7 +51,9 @@ describe("compactSettingsForPersistence", () => {
 
     const compacted = compactUserSettingsDocument(document);
     expect(compacted.settings).toEqual({
+      onboarding: { signInStepCompleted: false },
       appearance: { theme: "dark" },
+      providers: { inferenceProviderChosen: false },
     });
     expect("agent" in compacted.settings).toBe(false);
     expect("shell" in compacted.settings).toBe(false);
@@ -77,7 +79,8 @@ describe("compactSettingsForPersistence", () => {
     document.settings.appearance.theme = "light";
 
     const compacted = compactUserSettingsDocument(document);
-    expect(compacted.settings.providers).toBeUndefined();
+    expect(compacted.settings.providers?.credentials).toBeUndefined();
+    expect(compacted.settings.providers?.inferenceProviderChosen).toBe(false);
   });
 });
 

@@ -257,6 +257,10 @@ export type ProviderCredentialSummary = z.infer<typeof ProviderCredentialSchema>
 export type ProviderCredential = ProviderCredentialSummary;
 
 const SettingsDataSchema = z.object({
+  onboarding: z.object({
+    /** False until a new user signs in or explicitly skips the optional account step. */
+    signInStepCompleted: z.boolean().default(true),
+  }).default({ signInStepCompleted: true }),
   appearance: z.object({
     theme: ThemeSettingSchema,
     /** Primary product shell: full notebook IDE or simplified business workspace. */
@@ -329,8 +333,10 @@ const SettingsDataSchema = z.object({
       credentials: z.record(ProviderCredentialSchema).default({}),
       /** Non-secret provider IDs the user explicitly added to the Providers tab. */
       addedProviderIds: z.array(z.string()).default([]),
+      /** False until a new user chooses ChatGPT sign-in or manual provider setup. */
+      inferenceProviderChosen: z.boolean().default(true),
     })
-    .default({ credentials: {}, addedProviderIds: [] }),
+    .default({ credentials: {}, addedProviderIds: [], inferenceProviderChosen: true }),
 });
 
 export const UserSettingsDocumentSchema = z.object({

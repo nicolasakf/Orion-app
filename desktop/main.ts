@@ -133,13 +133,32 @@ function getActiveAppWindow(): BrowserWindow | null {
   return mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
 }
 
-/** Resolves the app window that sent a shell IPC request. */
+/** Returns whether a registered window is presently serving Orion's local origin. */
+function isTrustedAppWindow(appWindow: BrowserWindow | null): appWindow is BrowserWindow {
+  if (!appWindow || appWindow.isDestroyed() || !appWindows.has(appWindow) || !session) {
+    return false;
+  }
+
+  try {
+    return new URL(appWindow.webContents.getURL()).origin === new URL(session.url).origin;
+  } catch {
+    return false;
+  }
+}
+
+/** Resolves a trusted Orion app window that sent a shell IPC request. */
 function getShellIpcWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow | null {
   const senderWindow = BrowserWindow.fromWebContents(event.sender);
-  if (senderWindow && appWindows.has(senderWindow)) {
-    return senderWindow;
+  return isTrustedAppWindow(senderWindow) ? senderWindow : null;
+}
+
+/** Throws when an IPC request does not come from a tracked Orion app window. */
+function requireShellIpcWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow {
+  const senderWindow = getShellIpcWindow(event);
+  if (!senderWindow) {
+    throw new Error("Only Orion app windows can use desktop shell actions.");
   }
-  return getActiveAppWindow();
+  return senderWindow;
 }
 
 /** Routes renderer-initiated window opens to matching Electron window chrome. */
@@ -168,7 +187,15 @@ function setupWindowOpenHandler(window: BrowserWindow, appBaseUrl: string): void
     return { action: "deny" };
   });
 
-  window.webContents.on("did-create-window", (childWindow) => {
+  window.webContents.on("did-create-window", (childWindow, details) => {
+    if (
+      details.url !== "" &&
+      details.url !== "about:blank" &&
+      isOrionAppUrl(details.url, appBaseUrl) &&
+      !OAUTH_POPUP_WINDOW_NAMES.has(details.frameName)
+    ) {
+      registerAppWindow(childWindow);
+    }
     setupWindowOpenHandler(childWindow, appBaseUrl);
   });
 }
@@ -193,14 +220,15 @@ function setupShellIpc(): void {
     if (!isHexWindowBackgroundColor(color)) {
       throw new Error("Invalid Electron window background color.");
     }
-    getShellIpcWindow(event)?.setBackgroundColor(color);
+    requireShellIpcWindow(event).setBackgroundColor(color);
   });
   ipcMain.handle("orion:shell:reload-ignoring-cache", (event) => {
-    getShellIpcWindow(event)?.webContents.reloadIgnoringCache();
+    requireShellIpcWindow(event).webContents.reloadIgnoringCache();
   });
   ipcMain.handle(
     "orion:shell:show-project-folder-picker",
     async (event): Promise<NativeProjectFolderPickerResult | null> => {
+      const parentWindow = requireShellIpcWindow(event);
       const activeSession = session;
       if (!activeSession?.jupyter) {
         throw new Error("Connect Orion's runtime before opening a project.");
@@ -211,10 +239,7 @@ function setupShellIpc(): void {
         defaultPath: activeSession.jupyterRootDirectory,
         properties: ["openDirectory", "createDirectory"],
       };
-      const parentWindow = getShellIpcWindow(event);
-      const result = parentWindow
-        ? await dialog.showOpenDialog(parentWindow, dialogOptions)
-        : await dialog.showOpenDialog(dialogOptions);
+      const result = await dialog.showOpenDialog(parentWindow, dialogOptions);
       const selectedPath = result.filePaths[0];
       if (result.canceled || !selectedPath) return null;
 
@@ -239,10 +264,22 @@ function setupShellIpc(): void {
 
 /** Registers the narrow updater IPC surface exposed by the sandboxed preload. */
 function setupUpdaterIpc(): void {
-  ipcMain.handle("orion:update:get-state", () => getDesktopUpdateState());
-  ipcMain.handle("orion:update:check", () => checkForDesktopUpdates());
-  ipcMain.handle("orion:update:download", () => downloadDesktopUpdate());
-  ipcMain.handle("orion:update:restart", () => restartAndInstallDesktopUpdate());
+  ipcMain.handle("orion:update:get-state", (event) => {
+    requireShellIpcWindow(event);
+    return getDesktopUpdateState();
+  });
+  ipcMain.handle("orion:update:check", (event) => {
+    requireShellIpcWindow(event);
+    return checkForDesktopUpdates();
+  });
+  ipcMain.handle("orion:update:download", (event) => {
+    requireShellIpcWindow(event);
+    return downloadDesktopUpdate();
+  });
+  ipcMain.handle("orion:update:restart", (event) => {
+    requireShellIpcWindow(event);
+    return restartAndInstallDesktopUpdate();
+  });
   subscribeToDesktopUpdates((nextState) => {
     for (const appWindow of appWindows) {
       if (!appWindow.isDestroyed()) {

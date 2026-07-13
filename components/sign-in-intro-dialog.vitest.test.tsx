@@ -6,7 +6,7 @@ vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "system", setTheme: vi.fn() }),
 }));
 
-import { ExperienceModeIntroDialog } from "@/components/experience-mode-intro-dialog";
+import { SignInIntroDialog } from "@/components/sign-in-intro-dialog";
 import {
   SettingsProvider,
   useSettingsContext,
@@ -27,8 +27,8 @@ vi.mock("@/lib/settings/user-storage", async (importOriginal) => {
 function SettingsProbe() {
   const { effectiveSettings } = useSettingsContext();
   return (
-    <span data-testid="experience-mode-chosen">
-      {String(effectiveSettings.appearance.experienceModeChosen)}
+    <span data-testid="sign-in-completed">
+      {String(effectiveSettings.onboarding.signInStepCompleted)}
     </span>
   );
 }
@@ -38,16 +38,12 @@ beforeEach(() => {
   setUserSettingsDocumentMock.mockResolvedValue(undefined);
 
   const defaultDocument = createDefaultUserSettingsDocument();
-  defaultDocument.settings.onboarding.signInStepCompleted = true;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/settings") && (!init || init.method === "GET")) {
-        return Response.json({
-          status: "missing",
-          document: defaultDocument,
-        });
+        return Response.json({ status: "missing", document: defaultDocument });
       }
       if (url.endsWith("/api/credentials")) {
         return Response.json({ credentials: {} });
@@ -61,53 +57,24 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("ExperienceModeIntroDialog", () => {
-  it("returns to the sign-in step from the upper-left back button", async () => {
+describe("SignInIntroDialog", () => {
+  it("lets a user skip sign-in and advances the onboarding state", async () => {
     render(
       <SettingsProvider>
-        <ExperienceModeIntroDialog />
-      </SettingsProvider>,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText("Welcome to Orion")).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: "Back to sign-in" }));
-
-    await waitFor(() => {
-      expect(setUserSettingsDocumentMock).toHaveBeenCalled();
-    });
-
-    const savedDocument = setUserSettingsDocumentMock.mock.calls.at(-1)?.[0];
-    expect(savedDocument.settings.onboarding.signInStepCompleted).toBe(false);
-  });
-
-  it("shows on first launch and persists the selected experience mode", async () => {
-    render(
-      <SettingsProvider>
-        <ExperienceModeIntroDialog />
+        <SignInIntroDialog />
         <SettingsProbe />
       </SettingsProvider>,
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Welcome to Orion")).toBeInTheDocument();
+      expect(screen.getByText("Sign in to Orion")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Pro" }));
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
 
     await waitFor(() => {
       expect(setUserSettingsDocumentMock).toHaveBeenCalled();
-    });
-
-    const savedDocument = setUserSettingsDocumentMock.mock.calls.at(-1)?.[0];
-    expect(savedDocument.settings.appearance.experienceMode).toBe("pro");
-    expect(savedDocument.settings.appearance.experienceModeChosen).toBe(true);
-
-    await waitFor(() => {
-      expect(screen.queryByText("Welcome to Orion")).not.toBeInTheDocument();
+      expect(screen.getByTestId("sign-in-completed")).toHaveTextContent("true");
     });
   });
 });

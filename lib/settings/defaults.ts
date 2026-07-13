@@ -11,9 +11,12 @@ import { DEFAULT_INTERACTION_MODE_CONFIGS } from "@/lib/agent/interaction-modes"
 export const DEFAULT_TITLE_GENERATION_MODEL_ID = "gemini-3.1-flash-lite";
 
 /** Session-only default when no model is stored in sessionStorage. */
-export const DEFAULT_SELECTED_CHAT_MODEL_ID = DEFAULT_TITLE_GENERATION_MODEL_ID;
+export const DEFAULT_SELECTED_CHAT_MODEL_ID = "gpt-5.6-terra";
 
 export const DEFAULT_SETTINGS: SettingsData = {
+  onboarding: {
+    signInStepCompleted: false,
+  },
   appearance: {
     theme: "system",
     experienceMode: "business",
@@ -60,6 +63,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
   providers: {
     credentials: {},
     addedProviderIds: [],
+    inferenceProviderChosen: false,
   },
 };
 

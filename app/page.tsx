@@ -94,6 +94,7 @@ import {
 } from "@/contexts/mobile-layout-context";
 import { MobileToolbar } from "@/components/mobile/mobile-toolbar";
 import { SettingsDialog } from "@/components/settings-dialog/settings-dialog";
+import { OnboardingFlow } from "@/components/onboarding-flow";
 import { TerminalPool } from "@/lib/shell/terminal-pool";
 import { openPathInSystemTerminal } from "@/lib/shell/system-commands/open-file";
 import {
@@ -2868,6 +2869,7 @@ export default function Page() {
   if (isMobile) {
     return (
       <OpenSettingsProvider>
+        <OnboardingFlow />
         <NotebookViewModeProvider>
           <MarkdownEditorViewModeProvider>
             <MobileLayoutProvider>
@@ -2981,6 +2983,7 @@ export default function Page() {
     : verticalPanelSizes[1];
   return (
     <OpenSettingsProvider>
+      <OnboardingFlow />
       <NotebookViewModeProvider>
         <MarkdownEditorViewModeProvider>
           <div className="h-screen">

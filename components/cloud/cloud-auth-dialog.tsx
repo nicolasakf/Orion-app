@@ -27,6 +27,18 @@ interface CloudAuthDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onAuthenticated?: () => void | Promise<void>;
+  /** Optional explicit bypass for onboarding and other non-required account flows. */
+  onSkip?: () => void | Promise<void>;
+  /** Overrides the default cloud-specific heading. */
+  title?: string;
+  /** Overrides the default cloud-specific description. */
+  description?: string;
+  /** Hides the close button when a flow must be completed or skipped explicitly. */
+  hideCloseButton?: boolean;
+  /** Ignores dismissal attempts other than the supplied actions. */
+  preventDismiss?: boolean;
+  /** Renders only the dialog body for use inside a parent modal. */
+  embedded?: boolean;
 }
 
 type CloudAuthPhase = "idle" | "starting" | "awaiting" | "blocked" | "exchanging" | "failed";
@@ -50,6 +62,12 @@ export function CloudAuthDialog({
   open,
   onOpenChange,
   onAuthenticated,
+  onSkip,
+  title = "Sign in to Orion Cloud",
+  description = "Continue with Google to publish and manage Orion Cloud notebooks from this local app.",
+  hideCloseButton = false,
+  preventDismiss = false,
+  embedded = false,
 }: CloudAuthDialogProps) {
   const cloudConfig = React.useMemo(() => getOrionCloudConfig(), []);
   const supabase = React.useMemo(() => createOrionCloudSupabaseClient(), []);
@@ -233,17 +251,20 @@ export function CloudAuthDialog({
   const isBusy = phase === "starting" || phase === "exchanging";
   const isConfigured = Boolean(cloudConfig && supabase);
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px]">
-        <DialogHeader>
-          <DialogTitle>Sign in to Orion Cloud</DialogTitle>
-          <DialogDescription>
-            Continue with Google to publish and manage Orion Cloud notebooks from this local app.
-          </DialogDescription>
-        </DialogHeader>
+  /** Lets onboarding opt out without treating the dialog's close affordance as a skip. */
+  const handleOpenChange = React.useCallback((nextOpen: boolean) => {
+    if (!nextOpen && preventDismiss) return;
+    onOpenChange(nextOpen);
+  }, [onOpenChange, preventDismiss]);
 
-        <div className="space-y-4 py-4">
+  const content = (
+    <>
+      <DialogHeader>
+        <DialogTitle>{title}</DialogTitle>
+        <DialogDescription>{description}</DialogDescription>
+      </DialogHeader>
+
+      <div className="space-y-4 py-4">
           {!isConfigured ? (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
               Orion Cloud is not configured for this local app.
@@ -302,7 +323,28 @@ export function CloudAuthDialog({
             )}
             {phase === "failed" ? "Try Google again" : "Continue with Google"}
           </Button>
-        </div>
+
+          {onSkip ? (
+            <Button
+              type="button"
+              variant="ghost"
+              className="w-full"
+              disabled={isBusy}
+              onClick={() => void onSkip()}
+            >
+              Skip for now
+            </Button>
+          ) : null}
+      </div>
+    </>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-[425px]" hideCloseButton={hideCloseButton}>
+        {content}
       </DialogContent>
     </Dialog>
   );

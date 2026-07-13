@@ -2,7 +2,6 @@ import type { Metadata, Viewport } from 'next'
 import { Saira } from 'next/font/google'
 import './globals.css'
 import { ThemeProvider } from '@/components/theme-provider'
-import { ExperienceModeIntroDialog } from '@/components/experience-mode-intro-dialog'
 import { SettingsProvider } from '@/components/settings/settings-provider'
 import { Toaster } from '@/components/ui/sonner'
 import { UpdateProvider } from '@/components/update-provider'
@@ -46,7 +45,6 @@ export default async function RootLayout({
           <SettingsProvider>
             <UpdateProvider>
               {children}
-              <ExperienceModeIntroDialog />
               <Toaster />
             </UpdateProvider>
           </SettingsProvider>

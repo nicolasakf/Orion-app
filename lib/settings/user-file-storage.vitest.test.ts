@@ -46,7 +46,10 @@ describe("user file settings storage", () => {
     const raw = await readFile(path.join(tempDirectory, "settings.json"), "utf8");
     expect(JSON.parse(raw)).toEqual({
       version: 1,
-      settings: {},
+      settings: {
+        onboarding: { signInStepCompleted: false },
+        providers: { inferenceProviderChosen: false },
+      },
     });
 
     await expect(loadUserSettingsDocumentWithStatus()).resolves.toEqual({
@@ -69,15 +72,17 @@ describe("user file settings storage", () => {
     const persisted = JSON.parse(raw) as typeof saved;
 
     expect(saved.settings).toEqual({
+      onboarding: { signInStepCompleted: false },
       appearance: { theme: "dark" },
       agent: {
         context: {
           compactionRetentionTurns: 8,
         },
       },
+      providers: { inferenceProviderChosen: false },
     });
     expect(persisted.settings).toEqual(saved.settings);
-    expect(persisted.settings.providers).toBeUndefined();
+    expect(persisted.settings.providers?.credentials).toBeUndefined();
   });
 
   it("rejects malformed settings JSON", async () => {
@@ -112,7 +117,9 @@ describe("user file settings storage", () => {
     expect(JSON.parse(backedUp)).toEqual({
       version: 1,
       settings: {
+        onboarding: { signInStepCompleted: false },
         appearance: { theme: "dark" },
+        providers: { inferenceProviderChosen: false },
       },
     });
   });

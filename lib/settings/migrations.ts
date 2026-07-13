@@ -83,6 +83,36 @@ function backfillExperienceModeChosenForExistingUsers(
   appearance.experienceModeChosen = true;
 }
 
+/** Existing on-disk settings predate the optional account sign-in onboarding step. */
+function backfillSignInStepCompletedForExistingUsers(
+  settings: Record<string, unknown>
+): void {
+  const onboarding = asObject(settings.onboarding);
+  if (!onboarding) {
+    settings.onboarding = { signInStepCompleted: true };
+    return;
+  }
+  if ("signInStepCompleted" in onboarding) {
+    return;
+  }
+  onboarding.signInStepCompleted = true;
+}
+
+/** Existing on-disk settings predate the inference-provider onboarding dialog. */
+function backfillInferenceProviderChosenForExistingUsers(
+  settings: Record<string, unknown>
+): void {
+  const providers = asObject(settings.providers);
+  if (!providers) {
+    settings.providers = { inferenceProviderChosen: true };
+    return;
+  }
+  if ("inferenceProviderChosen" in providers) {
+    return;
+  }
+  providers.inferenceProviderChosen = true;
+}
+
 /** Drops legacy notebook table settings removed with the DataTable UI. */
 function stripRemovedTableSettings(settings: Record<string, unknown>): void {
   if ("table" in settings) {
@@ -176,7 +206,9 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
     stripSessionOnlyNotebookKeys(settingsObj);
     stripSessionOnlyLayoutKeys(settingsObj);
     stripRemovedTableSettings(settingsObj);
+    backfillSignInStepCompletedForExistingUsers(settingsObj);
     backfillExperienceModeChosenForExistingUsers(settingsObj);
+    backfillInferenceProviderChosenForExistingUsers(settingsObj);
   }
   const parsed = UserSettingsDocumentSchema.safeParse(normalized);
   if (parsed.success) {
@@ -213,7 +245,9 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
   stripSessionOnlyNotebookKeys(partialSettings);
   stripSessionOnlyLayoutKeys(partialSettings);
   stripRemovedTableSettings(partialSettings);
+  backfillSignInStepCompletedForExistingUsers(partialSettings);
   backfillExperienceModeChosenForExistingUsers(partialSettings);
+  backfillInferenceProviderChosenForExistingUsers(partialSettings);
 
   const merged = mergeSettings(
     DEFAULT_SETTINGS,

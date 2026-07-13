@@ -19,6 +19,13 @@ describe("model session persistence", () => {
     expect(loadSelectedModelFromSession()).toBe("openai:gpt-5.5");
   });
 
+  it("uses GPT-5.6 Terra only when sessionStorage has no selected model", () => {
+    expect(loadSelectedModelFromSession()).toBe("gpt-5.6-terra");
+
+    saveSelectedModelToSession("openai/gpt-5.5");
+    expect(loadSelectedModelFromSession()).toBe("openai/gpt-5.5");
+  });
+
   it("round-trips per-model intelligence settings through sessionStorage", () => {
     saveModelSettingsMapToSession({
       "openai:gpt-5.5": { reasoningEffort: "high" },

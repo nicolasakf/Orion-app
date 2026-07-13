@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Briefcase, Loader2, NotebookPen } from "lucide-react";
+import { ArrowLeft, Briefcase, Loader2, NotebookPen } from "lucide-react";
 
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import { Button } from "@/components/ui/button";
@@ -99,11 +99,18 @@ function ExperienceModeOptionCard({
   );
 }
 
+interface ExperienceModeIntroDialogProps {
+  /** Render workspace selection inside the shared onboarding dialog. */
+  embedded?: boolean;
+}
+
 /**
  * First-run dialog that asks new users to choose Pro or Business view mode.
  * The choice is persisted in user settings so it is not shown again.
  */
-export function ExperienceModeIntroDialog() {
+export function ExperienceModeIntroDialog({
+  embedded = false,
+}: ExperienceModeIntroDialogProps) {
   const {
     effectiveSettings,
     errorMessage,
@@ -119,7 +126,9 @@ export function ExperienceModeIntroDialog() {
   );
 
   const shouldShowIntro =
-    isHydrated && !effectiveSettings.appearance.experienceModeChosen;
+    isHydrated &&
+    effectiveSettings.onboarding.signInStepCompleted &&
+    !effectiveSettings.appearance.experienceModeChosen;
 
   React.useEffect(() => {
     if (shouldShowIntro) {
@@ -148,59 +157,98 @@ export function ExperienceModeIntroDialog() {
     }
   }, [selectedMode, setUserSettings]);
 
-  return (
-    <Dialog open={shouldShowIntro}>
-      <DialogContent
-        className="max-w-2xl"
-        hideCloseButton
-        onEscapeKeyDown={(event) => event.preventDefault()}
-        onInteractOutside={(event) => event.preventDefault()}
-        onPointerDownOutside={(event) => event.preventDefault()}
-      >
-        <DialogHeader>
+  /** Returns to the optional account sign-in step. */
+  const handleBack = React.useCallback(async () => {
+    setSaveErrorMessage(null);
+    try {
+      await setUserSettings((current) => ({
+        ...current,
+        onboarding: {
+          ...current.onboarding,
+          signInStepCompleted: false,
+        },
+      }));
+    } catch (error) {
+      setSaveErrorMessage(
+        error instanceof Error ? error.message : "Could not return to sign-in.",
+      );
+    }
+  }, [setUserSettings]);
+
+  const content = (
+    <>
+      <div className="flex items-start gap-3">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="shrink-0"
+          aria-label="Back to sign-in"
+          disabled={isSavingUser}
+          onClick={() => void handleBack()}
+        >
+          <ArrowLeft className="size-4" />
+        </Button>
+        <DialogHeader className="flex-1">
           <DialogTitle>Welcome to Orion</DialogTitle>
           <DialogDescription>
             Choose the workspace that fits how you work. You can change this
             later in Settings → Appearance.
           </DialogDescription>
         </DialogHeader>
+      </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          {EXPERIENCE_OPTIONS.map((option) => (
-            <ExperienceModeOptionCard
-              key={option.value}
-              audience={option.audience}
-              description={option.description}
-              icon={option.icon}
-              selected={selectedMode === option.value}
-              title={option.title}
-              onSelect={() => setSelectedMode(option.value)}
-            />
-          ))}
-        </div>
+      <div className="grid gap-3 sm:grid-cols-2">
+        {EXPERIENCE_OPTIONS.map((option) => (
+          <ExperienceModeOptionCard
+            key={option.value}
+            audience={option.audience}
+            description={option.description}
+            icon={option.icon}
+            selected={selectedMode === option.value}
+            title={option.title}
+            onSelect={() => setSelectedMode(option.value)}
+          />
+        ))}
+      </div>
 
-        {(saveErrorMessage ?? errorMessage) ? (
-          <p className="text-sm text-destructive">
-            {saveErrorMessage ?? errorMessage}
-          </p>
-        ) : null}
+      {(saveErrorMessage ?? errorMessage) ? (
+        <p className="text-sm text-destructive">
+          {saveErrorMessage ?? errorMessage}
+        </p>
+      ) : null}
 
-        <DialogFooter>
-          <Button
-            type="button"
-            disabled={isSavingUser}
-            onClick={() => void handleContinue()}
-          >
-            {isSavingUser ? (
-              <>
-                <Loader2 className="mr-2 size-4 animate-spin" />
-                Saving…
-              </>
-            ) : (
-              "Continue"
-            )}
-          </Button>
-        </DialogFooter>
+      <DialogFooter>
+        <Button
+          type="button"
+          disabled={isSavingUser}
+          onClick={() => void handleContinue()}
+        >
+          {isSavingUser ? (
+            <>
+              <Loader2 className="mr-2 size-4 animate-spin" />
+              Saving…
+            </>
+          ) : (
+            "Continue"
+          )}
+        </Button>
+      </DialogFooter>
+    </>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <Dialog open={shouldShowIntro}>
+      <DialogContent
+        className="relative max-w-2xl"
+        hideCloseButton
+        onEscapeKeyDown={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
+        onPointerDownOutside={(event) => event.preventDefault()}
+      >
+        {content}
       </DialogContent>
     </Dialog>
   );

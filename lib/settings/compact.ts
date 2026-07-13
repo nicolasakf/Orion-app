@@ -44,14 +44,35 @@ export function compactSettingsForPersistence(
   return (compacted ?? {}) as SettingsData;
 }
 
-/** Strips default-equal fields from a user settings document before persistence. */
+/**
+ * Strips default-equal fields while retaining explicit first-run completion flags.
+ *
+ * Sparse settings files from before onboarding are migrated as existing users, so
+ * newly created profiles must persist their false values to remain distinguishable.
+ */
 export function compactUserSettingsDocument(
   document: UserSettingsDocument,
   defaults: SettingsData = DEFAULT_SETTINGS
 ): UserSettingsDocument {
+  const compactedSettings = compactSettingsForPersistence(
+    document.settings,
+    defaults,
+  );
+
   return {
     version: document.version,
-    settings: compactSettingsForPersistence(document.settings, defaults),
+    settings: {
+      ...compactedSettings,
+      onboarding: {
+        ...compactedSettings.onboarding,
+        signInStepCompleted: document.settings.onboarding.signInStepCompleted,
+      },
+      providers: {
+        ...compactedSettings.providers,
+        inferenceProviderChosen:
+          document.settings.providers.inferenceProviderChosen,
+      },
+    },
   };
 }
 
