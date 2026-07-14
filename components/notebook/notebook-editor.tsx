@@ -439,6 +439,7 @@ export function NotebookEditor({
   const queuedAgentExecutionCellsRef = useRef<Set<number>>(new Set());
   const activeAgentExecutionCellsRef = useRef<Set<number>>(new Set());
   const pendingAgentNotebookReloadRef = useRef(false);
+  const agentExecutionFilepathRef = useRef(filepath);
   const mouseSelectionScrollSnapshotRef =
     useRef<ScrollPositionSnapshot | null>(null);
   const showSubagentOptions = isSubagentNotebookPath(filepath);
@@ -761,6 +762,16 @@ export function NotebookEditor({
   // const executionCountRef = useRef(0); // Now from props
 
   useEffect(() => {
+    if (agentExecutionFilepathRef.current !== filepath) {
+      // Agent execution events are scoped to a notebook path. Reset state from
+      // the prior notebook before this path can receive its own queued events.
+      queuedAgentExecutionCellsRef.current.clear();
+      activeAgentExecutionCellsRef.current.clear();
+      pendingAgentNotebookReloadRef.current = false;
+      agentExecutionFilepathRef.current = filepath;
+      updateExecutionRunningState();
+    }
+
     // Load the notebook from the filepath when the component mounts or filepath changes
     const loadNotebook = async () => {
       if (!filepath) {

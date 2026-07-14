@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { NotebookEditor } from "@/components/notebook/notebook-editor";
 import type { KernelService } from "@/lib/kernel/kernel-service";
+import { dispatchAgentNotebookExecutionEvent } from "@/lib/notebook/agent-notebook-events";
 import {
   CellType,
   OutputType,
@@ -170,5 +171,79 @@ describe("NotebookEditor business markdown saves", () => {
     await expect(saveMarkdown(0, "# Revised")).rejects.toThrow("Save failed");
     expect(contentsManager.save).toHaveBeenCalledTimes(1);
     expect(consoleErrorSpy).toHaveBeenCalled();
+  });
+});
+
+describe("NotebookEditor agent execution state", () => {
+  it("resets prior-path execution state without clearing events queued for the new path", async () => {
+    const firstPath = "/workspace/first.ipynb";
+    const secondPath = "/workspace/second.ipynb";
+    const secondNotebook = {
+      ...makeNotebook(),
+      metadata: { title: "Second notebook" },
+    };
+    let resolveSecondLoad: ((value: { content: NotebookType }) => void) | undefined;
+    const contentsManager = {
+      get: vi.fn((path: string) => {
+        if (path === secondPath) {
+          return new Promise<{ content: NotebookType }>((resolve) => {
+            resolveSecondLoad = resolve;
+          });
+        }
+        return Promise.resolve({ content: makeNotebook() });
+      }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    const onIsRunningChange = vi.fn();
+    const { rerender } = render(
+      <NotebookEditor
+        filepath={firstPath}
+        kernelService={makeKernelService(contentsManager)}
+        onIsRunningChange={onIsRunningChange}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(contentsManager.get).toHaveBeenCalledWith(firstPath, { content: true });
+    });
+    dispatchAgentNotebookExecutionEvent({
+      type: "queued",
+      notebookPath: firstPath,
+      cellIndices: [0],
+    });
+    await waitFor(() => {
+      expect(onIsRunningChange).toHaveBeenLastCalledWith(true);
+    });
+
+    rerender(
+      <NotebookEditor
+        filepath={secondPath}
+        kernelService={makeKernelService(contentsManager)}
+        onIsRunningChange={onIsRunningChange}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(contentsManager.get).toHaveBeenCalledWith(secondPath, { content: true });
+      expect(onIsRunningChange).toHaveBeenLastCalledWith(false);
+    });
+
+    dispatchAgentNotebookExecutionEvent({
+      type: "queued",
+      notebookPath: secondPath,
+      cellIndices: [0],
+    });
+    await waitFor(() => {
+      expect(onIsRunningChange).toHaveBeenLastCalledWith(true);
+    });
+
+    resolveSecondLoad?.({ content: secondNotebook });
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.notebook?.metadata.title).toBe("Second notebook");
+      expect(onIsRunningChange).toHaveBeenLastCalledWith(true);
+    });
   });
 });
