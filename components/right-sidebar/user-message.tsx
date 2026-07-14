@@ -2,7 +2,7 @@
 
 import { type UIMessage } from "ai";
 import { useState, useRef, useEffect } from "react";
-import { Bot, Brain, Command, Copy, GitFork, Redo2, Undo2 } from "lucide-react";
+import { Bot, Brain, Command, Copy, Redo2, Undo2 } from "lucide-react";
 import {
   CheckmarkedButton,
   useCheckmarkedFeedback,
@@ -52,7 +52,6 @@ interface UserMessageProps {
   checkpointId?: string;
   checkpointAction?: "restore" | "redo";
   onRestoreCheckpoint?: (checkpointId: string, action: "restore" | "redo") => void;
-  onForkFromMessage?: () => void;
 }
 
 export function UserMessage({
@@ -62,7 +61,6 @@ export function UserMessage({
   checkpointId,
   checkpointAction,
   onRestoreCheckpoint,
-  onForkFromMessage,
 }: UserMessageProps) {
   const { effectiveSettings } = useOrionSettings();
   const chatFontSize = effectiveSettings.chat.fontSize;
@@ -100,10 +98,6 @@ export function UserMessage({
     if (checkpointId && checkpointAction) {
       onRestoreCheckpoint?.(checkpointId, checkpointAction);
     }
-  };
-  const handleForkFromMessage = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onForkFromMessage?.();
   };
   const canRestoreCheckpoint = Boolean(checkpointId && checkpointAction && onRestoreCheckpoint);
   const CheckpointIcon = checkpointAction === "redo" ? Redo2 : Undo2;
@@ -189,31 +183,13 @@ export function UserMessage({
             </Tooltip>
           )}
 
-          {onForkFromMessage && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleForkFromMessage}
-                  aria-label="Fork from here"
-                  className="h-6 w-6 shrink-0 text-muted-foreground hover:bg-transparent hover:text-foreground [&_svg]:size-3"
-                >
-                  <GitFork />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Fork from here</p>
-              </TooltipContent>
-            </Tooltip>
-          )}
-
           <Tooltip>
             <TooltipTrigger asChild>
               <CheckmarkedButton
                 variant="ghost"
                 size="icon"
                 onClick={handleCopy}
+                aria-label="Copy message"
                 className="h-6 w-6 shrink-0 text-muted-foreground hover:bg-transparent hover:text-foreground [&_svg]:size-3"
                 checked={isCopied}
                 icon={<Copy />}

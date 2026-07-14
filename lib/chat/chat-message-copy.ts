@@ -62,6 +62,15 @@ export function formatUserMessageClipboardText(message: UIMessage): string {
   return trimmedText ? `${prefix}\n${trimmedText}` : prefix;
 }
 
+/**
+ * Formats only the raw Markdown text parts of an assistant message for copying.
+ * Reasoning, tool activity, and other non-text parts are intentionally omitted.
+ */
+export function formatAssistantMessageClipboardText(message: UIMessage): string {
+  if (message.role !== "assistant") return "";
+  return getTextContent(message);
+}
+
 /** Builds the structured payload used to rehydrate chips when pasting inside Orion. */
 export function buildUserMessageClipboardPayload(
   message: UIMessage
@@ -141,4 +150,9 @@ export async function writeUserMessageToClipboard(message: UIMessage): Promise<v
   }
 
   await navigator.clipboard.writeText(text);
+}
+
+/** Writes raw assistant Markdown text to the system clipboard. */
+export async function writeAssistantMessageToClipboard(message: UIMessage): Promise<void> {
+  await navigator.clipboard.writeText(formatAssistantMessageClipboardText(message));
 }

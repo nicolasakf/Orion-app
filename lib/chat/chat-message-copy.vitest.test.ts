@@ -3,6 +3,7 @@ import type { UIMessage } from "ai";
 
 import {
   buildUserMessageClipboardPayload,
+  formatAssistantMessageClipboardText,
   formatClipboardPayloadComposerText,
   formatSlashCommandClipboardToken,
   formatUserMessageClipboardText,
@@ -61,6 +62,39 @@ describe("formatUserMessageClipboardText", () => {
     };
 
     expect(formatUserMessageClipboardText(message)).toBe("@Cell #2");
+  });
+});
+
+describe("formatAssistantMessageClipboardText", () => {
+  it("keeps raw Markdown text while excluding reasoning and tool parts", () => {
+    const message: UIMessage = {
+      id: "assistant-copy",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "## Result\n" },
+        { type: "reasoning", text: "Internal reasoning" },
+        {
+          type: "tool-read_file",
+          toolCallId: "tool-copy",
+          state: "output-available",
+          input: { path: "/workspace/notes.md" },
+          output: "Read notes.",
+        } as UIMessage["parts"][number],
+        { type: "text", text: "\n**Done**" },
+      ],
+    };
+
+    expect(formatAssistantMessageClipboardText(message)).toBe("## Result\n\n**Done**");
+  });
+
+  it("does not format non-assistant messages as assistant output", () => {
+    const message: UIMessage = {
+      id: "user-copy",
+      role: "user",
+      parts: [{ type: "text", text: "Do not copy as assistant text." }],
+    };
+
+    expect(formatAssistantMessageClipboardText(message)).toBe("");
   });
 });
 

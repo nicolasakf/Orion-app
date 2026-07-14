@@ -22,7 +22,10 @@ import {
   type SubagentSession,
   type SubagentSessionStatus,
 } from "@/lib/chat/chat-storage";
-import { createChatFork, type ChatForkKind } from "@/lib/chat/chat-forking";
+import {
+  createChatFork,
+  truncateChatForInPlaceEdit,
+} from "@/lib/chat/chat-forking";
 import { downloadChatTranscriptMarkdown } from "@/lib/chat/export-chat-transcript";
 import {
   formatCellReferenceLabel,
@@ -148,6 +151,7 @@ import {
   saveModelSettingsMapToSession,
   saveSelectedModelToSession,
 } from "./model-selection";
+import { resolveTitleGenerationModel } from "./title-generation-model";
 import {
   findModelBySelectionKey,
   formatModelSelectionKey,
@@ -1099,9 +1103,12 @@ export function RightSidebar({
 
     const titlePrompt = `Based on the following conversation, create a short, descriptive title for the chat session. The title must be in the same language as the user's message. Return only the title, no other text. The title must be 45 characters or less.\n\nUser: ${userText}\nAssistant: ${assistantText}\n\nTitle:`;
 
-    const titleModelId = effectiveSettings.chat.titleGenerationModelId;
-    const titleGenerationModel =
-      getModel(titleModelId) ?? getModel(DEFAULT_TITLE_GENERATION_MODEL_ID);
+    const titleGenerationModel = resolveTitleGenerationModel({
+      configuredModelId: effectiveSettings.chat.titleGenerationModelId,
+      defaultModelId: DEFAULT_TITLE_GENERATION_MODEL_ID,
+      models: allModels,
+      credentials: effectiveSettings.providers?.credentials ?? {},
+    });
     if (!titleGenerationModel) {
       console.error("Title generation model not found");
       return;
@@ -1492,7 +1499,6 @@ export function RightSidebar({
 
     const terminals = assistant?.terminalPool?.getState().terminals ?? [];
     for (const terminal of terminals) {
-      if (terminal.type === "system") continue;
       if (terminal.type === "agent" && effectiveChatId && terminal.chatId !== effectiveChatId) continue;
       addOption(
         makeReference(
@@ -1588,17 +1594,17 @@ export function RightSidebar({
   const [stopConfirmAction, setStopConfirmAction] = useState<
     { type: "new-chat" } | { type: "switch-chat"; targetChatId: string } | null
   >(null);
-  type PendingChatForkAction = {
-    kind: ChatForkKind;
+  type PendingInPlaceEditAction = {
     sourceChat: Chat;
     sourceMessageIndex: number;
-    editedText?: string;
-    references?: ResolvedChatReference[];
-    attachments?: ChatDraftAttachment[];
+    messageId: string;
+    editedText: string;
+    references: ResolvedChatReference[];
+    attachments: ChatDraftAttachment[];
   };
-  const [pendingChatForkAction, setPendingChatForkAction] =
-    useState<PendingChatForkAction | null>(null);
-  const [isRestoringForkWorkspace, setIsRestoringForkWorkspace] = useState(false);
+  const [pendingInPlaceEditAction, setPendingInPlaceEditAction] =
+    useState<PendingInPlaceEditAction | null>(null);
+  const [isRestoringEditWorkspace, setIsRestoringEditWorkspace] = useState(false);
 
   // Guard against calling generateAndSetTitle more than once per chat session.
   // A ref is used so the check is synchronous and not subject to stale closure
@@ -2083,6 +2089,7 @@ export function RightSidebar({
       assistant?.availableSkills,
       assistant?.availableSubagents,
       assistant?.jupyterServerIsLocal,
+      assistant?.rootDirectory,
       assistant?.serverInfo,
       clientPlatformOs,
       effectiveChatId,
@@ -2815,9 +2822,9 @@ export function RightSidebar({
       };
     }), []);
 
-  /** Finds checkpoint ids that should be undone when restoring to a fork point. */
-  const getForkRestoreCheckpointIds = useCallback(
-    (action: PendingChatForkAction): string[] => {
+  /** Finds checkpoint ids that should be undone before resending an edited user turn. */
+  const getInPlaceEditRestoreCheckpointIds = useCallback(
+    (action: PendingInPlaceEditAction): string[] => {
       const checkpointIds: string[] = [];
       for (let index = action.sourceChat.messages.length - 1; index >= action.sourceMessageIndex; index -= 1) {
         const message = action.sourceChat.messages[index];
@@ -2833,8 +2840,8 @@ export function RightSidebar({
     [checkpointRequestByMessageId, checkpointStatuses]
   );
 
-  /** Notifies open editors that checkpoint restore may have changed files. */
-  const dispatchForkWorkspaceRestored = useCallback(() => {
+  /** Notifies open editors that an edit-time checkpoint restore may have changed files. */
+  const dispatchEditWorkspaceRestored = useCallback(() => {
     window.dispatchEvent(new CustomEvent("agentNotebookModified"));
     if (activeNotebookPath) {
       window.dispatchEvent(
@@ -2845,14 +2852,14 @@ export function RightSidebar({
     }
   }, [activeNotebookPath]);
 
-  /** Restores checkpointed workspace edits newest-to-oldest for a pending fork. */
-  const restoreWorkspaceForFork = useCallback(
-    async (action: PendingChatForkAction): Promise<void> => {
+  /** Restores checkpointed workspace edits newest-to-oldest before an in-place resend. */
+  const restoreWorkspaceForInPlaceEdit = useCallback(
+    async (action: PendingInPlaceEditAction): Promise<void> => {
       if (!kernelService) {
         throw new Error("Connect to a Jupyter server before restoring files to this point.");
       }
 
-      const checkpointIds = getForkRestoreCheckpointIds(action);
+      const checkpointIds = getInPlaceEditRestoreCheckpointIds(action);
       let restoredCount = 0;
       let conflictCount = 0;
       for (const checkpointId of checkpointIds) {
@@ -2865,7 +2872,7 @@ export function RightSidebar({
         conflictCount += result.conflicts.length;
       }
 
-      dispatchForkWorkspaceRestored();
+      dispatchEditWorkspaceRestored();
       await refreshCheckpointStatuses();
 
       if (conflictCount > 0) {
@@ -2880,8 +2887,8 @@ export function RightSidebar({
       );
     },
     [
-      dispatchForkWorkspaceRestored,
-      getForkRestoreCheckpointIds,
+      dispatchEditWorkspaceRestored,
+      getInPlaceEditRestoreCheckpointIds,
       kernelService,
       refreshCheckpointStatuses,
     ]
@@ -3784,45 +3791,27 @@ export function RightSidebar({
     }
   };
 
-  /** Clears composer state after a fork action has been accepted. */
-  const clearForkComposerState = useCallback((action: PendingChatForkAction) => {
-    if (action.kind === "edit-resend") {
-      setInput("");
-      setEditingState(null);
-    }
+  /** Clears the composer only after an in-place edit has been accepted. */
+  const clearInPlaceEditComposerState = useCallback(() => {
+    setInput("");
+    setEditingState(null);
     setDraftReferences([]);
     setDraftAttachments([]);
     setEphemeralCostMessage(null);
   }, []);
 
-  /** Creates a chat fork and optionally sends the edited replacement message. */
-  const executeChatForkAction = useCallback(
-    async (
-      action: PendingChatForkAction,
-      options: { restoreWorkspace: boolean }
-    ): Promise<void> => {
-      if (options.restoreWorkspace) {
-        setIsRestoringForkWorkspace(true);
-        try {
-          await restoreWorkspaceForFork(action);
-        } catch (error) {
-          console.error("Failed to restore workspace before fork:", error);
-          toast.error(
-            error instanceof Error
-              ? error.message
-              : "Failed to restore files to this point."
-          );
-          return;
-        } finally {
-          setIsRestoringForkWorkspace(false);
-        }
-      }
+  /** Creates a new chat branch through a completed assistant response without altering files. */
+  const handleForkFromAssistantMessage = useCallback(
+    (message: UIMessage, index: number): void => {
+      if (message.role !== "assistant" || isInputLocked || !currentChat) return;
+
+      const sourceMessage = currentChat.messages[index];
+      if (sourceMessage?.id !== message.id || sourceMessage.role !== "assistant") return;
 
       const now = new Date();
       const fork = createChatFork({
-        sourceChat: action.sourceChat,
-        sourceMessageIndex: action.sourceMessageIndex,
-        kind: action.kind,
+        sourceChat: currentChat,
+        sourceMessageIndex: index,
         forkId: crypto.randomUUID(),
         now,
       });
@@ -3837,8 +3826,9 @@ export function RightSidebar({
         setCurrentChatId(fork.id);
         setMessages(forkMessages);
         setActiveSubagentToolCallId(null);
-        setPendingChatForkAction(null);
-        clearForkComposerState(action);
+        setDraftReferences([]);
+        setDraftAttachments([]);
+        setEphemeralCostMessage(null);
       });
       effectiveChatIdRef.current = fork.id;
       compactionSummaryRef.current = fork.compactionSummary;
@@ -3847,44 +3837,153 @@ export function RightSidebar({
       pendingKernelToolCallsRef.current = [];
       pendingServerToolCallsRef.current = [];
       setShowKernelPrompt(false);
+      toast.success("Chat fork created.");
+    },
+    [currentChat, isInputLocked, setMessages, toChatStateMessages]
+  );
 
-      if (action.kind !== "edit-resend") {
-        toast.success("Chat fork created.");
+  /** Replaces a user message in the current chat and drops every later turn before resend. */
+  const executeInPlaceEdit = useCallback(
+    async (
+      action: PendingInPlaceEditAction,
+      options: { restoreWorkspace: boolean }
+    ): Promise<void> => {
+      if (effectiveChatIdRef.current !== action.sourceChat.id) {
+        toast.error("Return to the edited chat before resending this message.");
         return;
       }
 
-      const messageText = action.editedText?.trim() ?? "";
-      if (!messageText) return;
+      if (options.restoreWorkspace) {
+        setIsRestoringEditWorkspace(true);
+        try {
+          await restoreWorkspaceForInPlaceEdit(action);
+        } catch (error) {
+          console.error("Failed to restore workspace before editing:", error);
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : "Failed to restore files to this point."
+          );
+          return;
+        } finally {
+          setIsRestoringEditWorkspace(false);
+        }
+      }
+
+      const attachments = action.attachments;
+      const references = [
+        ...action.references,
+        ...attachments.map((attachment) => attachment.reference),
+      ].slice(-20);
+      const imageFileParts = attachments
+        .map((attachment) => attachment.imageFilePart)
+        .filter((part): part is FileUIPart => part !== undefined);
+      const messageText =
+        action.editedText.trim().length > 0
+          ? action.editedText
+          : references.length > 0 || imageFileParts.length > 0
+            ? "Attached external file(s)."
+            : "";
+      if (!messageText.trim() && imageFileParts.length === 0) return;
+
+      let truncatedChat: Chat;
+      try {
+        truncatedChat = truncateChatForInPlaceEdit({
+          sourceChat: action.sourceChat,
+          sourceMessageIndex: action.sourceMessageIndex,
+          now: new Date(),
+        });
+      } catch (error) {
+        console.error("Failed to prepare edited chat history:", error);
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to prepare the edited chat history."
+        );
+        return;
+      }
+      const retainedTarget = truncatedChat.messages.at(-1);
+      if (!retainedTarget || retainedTarget.id !== action.messageId) {
+        toast.error("The message you were editing is no longer available.");
+        return;
+      }
+
+      const updatedChat: Chat = {
+        ...truncatedChat,
+        messages: [
+          ...truncatedChat.messages.slice(0, -1),
+          {
+            ...retainedTarget,
+            parts: [{ type: "text", text: messageText }],
+            metadata: normalizeChatMessageMetadata(
+              references.length > 0 ? { references } : undefined
+            ),
+          },
+        ],
+      };
+      const updatedMessages = toChatStateMessages(updatedChat.messages);
+      const retainedMessageIds = new Set(updatedChat.messages.map((message) => message.id));
+
+      flushSync(() => {
+        setChats((prev) => {
+          const next = prev.map((chat) =>
+            chat.id === action.sourceChat.id ? updatedChat : chat
+          );
+          chatsRef.current = next;
+          return next;
+        });
+        setMessages(updatedMessages);
+        setActiveSubagentToolCallId(null);
+        setPendingInPlaceEditAction(null);
+        clearInPlaceEditComposerState();
+        setCheckpointRequestByMessageId((current) =>
+          new Map(
+            [...current].filter(
+              ([messageId]) => messageId !== action.messageId && retainedMessageIds.has(messageId)
+            )
+          )
+        );
+        setSubagentProgress(new Map());
+        toolTimingsRef.current = new Map();
+        setToolTimings(new Map());
+      });
+      messagesRef.current = updatedMessages;
+      compactionSummaryRef.current = updatedChat.compactionSummary;
+      trackedToolCallsRef.current = new Map();
+      pendingKernelToolCallsRef.current = [];
+      pendingServerToolCallsRef.current = [];
+      activeSubagentRunToolCallsRef.current.clear();
+      setShowKernelPrompt(false);
+      setMessageQueue([]);
+      setEphemeralCostMessage(null);
+
+      for (const [, pending] of pendingApprovalToolCallsRef.current) {
+        pending.resolve("reject");
+      }
+      pendingApprovalToolCallsRef.current.clear();
+      setPendingApprovalIds(new Set());
 
       beginAgentTurn();
       const modelRequestId = crypto.randomUUID();
       modelRequestIdRef.current = modelRequestId;
       ensureResearchSessionActive(messageText);
       forcedSubagentForCurrentTurnRef.current = null;
-
-      const attachments = action.attachments ?? [];
-      const references = [
-        ...(action.references ?? []),
-        ...attachments.map((attachment) => attachment.reference),
-      ].slice(-20);
-      const imageFileParts = attachments
-        .map((attachment) => attachment.imageFilePart)
-        .filter((part): part is FileUIPart => part !== undefined);
       bodyRef.current = {
         ...bodyRef.current,
-        chatId: fork.id,
+        chatId: action.sourceChat.id,
         modelRequestId,
       };
 
       await sendMessage(
         {
           text: messageText,
+          messageId: action.messageId,
           ...(imageFileParts.length > 0 ? { files: imageFileParts } : {}),
           ...(references.length > 0 ? { metadata: { references } } : {}),
         },
         {
           body: buildChatRequestBody({
-            chatId: fork.id,
+            chatId: action.sourceChat.id,
             modelRequestId,
           }),
         }
@@ -3893,39 +3992,26 @@ export function RightSidebar({
     [
       beginAgentTurn,
       buildChatRequestBody,
-      clearForkComposerState,
+      clearInPlaceEditComposerState,
       ensureResearchSessionActive,
-      restoreWorkspaceForFork,
+      restoreWorkspaceForInPlaceEdit,
       sendMessage,
       setMessages,
       toChatStateMessages,
     ]
   );
 
-  /** Prompts for optional workspace restore when a fork point has later checkpoints. */
-  const requestOrExecuteChatFork = useCallback(
-    (action: PendingChatForkAction): void => {
-      if (getForkRestoreCheckpointIds(action).length > 0) {
-        setPendingChatForkAction(action);
+  /** Opens the workspace choice only when the edited turn has active checkpoints to undo. */
+  const requestOrExecuteInPlaceEdit = useCallback(
+    (action: PendingInPlaceEditAction): void => {
+      if (getInPlaceEditRestoreCheckpointIds(action).length > 0) {
+        setPendingInPlaceEditAction(action);
         return;
       }
 
-      void executeChatForkAction(action, { restoreWorkspace: false });
+      void executeInPlaceEdit(action, { restoreWorkspace: false });
     },
-    [executeChatForkAction, getForkRestoreCheckpointIds]
-  );
-
-  /** Creates a new chat branch at the selected user message without sending. */
-  const handleForkFromMessage = useCallback(
-    (_message: UIMessage, index: number) => {
-      if (isInputLocked || !currentChat) return;
-      requestOrExecuteChatFork({
-        kind: "fork-from-message",
-        sourceChat: currentChat,
-        sourceMessageIndex: index,
-      });
-    },
-    [currentChat, isInputLocked, requestOrExecuteChatFork]
+    [executeInPlaceEdit, getInPlaceEditRestoreCheckpointIds]
   );
 
   // ============================================================================
@@ -4047,6 +4133,31 @@ export function RightSidebar({
         setDraftAttachments([]);
       }
     };
+
+    // Editing always replaces the selected user turn before any slash-command
+    // behavior is considered, so edited `/cost` or skill text remains chat content.
+    if (editingState) {
+      if (isInputLocked || !currentChat || !hasEffectiveDraftContent) return;
+
+      const sourceMessage = currentChat.messages[editingState.messageIndex];
+      if (
+        sourceMessage?.id !== editingState.messageId ||
+        sourceMessage.role !== "user"
+      ) {
+        toast.error("The message you were editing is no longer available.");
+        return;
+      }
+
+      requestOrExecuteInPlaceEdit({
+        sourceChat: currentChat,
+        sourceMessageIndex: editingState.messageIndex,
+        messageId: editingState.messageId,
+        editedText: effectiveInput,
+        references: effectiveReferences,
+        attachments: effectiveAttachments,
+      });
+      return;
+    }
 
     // Intercept slash commands before normal chat submission.
     if (submitSlashCommand === "compact") {
@@ -4186,18 +4297,7 @@ export function RightSidebar({
       return;
     }
 
-    if (editingState && currentChat) {
-      requestOrExecuteChatFork({
-        kind: "edit-resend",
-        sourceChat: currentChat,
-        sourceMessageIndex: editingState.messageIndex,
-        editedText: effectiveInput,
-        references: effectiveReferences,
-        attachments: effectiveAttachments,
-      });
-    } else {
-      handleSubmit(e);
-    }
+    handleSubmit(e);
   };
 
   customHandleSubmitRef.current = customHandleSubmit;
@@ -4600,7 +4700,7 @@ export function RightSidebar({
               checkpointStatuses={checkpointStatuses}
               checkpointRequestByMessageId={checkpointRequestByMessageId}
               onRestoreCheckpoint={handleRestoreCheckpoint}
-              onForkFromMessage={handleForkFromMessage}
+              onForkFromAssistantMessage={handleForkFromAssistantMessage}
               emptyPromptCategories={
                 isBusinessExperience ? BUSINESS_PROMPT_CATEGORIES : undefined
               }
@@ -4690,24 +4790,26 @@ export function RightSidebar({
       </AlertDialog>
 
       <AlertDialog
-        open={pendingChatForkAction !== null}
+        open={pendingInPlaceEditAction !== null}
         onOpenChange={(open) => {
-          if (!open && !isRestoringForkWorkspace) {
-            setPendingChatForkAction(null);
+          if (!open && !isRestoringEditWorkspace) {
+            setPendingInPlaceEditAction(null);
           }
         }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Fork chat from here?</AlertDialogTitle>
+            <AlertDialogTitle>Update chat from here?</AlertDialogTitle>
             <AlertDialogDescription>
-              Orion can keep your current files as they are, or try to restore recorded agent file changes back to this point before creating the fork.
+              Orion can keep your current files as they are while replacing this
+              message and clearing later chat context, or restore recorded agent
+              file changes to this point first.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <AlertDialogCancel
-              onClick={() => setPendingChatForkAction(null)}
-              disabled={isRestoringForkWorkspace}
+              onClick={() => setPendingInPlaceEditAction(null)}
+              disabled={isRestoringEditWorkspace}
               shortcut="Escape"
               className="mt-0 w-full"
             >
@@ -4715,11 +4817,11 @@ export function RightSidebar({
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                const action = pendingChatForkAction;
+                const action = pendingInPlaceEditAction;
                 if (!action) return;
-                void executeChatForkAction(action, { restoreWorkspace: false });
+                void executeInPlaceEdit(action, { restoreWorkspace: false });
               }}
-              disabled={isRestoringForkWorkspace}
+              disabled={isRestoringEditWorkspace}
               shortcut="Enter"
               className="w-full"
             >
@@ -4729,11 +4831,11 @@ export function RightSidebar({
               type="button"
               variant="outline"
               onClick={() => {
-                const action = pendingChatForkAction;
+                const action = pendingInPlaceEditAction;
                 if (!action) return;
-                void executeChatForkAction(action, { restoreWorkspace: true });
+                void executeInPlaceEdit(action, { restoreWorkspace: true });
               }}
-              disabled={!kernelService || isRestoringForkWorkspace}
+              disabled={!kernelService || isRestoringEditWorkspace}
               title={
                 kernelService
                   ? undefined

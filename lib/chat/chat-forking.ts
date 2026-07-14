@@ -1,12 +1,15 @@
 import type { Chat, ChatMessage, SubagentSession } from "@/lib/chat/chat-types";
 
-export type ChatForkKind = "edit-resend" | "fork-from-message";
-
 export interface CreateChatForkOptions {
   sourceChat: Chat;
   sourceMessageIndex: number;
-  kind: ChatForkKind;
   forkId: string;
+  now: Date;
+}
+
+export interface TruncateChatForInPlaceEditOptions {
+  sourceChat: Chat;
+  sourceMessageIndex: number;
   now: Date;
 }
 
@@ -60,26 +63,39 @@ function buildForkTitle(sourceTitle: string): string {
 }
 
 /**
- * Creates a chat fork from a user message boundary.
- * Edit-resend excludes the edited message; fork-from-message includes it.
+ * Returns a compaction summary only when its inclusive boundary remains in
+ * retained history. A summary at or after an edited user message is stale.
+ */
+function retainCompactionSummaryThrough(
+  sourceChat: Chat,
+  lastRetainedMessageIndex: number
+): Chat["compactionSummary"] {
+  const summary = sourceChat.compactionSummary;
+  if (!summary) return undefined;
+
+  const summaryIndex = sourceChat.messages.findIndex(
+    (message) => message.id === summary.coversThrough
+  );
+
+  return summaryIndex >= 0 && summaryIndex <= lastRetainedMessageIndex
+    ? summary
+    : undefined;
+}
+
+/**
+ * Creates a new chat fork through an assistant message boundary, preserving
+ * only context that is valid for the new branch.
  */
 export function createChatFork(options: CreateChatForkOptions): Chat {
   const sourceMessage = options.sourceChat.messages[options.sourceMessageIndex];
   if (!sourceMessage) {
     throw new Error("Cannot fork chat: source message does not exist.");
   }
+  if (sourceMessage.role !== "assistant") {
+    throw new Error("Cannot fork chat: source message must be an assistant message.");
+  }
 
-  const lastCopiedIndex =
-    options.kind === "edit-resend"
-      ? options.sourceMessageIndex - 1
-      : options.sourceMessageIndex;
-  const messages = options.sourceChat.messages.slice(0, Math.max(0, lastCopiedIndex + 1));
-  const copiedMessageIds = new Set(messages.map((message) => message.id));
-  const compactionSummary =
-    options.sourceChat.compactionSummary &&
-    copiedMessageIds.has(options.sourceChat.compactionSummary.coversThrough)
-      ? options.sourceChat.compactionSummary
-      : undefined;
+  const messages = options.sourceChat.messages.slice(0, options.sourceMessageIndex + 1);
 
   return {
     id: options.forkId,
@@ -91,16 +107,53 @@ export function createChatFork(options: CreateChatForkOptions): Chat {
     ),
     createdAt: options.now,
     updatedAt: options.now,
-    compactionSummary,
+    compactionSummary: retainCompactionSummaryThrough(
+      options.sourceChat,
+      options.sourceMessageIndex
+    ),
     forkedFrom: {
       sourceChatId: options.sourceChat.id,
       sourceMessageId: sourceMessage.id,
       sourceMessageIndex: options.sourceMessageIndex,
-      mode:
-        options.kind === "edit-resend"
-          ? "edit_resend"
-          : "fork_from_message",
+      mode: "fork_from_message",
       createdAt: options.now,
     },
+  };
+}
+
+/**
+ * Truncates a chat in place before resending an edited user message. The
+ * selected message keeps its id for AI SDK replacement but loses the prior
+ * request checkpoint so the regenerated turn can record a fresh one.
+ */
+export function truncateChatForInPlaceEdit(
+  options: TruncateChatForInPlaceEditOptions
+): Chat {
+  const sourceMessage = options.sourceChat.messages[options.sourceMessageIndex];
+  if (!sourceMessage) {
+    throw new Error("Cannot edit chat history: source message does not exist.");
+  }
+  if (sourceMessage.role !== "user") {
+    throw new Error("Cannot edit chat history: source message must be a user message.");
+  }
+
+  const { checkpointId: _previousCheckpointId, ...editedMessage } = sourceMessage;
+  const messages: ChatMessage[] = [
+    ...options.sourceChat.messages.slice(0, options.sourceMessageIndex),
+    editedMessage,
+  ];
+
+  return {
+    ...options.sourceChat,
+    messages,
+    subagentSessions: filterSubagentSessions(
+      messages,
+      options.sourceChat.subagentSessions
+    ),
+    compactionSummary: retainCompactionSummaryThrough(
+      options.sourceChat,
+      options.sourceMessageIndex - 1
+    ),
+    updatedAt: options.now,
   };
 }

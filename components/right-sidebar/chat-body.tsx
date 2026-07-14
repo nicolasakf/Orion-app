@@ -3,7 +3,7 @@
 import * as React from "react";
 import { type UIMessage, isToolUIPart } from "ai";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, AtSign, ChevronDown } from "lucide-react";
+import { ArrowDown, AtSign, ChevronDown, Copy, GitFork } from "lucide-react";
 import { ToolInvocationCard } from "./tool-invocation-card";
 import { DelegateInvocationCard } from "./delegate-invocation-card";
 import { AssistantActivityGroup } from "./assistant-activity-group";
@@ -28,11 +28,25 @@ import {
   type ToolTiming,
 } from "./assistant-activity-grouping";
 import { Button } from "@/components/ui/button";
+import {
+  CheckmarkedButton,
+  useCheckmarkedFeedback,
+} from "@/components/common/checkmarked-button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
 import type { EditingState } from "./types";
 import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
 import { dispatchInsertChatMessage } from "@/lib/chat/chat-composer-events";
+import {
+  formatAssistantMessageClipboardText,
+  writeAssistantMessageToClipboard,
+} from "@/lib/chat/chat-message-copy";
 
 type CheckpointMessageAction = "restore" | "redo";
 
@@ -71,7 +85,7 @@ export interface ChatBodyProps {
   checkpointStatuses?: Map<string, EditCheckpointStatus>;
   checkpointRequestByMessageId?: Map<string, string>;
   onRestoreCheckpoint?: (checkpointId: string, action: CheckpointMessageAction) => void;
-  onForkFromMessage?: (message: UIMessage, index: number) => void;
+  onForkFromAssistantMessage?: (message: UIMessage, index: number) => void;
   /** Optional prompt categories rendered when this chat has no rows. */
   emptyPromptCategories?: readonly BusinessPromptCategory[];
   /** Resets the prompt library when an empty chat is started again. */
@@ -83,6 +97,8 @@ interface ChatMessageRowProps {
   index: number;
   isLastMessage: boolean;
   isDimmed: boolean;
+  /** True while another user message is being edited in the composer. */
+  isEditing: boolean;
   isLoading: boolean;
   /** True while the assistant turn is still in progress (streaming, tools, follow-up gap). */
   isAgentTurnActive?: boolean;
@@ -104,7 +120,7 @@ interface ChatMessageRowProps {
   checkpointStatuses?: Map<string, EditCheckpointStatus>;
   checkpointRequestByMessageId?: Map<string, string>;
   onRestoreCheckpoint?: (checkpointId: string, action: CheckpointMessageAction) => void;
-  onForkFromMessage?: (message: UIMessage, index: number) => void;
+  onForkFromAssistantMessage?: (message: UIMessage, index: number) => void;
 }
 
 type ChatRenderItem =
@@ -701,6 +717,71 @@ function AssistantActivityRunRow({
   );
 }
 
+interface AssistantMessageActionsProps {
+  message: UIMessage;
+  onForkFromAssistantMessage?: () => void;
+}
+
+/** Renders the stable copy and fork controls below a completed assistant response. */
+function AssistantMessageActions({
+  message,
+  onForkFromAssistantMessage,
+}: AssistantMessageActionsProps) {
+  const { checked: isCopied, showCheckmark } = useCheckmarkedFeedback();
+
+  /** Copy the assistant's raw Markdown text and show transient success feedback. */
+  const handleCopy = React.useCallback(async () => {
+    try {
+      await writeAssistantMessageToClipboard(message);
+      showCheckmark();
+    } catch (error) {
+      console.error("Failed to copy assistant message:", error);
+    }
+  }, [message, showCheckmark]);
+
+  return (
+    <TooltipProvider delayDuration={300}>
+      <div className="flex items-center gap-0.5 px-1">
+        {onForkFromAssistantMessage ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={onForkFromAssistantMessage}
+                aria-label="Fork from here"
+                className="h-6 w-6 shrink-0 text-muted-foreground hover:bg-transparent hover:text-foreground [&_svg]:size-3"
+              >
+                <GitFork />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" align="start">
+              <p>Fork from here</p>
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <CheckmarkedButton
+              variant="ghost"
+              size="icon"
+              onClick={handleCopy}
+              aria-label="Copy message"
+              className="h-6 w-6 shrink-0 text-muted-foreground hover:bg-transparent hover:text-foreground [&_svg]:size-3"
+              checked={isCopied}
+              icon={<Copy />}
+            />
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{isCopied ? "Copied!" : "Copy message"}</p>
+          </TooltipContent>
+        </Tooltip>
+      </div>
+    </TooltipProvider>
+  );
+}
+
 /**
  * Render one chat row. Historical rows are memoized because AI SDK streaming
  * can clone message objects on every chunk.
@@ -710,6 +791,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   index,
   isLastMessage,
   isDimmed,
+  isEditing,
   isLoading,
   isAgentTurnActive = false,
   onUserMessageClick,
@@ -730,14 +812,15 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   checkpointStatuses,
   checkpointRequestByMessageId,
   onRestoreCheckpoint,
-  onForkFromMessage,
+  onForkFromAssistantMessage,
 }: ChatMessageRowProps) {
   const handleUserClick = React.useCallback(() => {
     onUserMessageClick(message, index);
   }, [index, message, onUserMessageClick]);
-  const handleForkFromMessage = React.useCallback(() => {
-    onForkFromMessage?.(message, index);
-  }, [index, message, onForkFromMessage]);
+  const handleForkFromAssistantMessage = React.useCallback(() => {
+    if (message.role !== "assistant") return;
+    onForkFromAssistantMessage?.(message, index);
+  }, [index, message, onForkFromAssistantMessage]);
 
   const costSummary = costSummaryByMessageId?.[message.id];
   const messageCheckpointId = checkpointRequestByMessageId?.get(message.id);
@@ -798,6 +881,13 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   const renderBlocks = message.role === "assistant"
     ? buildAssistantRenderBlocks(message.parts)
     : [];
+  const hasAssistantProse = Boolean(formatAssistantMessageClipboardText(message).trim());
+  const showAssistantActions =
+    message.role === "assistant" &&
+    !costSummary &&
+    hasAssistantProse &&
+    !isLoading &&
+    !isAgentTurnActive;
 
   return (
     <div
@@ -812,7 +902,6 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
           checkpointId={actionableCheckpointId}
           checkpointAction={checkpointAction}
           onRestoreCheckpoint={onRestoreCheckpoint}
-          onForkFromMessage={onForkFromMessage ? handleForkFromMessage : undefined}
         />
       ) : costSummary ? (
         <CostSummaryCard
@@ -865,6 +954,16 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
               </AssistantActivityGroup>
             );
           })}
+          {showAssistantActions ? (
+            <AssistantMessageActions
+              message={message}
+              onForkFromAssistantMessage={
+                !isEditing && onForkFromAssistantMessage
+                  ? handleForkFromAssistantMessage
+                  : undefined
+              }
+            />
+          ) : null}
         </div>
       )}
     </div>
@@ -875,6 +974,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   if (prev.index !== next.index) return false;
   if (prev.isLastMessage !== next.isLastMessage) return false;
   if (prev.isDimmed !== next.isDimmed) return false;
+  if (prev.isEditing !== next.isEditing) return false;
 
   const prevEffectiveLoading = prev.isLastMessage ? prev.isLoading : false;
   const nextEffectiveLoading = next.isLastMessage ? next.isLoading : false;
@@ -916,7 +1016,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
     return false;
   }
   if (prev.onRestoreCheckpoint !== next.onRestoreCheckpoint) return false;
-  if (prev.onForkFromMessage !== next.onForkFromMessage) return false;
+  if (prev.onForkFromAssistantMessage !== next.onForkFromAssistantMessage) return false;
 
   return true;
 });
@@ -1054,7 +1154,7 @@ export function ChatBody({
   checkpointStatuses,
   checkpointRequestByMessageId,
   onRestoreCheckpoint,
-  onForkFromMessage,
+  onForkFromAssistantMessage,
   emptyPromptCategories,
   emptyPromptLibraryKey,
 }: ChatBodyProps) {
@@ -1236,6 +1336,7 @@ export function ChatBody({
                     isDimmed={
                       !!editingState && editingState.messageId !== item.message.id
                     }
+                    isEditing={editingState !== null}
                     isLoading={isLoading && item.messageIndex === messages.length - 1}
                     isAgentTurnActive={
                       isAgentTurnActive && item.messageIndex === messages.length - 1
@@ -1258,7 +1359,7 @@ export function ChatBody({
                     checkpointStatuses={checkpointStatuses}
                     checkpointRequestByMessageId={checkpointRequestByMessageId}
                     onRestoreCheckpoint={onRestoreCheckpoint}
-                    onForkFromMessage={onForkFromMessage}
+                    onForkFromAssistantMessage={onForkFromAssistantMessage}
                   />
                 )}
 

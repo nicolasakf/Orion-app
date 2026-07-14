@@ -1,17 +1,56 @@
 import * as React from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { UIMessage } from "ai";
 
 import { BUSINESS_PROMPT_CATEGORIES } from "@/components/right-sidebar/business-prompt-library";
 import { ChatBody } from "@/components/right-sidebar/chat-body";
 import { INSERT_CHAT_MESSAGE_EVENT } from "@/lib/chat/chat-composer-events";
 
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({
+        index,
+        key: index,
+        start: index * 180,
+      })),
+    getTotalSize: () => count * 180,
+    measureElement: () => undefined,
+    scrollToIndex: () => undefined,
+  }),
+}));
+
+vi.mock("@/hooks/use-orion-settings", () => ({
+  useOrionSettings: () => ({
+    effectiveSettings: {
+      chat: { fontSize: 14 },
+    },
+  }),
+}));
+
 const projectCategory = BUSINESS_PROMPT_CATEGORIES[0]!;
 const firstProjectPrompt = projectCategory.prompts[0]!;
+const initialClipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  if (initialClipboardDescriptor) {
+    Object.defineProperty(navigator, "clipboard", initialClipboardDescriptor);
+  } else {
+    Reflect.deleteProperty(navigator, "clipboard");
+  }
+});
+
+beforeAll(() => {
+  class ResizeObserverMock {
+    observe = vi.fn();
+    unobserve = vi.fn();
+    disconnect = vi.fn();
+  }
+
+  vi.stubGlobal("ResizeObserver", ResizeObserverMock);
 });
 
 /** Renders ChatBody with the minimum props needed for empty-state assertions. */
@@ -21,6 +60,23 @@ function renderEmptyChatBody(
   return render(
     <ChatBody
       messages={[]}
+      error={undefined}
+      isLoading={false}
+      onUserMessageClick={() => undefined}
+      editingState={null}
+      {...props}
+    />,
+  );
+}
+
+/** Renders a chat body with historical message rows visible in the test virtualizer. */
+function renderMessageChatBody(
+  messages: UIMessage[],
+  props: Partial<React.ComponentProps<typeof ChatBody>> = {},
+) {
+  return render(
+    <ChatBody
+      messages={messages}
       error={undefined}
       isLoading={false}
       onUserMessageClick={() => undefined}
@@ -152,5 +208,136 @@ describe("ChatBody empty prompt library", () => {
     });
 
     expect(screen.queryByText("What should Orion work on?")).not.toBeInTheDocument();
+  });
+});
+
+describe("ChatBody assistant message actions", () => {
+  it("renders one left-aligned action row after a multi-part assistant response", () => {
+    const onForkFromAssistantMessage = vi.fn();
+    const message: UIMessage = {
+      id: "assistant-multipart",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "First Markdown block." },
+        { type: "text", text: "\n\nSecond Markdown block." },
+      ],
+    };
+
+    renderMessageChatBody([message], { onForkFromAssistantMessage });
+
+    expect(screen.getAllByRole("button", { name: "Fork from here" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Copy message" })).toHaveLength(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Fork from here" }));
+    expect(onForkFromAssistantMessage).toHaveBeenCalledWith(message, 0);
+  });
+
+  it("copies raw assistant Markdown while excluding activity-only parts", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const message: UIMessage = {
+      id: "assistant-copy",
+      role: "assistant",
+      parts: [
+        { type: "reasoning", text: "Hidden reasoning" },
+        { type: "text", text: "## Public result\n" },
+        {
+          type: "tool-read_file",
+          toolCallId: "read-copy",
+          state: "output-available",
+          input: { path: "/workspace/example.md" },
+          output: "Read example.",
+        } as UIMessage["parts"][number],
+        { type: "text", text: "\n**Complete**" },
+      ],
+    };
+
+    renderMessageChatBody([message]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith("## Public result\n\n**Complete**");
+    });
+  });
+
+  it("does not offer fork controls for user messages", () => {
+    const message: UIMessage = {
+      id: "user-message",
+      role: "user",
+      parts: [{ type: "text", text: "Please revise this." }],
+    };
+
+    renderMessageChatBody([message], { onForkFromAssistantMessage: vi.fn() });
+
+    expect(screen.queryByRole("button", { name: "Fork from here" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeInTheDocument();
+  });
+
+  it("keeps copy available but suppresses forks while editing a user message", () => {
+    const message: UIMessage = {
+      id: "assistant-after-edit",
+      role: "assistant",
+      parts: [{ type: "text", text: "Completed response." }],
+    };
+
+    renderMessageChatBody([message], {
+      editingState: {
+        messageId: "user-being-edited",
+        messageIndex: 0,
+        originalContent: "Draft update",
+      },
+      onForkFromAssistantMessage: vi.fn(),
+    });
+
+    expect(screen.queryByRole("button", { name: "Fork from here" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeInTheDocument();
+  });
+
+  it("hides controls while an assistant response is still active or has no prose", () => {
+    const proseMessage: UIMessage = {
+      id: "assistant-streaming",
+      role: "assistant",
+      parts: [{ type: "text", text: "Still responding" }],
+    };
+    const toolOnlyMessage: UIMessage = {
+      id: "assistant-tool-only",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-read_file",
+          toolCallId: "read-only",
+          state: "output-available",
+          input: { path: "/workspace/example.md" },
+          output: "Read example.",
+        } as UIMessage["parts"][number],
+      ],
+    };
+
+    const { rerender } = renderMessageChatBody([proseMessage], {
+      isLoading: true,
+      isAgentTurnActive: true,
+      onForkFromAssistantMessage: vi.fn(),
+    });
+
+    expect(screen.queryByRole("button", { name: "Fork from here" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy message" })).not.toBeInTheDocument();
+
+    rerender(
+      <ChatBody
+        messages={[toolOnlyMessage]}
+        error={undefined}
+        isLoading={false}
+        onUserMessageClick={() => undefined}
+        editingState={null}
+        onForkFromAssistantMessage={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "Fork from here" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy message" })).not.toBeInTheDocument();
   });
 });
