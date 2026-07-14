@@ -166,6 +166,23 @@ describe("WorkspaceSearchService", () => {
     ]);
   });
 
+  it("matches literal path fragments against workspace-relative file paths", async () => {
+    const fixture = createContentsFixture({
+      project: directory([entry("src", "project/src", "directory")]),
+      "project/src": directory([entry("foo.ts", "project/src/foo.ts", "file", 10)]),
+      "project/src/foo.ts": textFile("export {}"),
+    });
+    const service = new WorkspaceSearchService(fixture.manager);
+
+    const result = await service.searchWorkspace({
+      rootPath: "project",
+      query: "src/foo",
+      caseSensitive: true,
+    });
+
+    expect(result.fileMatches).toEqual(["src/foo.ts"]);
+  });
+
   it("caps filename and content output at fifty results and trims previews", async () => {
     const entries: FixtureEntry[] = [];
     const models: Record<string, FixtureModel> = {};

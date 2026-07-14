@@ -319,7 +319,7 @@ export class WorkspaceSearchService {
     const fileMatches: string[] = [];
     let fileMatchesTruncated = enumeration.truncated;
     for (const candidate of candidates) {
-      if (!matcher(candidate.name)) continue;
+      if (!matcher(candidate.name) && !matcher(candidate.relativePath)) continue;
 
       fileMatches.push(candidate.relativePath);
       if (fileMatches.length >= WORKSPACE_SEARCH_MAX_FILE_MATCHES) {
