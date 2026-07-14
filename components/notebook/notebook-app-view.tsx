@@ -4,11 +4,11 @@ import React, { useMemo } from "react";
 import {
   AtSign,
   LayoutTemplate,
-  Loader2,
   Sparkles,
   X,
 } from "lucide-react";
 
+import { BusinessRichMarkdownEditor } from "@/components/notebook/business-rich-markdown-editor";
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
 import type {
@@ -19,7 +19,6 @@ import type {
 import { OutputRenderer } from "@/components/notebook/output-renderer";
 import { QueuedOutputSkeleton } from "@/components/notebook/queued-output-skeleton";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -322,6 +321,8 @@ interface AppViewMarkdownContextMenuProps {
   onMention?: () => void;
   onRemove?: () => void;
   businessMode?: boolean;
+  /** Leaves interactive rich-editor controls free of the surrounding menu. */
+  disabled?: boolean;
 }
 
 /** Context menu for markdown items rendered inside App View. */
@@ -330,8 +331,9 @@ function AppViewMarkdownContextMenu({
   onMention,
   onRemove,
   businessMode = false,
+  disabled = false,
 }: AppViewMarkdownContextMenuProps): React.JSX.Element {
-  if (!onMention && !onRemove) {
+  if (disabled || (!onMention && !onRemove)) {
     return <>{children}</>;
   }
 
@@ -375,9 +377,7 @@ interface BusinessMarkdownCellProps {
   onSave: (source: string) => Promise<void>;
 }
 
-/**
- * Renders a Business-mode markdown block with a deliberately small inline editor.
- */
+/** Renders a Business-mode markdown block with a guarded rich editing lifecycle. */
 function BusinessMarkdownCell({
   cellIndex,
   source,
@@ -389,58 +389,6 @@ function BusinessMarkdownCell({
   onFinishEditing,
   onSave,
 }: BusinessMarkdownCellProps): React.JSX.Element {
-  const [draft, setDraft] = React.useState(source);
-  const [saveError, setSaveError] = React.useState<string | null>(null);
-  const [isSaving, setIsSaving] = React.useState(false);
-  const wasEditingRef = React.useRef(isEditing);
-
-  React.useEffect(() => {
-    if (isEditing && !wasEditingRef.current) {
-      setDraft(source);
-      setSaveError(null);
-    }
-    wasEditingRef.current = isEditing;
-  }, [isEditing, source]);
-
-  /** Saves the current markdown draft and leaves editing mode only on success. */
-  const handleSave = React.useCallback(async () => {
-    if (isSaving) return;
-
-    setIsSaving(true);
-    setSaveError(null);
-    try {
-      await onSave(draft);
-      onFinishEditing();
-    } catch (error) {
-      setSaveError(
-        error instanceof Error ? error.message : "Could not save this content.",
-      );
-    } finally {
-      setIsSaving(false);
-    }
-  }, [draft, isSaving, onFinishEditing, onSave]);
-
-  /** Handles the keyboard shortcuts available while editing a markdown block. */
-  const handleEditorKeyDown = React.useCallback(
-    (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        if (!isSaving) onCancelEditing();
-        return;
-      }
-
-      if (
-        event.key === "Enter" &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.nativeEvent.isComposing
-      ) {
-        event.preventDefault();
-        void handleSave();
-      }
-    },
-    [handleSave, isSaving, onCancelEditing],
-  );
-
   /** Starts editing a markdown block only while the Business Edit mode is active. */
   const handleMarkdownClick = React.useCallback(
     (event: React.MouseEvent<HTMLDivElement>) => {
@@ -455,45 +403,13 @@ function BusinessMarkdownCell({
 
   if (isEditing) {
     return (
-      <div
-        className="jp-Cell jp-MarkdownCell corner-squircle rounded-md border border-border bg-background p-3 shadow-sm"
-        data-app-view-cell-index={cellIndex}
-      >
-        <Textarea
-          autoFocus
-          aria-label={`Edit markdown cell ${cellIndex + 1}`}
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={handleEditorKeyDown}
-          disabled={isSaving}
-          className="min-h-40 resize-y bg-sidebar text-sm leading-6"
-        />
-        {saveError ? (
-          <p className="mt-2 text-sm text-destructive" role="alert">
-            {saveError}
-          </p>
-        ) : null}
-        <div className="mt-3 flex justify-end gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onCancelEditing}
-            disabled={isSaving}
-          >
-            Cancel
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => void handleSave()}
-            disabled={isSaving}
-          >
-            {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Save
-          </Button>
-        </div>
-      </div>
+      <BusinessRichMarkdownEditor
+        cellIndex={cellIndex}
+        source={source}
+        onSave={onSave}
+        onCancel={onCancelEditing}
+        onFinishEditing={onFinishEditing}
+      />
     );
   }
 
@@ -803,6 +719,10 @@ export function NotebookAppView({
                   <AppViewMarkdownContextMenu
                     key={`markdown-${item.cellIndex}`}
                     businessMode={businessMode}
+                    disabled={
+                      businessEditMode &&
+                      editingMarkdownCellIndex === item.cellIndex
+                    }
                     onMention={
                       notebookPath
                         ? () => handleMentionMarkdownCell(item.cellIndex)

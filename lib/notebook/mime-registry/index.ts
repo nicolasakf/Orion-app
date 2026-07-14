@@ -1,5 +1,11 @@
 export { createDefaultMimeRegistry, getDefaultMimeRegistry, summarizePlotlyFigure } from "./default-registry";
-export { EMPTY_MIME, ERROR_MIME, STREAM_MIME, getOutputMimeBundle } from "./synthetic-mimes";
+export {
+  EMPTY_MIME,
+  ERROR_MIME,
+  PLOTLY_HTML_MIME,
+  STREAM_MIME,
+  getOutputMimeBundle,
+} from "./synthetic-mimes";
 export { NotebookMimeRegistry } from "./registry";
 export type {
   MimeAgentImage,

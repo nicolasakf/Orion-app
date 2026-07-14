@@ -1,5 +1,9 @@
 import { MIME_RENDERERS } from "@/components/notebook/renderers";
-import { ERROR_MIME, STREAM_MIME } from "@/lib/notebook/mime-registry";
+import {
+  ERROR_MIME,
+  PLOTLY_HTML_MIME,
+  STREAM_MIME,
+} from "@/lib/notebook/mime-registry";
 import type { NotebookMimeRegistry } from "@/lib/notebook/mime-registry";
 import type { MimeOutputKind } from "@/lib/notebook/mime-registry";
 import { getOutputMimeBundle } from "@/lib/notebook/mime-registry";
@@ -35,6 +39,7 @@ const MIME_LABEL_OVERRIDES: Record<string, string> = {
   "application/x-nteract-model-debug+json": "nteract model debug",
   "text/latex": "LaTeX",
   "text/vnd.plotly.v1+html": "Plotly (HTML)",
+  [PLOTLY_HTML_MIME]: "Plotly (HTML)",
   [STREAM_MIME]: "Text stream",
   [ERROR_MIME]: "Error",
 };
@@ -81,6 +86,9 @@ export function getOutputPresentationMimes(
   const bundle = getOutputMimeBundle(output);
   const mimes: OutputPresentationOption[] = [];
   for (const mimeType of Object.keys(bundle)) {
+    if (mimeType === "text/html" && bundle[PLOTLY_HTML_MIME] !== undefined) {
+      continue;
+    }
     if (bundle[mimeType] === undefined) {
       continue;
     }

@@ -436,6 +436,7 @@ export function NotebookEditor({
 
   const cellRefs = useRef<Map<CellId, HTMLDivElement | null>>(new Map());
   const notebookRootRef = useRef<HTMLDivElement | null>(null);
+  const queuedAgentExecutionCellsRef = useRef<Set<number>>(new Set());
   const activeAgentExecutionCellsRef = useRef<Set<number>>(new Set());
   const pendingAgentNotebookReloadRef = useRef(false);
   const mouseSelectionScrollSnapshotRef =
@@ -724,6 +725,19 @@ export function NotebookEditor({
   >(new Map());
   const executionQueueRef = useRef(new CellExecutionQueue());
 
+  /**
+   * Publishes whether any notebook execution source is active. A queued run and
+   * pending or active agent execution can overlap, so neither source may clear
+   * the shared running state on its own.
+   */
+  const updateExecutionRunningState = useCallback(() => {
+    parentSetIsRunning?.(
+      executionQueueRef.current.isActive ||
+        queuedAgentExecutionCellsRef.current.size > 0 ||
+        activeAgentExecutionCellsRef.current.size > 0,
+    );
+  }, [parentSetIsRunning]);
+
   // Clipboard for copy/paste
   const [copiedCells, setCopiedCells] = useState<NotebookCellType[]>([]);
   const deletedCellHistoryRef = useRef<DeletedCellSnapshot[][]>([]);
@@ -781,6 +795,7 @@ export function NotebookEditor({
         pendingCellChangesRef.current = new Map();
         cellComponentRefs.current = new Map();
         executionQueueRef.current.clear();
+        updateExecutionRunningState();
         cellRefs.current = new Map();
         deletedCellHistoryRef.current = [];
         markClean();
@@ -806,6 +821,7 @@ export function NotebookEditor({
     parentKernelService,
     markClean,
     onFileLoadError,
+    updateExecutionRunningState,
   ]);
 
   // Notify parent when notebook changes
@@ -1690,10 +1706,15 @@ export function NotebookEditor({
 
       if (detail.type === "queued") {
         markCellsQueued(detail.cellIndices);
+        detail.cellIndices.forEach((cellIndex) =>
+          queuedAgentExecutionCellsRef.current.add(cellIndex),
+        );
+        updateExecutionRunningState();
         return;
       }
 
       if (detail.type === "start") {
+        queuedAgentExecutionCellsRef.current.delete(detail.cellIndex);
         activeAgentExecutionCellsRef.current.add(detail.cellIndex);
         setNotebook((prev) => {
           if (!prev || detail.cellIndex < 0 || detail.cellIndex >= prev.cells.length) {
@@ -1712,7 +1733,7 @@ export function NotebookEditor({
           status: CellExecutionStatus.RUNNING,
           startTime: detail.startTime,
         });
-        parentSetIsRunning?.(true);
+        updateExecutionRunningState();
         return;
       }
 
@@ -1749,9 +1770,10 @@ export function NotebookEditor({
 
       if (detail.type === "complete") {
         updateExecutionInfo(detail.cellIndex, detail.executionInfo);
+        queuedAgentExecutionCellsRef.current.delete(detail.cellIndex);
         activeAgentExecutionCellsRef.current.delete(detail.cellIndex);
+        updateExecutionRunningState();
         if (activeAgentExecutionCellsRef.current.size === 0) {
-          parentSetIsRunning?.(false);
           if (pendingAgentNotebookReloadRef.current) {
             pendingAgentNotebookReloadRef.current = false;
             void reloadNotebookAfterAgentModification();
@@ -1774,8 +1796,8 @@ export function NotebookEditor({
     filepath,
     markCellsQueued,
     parentExecutionCountRef,
-    parentSetIsRunning,
     reloadNotebookAfterAgentModification,
+    updateExecutionRunningState,
     updateExecutionInfo,
   ]);
 
@@ -2155,7 +2177,7 @@ export function NotebookEditor({
     if (queue.isProcessing) return;
 
     queue.setProcessing(true);
-    parentSetIsRunning?.(true);
+    updateExecutionRunningState();
 
     try {
       let job = queue.dequeue();
@@ -2290,15 +2312,13 @@ export function NotebookEditor({
       console.error("Error executing cells:", error);
     } finally {
       queue.setProcessing(false);
+      updateExecutionRunningState();
       if (queue.pendingCount > 0) {
         void processExecutionQueue();
-      } else {
-        parentSetIsRunning?.(false);
       }
     }
   }, [
     parentKernelService,
-    parentSetIsRunning,
     parentExecutionCountRef,
     prepareCellsForExecution,
     updateExecutionInfo,
@@ -2307,6 +2327,7 @@ export function NotebookEditor({
     clearQueuedExecutionStatuses,
     capturePendingCellSources,
     resolveCellExecutionSource,
+    updateExecutionRunningState,
   ]);
 
   /**
@@ -2651,6 +2672,7 @@ export function NotebookEditor({
     const handleClearExecutionQueue = () => {
       executionQueueRef.current.clear();
       clearQueuedExecutionStatuses();
+      updateExecutionRunningState();
     };
 
     window.addEventListener(
@@ -2664,7 +2686,7 @@ export function NotebookEditor({
         handleClearExecutionQueue as EventListener,
       );
     };
-  }, [clearQueuedExecutionStatuses]);
+  }, [clearQueuedExecutionStatuses, updateExecutionRunningState]);
 
   /**
    * Handles kernel selection

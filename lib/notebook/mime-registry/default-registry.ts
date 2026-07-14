@@ -2,7 +2,7 @@ import { OutputType } from "@/lib/types";
 import { ORION_UI_MIME_TYPE, parseOrionUiMimePayload } from "@/lib/notebook/app-view";
 import { extractTableFromHTML, isEmptyDataframeHtmlTable } from "@/lib/notebook/table-extractor";
 import { NotebookMimeRegistry } from "./registry";
-import { ERROR_MIME, STREAM_MIME } from "./synthetic-mimes";
+import { ERROR_MIME, PLOTLY_HTML_MIME, STREAM_MIME } from "./synthetic-mimes";
 import type { MimeAgentResult, MimeModel, MimeOutputKind, MimeRendererFactory } from "./types";
 
 const RASTER_IMAGE_MIME_TYPES = [
@@ -348,16 +348,14 @@ function buildDefaultFactories(): MimeRendererFactory[] {
     },
     {
       id: "orion-plotly-html",
-      mimeTypes: ["text/vnd.plotly.v1+html"],
+      mimeTypes: ["text/vnd.plotly.v1+html", PLOTLY_HTML_MIME],
       rank: 6,
       safe: false,
       kind: "plotly",
       disableContextMenu: true,
       outputTypes: [OutputType.EXECUTE_RESULT, OutputType.DISPLAY_DATA],
-      summarize: (model) => `[Plotly HTML]\n${toJoinedString(model.value)}`,
-      toAgentResult: (model) => ({
-        text: `[Plotly HTML]\n${toJoinedString(model.value)}`,
-      }),
+      summarize: () => "[Plotly HTML chart]",
+      toAgentResult: () => ({ text: "[Plotly HTML chart]" }),
       textLength: () => 0,
       toClipboard: (model) => ({
         kind: "text",

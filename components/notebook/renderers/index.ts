@@ -1,7 +1,11 @@
 "use client";
 
 import type { JSX } from "react";
-import { ERROR_MIME, STREAM_MIME } from "@/lib/notebook/mime-registry";
+import {
+  ERROR_MIME,
+  PLOTLY_HTML_MIME,
+  STREAM_MIME,
+} from "@/lib/notebook/mime-registry";
 import { DataResourceOutputRenderer } from "./dataresource";
 import { ErrorOutputRenderer } from "./error";
 import { GeoJsonOutputRenderer } from "./geojson";
@@ -34,6 +38,7 @@ export const MIME_RENDERERS: Record<string, NotebookMimeRenderer> = {
   [ORION_UI_MIME_TYPE]: OrionUiOutputRenderer,
   "application/vnd.plotly.v1+json": PlotlyJsonOutputRenderer,
   "text/vnd.plotly.v1+html": PlotlyHtmlOutputRenderer,
+  [PLOTLY_HTML_MIME]: PlotlyHtmlOutputRenderer,
   "image/png": ImageOutputRenderer,
   "image/jpeg": ImageOutputRenderer,
   "image/gif": ImageOutputRenderer,

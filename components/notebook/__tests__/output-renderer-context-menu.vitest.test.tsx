@@ -78,4 +78,23 @@ describe("OutputRenderer context menu", () => {
     expect(await screen.findByText("Remove")).toBeInTheDocument();
     expect(screen.queryByText("Presentation")).not.toBeInTheDocument();
   });
+
+  it("renders generic Plotly bootstrap HTML in the sandboxed Plotly frame", () => {
+    render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: {
+            "text/html": [
+              '<div id="chart"></div><script>window.PlotlyConfig = {}; Plotly.newPlot("chart", [], {});</script>',
+            ],
+          },
+          metadata: {},
+        }}
+      />,
+    );
+
+    const frame = screen.getByTitle("Plotly HTML output");
+    expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
+  });
 });

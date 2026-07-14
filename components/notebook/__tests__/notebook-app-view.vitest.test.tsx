@@ -20,11 +20,103 @@ import {
 } from "@/lib/types";
 
 const outputRendererMock = vi.hoisted(() => vi.fn());
+const businessRichMarkdownEditorMock = vi.hoisted(() => vi.fn());
+
+interface BusinessRichMarkdownEditorMockProps {
+  cellIndex: number;
+  source: string;
+  onSave: (source: string) => Promise<void>;
+  onCancel: () => void;
+  onFinishEditing: () => void;
+}
 
 vi.mock("@/components/notebook/markdown-renderer", () => ({
   MarkdownRenderer: ({ source }: { source: string }) => (
     <div data-testid="markdown">{source}</div>
   ),
+}));
+
+vi.mock("@/components/notebook/business-rich-markdown-editor", () => ({
+  BusinessRichMarkdownEditor: ({
+    cellIndex,
+    source,
+    onSave,
+    onCancel,
+    onFinishEditing,
+  }: BusinessRichMarkdownEditorMockProps) => {
+    const [draft, setDraft] = React.useState(source);
+    const [isSaving, setIsSaving] = React.useState(false);
+    const [saveError, setSaveError] = React.useState<string | null>(null);
+
+    /** Mirrors the wrapper's explicit-only save lifecycle for App View integration tests. */
+    const handleSave = async () => {
+      if (isSaving) return;
+
+      setIsSaving(true);
+      setSaveError(null);
+      try {
+        await onSave(draft);
+        onFinishEditing();
+      } catch (error) {
+        setSaveError(
+          error instanceof Error
+            ? error.message
+            : "Could not save this content.",
+        );
+      } finally {
+        setIsSaving(false);
+      }
+    };
+
+    /** Provides the editor-owned save and cancel shortcuts to the parent integration tests. */
+    const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        if (!isSaving) onCancel();
+        return;
+      }
+
+      if (
+        event.key === "Enter" &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.nativeEvent.isComposing
+      ) {
+        event.preventDefault();
+        void handleSave();
+      }
+    };
+
+    businessRichMarkdownEditorMock({
+      cellIndex,
+      source,
+      onSave,
+      onCancel,
+      onFinishEditing,
+    });
+
+    return (
+      <div data-testid={`rich-markdown-editor-${cellIndex}`}>
+        <textarea
+          aria-label={`Edit markdown cell ${cellIndex + 1}`}
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={isSaving}
+        />
+        {saveError ? <p role="alert">{saveError}</p> : null}
+        <button type="button" onClick={onCancel} disabled={isSaving}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={() => void handleSave()}
+          disabled={isSaving}
+        >
+          Save
+        </button>
+      </div>
+    );
+  },
 }));
 
 vi.mock("@/components/notebook/output-renderer", () => ({
@@ -59,6 +151,7 @@ vi.mock("@/components/notebook/output-renderer", () => ({
 
 afterEach(() => {
   cleanup();
+  businessRichMarkdownEditorMock.mockClear();
   outputRendererMock.mockClear();
 });
 
@@ -233,6 +326,9 @@ describe("NotebookAppView", () => {
     expect(
       screen.queryByRole("textbox", { name: "Edit markdown cell 1" }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("rich-markdown-editor-0"),
+    ).not.toBeInTheDocument();
 
     rerender(
       <NotebookAppView
@@ -250,9 +346,13 @@ describe("NotebookAppView", () => {
     );
     fireEvent.click(markdown);
 
+    expect(screen.getByTestId("rich-markdown-editor-0")).toBeInTheDocument();
     expect(
       screen.getByRole("textbox", { name: "Edit markdown cell 1" }),
     ).toBeInTheDocument();
+    expect(businessRichMarkdownEditorMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cellIndex: 0, source: "# Intro" }),
+    );
 
     rerender(
       <NotebookAppView
@@ -264,6 +364,9 @@ describe("NotebookAppView", () => {
 
     expect(
       screen.queryByRole("textbox", { name: "Edit markdown cell 1" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("rich-markdown-editor-0"),
     ).not.toBeInTheDocument();
   });
 
@@ -280,6 +383,9 @@ describe("NotebookAppView", () => {
     );
 
     fireEvent.click(screen.getByTestId("markdown"));
+    expect(businessRichMarkdownEditorMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ cellIndex: 0, source: "# Intro" }),
+    );
     const editor = screen.getByRole("textbox", {
       name: "Edit markdown cell 1",
     });
@@ -568,6 +674,28 @@ describe("NotebookAppView", () => {
         },
       }),
     );
+  });
+
+  it("leaves a rich markdown editor outside the App View context menu", async () => {
+    render(
+      <NotebookAppView
+        businessMode
+        businessEditMode
+        notebook={makeNotebook()}
+        notebookPath="/workspace/demo.ipynb"
+        onSaveMarkdownCell={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("markdown"));
+    fireEvent.contextMenu(screen.getByTestId("rich-markdown-editor-0"));
+
+    expect(screen.queryByText("Mention in chat")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.contextMenu(screen.getByTestId("markdown"));
+
+    expect(await screen.findByText("Mention in chat")).toBeInTheDocument();
   });
 
   it("restores the last App View removal on Cmd+Z", () => {

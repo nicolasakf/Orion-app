@@ -1,6 +1,10 @@
 import { OutputType, type NotebookOutputType } from "@/lib/types";
 import { createDefaultMimeRegistry } from "@/lib/notebook/mime-registry/default-registry";
-import { ERROR_MIME, STREAM_MIME } from "@/lib/notebook/mime-registry/synthetic-mimes";
+import {
+  ERROR_MIME,
+  PLOTLY_HTML_MIME,
+  STREAM_MIME,
+} from "@/lib/notebook/mime-registry/synthetic-mimes";
 
 /**
  * Assert helper for lightweight registry unit tests.
@@ -42,6 +46,46 @@ function main(): void {
     };
     const mime = registry.preferredMimeType(output);
     assert(mime === "application/vnd.plotly.v1+json", `expected plotly mime, got ${mime}`);
+  });
+
+  runTest("routes generic Plotly bootstrap HTML to the sandboxed Plotly renderer", () => {
+    const output: NotebookOutputType = {
+      output_type: OutputType.DISPLAY_DATA,
+      data: {
+        "text/html": [
+          '<div id="chart"></div><script>window.PlotlyConfig = {}; Plotly.newPlot("chart", [], {});</script>',
+        ],
+      },
+      metadata: {},
+    };
+    const resolved = registry.resolve(output);
+    assert(resolved?.mimeType === PLOTLY_HTML_MIME, "expected synthetic Plotly HTML mime");
+    assert(resolved?.factory.id === "orion-plotly-html", "expected Plotly HTML renderer");
+    assert(registry.classify(output) === "plotly", "expected Plotly output kind");
+  });
+
+  runTest("ignores Plotly library bootstrap HTML without a chart", () => {
+    const output: NotebookOutputType = {
+      output_type: OutputType.DISPLAY_DATA,
+      data: {
+        "text/html": [
+          '<script>window.PlotlyConfig = {}; /* plotly.js v2.35.2 */</script>',
+        ],
+      },
+      metadata: {},
+    };
+    assert(registry.resolve(output) === null, "expected loader-only output to be ignored");
+  });
+
+  runTest("keeps ordinary HTML on the generic HTML renderer", () => {
+    const output: NotebookOutputType = {
+      output_type: OutputType.DISPLAY_DATA,
+      data: { "text/html": ["<p>Plotly appears here only as text.</p>"] },
+      metadata: {},
+    };
+    const resolved = registry.resolve(output);
+    assert(resolved?.mimeType === "text/html", "expected HTML mime");
+    assert(resolved?.factory.id === "orion-html", "expected generic HTML renderer");
   });
 
   runTest("preferredMimeType picks Orion UI over HTML and plain text", () => {
