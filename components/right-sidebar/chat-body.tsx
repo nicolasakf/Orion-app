@@ -102,6 +102,8 @@ interface ChatMessageRowProps {
   isLoading: boolean;
   /** True while the assistant turn is still in progress (streaming, tools, follow-up gap). */
   isAgentTurnActive?: boolean;
+  /** Prevents forks while any request for the current chat remains active. */
+  isForkingDisabled?: boolean;
   onUserMessageClick: (message: UIMessage, index: number) => void;
   pendingApprovalIds?: Set<string>;
   onApprove?: (toolCallId: string) => void;
@@ -794,6 +796,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   isEditing,
   isLoading,
   isAgentTurnActive = false,
+  isForkingDisabled = false,
   onUserMessageClick,
   pendingApprovalIds,
   onApprove,
@@ -958,7 +961,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
             <AssistantMessageActions
               message={message}
               onForkFromAssistantMessage={
-                !isEditing && onForkFromAssistantMessage
+                !isEditing && !isForkingDisabled && onForkFromAssistantMessage
                   ? handleForkFromAssistantMessage
                   : undefined
               }
@@ -975,6 +978,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   if (prev.isLastMessage !== next.isLastMessage) return false;
   if (prev.isDimmed !== next.isDimmed) return false;
   if (prev.isEditing !== next.isEditing) return false;
+  if (prev.isForkingDisabled !== next.isForkingDisabled) return false;
 
   const prevEffectiveLoading = prev.isLastMessage ? prev.isLoading : false;
   const nextEffectiveLoading = next.isLastMessage ? next.isLoading : false;
@@ -1341,6 +1345,7 @@ export function ChatBody({
                     isAgentTurnActive={
                       isAgentTurnActive && item.messageIndex === messages.length - 1
                     }
+                    isForkingDisabled={isAgentTurnActive}
                     onUserMessageClick={onUserMessageClick}
                     pendingApprovalIds={pendingApprovalIds}
                     onApprove={onApprove}

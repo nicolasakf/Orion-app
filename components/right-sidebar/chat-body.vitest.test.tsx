@@ -232,6 +232,31 @@ describe("ChatBody assistant message actions", () => {
     expect(onForkFromAssistantMessage).toHaveBeenCalledWith(message, 0);
   });
 
+  it("suppresses historical forks while an automatic continuation is active", () => {
+    const onForkFromAssistantMessage = vi.fn();
+    const messages: UIMessage[] = [
+      {
+        id: "assistant-historical",
+        role: "assistant",
+        parts: [{ type: "text", text: "Initial response." }],
+      },
+      {
+        id: "assistant-continuing",
+        role: "assistant",
+        parts: [{ type: "reasoning", text: "Continuing work." }],
+      },
+    ];
+
+    renderMessageChatBody(messages, {
+      isAgentTurnActive: true,
+      onForkFromAssistantMessage,
+    });
+
+    expect(screen.queryByRole("button", { name: "Fork from here" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeInTheDocument();
+    expect(onForkFromAssistantMessage).not.toHaveBeenCalled();
+  });
+
   it("copies raw assistant Markdown while excluding activity-only parts", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
