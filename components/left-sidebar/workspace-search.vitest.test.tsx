@@ -83,11 +83,40 @@ function fileResult(path: string): WorkspaceSearchResult {
 
 /** Returns the minimum KernelService surface that WorkspaceSearch subscribes to. */
 function createKernelService(): KernelService {
+  const fileChanged = {
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+  };
   return {
-    getContentsManager: vi.fn(() => ({})),
+    getContentsManager: vi.fn(() => ({ fileChanged })),
     onSessionsChanged: vi.fn(() => () => undefined),
     onStatusChanged: vi.fn(() => () => undefined),
   } as unknown as KernelService;
+}
+
+/** Creates a kernel service fixture that can emit a Jupyter Contents change signal. */
+function createKernelServiceWithFileChangeSignal(): {
+  kernelService: KernelService;
+  emitFileChanged: () => void;
+} {
+  let listener: (() => void) | null = null;
+  const fileChanged = {
+    connect: vi.fn((nextListener: () => void) => {
+      listener = nextListener;
+    }),
+    disconnect: vi.fn((nextListener: () => void) => {
+      if (listener === nextListener) listener = null;
+    }),
+  };
+
+  return {
+    kernelService: {
+      getContentsManager: vi.fn(() => ({ fileChanged })),
+      onSessionsChanged: vi.fn(() => () => undefined),
+      onStatusChanged: vi.fn(() => () => undefined),
+    } as unknown as KernelService,
+    emitFileChanged: () => listener?.(),
+  };
 }
 
 beforeEach(() => {
@@ -141,5 +170,32 @@ describe("WorkspaceSearch", () => {
     });
     expect(screen.getByText("second.txt")).toBeInTheDocument();
     expect(screen.queryByText("first.txt")).not.toBeInTheDocument();
+  });
+
+  it("invalidates cached results and reruns the active query after a Contents mutation", async () => {
+    const { kernelService, emitFileChanged } = createKernelServiceWithFileChangeSignal();
+    workspaceSearchMocks.searchWorkspace.mockResolvedValue(fileResult("needle.txt"));
+
+    render(
+      <WorkspaceSearch
+        workspaceDirectory="project"
+        kernelService={kernelService}
+      />
+    );
+
+    const input = screen.getByPlaceholderText("Search files and content");
+    fireEvent.change(input, { target: { value: "needle" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(workspaceSearchMocks.searchWorkspace).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      emitFileChanged();
+      await Promise.resolve();
+    });
+
+    expect(workspaceSearchMocks.clear).toHaveBeenCalledTimes(1);
+    expect(workspaceSearchMocks.searchWorkspace).toHaveBeenCalledTimes(2);
   });
 });

@@ -276,7 +276,7 @@ export const WorkspaceSearch = forwardRef<
     };
   }, [searchService]);
 
-  // A session replacement or reconnect must not reuse responses from the old server state.
+  // File mutations, session replacement, and reconnects must not reuse stale Contents data.
   useEffect(() => {
     if (!kernelService || !searchService) return;
 
@@ -284,6 +284,7 @@ export const WorkspaceSearch = forwardRef<
       searchService.clear();
       setSearchRevision((current) => current + 1);
     };
+    const contentsManager = kernelService.getContentsManager();
     const unsubscribeSessions = kernelService.onSessionsChanged(
       invalidateSearchCache
     );
@@ -292,10 +293,12 @@ export const WorkspaceSearch = forwardRef<
         invalidateSearchCache();
       }
     });
+    contentsManager.fileChanged.connect(invalidateSearchCache);
 
     return () => {
       unsubscribeSessions();
       unsubscribeStatus();
+      contentsManager.fileChanged.disconnect(invalidateSearchCache);
     };
   }, [kernelService, searchService]);
 
