@@ -97,4 +97,23 @@ describe("OutputRenderer context menu", () => {
     const frame = screen.getByTitle("Plotly HTML output");
     expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-same-origin");
   });
+
+  it("silently suppresses loader-only Plotly HTML", () => {
+    const { container } = render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: {
+            "text/html": [
+              '<script>window.PlotlyConfig = {}; /* plotly.js v2.35.2 */</script>',
+            ],
+          },
+          metadata: {},
+        }}
+      />,
+    );
+
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText(/Orion cannot render this output yet/)).not.toBeInTheDocument();
+  });
 });

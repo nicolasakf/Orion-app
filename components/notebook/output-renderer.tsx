@@ -365,13 +365,15 @@ export function OutputRenderer({
 
   const trusted = output.metadata?.trusted !== false;
 
+  const outputMimeBundle = useMemo(() => getOutputMimeBundle(output), [output]);
   const outputBundleSignature = useMemo(() => {
-    const b = getOutputMimeBundle(output);
-    return Object.keys(b)
-      .filter((k) => b[k] !== undefined)
+    return Object.keys(outputMimeBundle)
+      .filter((k) => outputMimeBundle[k] !== undefined)
       .sort()
       .join("\0");
-  }, [output]);
+  }, [outputMimeBundle]);
+  const isSuppressedOutput =
+    Object.keys(output.data ?? {}).length > 0 && Object.keys(outputMimeBundle).length === 0;
 
   const [presentationMimeOverride, setPresentationMimeOverride] = useState<
     string | null
@@ -607,6 +609,12 @@ export function OutputRenderer({
         Output hidden (click to show)
       </div>
     );
+  }
+
+  // Plotly's loader-only HTML is intentionally removed from the MIME bundle.
+  // Do not turn that internal bootstrap output into an unsupported-MIME warning.
+  if (isSuppressedOutput) {
+    return null;
   }
 
   if (!effectiveResolved) {
