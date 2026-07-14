@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { getAutoConnectionCandidates } from "@/lib/kernel/connection-candidates";
+import {
+  getAutoConnectionCandidates,
+  getAutoConnectionRootDirectory,
+} from "@/lib/kernel/connection-candidates";
 import type { LauncherJupyterConnection } from "@/lib/kernel/launcher-connection";
 
 const launcherConnection: LauncherJupyterConnection = {
@@ -8,6 +11,7 @@ const launcherConnection: LauncherJupyterConnection = {
   token: "launcher-token",
   source: "managed",
   pythonPath: "/Users/taylor/.orion/runtime/venv/bin/python",
+  rootDirectory: "/Users/taylor/projects",
   jupyterVersion: "2.14.0",
   capabilities: {
     kernelspecs: true,
@@ -49,5 +53,19 @@ describe("auto connection candidates", () => {
         { baseUrl: "http://127.0.0.1:8888/", token: "saved-token" },
       ])
     ).toHaveLength(2);
+  });
+
+  it("keeps the host root only when the launcher connection succeeds", () => {
+    const [launcherCandidate, savedCandidate] = getAutoConnectionCandidates(
+      launcherConnection,
+      [{ baseUrl: "http://127.0.0.1:8888/", token: "saved-token" }]
+    );
+
+    expect(launcherCandidate).toBeDefined();
+    expect(savedCandidate).toBeDefined();
+    expect(getAutoConnectionRootDirectory(launcherCandidate!, launcherConnection)).toBe(
+      "/Users/taylor/projects"
+    );
+    expect(getAutoConnectionRootDirectory(savedCandidate!, launcherConnection)).toBeNull();
   });
 });

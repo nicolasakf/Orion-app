@@ -9,7 +9,7 @@
  */
 
 import type { PendingTerminalCommand } from "@/lib/shell/types";
-import { stripAnsi } from "@/lib/shell/terminal-executor";
+import { stripAnsi } from "@/lib/shell/terminal-text";
 
 /** Result of parsing marker state from buffered terminal output. */
 export interface CommandProgress {

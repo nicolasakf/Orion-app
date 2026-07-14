@@ -48,10 +48,19 @@ export function resolveAgentPath(
 
   const wasAbsolute = isAbsoluteAgentPath(trimmed);
   if (!wasAbsolute) {
+    const jupyterPath = normalizeJupyterRelativePath(trimmed);
+    if (jupyterPath === ".." || jupyterPath.startsWith("../")) {
+      return {
+        ok: false,
+        error:
+          `[ERROR] Relative path '${trimmed}' leaves the Jupyter root. ` +
+          "Use a path inside the Jupyter root.",
+      };
+    }
     return {
       ok: true,
       originalPath: pathValue,
-      jupyterPath: normalizeJupyterRelativePath(trimmed),
+      jupyterPath,
       wasAbsolute: false,
     };
   }
@@ -121,7 +130,7 @@ export function toAgentAbsolutePath(
     .join(separator)}`;
 }
 
-/** Normalizes legacy Jupyter-relative paths while preserving unresolved parent escapes. */
+/** Normalizes a Jupyter-relative path after its root-boundary check. */
 function normalizeJupyterRelativePath(pathValue: string): string {
   const normalized = pathValue.replace(/\\/g, "/");
   const segments: string[] = [];
@@ -154,7 +163,10 @@ function normalizeAbsolutePath(pathValue: string): string {
   if (!parsed) return pathValue.trim();
   const separator = parsed.windows ? "\\" : "/";
   if (parsed.windows) {
-    return `${parsed.root}${parsed.segments.length ? separator : ""}${parsed.segments.join(separator)}`;
+    if (parsed.segments.length === 0) {
+      return parsed.root.endsWith(":") ? `${parsed.root}${separator}` : parsed.root;
+    }
+    return `${parsed.root}${separator}${parsed.segments.join(separator)}`;
   }
   return `/${parsed.segments.join("/")}`.replace(/\/$/, "") || "/";
 }

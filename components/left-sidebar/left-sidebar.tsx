@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { useState, useEffect, useRef, useCallback } from "react";
+import { toast } from "sonner";
 import {
   Folder,
   Map as MinimapIcon,
@@ -71,7 +72,11 @@ import {
   scheduleAfterMinDuration,
   MIN_REFRESH_SPIN_MS,
 } from "@/lib/utils";
-import { openFile } from "@/lib/shell/system-commands/open-file";
+import {
+  getWorkspacePathActionAvailability,
+  revealWorkspacePath,
+} from "@/lib/desktop/workspace-actions.client";
+import { copyWorkspacePath } from "@/lib/workspace/copy-path.client";
 import {
   getWorkspaceFilesChangedDetail,
   WORKSPACE_FILES_CHANGED_EVENT,
@@ -416,6 +421,7 @@ export function LeftSidebar({
   );
   const [hasLoadedSidebarSessionState, setHasLoadedSidebarSessionState] =
     useState(false);
+  const [canRevealWorkspacePath, setCanRevealWorkspacePath] = useState(false);
 
   useEffect(() => {
     const savedState = loadLeftSidebarSessionState();
@@ -599,18 +605,31 @@ export function LeftSidebar({
     }
   }, [kernelService, workspaceDirectory]);
 
-  /**
-   * Opens the given path in the OS native file manager by running the
-   * appropriate shell command via a short-lived Jupyter terminal.
-   */
+  /** Copies a Jupyter-relative workspace path and reports the clipboard result. */
+  const handleCopyWorkspacePath = useCallback((path: string) => {
+    void copyWorkspacePath(path)
+      .then(() => toast.success("Workspace path copied."))
+      .catch((error) => {
+        console.error("Failed to copy workspace path:", error);
+        toast.error("Could not copy the workspace path.");
+      });
+  }, []);
+
+  /** Reveals a workspace item through the local Electron host when it owns the active runtime. */
   const handleRevealInFinder = useCallback(
     (path: string) => {
       if (!kernelService) return;
-      void openFile(kernelService, path).catch((err) => {
-        console.error("Failed to reveal in file manager:", err);
+      void revealWorkspacePath({ path, kernelService }).then((result) => {
+        if (result.ok) return;
+        toast.error(result.message, {
+          action: {
+            label: "Copy path",
+            onClick: () => handleCopyWorkspacePath(path),
+          },
+        });
       });
     },
-    [kernelService]
+    [handleCopyWorkspacePath, kernelService]
   );
 
   // Load the file tree when the kernel connects or the workspace changes.
@@ -747,6 +766,30 @@ export function LeftSidebar({
   const kernelForFiles =
     serverAvailable && kernelService ? kernelService : null;
 
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!kernelForFiles) {
+      setCanRevealWorkspacePath(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void getWorkspacePathActionAvailability({
+      path: workspaceDirectory ?? "",
+      kernelService: kernelForFiles,
+    }).then((availability) => {
+      if (!cancelled) {
+        setCanRevealWorkspacePath(availability.available);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [kernelForFiles, workspaceDirectory]);
+
   /** Renders the files view body shared by the accordion and bare file-tree popup. */
   const renderFilesContent = (contentClassName?: string) => (
     <div className={cn("px-2 pt-2", contentClassName)}>
@@ -779,10 +822,16 @@ export function LeftSidebar({
           onFileSelect={onFileSelect}
           onTreeChange={refreshFolder}
           onFetchChildren={fetchAndCacheChildren}
-          onRevealInFinder={handleRevealInFinder}
+          onRevealInFinder={canRevealWorkspacePath ? handleRevealInFinder : undefined}
+          onCopyPath={handleCopyWorkspacePath}
           onPathRenamed={onWorkspacePathRenamed}
           onPathDeleted={onWorkspacePathDeleted}
           revealLabel={revealLabel}
+          revealUnavailableLabel={
+            canRevealWorkspacePath
+              ? undefined
+              : "Reveal available for local desktop workspaces"
+          }
           workspaceDirectory={workspaceDirectory}
           fontSize={fileTreeFontSize}
         />

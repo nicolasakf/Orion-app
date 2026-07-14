@@ -3,6 +3,10 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "path";
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 
 import { parseDesktopOptions } from "../lib/desktop/options";
+import {
+  executeManagedWorkspacePathAction,
+  type NativeWorkspacePathAction,
+} from "../lib/desktop/workspace-actions";
 import { runDesktopSmoke, startDesktopSession, type DesktopSession } from "../lib/desktop/launcher";
 import { setupDesktopApplicationMenu } from "./menu";
 import {
@@ -161,6 +165,16 @@ function requireShellIpcWindow(event: Electron.IpcMainInvokeEvent): BrowserWindo
   return senderWindow;
 }
 
+/** Runs a guarded native file action for the Jupyter runtime that this desktop app launched. */
+async function handleWorkspacePathAction(
+  event: Electron.IpcMainInvokeEvent,
+  value: unknown,
+  action: NativeWorkspacePathAction
+): Promise<void> {
+  requireShellIpcWindow(event);
+  await executeManagedWorkspacePathAction(action, session, value, shell);
+}
+
 /** Routes renderer-initiated window opens to matching Electron window chrome. */
 function setupWindowOpenHandler(window: BrowserWindow, appBaseUrl: string): void {
   window.webContents.setWindowOpenHandler(({ url, frameName, features }) => {
@@ -225,6 +239,16 @@ function setupShellIpc(): void {
   ipcMain.handle("orion:shell:reload-ignoring-cache", (event) => {
     requireShellIpcWindow(event).webContents.reloadIgnoringCache();
   });
+  ipcMain.handle("orion:shell:get-managed-jupyter-base-url", (event): string | null => {
+    requireShellIpcWindow(event);
+    return session?.jupyter?.baseUrl ?? null;
+  });
+  ipcMain.handle("orion:shell:reveal-workspace-path", (event, value: unknown) =>
+    handleWorkspacePathAction(event, value, "reveal")
+  );
+  ipcMain.handle("orion:shell:open-workspace-path", (event, value: unknown) =>
+    handleWorkspacePathAction(event, value, "open")
+  );
   ipcMain.handle(
     "orion:shell:show-project-folder-picker",
     async (event): Promise<NativeProjectFolderPickerResult | null> => {

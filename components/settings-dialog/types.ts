@@ -14,7 +14,6 @@ export type AgentSettingsSection =
   | "context"
   | "tool-output"
   | "terminal"
-  | "search"
   | "filesystem"
   | "web";
 
@@ -29,7 +28,6 @@ export const AGENT_SETTINGS_SECTIONS: {
   { id: "context", title: "Context" },
   { id: "tool-output", title: "Tool output" },
   { id: "terminal", title: "Terminal" },
-  { id: "search", title: "Search" },
   { id: "filesystem", title: "Filesystem" },
   { id: "web", title: "Web" },
 ];

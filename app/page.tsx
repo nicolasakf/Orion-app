@@ -57,7 +57,10 @@ import {
   saveKernelConnection,
   getStoredKernelConnections,
 } from "@/lib/kernel/kernel-storage";
-import { getAutoConnectionCandidates } from "@/lib/kernel/connection-candidates";
+import {
+  getAutoConnectionCandidates,
+  getAutoConnectionRootDirectory,
+} from "@/lib/kernel/connection-candidates";
 import { fetchLauncherJupyterConnection } from "@/lib/kernel/launcher-connection";
 import { AssistantProvider } from "@/lib/agent";
 import type { NotebookType } from "@/lib/types";
@@ -95,8 +98,8 @@ import {
 import { MobileToolbar } from "@/components/mobile/mobile-toolbar";
 import { SettingsDialog } from "@/components/settings-dialog/settings-dialog";
 import { OnboardingFlow } from "@/components/onboarding-flow";
-import { TerminalPool } from "@/lib/shell/terminal-pool";
-import { openPathInSystemTerminal } from "@/lib/shell/system-commands/open-file";
+import { openWorkspacePath } from "@/lib/desktop/workspace-actions.client";
+import { copyWorkspacePath } from "@/lib/workspace/copy-path.client";
 import {
   DEFAULT_NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS,
   DEFAULT_PANEL_LAYOUT_STATE,
@@ -603,7 +606,6 @@ export default function Page() {
   } | null>(null);
   const hasRestoredSessionRef = useRef(false);
   const kernelServiceRef = React.useRef<KernelService | null>(null);
-  const externalOpenTerminalPoolRef = React.useRef<TerminalPool | null>(null);
   const [workspaceDirectory, setWorkspaceDirectory] = useState<string | null>(
     null,
   );
@@ -1212,22 +1214,32 @@ export default function Page() {
     [editorNavigation, hasUnsavedChanges, selectFile],
   );
 
-  /**
-   * Opens a path with the OS-default application after Orion's editor cannot
-   * load it natively.
-   */
+  /** Copies a Jupyter-relative path when an external open is unavailable. */
+  const handleCopyExternalPath = useCallback((path: string) => {
+    void copyWorkspacePath(path)
+      .then(() => toast.success("Workspace path copied."))
+      .catch((error) => {
+        console.error("Failed to copy workspace path:", error);
+        toast.error("Could not copy the workspace path.");
+      });
+  }, []);
+
+  /** Opens an unsupported editor file through the managed local Electron runtime. */
   const openFileExternally = useCallback((path: string): boolean => {
     const service = kernelServiceRef.current;
     if (!service) return false;
 
-    const pool =
-      externalOpenTerminalPoolRef.current ?? new TerminalPool(service);
-    externalOpenTerminalPoolRef.current = pool;
-    void openPathInSystemTerminal(pool, service, path).catch((error) => {
-      console.error("Failed to open file in system application:", error);
+    void openWorkspacePath({ path, kernelService: service }).then((result) => {
+      if (result.ok) return;
+      toast.error(result.message, {
+        action: {
+          label: "Copy path",
+          onClick: () => handleCopyExternalPath(path),
+        },
+      });
     });
     return true;
-  }, []);
+  }, [handleCopyExternalPath]);
 
   /** Adds an unopenable workspace file as a mention chip in the chat composer. */
   const mentionFileInChat = useCallback((path: string): boolean => {
@@ -1833,12 +1845,11 @@ export default function Page() {
     autoConnectionAttemptedRef.current = true;
 
     let launcherConnection = null;
+    setJupyterRootDirectory(null);
     try {
       launcherConnection = await fetchLauncherJupyterConnection();
-      setJupyterRootDirectory(launcherConnection?.rootDirectory ?? null);
     } catch (error) {
       console.warn("Failed to load CLI-managed Jupyter connection:", error);
-      setJupyterRootDirectory(null);
     }
 
     const recentConnections = getStoredKernelConnections();
@@ -1912,6 +1923,9 @@ export default function Page() {
 
             keepService = true;
             replaceKernelService(service);
+            setJupyterRootDirectory(
+              getAutoConnectionRootDirectory(connection, launcherConnection),
+            );
 
             setCurrentKernel(fetchedKernels[0]);
             setKernelStatus("connected");
@@ -1949,11 +1963,9 @@ export default function Page() {
     return false;
   }, [currentFile, replaceKernelService]);
 
-  // Keep refs aligned with the latest service for cleanup and external opens.
+  // Keep the ref aligned with the latest service for editor fallback actions and cleanup.
   useEffect(() => {
     kernelServiceRef.current = kernelService;
-    externalOpenTerminalPoolRef.current?.dispose();
-    externalOpenTerminalPoolRef.current = null;
   }, [kernelService]);
 
   /**
@@ -2137,7 +2149,6 @@ export default function Page() {
   // Dispose on unmount to stop managers and polling.
   useEffect(() => {
     return () => {
-      externalOpenTerminalPoolRef.current?.dispose();
       kernelServiceRef.current?.dispose();
     };
   }, []);
@@ -2347,7 +2358,6 @@ export default function Page() {
     try {
       window.dispatchEvent(new CustomEvent("clearCellExecutionQueue"));
       await kernelService.interrupt();
-      setIsRunning(false); // Explicitly set isRunning to false
     } catch (error) {
       console.error("Error interrupting kernel:", error);
     }
@@ -2362,6 +2372,7 @@ export default function Page() {
   const handleDisconnect = React.useCallback(() => {
     setIsKernelDropdownOpen(false);
     replaceKernelService(null);
+    setJupyterRootDirectory(null);
     setCurrentKernel(null);
     setKernelStatus("disconnected");
     setAvailableKernels([]);
@@ -2437,6 +2448,7 @@ export default function Page() {
           await newService.startKernel(fetchedKernels[0].name, notebookPath);
           shouldKeepService = true;
           replaceKernelService(newService);
+          setJupyterRootDirectory(null);
           setCurrentKernel(fetchedKernels[0]);
           setKernelStatus("connected");
           executionCountRef.current = 0;

@@ -56,3 +56,16 @@ export function getAutoConnectionCandidates(
 
   return candidates;
 }
+
+/**
+ * Returns the host root only for a successfully connected launcher candidate.
+ * Saved connections do not carry a trustworthy local Jupyter root.
+ */
+export function getAutoConnectionRootDirectory(
+  candidate: AutoConnectionCandidate,
+  launcherConnection: LauncherJupyterConnection | null
+): string | null {
+  return candidate.source === "launcher"
+    ? launcherConnection?.rootDirectory ?? null
+    : null;
+}

@@ -104,21 +104,8 @@ export const AgentTerminalSettingsSchema = z.object({
   outputSpillThresholdChars: z.number().int().positive(),
   outputPreviewHeadChars: z.number().int().positive(),
   outputPreviewTailChars: z.number().int().positive(),
-  executorTimeoutMs: z.number().int().positive(),
-  executorAvailabilityTimeoutMs: z.number().int().positive(),
-  executorPollIntervalMs: z.number().int().positive(),
   poolIdleTimeoutMs: z.number().int().positive(),
-  poolSystemSize: z.number().int().min(1),
   poolReaperIntervalMs: z.number().int().positive(),
-});
-
-export const AgentSearchSettingsSchema = z.object({
-  maxMatches: z.number().int().positive(),
-  maxLineLength: z.number().int().positive(),
-  globTerminalMaxResults: z.number().int().positive(),
-  globMaxDisplayResults: z.number().int().positive(),
-  grepTimeoutMs: z.number().int().positive(),
-  whichTimeoutMs: z.number().int().positive(),
 });
 
 export const AgentFilesystemSettingsSchema = z.object({
@@ -140,7 +127,6 @@ export const AgentSettingsSchema = z.object({
   context: AgentContextSettingsSchema,
   toolOutput: AgentToolOutputSettingsSchema,
   terminal: AgentTerminalSettingsSchema,
-  search: AgentSearchSettingsSchema,
   filesystem: AgentFilesystemSettingsSchema,
   web: AgentWebSettingsSchema,
 });
@@ -368,7 +354,6 @@ export type NotebookMinimapPreviewMode = z.infer<
 export type AgentContextSettings = z.infer<typeof AgentContextSettingsSchema>;
 export type AgentToolOutputSettings = z.infer<typeof AgentToolOutputSettingsSchema>;
 export type AgentTerminalSettings = z.infer<typeof AgentTerminalSettingsSchema>;
-export type AgentSearchSettings = z.infer<typeof AgentSearchSettingsSchema>;
 export type AgentFilesystemSettings = z.infer<typeof AgentFilesystemSettingsSchema>;
 export type AgentWebSettings = z.infer<typeof AgentWebSettingsSchema>;
 export type AgentSettings = z.infer<typeof AgentSettingsSchema>;

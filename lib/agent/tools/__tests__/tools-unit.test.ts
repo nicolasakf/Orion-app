@@ -572,23 +572,6 @@ await runTest("TerminalPool creates a fresh agent terminal for each request", as
   }
 });
 
-await runTest("TerminalPool reuses idle system terminals", async () => {
-  const { ks } = createTerminalKernelService();
-  const pool = new TerminalPool(ks);
-  try {
-    const first = await pool.acquireSystemTerminal();
-    assert(first.isWarm === false, "first system terminal should be newly created");
-    pool.releaseSystemTerminal(first.terminal.name);
-
-    const second = await pool.acquireSystemTerminal();
-    assert(second.isWarm === true, "released system terminal should be picked up from the warm pool");
-    assert(second.terminal.name === first.terminal.name, "system terminal reuse should stay pool-backed");
-    pool.releaseSystemTerminal(second.terminal.name);
-  } finally {
-    pool.dispose();
-  }
-});
-
 await runTest("BashTool creates a fresh terminal for empty terminalName", async () => {
   const { ks } = createTerminalKernelService();
   const pool = new TerminalPool(ks);
@@ -634,6 +617,27 @@ await runTest("BashTool normalizes absolute cwd before fresh terminal creation",
 
     assertIncludes(result, "terminalName:", "should create a terminal");
     assert(startedCwds[0] === "project", "should pass normalized cwd to terminal creation");
+  } finally {
+    pool.dispose();
+  }
+});
+
+await runTest("BashTool rejects a cwd that escapes the Jupyter root", async () => {
+  const { ks, sent, startedCwds } = createTerminalKernelService();
+  const pool = new TerminalPool(ks);
+  const tool = new BashTool(ks, null, pool, () => "chat-1", null, () => "/Users/taylor");
+  try {
+    const result = await tool.execute({
+      command: "pwd",
+      description: "Check the current directory",
+      terminalName: "",
+      cwd: "project/../../outside",
+      background: true,
+    });
+
+    assertIncludes(result, "leaves the Jupyter root", "should reject an escaping cwd");
+    assert(startedCwds.length === 0, "should not create a terminal outside the root");
+    assert(sent.length === 0, "should not dispatch a command outside the root");
   } finally {
     pool.dispose();
   }

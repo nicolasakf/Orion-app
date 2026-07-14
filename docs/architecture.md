@@ -70,9 +70,8 @@ orion/
 │   │   ├── kernel-service.ts     # Jupyter kernel lifecycle management
 │   │   └── kernel-storage.ts     # Persists last-used kernel config
 │   ├── shell/
-│   │   ├── terminal-executor.ts  # Runs bash commands in a persistent shell
-│   │   ├── terminal-pool.ts      # Manages multiple terminal sessions
-│   │   └── system-commands/      # Glob, grep, open-file (used by agent tools)
+│   │   ├── terminal-pool.ts      # Manages user and agent terminal sessions
+│   │   └── terminal-text.ts      # Formats terminal-derived text
 │   ├── settings/
 │   │   ├── schema.ts             # Zod schema for settings and workspace overrides
 │   │   ├── defaults.ts
@@ -110,7 +109,7 @@ Browser (AssistantProvider / useChat)
   ├─ Streams assistant text into message list
   └─ On tool_call events → executeToolCall(name, args)
        ├─ Notebook tools  → lib/agent/tools/* (reads/writes open notebook)
-       ├─ Bash/terminal   → lib/shell/terminal-executor.ts
+       ├─ Bash/terminal   → lib/agent/tools/bash.ts and await-command.ts
        ├─ File tools      → JupyterLab ContentsManager
        └─ Subagent tool   → lib/agent/subagents/client-runner.ts
             └─ (nested loop: POST /api/chat with subagent system prompt)

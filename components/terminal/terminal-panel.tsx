@@ -176,8 +176,6 @@ export function TerminalPanel({
     const syncFromPool = () => {
       const { terminals: poolTerminals } = pool.getState();
       const visible = poolTerminals
-        // System terminals are internal — never show them in the panel
-        .filter((t) => t.type !== TerminalType.System)
         .map((t): TerminalInfo => ({
           name: t.name,
           createdBy: t.type === TerminalType.User ? "user" : "agent",

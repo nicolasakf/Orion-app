@@ -6,7 +6,10 @@ import {
   DEFAULT_TITLE_GENERATION_MODEL_ID,
 } from "@/lib/settings/defaults";
 import { mergeSettings } from "@/lib/settings/merge";
-import { parseUserSettingsDocumentFromJson } from "@/lib/settings/migrations";
+import {
+  parseUserSettingsDocumentFromJson,
+  parseWorkspaceSettingsDocumentFromJson,
+} from "@/lib/settings/migrations";
 import {
   ToolApprovalModeSchema,
   UserSettingsDocumentSchema,
@@ -123,7 +126,52 @@ describe("settings migrations", () => {
     expect(
       "chatGenerationModelId" in migrated.settings.chat
     ).toBe(false);
-    expect(migrated.settings.agent.search.maxMatches).toBe(100);
+    expect(migrated.settings.agent.terminal.poolIdleTimeoutMs).toBe(3_600_000);
+  });
+
+  it("strips retired hidden system-terminal settings", () => {
+    const migrated = parseUserSettingsDocumentFromJson(
+      JSON.stringify({
+        version: 1,
+        settings: {
+          agent: {
+            terminal: {
+              executorTimeoutMs: 15_000,
+              executorAvailabilityTimeoutMs: 3_000,
+              executorPollIntervalMs: 300,
+              poolSystemSize: 2,
+            },
+            search: { maxMatches: 100 },
+          },
+        },
+      })
+    );
+
+    const terminal = migrated.settings.agent.terminal as Record<string, unknown>;
+    const agent = migrated.settings.agent as Record<string, unknown>;
+    expect(terminal).not.toHaveProperty("executorTimeoutMs");
+    expect(terminal).not.toHaveProperty("executorAvailabilityTimeoutMs");
+    expect(terminal).not.toHaveProperty("executorPollIntervalMs");
+    expect(terminal).not.toHaveProperty("poolSystemSize");
+    expect(agent).not.toHaveProperty("search");
+  });
+
+  it("strips retired hidden system-terminal workspace overrides", () => {
+    const migrated = parseWorkspaceSettingsDocumentFromJson(
+      JSON.stringify({
+        version: 1,
+        overrides: {
+          agent: {
+            terminal: { poolSystemSize: 2 },
+            search: { maxMatches: 100 },
+          },
+        },
+      })
+    );
+
+    const agent = migrated.overrides.agent as Record<string, unknown>;
+    expect(agent).not.toHaveProperty("search");
+    expect(agent.terminal).toEqual({});
   });
 });
 
@@ -131,15 +179,15 @@ describe("mergeSettings", () => {
   it("applies workspace partial overrides while preserving other agent defaults", () => {
     const merged = mergeSettings(DEFAULT_SETTINGS, DEFAULT_SETTINGS, {
       agent: {
-        search: {
-          maxMatches: 250,
+        terminal: {
+          poolIdleTimeoutMs: 250,
         },
       },
     });
 
-    expect(merged.agent.search.maxMatches).toBe(250);
-    expect(merged.agent.search.maxLineLength).toBe(
-      DEFAULT_SETTINGS.agent.search.maxLineLength
+    expect(merged.agent.terminal.poolIdleTimeoutMs).toBe(250);
+    expect(merged.agent.terminal.foregroundBudgetMs).toBe(
+      DEFAULT_SETTINGS.agent.terminal.foregroundBudgetMs
     );
     expect(merged.agent.context.compactionRetentionTurns).toBe(4);
   });

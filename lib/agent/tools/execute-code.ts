@@ -9,7 +9,7 @@
 import { BaseTool } from "./base-tool";
 import { NotebookManager } from "./notebook-manager";
 import type { KernelService } from "@/lib/kernel/kernel-service";
-import { stripAnsi } from "@/lib/shell/terminal-executor";
+import { stripAnsi } from "@/lib/shell/terminal-text";
 import type { KernelSidecar } from "../kernel-sidecar";
 import type { ExecuteCodeParams } from "./types";
 import type { ExecutionToolResult } from "../visual-evidence";

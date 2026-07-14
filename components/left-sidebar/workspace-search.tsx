@@ -18,13 +18,17 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { useAssistantChatOptional } from "@/lib/agent/assistant-provider";
-import { glob } from "@/lib/shell/system-commands/glob";
-import { grep } from "@/lib/shell/system-commands/grep";
+import { useOrionSettings } from "@/hooks/use-orion-settings";
 import type { KernelService } from "@/lib/kernel/kernel-service";
-import { TerminalPool } from "@/lib/shell/terminal-pool";
-import type { GlobResult, GrepResult } from "@/lib/shell/types";
 import { cn } from "@/lib/utils";
+import {
+  WorkspaceSearchService,
+  type WorkspaceSearchResult,
+} from "@/lib/workspace/workspace-search-service";
+import {
+  getWorkspaceFilesChangedDetail,
+  WORKSPACE_FILES_CHANGED_EVENT,
+} from "@/lib/workspace/workspace-events";
 
 // ============================================================================
 // Types
@@ -54,11 +58,7 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * Strip the leading "./" that shell commands add when cwd is set and the path
- * is relative to that cwd. Also strips a leading workspaceDirectory prefix if
- * the tool returns absolute-style paths.
- */
+/** Strips a leading relative-path marker before passing a result to the editor. */
 function stripLeadingDotSlash(p: string): string {
   return p.startsWith("./") ? p.slice(2) : p;
 }
@@ -83,6 +83,15 @@ function buildWorkspaceQualifiedPath(
   }
   return `${workspaceDirectory}/${normalizedPath}`;
 }
+
+/** Kernel states that can leave a Contents API cache stale after reconnection. */
+const CACHE_INVALIDATING_KERNEL_STATUSES = new Set([
+  "unknown",
+  "starting",
+  "dead",
+  "restarting",
+  "autorestarting",
+]);
 
 // ============================================================================
 // Sub-components
@@ -177,8 +186,8 @@ function HighlightedText({
 
 /**
  * WorkspaceSearch renders the search panel inside the left sidebar.
- * It searches both file names and file contents in parallel using the existing
- * glob() and grep() shell commands.
+ * It searches file names and file contents through Jupyter's Contents API,
+ * without creating a hidden shell session.
  *
  * A ref handle is exposed so the parent can programmatically focus the input
  * (e.g. via the Cmd+K shortcut).
@@ -196,33 +205,34 @@ export const WorkspaceSearch = forwardRef<
   },
   ref
 ) {
-  const assistantCtx = useAssistantChatOptional();
-  const assistantTerminalPool = assistantCtx?.terminalPool ?? null;
-  /**
-   * LeftSidebar is rendered outside AssistantProvider, so search needs
-   * a local pool fallback for system commands (glob/grep).
-   */
-  const localTerminalPool = React.useMemo(() => {
-    if (!kernelService || assistantTerminalPool) return null;
-    return new TerminalPool(kernelService);
-  }, [assistantTerminalPool, kernelService]);
-  const terminalPool = assistantTerminalPool ?? localTerminalPool;
-
-  useEffect(() => {
-    return () => {
-      localTerminalPool?.dispose();
-    };
-  }, [localTerminalPool]);
+  const { effectiveSettings } = useOrionSettings();
+  const ignoredDirectoryNames = effectiveSettings.agent.filesystem.ignoreDirs;
+  const binaryExtensions = effectiveSettings.agent.filesystem.binaryExtensions;
+  const searchService = React.useMemo(() => {
+    if (!kernelService || workspaceDirectory === null) return null;
+    return new WorkspaceSearchService(kernelService.getContentsManager(), {
+      ignoreDirectoryNames: ignoredDirectoryNames,
+      binaryExtensions,
+    });
+  }, [
+    binaryExtensions,
+    ignoredDirectoryNames,
+    kernelService,
+    workspaceDirectory,
+  ]);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
-  const [fileMatches, setFileMatches] = useState<GlobResult | null>(null);
-  const [contentMatches, setContentMatches] = useState<GrepResult | null>(null);
+  const [searchResult, setSearchResult] = useState<WorkspaceSearchResult | null>(
+    null
+  );
   const [searchError, setSearchError] = useState(false);
+  const [searchRevision, setSearchRevision] = useState(0);
   const [isFilesSectionOpen, setIsFilesSectionOpen] = useState(true);
   const [isContentSectionOpen, setIsContentSectionOpen] = useState(true);
+  const searchGenerationRef = useRef(0);
 
   /** Expose a focus() method to the parent via forwardRef. */
   useImperativeHandle(ref, () => ({
@@ -243,61 +253,103 @@ export const WorkspaceSearch = forwardRef<
     }
   }, [debouncedQuery]);
 
+  // Keep cached Contents results aligned with file mutations made elsewhere.
+  useEffect(() => {
+    if (!searchService) return;
+
+    const handleWorkspaceFilesChanged = (event: Event) => {
+      const detail = getWorkspaceFilesChangedDetail(event);
+      if (!detail) return;
+      searchService.clearPath(detail.folderPath);
+      setSearchRevision((current) => current + 1);
+    };
+
+    window.addEventListener(
+      WORKSPACE_FILES_CHANGED_EVENT,
+      handleWorkspaceFilesChanged
+    );
+    return () => {
+      window.removeEventListener(
+        WORKSPACE_FILES_CHANGED_EVENT,
+        handleWorkspaceFilesChanged
+      );
+    };
+  }, [searchService]);
+
+  // A session replacement or reconnect must not reuse responses from the old server state.
+  useEffect(() => {
+    if (!kernelService || !searchService) return;
+
+    const invalidateSearchCache = () => {
+      searchService.clear();
+      setSearchRevision((current) => current + 1);
+    };
+    const unsubscribeSessions = kernelService.onSessionsChanged(
+      invalidateSearchCache
+    );
+    const unsubscribeStatus = kernelService.onStatusChanged((status) => {
+      if (CACHE_INVALIDATING_KERNEL_STATUSES.has(status)) {
+        invalidateSearchCache();
+      }
+    });
+
+    return () => {
+      unsubscribeSessions();
+      unsubscribeStatus();
+    };
+  }, [kernelService, searchService]);
+
   // ── Execute search ──────────────────────────────────────────────────────
   useEffect(() => {
+    const requestGeneration = searchGenerationRef.current + 1;
+    searchGenerationRef.current = requestGeneration;
+
     if (debouncedQuery.length < 2) {
-      setFileMatches(null);
-      setContentMatches(null);
+      setSearchResult(null);
       setSearchError(false);
+      setIsSearching(false);
       return;
     }
 
-    if (workspaceDirectory === null || !terminalPool || !kernelService) {
+    if (workspaceDirectory === null || !searchService) {
+      setSearchResult(null);
+      setIsSearching(false);
       return;
     }
 
-    let cancelled = false;
     setIsSearching(true);
     setSearchError(false);
 
-    const cwd = workspaceDirectory === "" ? undefined : workspaceDirectory;
-    const escapedPattern = escapeRegex(debouncedQuery);
-
-    Promise.all([
-      glob(terminalPool, kernelService, {
-        pattern: `*${debouncedQuery}*`,
-        cwd,
+    void searchService
+      .searchWorkspace({
+        rootPath: workspaceDirectory,
+        query: debouncedQuery,
         caseSensitive,
-        maxResults: 50,
-      }),
-      grep(terminalPool, kernelService, {
-        pattern: escapedPattern,
-        cwd,
-        caseSensitive,
-        maxResults: 50,
-        maxLineLength: 150,
-      }),
-    ])
-      .then(([globResult, grepResult]) => {
-        if (cancelled) return;
-        setFileMatches(globResult);
-        setContentMatches(grepResult);
-        if (!globResult.success && !grepResult.success) {
-          setSearchError(true);
-        }
+      })
+      .then((result) => {
+        if (searchGenerationRef.current !== requestGeneration) return;
+        setSearchResult(result);
+        const hasResult =
+          result.fileMatches.length > 0 || result.contentMatchCount > 0;
+        setSearchError(result.errors.length > 0 && !hasResult);
       })
       .catch(() => {
-        if (cancelled) return;
+        if (searchGenerationRef.current !== requestGeneration) return;
+        setSearchResult(null);
         setSearchError(true);
       })
       .finally(() => {
-        if (!cancelled) setIsSearching(false);
+        if (searchGenerationRef.current === requestGeneration) {
+          setIsSearching(false);
+        }
       });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [debouncedQuery, workspaceDirectory, terminalPool, kernelService, caseSensitive]);
+  }, [
+    caseSensitive,
+    debouncedQuery,
+    searchRevision,
+    searchService,
+    workspaceDirectory,
+  ]);
 
   // ── Handlers ────────────────────────────────────────────────────────────
 
@@ -328,15 +380,15 @@ export const WorkspaceSearch = forwardRef<
   // ── Derived state ────────────────────────────────────────────────────────
 
   const noWorkspace = workspaceDirectory === null;
-  const noServer = !kernelService || !terminalPool;
+  const noServer = !kernelService || !searchService;
   const hasQuery = query.length > 0;
   const queryTooShort = hasQuery && query.length < 2;
   const hasResults =
-    (fileMatches?.files.length ?? 0) > 0 ||
-    (contentMatches?.matches.size ?? 0) > 0;
+    (searchResult?.fileMatches.length ?? 0) > 0 ||
+    (searchResult?.contentMatchCount ?? 0) > 0;
 
-  const fileCount = fileMatches?.files.length ?? 0;
-  const contentCount = contentMatches?.total ?? 0;
+  const fileCount = searchResult?.fileMatches.length ?? 0;
+  const contentCount = searchResult?.contentMatchCount ?? 0;
 
   // ── Render ───────────────────────────────────────────────────────────────
 
@@ -422,7 +474,7 @@ export const WorkspaceSearch = forwardRef<
           )}
 
         {/* ── File name matches ──────────────────────────────────────── */}
-        {!isSearching && fileCount > 0 && (
+        {!isSearching && searchResult && fileCount > 0 && (
           <div>
             <ResultSectionHeader
               label="Files"
@@ -433,7 +485,7 @@ export const WorkspaceSearch = forwardRef<
             />
             {isFilesSectionOpen && (
               <>
-                {fileMatches!.files.map((rawPath) => {
+                {searchResult.fileMatches.map((rawPath) => {
                   const path = stripLeadingDotSlash(rawPath);
                   const name = basename(path);
                   return (
@@ -448,9 +500,9 @@ export const WorkspaceSearch = forwardRef<
                     </button>
                   );
                 })}
-                {fileMatches!.truncated && (
+                {searchResult.fileMatchesTruncated && (
                   <p className="px-2 py-1 text-[10px] text-muted-foreground">
-                    Results truncated ({fileMatches!.total}+ matches)
+                    Results truncated ({fileCount}+ matches)
                   </p>
                 )}
               </>
@@ -459,7 +511,7 @@ export const WorkspaceSearch = forwardRef<
         )}
 
         {/* ── Content matches ────────────────────────────────────────── */}
-        {!isSearching && contentCount > 0 && (
+        {!isSearching && searchResult && contentCount > 0 && (
           <div>
             <ResultSectionHeader
               label="Content"
@@ -470,7 +522,7 @@ export const WorkspaceSearch = forwardRef<
             />
             {isContentSectionOpen && (
               <>
-                {Array.from(contentMatches!.matches.entries()).map(
+                {Array.from(searchResult.contentMatches.entries()).map(
                   ([rawFilePath, lineMatches]) => {
                     const filePath = stripLeadingDotSlash(rawFilePath);
                     const name = basename(filePath);
@@ -515,9 +567,9 @@ export const WorkspaceSearch = forwardRef<
                     );
                   }
                 )}
-                {contentMatches!.truncated && (
+                {searchResult.contentMatchesTruncated && (
                   <p className="px-2 py-1 text-[10px] text-muted-foreground">
-                    Results truncated ({contentMatches!.total}+ matches)
+                    Results truncated ({contentCount}+ matches)
                   </p>
                 )}
               </>

@@ -19,7 +19,6 @@ export function AgentTab({ section }: AgentTabProps) {
     case "context":
     case "tool-output":
     case "terminal":
-    case "search":
     case "filesystem":
     case "web":
       return <AgentAdvancedSection section={section} />;

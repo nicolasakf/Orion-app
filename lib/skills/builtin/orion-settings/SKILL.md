@@ -206,20 +206,8 @@ For `chat.interactionModes`, `[]` is accepted in authored JSON and is normalized
         "outputSpillThresholdChars": 200000,
         "outputPreviewHeadChars": 6000,
         "outputPreviewTailChars": 6000,
-        "executorTimeoutMs": 15000,
-        "executorAvailabilityTimeoutMs": 3000,
-        "executorPollIntervalMs": 300,
         "poolIdleTimeoutMs": 3600000,
-        "poolSystemSize": 2,
         "poolReaperIntervalMs": 60000
-      },
-      "search": {
-        "maxMatches": 100,
-        "maxLineLength": 200,
-        "globTerminalMaxResults": 500,
-        "globMaxDisplayResults": 100,
-        "grepTimeoutMs": 15000,
-        "whichTimeoutMs": 3000
       },
       "filesystem": {
         "ignoreDirs": ["node_modules", ".git", "__pycache__", ".ipynb_checkpoints", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".tox", ".nox", ".venv", "venv", "env", ".env", "dist", "build", "out", "target", "coverage", ".next", ".nuxt", ".cache", ".parcel-cache", ".DS_Store"],
@@ -399,29 +387,14 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | `outputSpillThresholdChars` | integer | > 0 | `200000` | Bash output size above which spill-to-file is used. |
 | `outputPreviewHeadChars` | integer | > 0 | `6000` | Head preview size when output is spilled. |
 | `outputPreviewTailChars` | integer | > 0 | `6000` | Tail preview size when output is spilled. |
-| `executorTimeoutMs` | integer | > 0 (ms) | `15000` | System command executor timeout. |
-| `executorAvailabilityTimeoutMs` | integer | > 0 (ms) | `3000` | Availability-check probe timeout. |
-| `executorPollIntervalMs` | integer | > 0 (ms) | `300` | Executor poll interval. |
 | `poolIdleTimeoutMs` | integer | > 0 (ms) | `3600000` | Idle terminal pool reclaim (1 h). |
-| `poolSystemSize` | integer | ≥ 1 | `2` | Warm system terminals in pool. |
 | `poolReaperIntervalMs` | integer | > 0 (ms) | `60000` | Terminal pool reaper interval. |
-
-### `agent.search`
-
-| Field | Type | Allowed values | Default | Description |
-| --- | --- | --- | --- | --- |
-| `maxMatches` | integer | > 0 | `100` | Max grep matches returned. |
-| `maxLineLength` | integer | > 0 | `200` | Max line length in grep results. |
-| `globTerminalMaxResults` | integer | > 0 | `500` | Max paths from glob on disk. |
-| `globMaxDisplayResults` | integer | > 0 | `100` | Max glob paths shown to the model. |
-| `grepTimeoutMs` | integer | > 0 (ms) | `15000` | Grep command timeout. |
-| `whichTimeoutMs` | integer | > 0 (ms) | `3000` | `which` availability check timeout. |
 
 ### `agent.filesystem`
 
 | Field | Type | Allowed values | Default | Description |
 | --- | --- | --- | --- | --- |
-| `ignoreDirs` | string[] | Directory **names** (not paths), non-empty | See default JSON | Directory names skipped in list/glob (e.g. `node_modules`). |
+| `ignoreDirs` | string[] | Directory **names** (not paths), non-empty | See default JSON | Directory names skipped in workspace listings and search (e.g. `node_modules`). |
 | `binaryExtensions` | string[] | Extensions with leading `.`, non-empty | See default JSON | Extensions excluded from text search. |
 | `blockedBashCommandPatterns` | string[] | Valid RegExp **source** strings, non-empty | See default JSON | Patterns blocked in Ask-mode read-only bash. Invalid regex may break the guard at runtime. |
 
@@ -533,19 +506,6 @@ Set workspace title generation model and model pins:
     "chat": {
       "titleGenerationModelId": "gemini-3-flash-preview",
       "pinnedModelIds": ["gpt-5.4", "claude-sonnet-4-5"]
-    }
-  }
-}
-```
-
-Raise grep match limit for a repo:
-
-```json
-{
-  "version": 1,
-  "overrides": {
-    "agent": {
-      "search": { "maxMatches": 200 }
     }
   }
 }

@@ -116,7 +116,7 @@ export function AgentAdvancedSection({ section }: { section: AgentSettingsSectio
       return (
         <SettingsSectionLayout
           title="Terminal"
-          description="Shell tool timing, output handling, and terminal pool settings."
+          description="Shell tool timing, output handling, and agent terminal lifecycle settings."
         >
           <div className="grid gap-4 sm:grid-cols-2 max-w-2xl">
             <SettingsNumberField
@@ -182,48 +182,12 @@ export function AgentAdvancedSection({ section }: { section: AgentSettingsSectio
               }
             />
             <SettingsNumberField
-              id="agent-terminal-executor-timeout-ms"
-              label="Executor timeout (ms)"
-              description="Timeout for system command execution."
-              value={agent.terminal.executorTimeoutMs}
-              min={1}
-              onChange={(value) => updateAgent("terminal", { executorTimeoutMs: value })}
-            />
-            <SettingsNumberField
-              id="agent-terminal-executor-availability-timeout-ms"
-              label="Availability timeout (ms)"
-              description="Timeout for availability-check probes."
-              value={agent.terminal.executorAvailabilityTimeoutMs}
-              min={1}
-              onChange={(value) =>
-                updateAgent("terminal", { executorAvailabilityTimeoutMs: value })
-              }
-            />
-            <SettingsNumberField
-              id="agent-terminal-executor-poll-interval-ms"
-              label="Executor poll interval (ms)"
-              description="Poll interval while waiting on the command executor."
-              value={agent.terminal.executorPollIntervalMs}
-              min={1}
-              onChange={(value) =>
-                updateAgent("terminal", { executorPollIntervalMs: value })
-              }
-            />
-            <SettingsNumberField
               id="agent-terminal-pool-idle-timeout-ms"
               label="Pool idle timeout (ms)"
               description="Idle time before an unused terminal is reclaimed."
               value={agent.terminal.poolIdleTimeoutMs}
               min={1}
               onChange={(value) => updateAgent("terminal", { poolIdleTimeoutMs: value })}
-            />
-            <SettingsNumberField
-              id="agent-terminal-pool-system-size"
-              label="Pool system size"
-              description="Number of warm system terminals kept in the pool."
-              value={agent.terminal.poolSystemSize}
-              min={1}
-              onChange={(value) => updateAgent("terminal", { poolSystemSize: value })}
             />
             <SettingsNumberField
               id="agent-terminal-pool-reaper-interval-ms"
@@ -234,68 +198,6 @@ export function AgentAdvancedSection({ section }: { section: AgentSettingsSectio
               onChange={(value) =>
                 updateAgent("terminal", { poolReaperIntervalMs: value })
               }
-            />
-          </div>
-        </SettingsSectionLayout>
-      );
-    case "search":
-      return (
-        <SettingsSectionLayout
-          title="Search"
-          description="Limits for grep, glob, and command availability checks."
-        >
-          <div className="grid gap-4 sm:grid-cols-2 max-w-2xl">
-            <SettingsNumberField
-              id="agent-search-max-matches"
-              label="Max grep matches"
-              description="Maximum number of grep matches returned to the agent."
-              value={agent.search.maxMatches}
-              min={1}
-              onChange={(value) => updateAgent("search", { maxMatches: value })}
-            />
-            <SettingsNumberField
-              id="agent-search-max-line-length"
-              label="Max grep line length"
-              description="Maximum line length included in grep results."
-              value={agent.search.maxLineLength}
-              min={1}
-              onChange={(value) => updateAgent("search", { maxLineLength: value })}
-            />
-            <SettingsNumberField
-              id="agent-search-glob-terminal-max-results"
-              label="Glob terminal max results"
-              description="Maximum file paths returned by glob on disk."
-              value={agent.search.globTerminalMaxResults}
-              min={1}
-              onChange={(value) =>
-                updateAgent("search", { globTerminalMaxResults: value })
-              }
-            />
-            <SettingsNumberField
-              id="agent-search-glob-max-display-results"
-              label="Glob max display results"
-              description="Maximum glob paths shown to the model."
-              value={agent.search.globMaxDisplayResults}
-              min={1}
-              onChange={(value) =>
-                updateAgent("search", { globMaxDisplayResults: value })
-              }
-            />
-            <SettingsNumberField
-              id="agent-search-grep-timeout-ms"
-              label="Grep timeout (ms)"
-              description="Timeout for grep commands."
-              value={agent.search.grepTimeoutMs}
-              min={1}
-              onChange={(value) => updateAgent("search", { grepTimeoutMs: value })}
-            />
-            <SettingsNumberField
-              id="agent-search-which-timeout-ms"
-              label="Which timeout (ms)"
-              description="Timeout for which availability checks."
-              value={agent.search.whichTimeoutMs}
-              min={1}
-              onChange={(value) => updateAgent("search", { whichTimeoutMs: value })}
             />
           </div>
         </SettingsSectionLayout>

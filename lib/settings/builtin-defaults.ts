@@ -30,7 +30,7 @@ import {
 import {
   BINARY_EXTENSIONS,
   DEFAULT_IGNORE_DIRS,
-} from "@/lib/shell/system-commands/constants";
+} from "@/lib/workspace/search-policies";
 import {
   DEFAULT_PANEL_LAYOUT_STATE,
   DEFAULT_PANEL_VISIBILITY_STATE,
@@ -38,7 +38,6 @@ import {
 import type {
   AgentContextSettings,
   AgentFilesystemSettings,
-  AgentSearchSettings,
   AgentSettings,
   AgentTerminalSettings,
   AgentToolOutputSettings,
@@ -88,32 +87,10 @@ export const BASH_OUTPUT_PREVIEW_HEAD_CHARS = 6_000;
 /** From lib/agent/tools/bash.ts. */
 export const BASH_OUTPUT_PREVIEW_TAIL_CHARS = 6_000;
 
-/** From lib/shell/terminal-executor.ts. */
-export const TERMINAL_EXECUTOR_TIMEOUT_MS = 15_000;
-/** From lib/shell/terminal-executor.ts. */
-export const TERMINAL_EXECUTOR_AVAILABILITY_TIMEOUT_MS = 3_000;
-/** From lib/shell/terminal-executor.ts. */
-export const TERMINAL_EXECUTOR_POLL_INTERVAL_MS = 300;
-
 /** From lib/shell/terminal-pool.ts. */
 export const TERMINAL_POOL_IDLE_TIMEOUT_MS = 60 * 60 * 1_000;
 /** From lib/shell/terminal-pool.ts. */
-export const TERMINAL_POOL_SYSTEM_SIZE = 2;
-/** From lib/shell/terminal-pool.ts. */
 export const TERMINAL_POOL_REAPER_INTERVAL_MS = 60_000;
-
-/** From lib/shell/system-commands/grep.ts. */
-export const SEARCH_MAX_MATCHES = 100;
-/** From lib/shell/system-commands/grep.ts. */
-export const SEARCH_MAX_LINE_LENGTH = 200;
-/** From lib/shell/system-commands/glob.ts. */
-export const SEARCH_GLOB_TERMINAL_MAX_RESULTS = 500;
-/** From lib/shell/system-commands/glob.ts. */
-export const SEARCH_GLOB_MAX_DISPLAY_RESULTS = 100;
-/** From lib/shell/system-commands/grep.ts. */
-export const SEARCH_GREP_TIMEOUT_MS = 15_000;
-/** From lib/shell/system-commands/grep.ts. */
-export const SEARCH_WHICH_TIMEOUT_MS = 3_000;
 
 /** From components/notebook/utils.ts. */
 export const NOTEBOOK_TEXT_OUTPUT_AUTO_COLLAPSE_THRESHOLD = 2000;
@@ -177,22 +154,8 @@ export const BUILTIN_AGENT_TERMINAL_DEFAULTS: AgentTerminalSettings = {
   outputSpillThresholdChars: BASH_OUTPUT_SPILL_THRESHOLD_CHARS,
   outputPreviewHeadChars: BASH_OUTPUT_PREVIEW_HEAD_CHARS,
   outputPreviewTailChars: BASH_OUTPUT_PREVIEW_TAIL_CHARS,
-  executorTimeoutMs: TERMINAL_EXECUTOR_TIMEOUT_MS,
-  executorAvailabilityTimeoutMs: TERMINAL_EXECUTOR_AVAILABILITY_TIMEOUT_MS,
-  executorPollIntervalMs: TERMINAL_EXECUTOR_POLL_INTERVAL_MS,
   poolIdleTimeoutMs: TERMINAL_POOL_IDLE_TIMEOUT_MS,
-  poolSystemSize: TERMINAL_POOL_SYSTEM_SIZE,
   poolReaperIntervalMs: TERMINAL_POOL_REAPER_INTERVAL_MS,
-};
-
-/** Built-in search/list tool defaults. */
-export const BUILTIN_AGENT_SEARCH_DEFAULTS: AgentSearchSettings = {
-  maxMatches: SEARCH_MAX_MATCHES,
-  maxLineLength: SEARCH_MAX_LINE_LENGTH,
-  globTerminalMaxResults: SEARCH_GLOB_TERMINAL_MAX_RESULTS,
-  globMaxDisplayResults: SEARCH_GLOB_MAX_DISPLAY_RESULTS,
-  grepTimeoutMs: SEARCH_GREP_TIMEOUT_MS,
-  whichTimeoutMs: SEARCH_WHICH_TIMEOUT_MS,
 };
 
 /** Built-in filesystem policy defaults. */
@@ -216,7 +179,6 @@ export const BUILTIN_AGENT_DEFAULTS: AgentSettings = {
   context: BUILTIN_AGENT_CONTEXT_DEFAULTS,
   toolOutput: BUILTIN_AGENT_TOOL_OUTPUT_DEFAULTS,
   terminal: BUILTIN_AGENT_TERMINAL_DEFAULTS,
-  search: BUILTIN_AGENT_SEARCH_DEFAULTS,
   filesystem: BUILTIN_AGENT_FILESYSTEM_DEFAULTS,
   web: BUILTIN_AGENT_WEB_DEFAULTS,
 };

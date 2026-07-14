@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Download,
+  Copy,
   FileCode,
   FileText,
   Folder,
@@ -61,7 +62,10 @@ import { useNotebookViewMode } from "@/contexts/notebook-view-mode-context";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import { useIsDesktopApp, usePlatformOs } from "@/hooks/use-platform";
 import { NOTEBOOK_PUBLISH_EVENT_NAME } from "@/lib/cloud/publishing";
-import { openFile as revealPathInFileManager } from "@/lib/shell/system-commands/open-file";
+import {
+  getWorkspacePathActionAvailability,
+  revealWorkspacePath,
+} from "@/lib/desktop/workspace-actions.client";
 import { togglePinnedFilePath } from "@/lib/settings/pinned-files";
 import {
   MAX_PINNED_FILE_PATHS,
@@ -78,6 +82,7 @@ import {
   type NotebookExportFormat,
 } from "@/lib/notebook/notebook-export";
 import { cn } from "@/lib/utils";
+import { copyWorkspacePath } from "@/lib/workspace/copy-path.client";
 import { dispatchWorkspaceFilesChanged } from "@/lib/workspace/workspace-events";
 import type { KernelInfo, KernelStatus, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
@@ -352,6 +357,7 @@ export function BusinessShell({
   const [businessEditMode, setBusinessEditMode] = React.useState(false);
   const [analysisName, setAnalysisName] = React.useState(defaultAnalysisName);
   const [isCreatingAnalysis, setIsCreatingAnalysis] = React.useState(false);
+  const [canRevealWorkspacePath, setCanRevealWorkspacePath] = React.useState(false);
   const analysisNameInputRef = React.useRef<HTMLInputElement>(null);
   const isDesktopApp = useIsDesktopApp();
   const platformOs = usePlatformOs();
@@ -380,6 +386,30 @@ export function BusinessShell({
     MAX_PINNED_WORKSPACE_DIRECTORY_PATHS;
   const disablePinProject =
     !isCurrentProjectPinned && pinnedProjectLimitReached;
+
+  React.useEffect(() => {
+    let cancelled = false;
+
+    if (!kernelService || revealTargetPath === null) {
+      setCanRevealWorkspacePath(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void getWorkspacePathActionAvailability({
+      path: revealTargetPath,
+      kernelService,
+    }).then((availability) => {
+      if (!cancelled) {
+        setCanRevealWorkspacePath(availability.available);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [kernelService, revealTargetPath]);
 
   React.useEffect(() => {
     if (currentFile.path.toLowerCase().endsWith(".ipynb")) {
@@ -474,18 +504,35 @@ export function BusinessShell({
     [onOpenFile],
   );
 
-  /** Opens the active file, or the current project folder, in the OS native file manager. */
+  /** Copies the active Jupyter-relative workspace target and reports the result. */
+  const handleCopyRevealTarget = React.useCallback(() => {
+    if (revealTargetPath === null) return;
+
+    void copyWorkspacePath(revealTargetPath)
+      .then(() => toast.success("Workspace path copied."))
+      .catch((error) => {
+        console.error("Failed to copy workspace path:", error);
+        toast.error("Could not copy the workspace path.");
+      });
+  }, [revealTargetPath]);
+
+  /** Opens the active file, or the current project folder, through the local Electron host. */
   const handleRevealTarget = React.useCallback(() => {
     if (!kernelService || revealTargetPath === null) {
       toast.error("Connect Orion's runtime before revealing a file or project.");
       return;
     }
 
-    void revealPathInFileManager(kernelService, revealTargetPath).catch((error) => {
-      console.error("Failed to reveal file or project in file manager:", error);
-      toast.error("Failed to reveal the file or project. See console for details.");
+    void revealWorkspacePath({ path: revealTargetPath, kernelService }).then((result) => {
+      if (result.ok) return;
+      toast.error(result.message, {
+        action: {
+          label: "Copy path",
+          onClick: handleCopyRevealTarget,
+        },
+      });
     });
-  }, [kernelService, revealTargetPath]);
+  }, [handleCopyRevealTarget, kernelService, revealTargetPath]);
 
   /** Toggles the active file in the pinned-file shortcuts. */
   const handleToggleFilePin = React.useCallback(async () => {
@@ -744,12 +791,26 @@ export function BusinessShell({
                             <Plus className="h-4 w-4" />
                             {isCreatingAnalysis ? "Creating..." : "New notebook"}
                           </DropdownMenuItem>
+                          {canRevealWorkspacePath ? (
+                            <DropdownMenuItem
+                              onClick={handleRevealTarget}
+                              disabled={!kernelService || revealTargetPath === null}
+                            >
+                              <FolderSearch className="h-4 w-4" />
+                              {revealTargetLabel}
+                            </DropdownMenuItem>
+                          ) : (
+                            <DropdownMenuItem disabled>
+                              <FolderSearch className="h-4 w-4" />
+                              Reveal available for local desktop workspaces
+                            </DropdownMenuItem>
+                          )}
                           <DropdownMenuItem
-                            onClick={handleRevealTarget}
-                            disabled={!kernelService || revealTargetPath === null}
+                            onClick={handleCopyRevealTarget}
+                            disabled={revealTargetPath === null}
                           >
-                            <FolderSearch className="h-4 w-4" />
-                            {revealTargetLabel}
+                            <Copy className="h-4 w-4" />
+                            Copy path
                           </DropdownMenuItem>
                           {currentFilePath !== null ? (
                             <DropdownMenuItem

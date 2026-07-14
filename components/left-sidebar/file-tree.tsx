@@ -16,8 +16,10 @@ import {
   SquareArrowOutUpRight,
   AtSign,
   Pin,
+  Copy,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useIsDesktopApp } from "@/hooks/use-platform";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import { DEFAULT_SETTINGS } from "@/lib/settings/defaults";
 import { togglePinnedFilePath } from "@/lib/settings/pinned-files";
@@ -92,6 +94,10 @@ type FileTreeProps = {
    * Receives the path of the item to reveal.
    */
   onRevealInFinder?: (path: string) => void;
+  /** Called when the user requests a Jupyter-relative path be copied. */
+  onCopyPath?: (path: string) => void;
+  /** Disabled reveal menu text when the connected workspace is not locally revealable. */
+  revealUnavailableLabel?: string;
   /**
    * Called after a successful rename so the app can update the open file and recent list.
    */
@@ -110,7 +116,7 @@ type FileTreeProps = {
   }) => void;
   /**
    * OS-specific label for the reveal action (e.g. "Reveal in Finder" on macOS,
-   * "Reveal in Finder" on Windows).  Defaults to "Reveal in Finder".
+   * "Reveal in Explorer" on Windows). Defaults to "Reveal in Finder".
    */
   revealLabel?: string;
   /** The active workspace directory (Jupyter-relative). Used to build deep-link URLs. */
@@ -130,6 +136,8 @@ export function FileTree({
   onTreeChange,
   onFetchChildren,
   onRevealInFinder,
+  onCopyPath,
+  revealUnavailableLabel,
   onPathRenamed,
   onPathDeleted,
   revealLabel = "Reveal in Finder",
@@ -161,6 +169,8 @@ export function FileTree({
               onTreeChange={onTreeChange}
               onFetchChildren={onFetchChildren}
               onRevealInFinder={onRevealInFinder}
+              onCopyPath={onCopyPath}
+              revealUnavailableLabel={revealUnavailableLabel}
               onPathRenamed={onPathRenamed}
               onPathDeleted={onPathDeleted}
               revealLabel={revealLabel}
@@ -183,6 +193,8 @@ function FileTreeNode({
   onTreeChange,
   onFetchChildren,
   onRevealInFinder,
+  onCopyPath,
+  revealUnavailableLabel,
   onPathRenamed,
   onPathDeleted,
   revealLabel = "Reveal in Finder",
@@ -197,6 +209,8 @@ function FileTreeNode({
   onTreeChange?: (parentPath: string) => void;
   onFetchChildren?: (path: string) => Promise<FileTreeItem[]>;
   onRevealInFinder?: (path: string) => void;
+  onCopyPath?: (path: string) => void;
+  revealUnavailableLabel?: string;
   onPathRenamed?: FileTreeProps["onPathRenamed"];
   onPathDeleted?: FileTreeProps["onPathDeleted"];
   revealLabel?: string;
@@ -231,6 +245,7 @@ function FileTreeNode({
   /** Absorbs the first blur caused by the context menu restoring focus to its trigger. */
   const ignoreNextBlurRef = React.useRef(false);
 
+  const isDesktopApp = useIsDesktopApp();
   const { effectiveSettings, setUserSettings } = useOrionSettings();
   const isFolder = item.type === "folder";
   const isNotebookFile =
@@ -690,7 +705,29 @@ function FileTreeNode({
             </>
           )}
 
-          {item.type === "file" && onRevealInFinder && <ContextMenuSeparator />}
+          {!onRevealInFinder && revealUnavailableLabel && (
+            <>
+              {item.type === "folder" && canCreateFile && <ContextMenuSeparator />}
+              <ContextMenuItem disabled>
+                <FolderSearch className="mr-2 h-4 w-4" />
+                {revealUnavailableLabel}
+              </ContextMenuItem>
+            </>
+          )}
+
+          {onCopyPath && (
+            <ContextMenuItem
+              className="outline-none ring-0 focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0"
+              onSelect={() => onCopyPath(item.path)}
+            >
+              <Copy className="mr-2 h-4 w-4" />
+              Copy path
+            </ContextMenuItem>
+          )}
+
+          {item.type === "file" && (onRevealInFinder || onCopyPath) && (
+            <ContextMenuSeparator />
+          )}
 
           {item.type === "file" && (
             <ContextMenuItem
@@ -698,7 +735,7 @@ function FileTreeNode({
               onSelect={handleOpenInNewTab}
             >
               <SquareArrowOutUpRight className="mr-2 h-4 w-4" />
-              Open in new tab
+              {isDesktopApp ? "Open in new window" : "Open in new tab"}
             </ContextMenuItem>
           )}
 
@@ -782,6 +819,8 @@ function FileTreeNode({
               onTreeChange={onTreeChange}
               onFetchChildren={onFetchChildren}
               onRevealInFinder={onRevealInFinder}
+              onCopyPath={onCopyPath}
+              revealUnavailableLabel={revealUnavailableLabel}
               onPathRenamed={onPathRenamed}
               onPathDeleted={onPathDeleted}
               revealLabel={revealLabel}

@@ -24,6 +24,12 @@ contextBridge.exposeInMainWorld("orionDesktopShell", {
     ipcRenderer.invoke("orion:shell:set-background-color", color),
   showProjectFolderPicker: () =>
     ipcRenderer.invoke("orion:shell:show-project-folder-picker"),
+  getManagedJupyterBaseUrl: (): Promise<string | null> =>
+    ipcRenderer.invoke("orion:shell:get-managed-jupyter-base-url"),
+  revealWorkspacePath: (request: { path: string; jupyterBaseUrl: string }): Promise<void> =>
+    ipcRenderer.invoke("orion:shell:reveal-workspace-path", request),
+  openWorkspacePath: (request: { path: string; jupyterBaseUrl: string }): Promise<void> =>
+    ipcRenderer.invoke("orion:shell:open-workspace-path", request),
   reloadIgnoringCache: (): Promise<void> =>
     ipcRenderer.invoke("orion:shell:reload-ignoring-cache"),
   onOpenSettings: (listener: () => void) => {

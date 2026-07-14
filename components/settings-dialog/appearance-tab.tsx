@@ -306,7 +306,7 @@ export function AppearanceTab() {
               <SettingsInfoLabel
                 htmlFor="editor-unopenable-file-action"
                 label="Unsupported files"
-                description="When you click a file Orion cannot open in the editor, add it as a chat mention or open it with your system's default app."
+                description="When Orion cannot open a file in the editor, add it as a chat mention or open it with your system's default app in Orion Desktop with a local runtime."
               />
               <Select
                 value={editor.unopenableFileAction}

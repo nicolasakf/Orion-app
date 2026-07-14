@@ -54,13 +54,11 @@ describe("agent path resolver", () => {
     });
   });
 
-  it("preserves unresolved parent escapes in legacy relative paths", () => {
-    expect(resolveAgentPath("../package.json", { rootDirectory })).toEqual({
-      ok: true,
-      originalPath: "../package.json",
-      jupyterPath: "../package.json",
-      wasAbsolute: false,
-    });
+  it("rejects legacy relative paths that escape the Jupyter root", () => {
+    const result = resolveAgentPath("project/../../package.json", { rootDirectory });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error).toContain("leaves the Jupyter root");
   });
 
   it("detects POSIX and Windows absolute paths", () => {
@@ -73,5 +71,19 @@ describe("agent path resolver", () => {
     expect(toAgentAbsolutePath("project/notebook.ipynb", { rootDirectory })).toBe(
       "/Users/taylor/project/notebook.ipynb"
     );
+  });
+
+  it("preserves a Windows drive-root separator in prompt-facing paths", () => {
+    const windowsRoot = "C:\\";
+    const promptRoot = toAgentAbsolutePath("", { rootDirectory: windowsRoot });
+
+    expect(promptRoot).toBe(windowsRoot);
+    expect(isAbsoluteAgentPath(promptRoot!)).toBe(true);
+    expect(resolveAgentPath(promptRoot!, { rootDirectory: windowsRoot })).toEqual({
+      ok: true,
+      originalPath: windowsRoot,
+      jupyterPath: "",
+      wasAbsolute: true,
+    });
   });
 });

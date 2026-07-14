@@ -15,11 +15,19 @@ interface OrionDesktopProjectFolderPickerResult {
   name: string;
 }
 
+interface OrionDesktopWorkspacePathRequest {
+  path: string;
+  jupyterBaseUrl: string;
+}
+
 interface OrionDesktopShellBridge {
   setWindowBackgroundColor: (color: string) => Promise<void>;
   showProjectFolderPicker: () => Promise<
     OrionDesktopProjectFolderPickerResult | null
   >;
+  getManagedJupyterBaseUrl: () => Promise<string | null>;
+  revealWorkspacePath: (request: OrionDesktopWorkspacePathRequest) => Promise<void>;
+  openWorkspacePath: (request: OrionDesktopWorkspacePathRequest) => Promise<void>;
   reloadIgnoringCache: () => Promise<void>;
   onOpenSettings: (listener: () => void) => () => void;
   onReloadRequested: (

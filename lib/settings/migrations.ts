@@ -144,6 +144,22 @@ function stripSessionOnlyLayoutKeys(settings: Record<string, unknown>): void {
   }
 }
 
+/** Drops settings that configured the retired hidden system-terminal command path. */
+function stripRetiredSystemCommandSettings(settings: Record<string, unknown>): void {
+  const agent = asObject(settings.agent);
+  if (!agent) return;
+
+  const terminal = asObject(agent.terminal);
+  if (terminal) {
+    delete terminal.executorTimeoutMs;
+    delete terminal.executorAvailabilityTimeoutMs;
+    delete terminal.executorPollIntervalMs;
+    delete terminal.poolSystemSize;
+  }
+
+  delete agent.search;
+}
+
 function normalizeUserDocument(raw: unknown): Record<string, unknown> {
   const obj = asObject(raw);
   if (!obj) {
@@ -206,6 +222,7 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
     stripSessionOnlyNotebookKeys(settingsObj);
     stripSessionOnlyLayoutKeys(settingsObj);
     stripRemovedTableSettings(settingsObj);
+    stripRetiredSystemCommandSettings(settingsObj);
     backfillSignInStepCompletedForExistingUsers(settingsObj);
     backfillExperienceModeChosenForExistingUsers(settingsObj);
     backfillInferenceProviderChosenForExistingUsers(settingsObj);
@@ -245,6 +262,7 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
   stripSessionOnlyNotebookKeys(partialSettings);
   stripSessionOnlyLayoutKeys(partialSettings);
   stripRemovedTableSettings(partialSettings);
+  stripRetiredSystemCommandSettings(partialSettings);
   backfillSignInStepCompletedForExistingUsers(partialSettings);
   backfillExperienceModeChosenForExistingUsers(partialSettings);
   backfillInferenceProviderChosenForExistingUsers(partialSettings);
@@ -260,6 +278,10 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
 
 export function migrateWorkspaceSettingsDocument(raw: unknown): WorkspaceSettingsDocument {
   const normalized = normalizeWorkspaceDocument(raw);
+  const overrides = asObject(normalized.overrides);
+  if (overrides) {
+    stripRetiredSystemCommandSettings(overrides);
+  }
   const parsed = WorkspaceSettingsDocumentSchema.safeParse(normalized);
   if (parsed.success) {
     return {
@@ -271,6 +293,7 @@ export function migrateWorkspaceSettingsDocument(raw: unknown): WorkspaceSetting
   const maybeOverrides = asObject(normalized.overrides) ?? {};
   stripSessionOnlyLayoutKeys(maybeOverrides);
   stripRemovedTableSettings(maybeOverrides);
+  stripRetiredSystemCommandSettings(maybeOverrides);
   return {
     version: SETTINGS_SCHEMA_VERSION,
     overrides: maybeOverrides as WorkspaceSettingsOverrides,
