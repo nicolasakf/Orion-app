@@ -134,6 +134,11 @@ describe("getBusinessMarkdownCompatibility", () => {
       source: "![Revenue chart](https://example.com/revenue.png)",
     },
     {
+      name: "a shortcut-reference image",
+      reason: "Image editing is not available in Business View yet.",
+      source: "![Revenue chart]\n\n[Revenue chart]: https://example.com/revenue.png",
+    },
+    {
       name: "MathJax slash delimiters",
       reason: "This block uses an advanced MathJax delimiter.",
       source: "Inline \\(x^2\\) and display \\[E = mc^2\\].",

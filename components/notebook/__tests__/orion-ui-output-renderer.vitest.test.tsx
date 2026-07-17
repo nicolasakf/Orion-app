@@ -11,8 +11,17 @@ import type {
 import { ORION_UI_MIME_TYPE } from "@/lib/notebook/app-view";
 import { OutputType, type NotebookOutputType } from "@/lib/types";
 
+const useExperienceModeMock = vi.hoisted(() =>
+  vi.fn<() => "pro" | "business">(() => "pro"),
+);
+
+vi.mock("@/hooks/use-orion-settings", () => ({
+  useExperienceMode: useExperienceModeMock,
+}));
+
 afterEach(() => {
   cleanup();
+  useExperienceModeMock.mockReturnValue("pro");
 });
 
 function renderOrionUiOutput({
@@ -660,7 +669,9 @@ describe("OrionUiOutputRenderer", () => {
 
   it("shows table backend errors without replacing the initial window", async () => {
     const onTableRequest = vi.fn(async () => {
-      throw new Error("backend unavailable");
+      throw new Error(
+        "Orion table is no longer registered in the kernel: orion-table-abc",
+      );
     });
     renderOrionUiOutput({ value: tablePayload(), onTableRequest });
 
@@ -668,7 +679,29 @@ describe("OrionUiOutputRenderer", () => {
       target: { value: "alice" },
     });
 
-    expect(await screen.findByText("backend unavailable")).toBeInTheDocument();
+    expect(
+      await screen.findByText(/Run the cell that displays this table/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Alice")).toBeInTheDocument();
+  });
+
+  it("shows simpler table backend errors in business view", async () => {
+    useExperienceModeMock.mockReturnValue("business");
+    const onTableRequest = vi.fn(async () => {
+      throw new Error(
+        "Orion table is no longer registered in the kernel: orion-table-abc",
+      );
+    });
+    renderOrionUiOutput({ value: tablePayload(), onTableRequest });
+
+    fireEvent.change(screen.getByPlaceholderText("Search all columns..."), {
+      target: { value: "alice" },
+    });
+
+    expect(
+      await screen.findByText("Refresh this report to sort, filter, or explore this table."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/kernel/i)).not.toBeInTheDocument();
     expect(screen.getByText("Alice")).toBeInTheDocument();
   });
 

@@ -43,11 +43,11 @@ export function ErrorOutputRenderer({
             dispatchInsertChatMessage(buildNotebookErrorRepairPrompt(cellLabel));
           }}
           className="corner-squircle absolute right-8 top-2 inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-xs font-medium text-red-700/70 transition-colors hover:bg-red-100/70 hover:text-red-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-red-500/40 dark:text-red-300/70 dark:hover:bg-red-900/40 dark:hover:text-red-200"
-          aria-label={`Fix this error in ${cellLabel} on chat`}
-          title={`Fix this error in ${cellLabel} on chat`}
+          aria-label={`Fix this error in ${cellLabel} in chat`}
+          title={`Fix this error in ${cellLabel} in chat`}
         >
           <Sparkles className="h-3 w-3" />
-          Fix on chat
+          Fix in chat
         </button>
       )}
       <div className="pr-32 text-sm font-bold text-red-600">

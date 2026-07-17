@@ -134,7 +134,10 @@ export function NotebookEditorToolbar({
     React.useState<GoToErrorPopoverState | null>(null);
 
   const canRun =
-    Boolean(currentKernel) && kernelStatus === "connected" && !isRunning;
+    Boolean(currentKernel) &&
+    kernelStatus !== "disconnected" &&
+    kernelStatus !== "connecting" &&
+    !isRunning;
   const canControlKernel =
     Boolean(currentKernel) &&
     kernelStatus !== "disconnected" &&

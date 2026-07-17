@@ -25,7 +25,7 @@ interface MarkdownCompatibility {
 
 const htmlLikePattern = /<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?>/;
 const directivePattern = /^\s*:::[^\n]*$/m;
-const imagePattern = /!\[[^\]]*\](?:\([^\n)]*\)|\[[^\]]*\])/;
+const imagePattern = /!\[[^\]]*\](?:\([^\n)]*\)|\[[^\]]*\])?/;
 const mathJaxPattern = /\\(?:\(|\[)|\\begin\{[A-Za-z*]+\}/;
 const mdxExpressionPattern = /(?:^|\n)\s*\{[^{}\n]+\}\s*(?=\n|$)/;
 const mdxEsmPattern =

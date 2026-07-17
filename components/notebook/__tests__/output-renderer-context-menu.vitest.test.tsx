@@ -116,4 +116,22 @@ describe("OutputRenderer context menu", () => {
     expect(container).toBeEmptyDOMElement();
     expect(screen.queryByText(/Orion cannot render this output yet/)).not.toBeInTheDocument();
   });
+
+  it("renders ordinary HTML links that point to Plotly", () => {
+    render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: {
+            "text/html": [
+              '<p><a href="https://plotly.com/python/">Plotly guide</a></p>',
+            ],
+          },
+          metadata: {},
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Plotly guide" })).toBeInTheDocument();
+  });
 });

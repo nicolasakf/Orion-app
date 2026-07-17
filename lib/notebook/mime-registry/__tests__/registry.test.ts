@@ -80,7 +80,11 @@ function main(): void {
   runTest("keeps ordinary HTML on the generic HTML renderer", () => {
     const output: NotebookOutputType = {
       output_type: OutputType.DISPLAY_DATA,
-      data: { "text/html": ["<p>Plotly appears here only as text.</p>"] },
+      data: {
+        "text/html": [
+          '<div id="example"><code>Plotly.newPlot("example", [], {})</code> <a href="https://plotly.com/python/">Plotly guide</a></div>',
+        ],
+      },
       metadata: {},
     };
     const resolved = registry.resolve(output);

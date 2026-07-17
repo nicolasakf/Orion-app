@@ -26,11 +26,17 @@ function toJoinedString(value: unknown): string {
  */
 function isPlotlyBootstrapHtml(value: unknown): boolean {
   const html = toJoinedString(value);
-  const hasPlotlyRenderer = /Plotly\.(?:newPlot|react)\s*\(/.test(html);
-  const hasPlotlyBootstrap =
-    /window\.PlotlyConfig/.test(html) ||
-    /plotly(?:\.min)?\.js\s+v/i.test(html) ||
-    /(?:src|href)=["'][^"']*plotly/i.test(html);
+  const scriptBlocks =
+    html.match(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi) ?? [];
+  const hasPlotlyRenderer = scriptBlocks.some((script) =>
+    /Plotly\.(?:newPlot|react)\s*\(/.test(script),
+  );
+  const hasPlotlyBootstrap = scriptBlocks.some(
+    (script) =>
+      /window\.PlotlyConfig/.test(script) ||
+      /plotly(?:\.min)?\.js\s+v/i.test(script) ||
+      /\bsrc=["'][^"']*plotly/i.test(script),
+  );
 
   return hasPlotlyRenderer || hasPlotlyBootstrap;
 }
@@ -38,9 +44,13 @@ function isPlotlyBootstrapHtml(value: unknown): boolean {
 /** Detects a Plotly HTML document that contains a concrete chart to render. */
 function isPlotlyFigureHtml(value: unknown): boolean {
   const html = toJoinedString(value);
+  const scriptBlocks =
+    html.match(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi) ?? [];
   return (
     /<div\b[^>]*\bid=["'][^"']+["'][^>]*>/i.test(html) &&
-    /Plotly\.(?:newPlot|react)\s*\(/.test(html)
+    scriptBlocks.some((script) =>
+      /Plotly\.(?:newPlot|react)\s*\(/.test(script),
+    )
   );
 }
 

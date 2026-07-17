@@ -91,6 +91,12 @@ import {
   type OrionTableStats,
   type OrionTableWindow,
 } from "./types";
+import { useExperienceMode } from "@/hooks/use-orion-settings";
+
+import {
+  formatTableOperationError,
+  missingKernelMessage,
+} from "./table-operation-errors";
 
 interface OrionUiTableProps {
   node: NotebookAppViewSchemaNode;
@@ -345,6 +351,7 @@ function OrionUiTableInner({
   tableMetadata,
   onTableMetadataChange,
 }: OrionUiTableInnerProps): React.JSX.Element {
+  const experienceMode = useExperienceMode();
   const tableRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const scrollParentRef = useRef<HTMLDivElement | null>(null);
@@ -439,7 +446,7 @@ function OrionUiTableInner({
       persistViewId: string | null = null,
     ) => {
       if (!requestTableData) {
-        setError("Live table actions require an active Orion kernel.");
+        setError(missingKernelMessage(experienceMode));
         return;
       }
 
@@ -468,16 +475,12 @@ function OrionUiTableInner({
           );
         }
       } catch (fetchError) {
-        setError(
-          fetchError instanceof Error
-            ? fetchError.message
-            : "Failed to fetch table data.",
-        );
+        setError(formatTableOperationError("fetch", fetchError, experienceMode));
       } finally {
         setPending(false);
       }
     },
-    [display, requestTableData, tableId, tableState, updateSavedView],
+    [display, experienceMode, requestTableData, tableId, tableState, updateSavedView],
   );
 
   /** Applies a state update and refreshes the backend window from the first row. */
@@ -729,24 +732,31 @@ function OrionUiTableInner({
     }
 
     if (!requestTableData) {
-      setError("Live table actions require an active Orion kernel.");
+      setError(missingKernelMessage(experienceMode));
       return;
     }
-    const response = await requestTableData({
-      action: "export_csv",
-      tableId,
-      state: tableState,
-      columns: visibleColumns
-        .map((column) => column.key)
-        .filter((key) => key !== "__index__"),
-    });
-    const parsedResponse = OrionTableExportSchema.safeParse(response);
-    if (!parsedResponse.success) {
-      setError("Kernel returned an invalid export payload.");
-      return;
+
+    setError(null);
+    try {
+      const response = await requestTableData({
+        action: "export_csv",
+        tableId,
+        state: tableState,
+        columns: visibleColumns
+          .map((column) => column.key)
+          .filter((key) => key !== "__index__"),
+      });
+      const parsedResponse = OrionTableExportSchema.safeParse(response);
+      if (!parsedResponse.success) {
+        setError("Kernel returned an invalid export payload.");
+        return;
+      }
+      await navigator.clipboard.writeText(parsedResponse.data.csv);
+    } catch (copyError) {
+      setError(formatTableOperationError("export_csv", copyError, experienceMode));
     }
-    await navigator.clipboard.writeText(parsedResponse.data.csv);
   }, [
+    experienceMode,
     offset,
     requestTableData,
     selectedCells,
@@ -759,45 +769,55 @@ function OrionUiTableInner({
   /** Downloads the current backend view as CSV. */
   const exportCsv = useCallback(async () => {
     if (!requestTableData) {
-      setError("Live table actions require an active Orion kernel.");
+      setError(missingKernelMessage(experienceMode));
       return;
     }
-    const response = await requestTableData({
-      action: "export_csv",
-      tableId,
-      state: tableState,
-      columns: visibleColumns
-        .map((column) => column.key)
-        .filter((key) => key !== "__index__"),
-    });
-    const parsedResponse = OrionTableExportSchema.safeParse(response);
-    if (!parsedResponse.success) {
-      setError("Kernel returned an invalid export payload.");
-      return;
+
+    setError(null);
+    try {
+      const response = await requestTableData({
+        action: "export_csv",
+        tableId,
+        state: tableState,
+        columns: visibleColumns
+          .map((column) => column.key)
+          .filter((key) => key !== "__index__"),
+      });
+      const parsedResponse = OrionTableExportSchema.safeParse(response);
+      if (!parsedResponse.success) {
+        setError("Kernel returned an invalid export payload.");
+        return;
+      }
+      downloadTextFile(`${source.replace(/\W+/g, "_") || "orion-table"}.csv`, parsedResponse.data.csv, "text/csv;charset=utf-8");
+    } catch (exportError) {
+      setError(formatTableOperationError("export_csv", exportError, experienceMode));
     }
-    downloadTextFile(`${source.replace(/\W+/g, "_") || "orion-table"}.csv`, parsedResponse.data.csv, "text/csv;charset=utf-8");
-  }, [requestTableData, source, tableId, tableState, visibleColumns]);
+  }, [experienceMode, requestTableData, source, tableId, tableState, visibleColumns]);
 
   /** Opens backend column stats in the stats dialog. */
   const showColumnStats = useCallback(
     async (columnKey: string) => {
       if (columnKey === "__index__" || !requestTableData) return;
       setError(null);
-      const response = await requestTableData({
-        action: "stats",
-        tableId,
-        state: tableState,
-        column: columnKey,
-      });
-      const parsedResponse = OrionTableStatsSchema.safeParse(response);
-      if (!parsedResponse.success) {
-        setError("Kernel returned invalid column statistics.");
-        return;
+      try {
+        const response = await requestTableData({
+          action: "stats",
+          tableId,
+          state: tableState,
+          column: columnKey,
+        });
+        const parsedResponse = OrionTableStatsSchema.safeParse(response);
+        if (!parsedResponse.success) {
+          setError("Kernel returned invalid column statistics.");
+          return;
+        }
+        setStats(parsedResponse.data);
+        setStatsOpen(true);
+      } catch (statsError) {
+        setError(formatTableOperationError("stats", statsError, experienceMode));
       }
-      setStats(parsedResponse.data);
-      setStatsOpen(true);
     },
-    [requestTableData, tableId, tableState],
+    [experienceMode, requestTableData, tableId, tableState],
   );
 
   /** Persists the current table state as output-level Orion metadata. */

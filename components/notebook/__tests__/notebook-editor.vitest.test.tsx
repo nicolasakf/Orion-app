@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   render,
   waitFor,
@@ -175,6 +176,58 @@ describe("NotebookEditor business markdown saves", () => {
 });
 
 describe("NotebookEditor agent execution state", () => {
+  it("ignores a stale notebook load after the filepath changes", async () => {
+    const firstPath = "/workspace/first.ipynb";
+    const secondPath = "/workspace/second.ipynb";
+    const firstNotebook = {
+      ...makeNotebook(),
+      metadata: { title: "First notebook" },
+    };
+    const secondNotebook = {
+      ...makeNotebook(),
+      metadata: { title: "Second notebook" },
+    };
+    let resolveFirstLoad: ((value: { content: NotebookType }) => void) | undefined;
+    const firstLoad = new Promise<{ content: NotebookType }>((resolve) => {
+      resolveFirstLoad = resolve;
+    });
+    const contentsManager = {
+      get: vi.fn((path: string) =>
+        path === firstPath
+          ? firstLoad
+          : Promise.resolve({ content: secondNotebook }),
+      ),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    const kernelService = makeKernelService(contentsManager);
+    const { rerender } = render(
+      <NotebookEditor filepath={firstPath} kernelService={kernelService} />,
+    );
+
+    await waitFor(() => {
+      expect(contentsManager.get).toHaveBeenCalledWith(firstPath, { content: true });
+    });
+    rerender(
+      <NotebookEditor filepath={secondPath} kernelService={kernelService} />,
+    );
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.notebook?.metadata.title).toBe("Second notebook");
+    });
+
+    await act(async () => {
+      resolveFirstLoad?.({ content: firstNotebook });
+      await firstLoad;
+    });
+
+    const props = notebookAppViewMock.mock.lastCall?.[0] as
+      | NotebookAppViewTestProps
+      | undefined;
+    expect(props?.notebook?.metadata.title).toBe("Second notebook");
+  });
+
   it("resets prior-path execution state without clearing events queued for the new path", async () => {
     const firstPath = "/workspace/first.ipynb";
     const secondPath = "/workspace/second.ipynb";

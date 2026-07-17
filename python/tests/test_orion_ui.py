@@ -301,6 +301,21 @@ class OrionUiTests(unittest.TestCase):
         self.assertEqual(len(response["rows"]), 1)
 
     @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_unregistered_table_errors_are_action_specific(self):
+        with self.assertRaises(KeyError) as fetch_error:
+            _table.get_table_window("missing-table", action="fetch")
+        self.assertIn("sort, filter, search", str(fetch_error.exception))
+        self.assertNotIn("missing-table", str(fetch_error.exception))
+
+        with self.assertRaises(KeyError) as export_error:
+            _table.export_csv("missing-table", action="export_csv")
+        self.assertIn("export", str(export_error.exception).lower())
+
+        with self.assertRaises(KeyError) as stats_error:
+            _table.column_stats("missing-table", "score", action="stats")
+        self.assertIn("column statistics", str(stats_error.exception).lower())
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
     def test_table_requires_source_and_pandas_dataframe(self):
         df = pd.DataFrame({"a": [1]})
 

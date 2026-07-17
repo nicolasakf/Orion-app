@@ -762,6 +762,8 @@ export function NotebookEditor({
   // const executionCountRef = useRef(0); // Now from props
 
   useEffect(() => {
+    let cancelled = false;
+
     if (agentExecutionFilepathRef.current !== filepath) {
       // Agent execution events are scoped to a notebook path. Reset state from
       // the prior notebook before this path can receive its own queued events.
@@ -792,6 +794,7 @@ export function NotebookEditor({
         }
 
         const model = await contentsManager.get(filepath, { content: true });
+        if (cancelled) return;
         // ContentsManager returns the notebook as a parsed JS object.
         // Run it through parseNotebook (via JSON round-trip) so all fields
         // (source, outputs.text, outputs.traceback, etc.) are normalized to
@@ -812,6 +815,7 @@ export function NotebookEditor({
         markClean();
         applySelectionState(singleCellSelection(getCellId(withIds.cells[0])));
       } catch (err) {
+        if (cancelled) return;
         console.error("Error loading notebook:", err);
         const handledExternally = onFileLoadError?.(filepath, err) === true;
         if (handledExternally) return;
@@ -821,11 +825,14 @@ export function NotebookEditor({
           }`,
         );
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
-    loadNotebook();
+    void loadNotebook();
+    return () => {
+      cancelled = true;
+    };
   }, [
     applySelectionState,
     filepath,

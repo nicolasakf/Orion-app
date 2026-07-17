@@ -317,9 +317,11 @@ def get_table_window(
     state: Optional[Mapping[str, Any]] = None,
     offset: int = 0,
     limit: int = 50,
+    *,
+    action: str = "fetch",
 ) -> Dict[str, JsonValue]:
     """Return a bounded, operation-aware row window for a registered table."""
-    registration = _require_table(table_id)
+    registration = _require_table(table_id, action=action)
     table_state = state or {}
     df = _apply_operations(registration, table_state)
     group_by = _state_group_by(table_state)
@@ -340,10 +342,16 @@ def get_table_window(
     }
 
 
-def column_stats(table_id: str, column: str, state: Optional[Mapping[str, Any]] = None) -> Dict[str, JsonValue]:
+def column_stats(
+    table_id: str,
+    column: str,
+    state: Optional[Mapping[str, Any]] = None,
+    *,
+    action: str = "stats",
+) -> Dict[str, JsonValue]:
     """Return backend-computed stats for one visible DataFrame column."""
     pd = _import_pandas()
-    registration = _require_table(table_id)
+    registration = _require_table(table_id, action=action)
     df = _apply_operations(registration, state or {})
     if column not in df.columns:
         raise KeyError(f"Column not found: {column}")
@@ -374,9 +382,11 @@ def export_csv(
     state: Optional[Mapping[str, Any]] = None,
     columns: Optional[Iterable[str]] = None,
     max_rows: int = MAX_EXPORT_ROWS,
+    *,
+    action: str = "export_csv",
 ) -> Dict[str, JsonValue]:
     """Return CSV text for the current backend table view with a row cap."""
-    registration = _require_table(table_id)
+    registration = _require_table(table_id, action=action)
     df = _apply_operations(registration, state or {})
     selected_columns = [column for column in columns or [] if column in df.columns]
     if selected_columns:
@@ -515,10 +525,40 @@ def table_payload(
     }
 
 
-def _require_table(table_id: str) -> TableRegistration:
+def _table_not_registered_message(action: Optional[str]) -> str:
+    """Return a user-facing message when a table is missing from the kernel registry."""
+    run_cell = (
+        "Run the cell that displays this table. "
+        "If you restarted the kernel, run it again."
+    )
+    messages = {
+        "fetch": (
+            "This table is showing saved output. "
+            f"{run_cell} Then you can sort, filter, search, or change pages."
+        ),
+        "stats": (
+            "This table is showing saved output. "
+            f"{run_cell} Then you can view column statistics."
+        ),
+        "export_csv": (
+            "This table is showing saved output. "
+            f"{run_cell} Then you can export or copy the full table."
+        ),
+        "expression": (
+            "This table is showing saved output. "
+            f"{run_cell} Then you can save the current view expression."
+        ),
+    }
+    return messages.get(
+        action,
+        f"This table is showing saved output. {run_cell}",
+    )
+
+
+def _require_table(table_id: str, *, action: Optional[str] = None) -> TableRegistration:
     """Return a registered table or raise a helpful key error."""
     if table_id not in _TABLES:
-        raise KeyError(f"Orion table is no longer registered in the kernel: {table_id}")
+        raise KeyError(_table_not_registered_message(action))
     return _TABLES[table_id]
 
 
@@ -538,12 +578,13 @@ def _handle_request(data: Mapping[str, Any]) -> Dict[str, JsonValue]:
             table_state,
             int(data.get("offset", 0)),
             int(data.get("limit", 50)),
+            action="fetch",
         )
     if action == "stats":
         column = data.get("column")
         if not isinstance(column, str):
             raise ValueError("column must be a string for stats requests.")
-        return column_stats(table_id, column, table_state)
+        return column_stats(table_id, column, table_state, action="stats")
     if action == "export_csv":
         columns = data.get("columns")
         visible_columns = columns if isinstance(columns, Sequence) else []
@@ -551,9 +592,10 @@ def _handle_request(data: Mapping[str, Any]) -> Dict[str, JsonValue]:
             table_id,
             table_state,
             [column for column in visible_columns if isinstance(column, str)],
+            action="export_csv",
         )
     if action == "expression":
-        registration = _require_table(table_id)
+        registration = _require_table(table_id, action="expression")
         return {"expression": state_expression(registration.source, table_state)}
 
     raise ValueError(f"Unknown Orion table action: {action}")
