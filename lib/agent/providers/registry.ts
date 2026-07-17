@@ -74,7 +74,10 @@ function openAICompatibleAdapter(input: {
         stream_options: { include_usage: true },
       };
       if (modelSettings?.reasoningEffort) {
-        openai.reasoningEffort = modelSettings.reasoningEffort;
+        // Normalize settings persisted before Orion adopted OpenAI's `xhigh` wire value.
+        openai.reasoningEffort = modelSettings.reasoningEffort === "extra-high"
+          ? "xhigh"
+          : modelSettings.reasoningEffort;
       }
       return {
         openai: {

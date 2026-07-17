@@ -91,6 +91,16 @@ describe("provider registry", () => {
     ).toBe("my-provider");
     expect(getProviderAdapter("my-provider")).toBeUndefined();
   });
+
+  it("normalizes the legacy extra-high reasoning effort to OpenAI's xhigh value", () => {
+    const adapter = getProviderAdapter("openai");
+
+    expect(
+      adapter?.providerOptions({ modelSettings: { reasoningEffort: "extra-high" } })
+    ).toMatchObject({
+      openai: { reasoningEffort: "xhigh" },
+    });
+  });
 });
 
 describe("model catalog merging", () => {

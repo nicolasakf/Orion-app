@@ -19,7 +19,6 @@ import {
 import { orionTools } from "@/lib/agent/tool-schemas";
 import {
   getDefaultInteractionModeConfig,
-  getToolsForInteractionMode,
   resolveInteractionModeConfig,
 } from "@/lib/agent/interaction-modes";
 import {
@@ -28,20 +27,26 @@ import {
   type ModelPricing,
 } from "@/lib/agent/cost-calculator";
 import {
+  getContextCalibration,
   insertModelUsage,
   resolveOrCreateChatSession,
   resolveOrCreateModelRequest,
   updateChatSessionStatus,
+  updateContextCalibration,
 } from "@/lib/chat/chat-sqlite-storage.server";
-
 import {
-  buildAgentSystemPrompt,
-  buildAskModeSystemPrompt,
-  buildEditModeSystemPrompt,
-  buildAgentEnvironmentContextPrompt,
-  buildResearchModeSystemPrompt,
-  buildSubagentSystemPrompt,
-} from "@/lib/agent/agent-system-prompt";
+  CONTEXT_ESTIMATOR_VERSION,
+  measurePreparedPrompt,
+} from "@/lib/agent/context-measurement.server";
+import { ContextPreflightSettingsSchema } from "@/lib/agent/context-preflight";
+import { getRuntimeModelProfile } from "@/lib/agent/model-runtime-profile.server";
+import { calculateContextBudget } from "@/lib/agent/token-budget";
+import {
+  getVercelGenerationId,
+  scheduleVercelGenerationReconciliation,
+} from "@/lib/agent/vercel-generation.server";
+
+import { prepareChatInvocation } from "@/lib/agent/prepare-chat-invocation.server";
 import { AgentCommunicationStyleSchema, type AgentCommunicationStyle } from "@/lib/settings/schema";
 import type { AgentRule } from "@/lib/agent/rules";
 import { parseAgentRulesPayload } from "@/lib/agent/rules/request-schema";
@@ -66,7 +71,6 @@ import { normalizeInlineDataUrlFileParts } from "@/lib/agent/model-message-files
 import {
   ResearchNudgeSchema,
   ResearchSessionSnapshotSchema,
-  summarizeResearchSessionForPrompt,
 } from "@/lib/agent/research-session";
 import { resolveImplicitForcedSkillNames } from "@/lib/agent/implicit-skills";
 import {
@@ -120,9 +124,12 @@ async function getPricingCatalogModel(providerId: ProviderId, modelId: string): 
     input_price_per_1m: null,
     output_price_per_1m: null,
     cached_price_per_1m: null,
+    cache_write_price_per_1m: null,
     long_context_threshold: null,
     long_context_input_price_per_1m: null,
     long_context_output_price_per_1m: null,
+    long_context_cached_price_per_1m: null,
+    long_context_cache_write_price_per_1m: null,
   };
 }
 
@@ -140,7 +147,10 @@ async function supportsForcedToolChoice(options: {
   return true;
 }
 
-export async function POST(req: Request) {
+async function handleChatRequest(
+  req: Request,
+  options: { preflight?: boolean } = {}
+) {
   const requestId = crypto.randomUUID();
   const requestStartMs = Date.now();
 
@@ -218,6 +228,8 @@ export async function POST(req: Request) {
     automaticContinuationReason?: unknown;
     /** When true, the user is in Business View and only sees notebook App View. */
     businessExperienceMode?: boolean;
+    /** Effective context settings used by preflight and runtime compaction. */
+    contextSettings?: unknown;
   };
 
   try {
@@ -271,7 +283,17 @@ export async function POST(req: Request) {
     automaticContinuationAttempt: automaticContinuationAttemptRaw,
     automaticContinuationReason: automaticContinuationReasonRaw,
     businessExperienceMode: businessExperienceModeRaw,
+    contextSettings: rawContextSettings,
   } = body;
+
+  const parsedContextSettings = ContextPreflightSettingsSchema.safeParse(rawContextSettings ?? {});
+  if (!parsedContextSettings.success) {
+    return Response.json(
+      { title: "Invalid Request", message: "Context settings are invalid." },
+      { status: 400 }
+    );
+  }
+  const contextSettings = parsedContextSettings.data;
 
   const parsedResearchSession = ResearchSessionSnapshotSchema.safeParse(researchSessionRaw);
   const researchSession =
@@ -630,6 +652,9 @@ export async function POST(req: Request) {
     modelPricing: ModelPricing;
     usage: Parameters<typeof extractTokenBreakdown>[0];
     providerMetadata: Parameters<typeof extractTokenBreakdown>[1];
+    estimatedInputTokens?: number | null;
+    interactionMode?: string | null;
+    estimatorVersion?: number | null;
   }): Promise<number | null> => {
     const tokensIn = safeToken(options.usage.inputTokens);
     const tokensOut = safeToken(options.usage.outputTokens);
@@ -644,6 +669,15 @@ export async function POST(req: Request) {
         providerId
       );
     const costUsd = calculateCostUsd(options.modelPricing, tokenBreakdown);
+    const gatewayGenerationId =
+      providerId === "vercel"
+        ? getVercelGenerationId(options.providerMetadata)
+        : null;
+    const costStatus = gatewayGenerationId
+      ? "pending"
+      : costUsd == null
+        ? "unavailable"
+        : "estimated";
 
     await insertModelUsage({
       requestId: options.resolvedModelRequestId,
@@ -656,7 +690,29 @@ export async function POST(req: Request) {
       cacheCreationTokens: tokenBreakdown.cacheCreationTokens,
       reasoningTokens: tokenBreakdown.reasoningTokens,
       isByok,
+      estimatedInputTokens: options.estimatedInputTokens,
+      estimatedCostUsd: costUsd,
+      costStatus,
+      costSource: gatewayGenerationId
+        ? "vercel_generation_pending"
+        : "catalog_snapshot",
+      gatewayGenerationId,
+      credentialMode: resolvedCredential?.type ?? null,
+      pricingSnapshot: options.modelPricing,
+      interactionMode: options.interactionMode,
+      estimatorVersion: options.estimatorVersion,
     });
+
+    if (
+      gatewayGenerationId &&
+      providerId === "vercel" &&
+      resolvedCredential?.type === "byok"
+    ) {
+      scheduleVercelGenerationReconciliation(
+        gatewayGenerationId,
+        resolvedCredential.apiKey
+      );
+    }
 
     return costUsd;
   };
@@ -894,21 +950,22 @@ export async function POST(req: Request) {
         });
   const effectiveMode = effectiveInteractionModeConfig.baseMode;
   const enableSkills = effectiveInteractionModeConfig.toolNames.includes("load_skill");
-  const enableSubagents = effectiveInteractionModeConfig.toolNames.includes("delegate");
   const missingForcedSkillNames =
     enableSkills
       ? forcedSkillNames.filter((skillName) => !hasLoadedSkillInHistory(skillName))
       : [];
 
-  const chatSession = await resolveOrCreateChatSession(chatId);
-  const modelRequest = await resolveOrCreateModelRequest({
-    id: requestOrigin === "user" ? clientModelRequestId : undefined,
-    origin: requestOrigin,
-    chatSessionId: chatSession?.sessionId,
-  });
+  const chatSession = options.preflight ? null : await resolveOrCreateChatSession(chatId);
+  const modelRequest = options.preflight
+    ? null
+    : await resolveOrCreateModelRequest({
+        id: requestOrigin === "user" ? clientModelRequestId : undefined,
+        origin: requestOrigin,
+        chatSessionId: chatSession?.sessionId,
+      });
 
   // Log the full incoming request (messages + context metadata)
-  logChatRequest({
+  if (!options.preflight) logChatRequest({
     fileId,
     requestId,
     userId: "local",
@@ -929,135 +986,45 @@ export async function POST(req: Request) {
   });
 
   try {
-    const gateway = getModelGateway();
-
-    // Build the system prompt for this request.
-    //
-    // - Research: full agent prompt plus notebook-native research behavior
-    // - Agent / sub-agent: full agent prompt
-    // - Ask: read-only tool prompt (no skills, no delegation)
-    // - Edit: file/terminal prompt with skills and delegation but no cell execution
-    //
-    // Sub-agent steps pass `subagentPrompt` (with `origin: "subagent"`) to
-    // request a notebook-defined sub-agent system prompt instead of the main
-    // parent prompt.
-    let agentSystemPrompt: string | undefined;
-    if (effectiveMode === "Research" || effectiveMode === "Agent") {
-      if (origin === "subagent" && subagentPrompt) {
-        const envContext = buildAgentEnvironmentContextPrompt({
-          serverInfo,
-          jupyterServerIsLocal,
-          clientPlatformOs,
-          rootDirectory,
-          workspaceDirectory,
-          notebookPath,
-          activeFilePath,
-        });
-        agentSystemPrompt = buildSubagentSystemPrompt({
-          subagent: subagentPrompt,
-          envContext,
-          agentRules,
-          forcedSkillNames: missingForcedSkillNames,
-          rootDirectory,
-        });
-      } else if (effectiveMode === "Research") {
-        agentSystemPrompt = buildResearchModeSystemPrompt({
-          notebookPath,
-          activeFilePath,
-          rootDirectory,
-          workspaceDirectory,
-          availableSkills,
-          availableSubagents,
-          agentRules,
-          forcedSkillNames: missingForcedSkillNames,
-          forcedSubagentName,
-          serverInfo,
-          jupyterServerIsLocal,
-          clientPlatformOs,
-          communicationStyle: agentCommunicationStyle,
-          customCommunicationStyle: agentCustomCommunicationStyle,
-          customSystemPrompt: effectiveInteractionModeConfig.customSystemPrompt,
-          enableSkills,
-          enableSubagents,
-          businessExperienceMode,
-        });
-      } else {
-        agentSystemPrompt = buildAgentSystemPrompt({
-          notebookPath,
-          activeFilePath,
-          rootDirectory,
-          workspaceDirectory,
-          availableSkills,
-          availableSubagents,
-          agentRules,
-          forcedSkillNames: missingForcedSkillNames,
-          forcedSubagentName,
-          serverInfo,
-          jupyterServerIsLocal,
-          clientPlatformOs,
-          communicationStyle: agentCommunicationStyle,
-          customCommunicationStyle: agentCustomCommunicationStyle,
-          customSystemPrompt: effectiveInteractionModeConfig.customSystemPrompt,
-          enableSkills,
-          enableSubagents,
-          businessExperienceMode,
-        });
-      }
-    } else if (effectiveMode === "Ask") {
-      agentSystemPrompt = buildAskModeSystemPrompt({
-        notebookPath,
-        activeFilePath,
-        rootDirectory,
-        workspaceDirectory,
-        agentRules,
-        serverInfo,
-        jupyterServerIsLocal,
-        clientPlatformOs,
-        communicationStyle: agentCommunicationStyle,
-        customCommunicationStyle: agentCustomCommunicationStyle,
-        customSystemPrompt: effectiveInteractionModeConfig.customSystemPrompt,
-      });
-    } else if (effectiveMode === "Edit") {
-      agentSystemPrompt = buildEditModeSystemPrompt({
-        notebookPath,
-        activeFilePath,
-        rootDirectory,
-        workspaceDirectory,
-        availableSkills,
-        availableSubagents,
-        agentRules,
-        forcedSkillNames: missingForcedSkillNames,
-        forcedSubagentName,
-        serverInfo,
-        jupyterServerIsLocal,
-        clientPlatformOs,
-        communicationStyle: agentCommunicationStyle,
-        customCommunicationStyle: agentCustomCommunicationStyle,
-        customSystemPrompt: effectiveInteractionModeConfig.customSystemPrompt,
-        enableSkills,
-        enableSubagents,
-      });
-    }
-    if (effectiveMode === "Research" && researchSession && agentSystemPrompt) {
-      const sessionPrompt = summarizeResearchSessionForPrompt({
-        session: researchSession,
-        nudge: researchNudge,
-      });
-      const continuationNote =
-        automaticContinuationAttempt > 0
-          ? `\nAutomatic continuation ${automaticContinuationAttempt}${automaticContinuationReason ? ` (${automaticContinuationReason})` : ""}.`
-          : "";
-      agentSystemPrompt += `\n\n${sessionPrompt}${continuationNote}`;
-    }
-    // Process request through the gateway (injects agent system prompt into messages)
-    const { model, messages: processedMessages, providerOptions } = gateway.processRequest({
+    const {
+      model,
+      messages: processedMessages,
+      providerOptions,
+      agentSystemPrompt,
+      tools: toolsForMode,
+      toolChoice: forcedToolChoice,
+    } = prepareChatInvocation({
       messages,
       modelId,
       providerId,
-      agentSystemPrompt,
+      credential: resolvedCredential,
       requestId,
       modelSettings,
-      credentials: resolvedCredential,
+      interactionMode: effectiveInteractionModeConfig,
+      origin,
+      subagentPrompt,
+      notebookPath,
+      activeFilePath,
+      rootDirectory,
+      workspaceDirectory,
+      availableSkills,
+      availableSubagents,
+      agentRules,
+      missingForcedSkillNames,
+      forcedSubagentName,
+      serverInfo,
+      jupyterServerIsLocal,
+      clientPlatformOs,
+      communicationStyle: agentCommunicationStyle,
+      customCommunicationStyle: agentCustomCommunicationStyle,
+      businessExperienceMode,
+      researchSession,
+      researchNudge,
+      automaticContinuationAttempt,
+      automaticContinuationReason,
+      canForceToolChoice,
+      hasDelegatedForcedSubagent:
+        forcedSubagentName != null && hasDelegatedSubagentInHistory(forcedSubagentName),
     });
 
     // Log the context injection details and final LLM call
@@ -1080,17 +1047,47 @@ export async function POST(req: Request) {
           : "none",
     });
 
-    const missingForcedSkillName = missingForcedSkillNames[0];
-    const shouldForceLoadSkill = !!missingForcedSkillName;
-    const shouldForceDelegate =
-      !!(enableSubagents && forcedSubagentName && !hasDelegatedSubagentInHistory(forcedSubagentName));
-    const toolsForMode = getToolsForInteractionMode(effectiveInteractionModeConfig);
-    const requestedToolChoice = shouldForceDelegate
-      ? { type: "tool" as const, toolName: "delegate" as const }
-      : shouldForceLoadSkill
-        ? { type: "tool" as const, toolName: "load_skill" as const }
-        : "auto";
-    const forcedToolChoice = canForceToolChoice ? requestedToolChoice : "auto";
+    const runtimeProfile = await getRuntimeModelProfile(providerId, modelId);
+    const budget = calculateContextBudget({
+      contextWindow: runtimeProfile.contextWindow,
+      maxOutputTokens: runtimeProfile.maxOutputTokens,
+      autoCompactThreshold: contextSettings.compactionAutoThreshold,
+    });
+    const calibrationKey = {
+      providerId,
+      modelId,
+      interactionMode: effectiveInteractionModeConfig.id,
+      estimatorVersion: CONTEXT_ESTIMATOR_VERSION,
+    };
+    const calibration = await getContextCalibration(calibrationKey);
+    const promptMeasurement = await measurePreparedPrompt({
+      messages: processedMessages,
+      tools: toolsForMode,
+      calibration,
+    });
+
+    if (options.preflight) {
+      const status =
+        promptMeasurement.estimatedInputTokens >= budget.usableInputTokens
+          ? "over"
+          : promptMeasurement.estimatedInputTokens >= budget.thresholdTokens
+            ? "compact"
+            : "ok";
+      return Response.json({
+        version: 1,
+        model: runtimeProfile,
+        budget: {
+          ...budget,
+          autoCompactThreshold: contextSettings.compactionAutoThreshold,
+        },
+        measurement: {
+          ...promptMeasurement,
+          percentUsed:
+            promptMeasurement.estimatedInputTokens / budget.usableInputTokens,
+          status,
+        },
+      });
+    }
 
     logLLMCall({
       fileId,
@@ -1121,11 +1118,20 @@ export async function POST(req: Request) {
         let costUsd: number | null = null;
         try {
           costUsd = await logLocalModelUsage({
-            resolvedModelRequestId: modelRequest.requestId,
+            resolvedModelRequestId: modelRequest?.requestId ?? null,
             modelPricing: catalogModel,
             usage,
             providerMetadata,
+            estimatedInputTokens: promptMeasurement.estimatedInputTokens,
+            interactionMode: effectiveInteractionModeConfig.id,
+            estimatorVersion: CONTEXT_ESTIMATOR_VERSION,
           });
+          if (tokensIn != null) {
+            await updateContextCalibration(calibrationKey, {
+              rawEstimatedTokens: promptMeasurement.rawInputTokens,
+              actualInputTokens: tokensIn,
+            });
+          }
           if (chatSession) {
             await updateChatSessionStatus(chatSession.sessionId, "completed");
           }
@@ -1215,4 +1221,11 @@ export async function POST(req: Request) {
       headers: { "Content-Type": "application/json" },
     });
   }
+}
+
+/** Handles a normal model invocation. */
+export async function POST(req: Request): Promise<Response> {
+  return handleChatRequest(req, {
+    preflight: req.headers.get("x-orion-context-preflight") === "1",
+  });
 }

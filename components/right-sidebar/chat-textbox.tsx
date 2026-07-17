@@ -169,6 +169,8 @@ export interface ChatTextboxProps {
   hasMessages?: boolean;
   /** Precomputed context usage estimate for the active chat. */
   contextEstimate?: TokenEstimate | null;
+  /** Shows only the context total, without technical categories. */
+  simpleContextUsage?: boolean;
   /** Called when the user clicks the context usage pill. */
   onCompact?: () => void;
   /** When true, the send button is disabled and a tooltip is shown. */
@@ -602,6 +604,7 @@ export function ChatTextbox({
   onImmediateSlashCommand,
   hasMessages = false,
   contextEstimate = null,
+  simpleContextUsage = false,
   onCompact,
   isOverContextBudget = false,
   readOnly = false,
@@ -2277,6 +2280,7 @@ export function ChatTextbox({
                 estimate={contextEstimate}
                 hasMessages={!readOnly && (hasMessages || attachments.length > 0)}
                 onCompact={onCompact}
+                simple={simpleContextUsage}
               />
               {!readOnly && isLoading ? (
                 <Button

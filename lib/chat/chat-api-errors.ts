@@ -19,11 +19,54 @@ const OpenAiUsageLimitErrorSchema = z.object({
 });
 
 export type ChatApiErrorPayload = {
+  code?: "context_budget_exceeded";
   title: string;
   message: string;
   actionUrl?: string;
   actionLabel?: string;
 };
+
+const ProviderErrorEnvelopeSchema = z.object({
+  error: z.object({
+    code: z.string().optional(),
+    type: z.string().optional(),
+    message: z.string().optional(),
+  }).optional(),
+});
+
+/** Detects provider context-limit failures at the server boundary. */
+function isContextBudgetExceeded(error: unknown): boolean {
+  const candidates: unknown[] = [];
+  if (APICallError.isInstance(error)) {
+    candidates.push(error.data);
+    if (typeof error.responseBody === "string") {
+      try {
+        candidates.push(JSON.parse(error.responseBody));
+      } catch {
+        // A plain provider message is handled by the final fallback below.
+      }
+    }
+  }
+  for (const candidate of candidates) {
+    const parsed = ProviderErrorEnvelopeSchema.safeParse(candidate);
+    const providerError = parsed.success ? parsed.data.error : undefined;
+    if (
+      providerError?.code === "context_length_exceeded" ||
+      providerError?.type === "context_length_exceeded" ||
+      providerError?.code === "max_tokens_exceeded"
+    ) {
+      return true;
+    }
+  }
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  return [
+    "prompt is too long",
+    "context_length",
+    "context window",
+    "maximum context",
+    "too many tokens",
+  ].some((fragment) => message.includes(fragment));
+}
 
 /** Parses OpenAI / ChatGPT usage-limit metadata from an API error payload. */
 function readUsageLimitError(error: unknown): z.infer<typeof OpenAiUsageLimitErrorSchema>["error"] | null {
@@ -106,6 +149,14 @@ export function buildChatApiErrorPayload(
   error: unknown,
   providerId: string
 ): ChatApiErrorPayload {
+  if (isContextBudgetExceeded(error)) {
+    return {
+      code: "context_budget_exceeded",
+      title: "Context Budget Exceeded",
+      message: "The prepared request exceeded the selected model's context budget.",
+    };
+  }
+
   const usageLimitError = readUsageLimitError(error);
   if (usageLimitError) {
     const resetHint = formatUsageLimitResetHint(usageLimitError.resets_in_seconds);
@@ -172,6 +223,7 @@ export function parseChatApiErrorMessage(message: string | undefined): ChatApiEr
     ) {
       const payload = parsed as ChatApiErrorPayload;
       return {
+        code: payload.code === "context_budget_exceeded" ? payload.code : undefined,
         title: payload.title,
         message: payload.message,
         actionUrl: typeof payload.actionUrl === "string" ? payload.actionUrl : undefined,

@@ -1,13 +1,17 @@
 import type { LanguageModelUsage, ProviderMetadata } from "ai";
+import { z } from "zod";
 
 export interface ModelPricing {
   provider_id: string;
   input_price_per_1m: number | null;
   output_price_per_1m: number | null;
   cached_price_per_1m: number | null;
+  cache_write_price_per_1m?: number | null;
   long_context_threshold: number | null;
   long_context_input_price_per_1m: number | null;
   long_context_output_price_per_1m: number | null;
+  long_context_cached_price_per_1m?: number | null;
+  long_context_cache_write_price_per_1m?: number | null;
 }
 
 export interface TokenBreakdown {
@@ -23,6 +27,24 @@ function safeNum(n: unknown): number {
   return typeof n === "number" && Number.isFinite(n) ? n : 0;
 }
 
+const OpenAiUsageMetadataSchema = z.object({
+  cachedPromptTokens: z.number().optional(),
+  cachedInputTokens: z.number().optional(),
+  reasoningTokens: z.number().optional(),
+}).passthrough();
+
+const AnthropicUsageMetadataSchema = z.object({
+  cacheCreationInputTokens: z.number().optional(),
+  cacheReadInputTokens: z.number().optional(),
+}).passthrough();
+
+const GoogleUsageMetadataSchema = z.object({
+  usageMetadata: z.object({
+    cachedContentTokenCount: z.number().optional(),
+    thoughtsTokenCount: z.number().optional(),
+  }).passthrough().optional(),
+}).passthrough();
+
 /**
  * Extracts billable token categories from AI SDK usage plus provider metadata.
  */
@@ -35,18 +57,20 @@ export function extractTokenBreakdown(
   const outputTokens = safeNum(usage.outputTokens);
   const cacheRead = safeNum(usage.inputTokenDetails?.cacheReadTokens);
   const cacheWrite = safeNum(usage.inputTokenDetails?.cacheWriteTokens);
+  const noCacheInput = safeNum(usage.inputTokenDetails?.noCacheTokens);
   const reasoning = safeNum(usage.outputTokenDetails?.reasoningTokens);
   const meta = providerMetadata ?? {};
 
   switch (providerId) {
     case "anthropic": {
-      const anthropicMeta = meta.anthropic as Record<string, unknown> | undefined;
+      const anthropicMeta = AnthropicUsageMetadataSchema.safeParse(meta.anthropic);
       const cacheCreation =
-        cacheWrite || safeNum(anthropicMeta?.cacheCreationInputTokens);
+        cacheWrite || safeNum(anthropicMeta.success ? anthropicMeta.data.cacheCreationInputTokens : 0);
       const cacheReadFinal =
-        cacheRead || safeNum(anthropicMeta?.cacheReadInputTokens);
+        cacheRead || safeNum(anthropicMeta.success ? anthropicMeta.data.cacheReadInputTokens : 0);
       return {
-        standardInputTokens: inputTokens,
+        standardInputTokens:
+          noCacheInput || Math.max(0, inputTokens - cacheCreation - cacheReadFinal),
         cacheCreationTokens: cacheCreation,
         cacheReadTokens: cacheReadFinal,
         outputTokens,
@@ -55,14 +79,16 @@ export function extractTokenBreakdown(
     }
 
     case "openai": {
-      const openAiMeta = meta.openai as Record<string, unknown> | undefined;
+      const openAiMeta = OpenAiUsageMetadataSchema.safeParse(meta.openai);
       const cachedFinal =
         cacheRead ||
-        safeNum(openAiMeta?.cachedPromptTokens ?? openAiMeta?.cachedInputTokens);
+        safeNum(openAiMeta.success
+          ? openAiMeta.data.cachedPromptTokens ?? openAiMeta.data.cachedInputTokens
+          : 0);
       const reasoningFinal =
-        reasoning || safeNum(openAiMeta?.reasoningTokens);
+        reasoning || safeNum(openAiMeta.success ? openAiMeta.data.reasoningTokens : 0);
       return {
-        standardInputTokens: Math.max(0, inputTokens - cachedFinal),
+        standardInputTokens: noCacheInput || Math.max(0, inputTokens - cachedFinal),
         cacheCreationTokens: 0,
         cacheReadTokens: cachedFinal,
         outputTokens: Math.max(0, outputTokens - reasoningFinal),
@@ -71,13 +97,12 @@ export function extractTokenBreakdown(
     }
 
     case "google": {
-      const googleMeta = (
-        (meta.google as Record<string, unknown> | undefined)?.usageMetadata ?? {}
-      ) as Record<string, unknown>;
-      const cachedFinal = cacheRead || safeNum(googleMeta.cachedContentTokenCount);
-      const thinkingFinal = reasoning || safeNum(googleMeta.thoughtsTokenCount);
+      const googleMeta = GoogleUsageMetadataSchema.safeParse(meta.google);
+      const metadata = googleMeta.success ? googleMeta.data.usageMetadata : undefined;
+      const cachedFinal = cacheRead || safeNum(metadata?.cachedContentTokenCount);
+      const thinkingFinal = reasoning || safeNum(metadata?.thoughtsTokenCount);
       return {
-        standardInputTokens: Math.max(0, inputTokens - cachedFinal),
+        standardInputTokens: noCacheInput || Math.max(0, inputTokens - cachedFinal),
         cacheCreationTokens: 0,
         cacheReadTokens: cachedFinal,
         outputTokens: Math.max(0, outputTokens - thinkingFinal),
@@ -86,12 +111,14 @@ export function extractTokenBreakdown(
     }
 
     case "xai": {
-      const openAiMeta = meta.openai as Record<string, unknown> | undefined;
+      const openAiMeta = OpenAiUsageMetadataSchema.safeParse(meta.openai);
       const cachedFinal =
         cacheRead ||
-        safeNum(openAiMeta?.cachedPromptTokens ?? openAiMeta?.cachedInputTokens);
+        safeNum(openAiMeta.success
+          ? openAiMeta.data.cachedPromptTokens ?? openAiMeta.data.cachedInputTokens
+          : 0);
       return {
-        standardInputTokens: Math.max(0, inputTokens - cachedFinal),
+        standardInputTokens: noCacheInput || Math.max(0, inputTokens - cachedFinal),
         cacheCreationTokens: 0,
         cacheReadTokens: cachedFinal,
         outputTokens,
@@ -101,11 +128,11 @@ export function extractTokenBreakdown(
 
     default:
       return {
-        standardInputTokens: inputTokens,
-        cacheCreationTokens: 0,
-        cacheReadTokens: 0,
+        standardInputTokens: noCacheInput || Math.max(0, inputTokens - cacheWrite - cacheRead),
+        cacheCreationTokens: cacheWrite,
+        cacheReadTokens: cacheRead,
         outputTokens,
-        reasoningTokens: 0,
+        reasoningTokens: reasoning,
       };
   }
 }
@@ -135,8 +162,13 @@ export function calculateCostUsd(
     ? (pricing.long_context_output_price_per_1m ?? pricing.output_price_per_1m)
     : pricing.output_price_per_1m;
   const cacheCreationRate =
-    pricing.provider_id === "anthropic" ? inputRate * 1.25 : 0;
-  const cacheReadRate = pricing.cached_price_per_1m ?? 0;
+    (isLongContext ? pricing.long_context_cache_write_price_per_1m : null) ??
+    pricing.cache_write_price_per_1m ??
+    (pricing.provider_id === "anthropic" ? inputRate * 1.25 : inputRate);
+  const cacheReadRate =
+    (isLongContext ? pricing.long_context_cached_price_per_1m : null) ??
+    pricing.cached_price_per_1m ??
+    0;
   const totalOutputTokens = tokens.outputTokens + tokens.reasoningTokens;
 
   return (

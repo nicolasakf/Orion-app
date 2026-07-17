@@ -98,6 +98,13 @@ interface EditCheckpointTargetRow {
 }
 
 export type ChatSessionStatus = "idle" | "processing" | "completed" | "error";
+export type ModelUsageCostStatus =
+  | "exact"
+  | "estimated"
+  | "pending"
+  | "unavailable"
+  | "legacy_estimated"
+  | "legacy_unavailable";
 
 export interface ModelUsageInsert {
   requestId?: string | null;
@@ -105,11 +112,33 @@ export interface ModelUsageInsert {
   providerId: string;
   tokensIn?: number | null;
   tokensOut?: number | null;
+  actualInputTokens?: number | null;
+  actualOutputTokens?: number | null;
+  actualCacheReadTokens?: number | null;
+  actualCacheWriteTokens?: number | null;
+  actualReasoningTokens?: number | null;
   costUsd?: number | null;
+  estimatedInputTokens?: number | null;
+  estimatedOutputTokens?: number | null;
+  estimatedCacheReadTokens?: number | null;
+  estimatedCacheWriteTokens?: number | null;
+  estimatedReasoningTokens?: number | null;
+  estimatedCostUsd?: number | null;
+  actualCostUsd?: number | null;
+  costStatus?: ModelUsageCostStatus;
+  costSource?: string | null;
   cacheReadTokens?: number | null;
   cacheCreationTokens?: number | null;
   reasoningTokens?: number | null;
   isByok: boolean;
+  gatewayGenerationId?: string | null;
+  servedProviderId?: string | null;
+  upstreamInferenceCostUsd?: number | null;
+  gatewayIsByok?: boolean | null;
+  credentialMode?: string | null;
+  pricingSnapshot?: unknown;
+  interactionMode?: string | null;
+  estimatorVersion?: number | null;
 }
 
 export interface ChatCostSummaryModel {
@@ -118,16 +147,35 @@ export interface ChatCostSummaryModel {
   requestCount: number;
   totalCostUsd: number | null;
   unknownCostRequestCount: number;
+  bestAvailableTotalUsd: number | null;
+  exactTotalUsd: number;
+  estimatedTotalUsd: number;
+  legacyEstimatedTotalUsd: number;
+  exactRequestCount: number;
+  estimatedRequestCount: number;
+  pendingRequestCount: number;
+  unavailableRequestCount: number;
+  legacyRequestCount: number;
 }
 
 export interface ChatCostSummary {
+  version: 2;
   totalCostUsd: number | null;
   requestCount: number;
   unknownCostRequestCount: number;
+  bestAvailableTotalUsd: number | null;
+  exactTotalUsd: number;
+  estimatedTotalUsd: number;
+  legacyEstimatedTotalUsd: number;
+  exactRequestCount: number;
+  estimatedRequestCount: number;
+  pendingRequestCount: number;
+  unavailableRequestCount: number;
+  legacyRequestCount: number;
   models: ChatCostSummaryModel[];
 }
 
-const CURRENT_SCHEMA_VERSION = 3;
+const CURRENT_SCHEMA_VERSION = 4;
 
 let database: OrionDatabase | null = null;
 
@@ -311,6 +359,71 @@ function migrateToVersion3(db: OrionDatabase): void {
   migrate();
 }
 
+/** Adds provenance-aware usage accounting and persistent context calibration. */
+function migrateToVersion4(db: OrionDatabase): void {
+  const migrate = db.transaction(() => {
+    const columns: Array<[string, string]> = [
+      ["estimated_input_tokens", "integer"],
+      ["estimated_output_tokens", "integer"],
+      ["estimated_cache_read_tokens", "integer"],
+      ["estimated_cache_write_tokens", "integer"],
+      ["estimated_reasoning_tokens", "integer"],
+      ["actual_input_tokens", "integer"],
+      ["actual_output_tokens", "integer"],
+      ["actual_cache_read_tokens", "integer"],
+      ["actual_cache_write_tokens", "integer"],
+      ["actual_reasoning_tokens", "integer"],
+      ["estimated_cost_usd", "real"],
+      ["actual_cost_usd", "real"],
+      ["cost_status", "text"],
+      ["cost_source", "text"],
+      ["gateway_generation_id", "text"],
+      ["served_provider_id", "text"],
+      ["upstream_inference_cost_usd", "real"],
+      ["gateway_is_byok", "integer"],
+      ["credential_mode", "text"],
+      ["pricing_snapshot_json", "text"],
+      ["interaction_mode", "text"],
+      ["estimator_version", "integer"],
+      ["reconciled_at", "text"],
+    ];
+    for (const [name, definition] of columns) {
+      if (!tableColumnExists(db, "model_usage", name)) {
+        db.exec(`alter table model_usage add column ${name} ${definition};`);
+      }
+    }
+
+    db.exec(`
+      update model_usage
+      set estimated_cost_usd = cost_usd,
+          cost_status = case
+            when cost_usd is null then 'legacy_unavailable'
+            else 'legacy_estimated'
+          end,
+          cost_source = 'legacy'
+      where cost_status is null;
+
+      create unique index if not exists model_usage_gateway_generation_id_idx
+        on model_usage(gateway_generation_id) where gateway_generation_id is not null;
+
+      create table if not exists context_calibration (
+        provider_id text not null,
+        model_id text not null,
+        interaction_mode text not null,
+        estimator_version integer not null,
+        sample_count integer not null,
+        ewma_ratio real not null,
+        rolling_ratios_json text not null,
+        updated_at text not null,
+        primary key (provider_id, model_id, interaction_mode, estimator_version)
+      );
+
+      pragma user_version = 4;
+    `);
+  });
+  migrate();
+}
+
 /** Runs all pending local SQLite migrations in order. */
 function migrateDatabase(db: OrionDatabase): void {
   const version = db.pragma("user_version", { simple: true }) as number;
@@ -328,6 +441,9 @@ function migrateDatabase(db: OrionDatabase): void {
   }
   if (version < 3) {
     migrateToVersion3(db);
+  }
+  if (version < 4) {
+    migrateToVersion4(db);
   }
 }
 
@@ -1099,6 +1215,28 @@ export async function insertModelUsage(usage: ModelUsageInsert): Promise<void> {
         cache_creation_tokens,
         reasoning_tokens,
         is_byok,
+        estimated_input_tokens,
+        estimated_output_tokens,
+        estimated_cache_read_tokens,
+        estimated_cache_write_tokens,
+        estimated_reasoning_tokens,
+        actual_input_tokens,
+        actual_output_tokens,
+        actual_cache_read_tokens,
+        actual_cache_write_tokens,
+        actual_reasoning_tokens,
+        estimated_cost_usd,
+        actual_cost_usd,
+        cost_status,
+        cost_source,
+        gateway_generation_id,
+        served_provider_id,
+        upstream_inference_cost_usd,
+        gateway_is_byok,
+        credential_mode,
+        pricing_snapshot_json,
+        interaction_mode,
+        estimator_version,
         created_at
       ) values (
         @id,
@@ -1112,6 +1250,28 @@ export async function insertModelUsage(usage: ModelUsageInsert): Promise<void> {
         @cacheCreationTokens,
         @reasoningTokens,
         @isByok,
+        @estimatedInputTokens,
+        @estimatedOutputTokens,
+        @estimatedCacheReadTokens,
+        @estimatedCacheWriteTokens,
+        @estimatedReasoningTokens,
+        @actualInputTokens,
+        @actualOutputTokens,
+        @actualCacheReadTokens,
+        @actualCacheWriteTokens,
+        @actualReasoningTokens,
+        @estimatedCostUsd,
+        @actualCostUsd,
+        @costStatus,
+        @costSource,
+        @gatewayGenerationId,
+        @servedProviderId,
+        @upstreamInferenceCostUsd,
+        @gatewayIsByok,
+        @credentialMode,
+        @pricingSnapshotJson,
+        @interactionMode,
+        @estimatorVersion,
         @createdAt
       )
     `
@@ -1127,8 +1287,211 @@ export async function insertModelUsage(usage: ModelUsageInsert): Promise<void> {
     cacheCreationTokens: usage.cacheCreationTokens ?? null,
     reasoningTokens: usage.reasoningTokens ?? null,
     isByok: usage.isByok ? 1 : 0,
+    estimatedInputTokens: usage.estimatedInputTokens ?? null,
+    estimatedOutputTokens: usage.estimatedOutputTokens ?? null,
+    estimatedCacheReadTokens: usage.estimatedCacheReadTokens ?? null,
+    estimatedCacheWriteTokens: usage.estimatedCacheWriteTokens ?? null,
+    estimatedReasoningTokens: usage.estimatedReasoningTokens ?? null,
+    actualInputTokens: usage.actualInputTokens ?? usage.tokensIn ?? null,
+    actualOutputTokens: usage.actualOutputTokens ?? usage.tokensOut ?? null,
+    actualCacheReadTokens: usage.actualCacheReadTokens ?? usage.cacheReadTokens ?? null,
+    actualCacheWriteTokens: usage.actualCacheWriteTokens ?? usage.cacheCreationTokens ?? null,
+    actualReasoningTokens: usage.actualReasoningTokens ?? usage.reasoningTokens ?? null,
+    estimatedCostUsd: usage.estimatedCostUsd ?? usage.costUsd ?? null,
+    actualCostUsd: usage.actualCostUsd ?? null,
+    costStatus:
+      usage.costStatus ??
+      ((usage.estimatedCostUsd ?? usage.costUsd) == null ? "unavailable" : "estimated"),
+    costSource: usage.costSource ?? null,
+    gatewayGenerationId: usage.gatewayGenerationId ?? null,
+    servedProviderId: usage.servedProviderId ?? null,
+    upstreamInferenceCostUsd: usage.upstreamInferenceCostUsd ?? null,
+    gatewayIsByok:
+      usage.gatewayIsByok == null ? null : usage.gatewayIsByok ? 1 : 0,
+    credentialMode: usage.credentialMode ?? null,
+    pricingSnapshotJson:
+      usage.pricingSnapshot === undefined ? null : JSON.stringify(usage.pricingSnapshot),
+    interactionMode: usage.interactionMode ?? null,
+    estimatorVersion: usage.estimatorVersion ?? null,
     createdAt: new Date().toISOString(),
   });
+}
+
+export interface ContextCalibrationKey {
+  providerId: string;
+  modelId: string;
+  interactionMode: string;
+  estimatorVersion: number;
+}
+
+export interface ContextCalibrationSnapshot {
+  sampleCount: number;
+  correctionRatio: number;
+}
+
+/** Reads the conservative correction factor for one provider/model/mode tuple. */
+export async function getContextCalibration(
+  key: ContextCalibrationKey
+): Promise<ContextCalibrationSnapshot> {
+  if (usingFallbackStorage()) return { sampleCount: 0, correctionRatio: 1.15 };
+  const db = await getChatDatabase();
+  const row = db.prepare(
+    `select sample_count as sampleCount, ewma_ratio as ewmaRatio,
+            rolling_ratios_json as rollingRatiosJson
+       from context_calibration
+      where provider_id = ? and model_id = ? and interaction_mode = ?
+        and estimator_version = ?`
+  ).get(key.providerId, key.modelId, key.interactionMode, key.estimatorVersion) as
+    | { sampleCount: number; ewmaRatio: number; rollingRatiosJson: string }
+    | undefined;
+  if (!row) return { sampleCount: 0, correctionRatio: 1.15 };
+  let ratios: number[] = [];
+  try {
+    const parsed = JSON.parse(row.rollingRatiosJson) as unknown;
+    if (Array.isArray(parsed)) {
+      ratios = parsed.filter((value): value is number =>
+        typeof value === "number" && Number.isFinite(value) && value > 0
+      );
+    }
+  } catch {
+    ratios = [];
+  }
+  const sorted = [...ratios].sort((left, right) => left - right);
+  const p90 = sorted.length === 0
+    ? 1
+    : sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.9) - 1)];
+  return {
+    sampleCount: row.sampleCount,
+    correctionRatio: Math.max(1, row.ewmaRatio, p90),
+  };
+}
+
+/** Updates calibration from one provider-reported input-token observation. */
+export async function updateContextCalibration(
+  key: ContextCalibrationKey,
+  observation: { rawEstimatedTokens: number; actualInputTokens: number }
+): Promise<void> {
+  if (
+    usingFallbackStorage() ||
+    observation.rawEstimatedTokens <= 0 ||
+    observation.actualInputTokens <= 0
+  ) return;
+  const db = await getChatDatabase();
+  const existing = db.prepare(
+    `select sample_count as sampleCount, ewma_ratio as ewmaRatio,
+            rolling_ratios_json as rollingRatiosJson
+       from context_calibration
+      where provider_id = ? and model_id = ? and interaction_mode = ?
+        and estimator_version = ?`
+  ).get(key.providerId, key.modelId, key.interactionMode, key.estimatorVersion) as
+    | { sampleCount: number; ewmaRatio: number; rollingRatiosJson: string }
+    | undefined;
+  let ratios: number[] = [];
+  if (existing) {
+    try {
+      const parsed = JSON.parse(existing.rollingRatiosJson) as unknown;
+      if (Array.isArray(parsed)) {
+        ratios = parsed.filter((value): value is number =>
+          typeof value === "number" && Number.isFinite(value) && value > 0
+        );
+      }
+    } catch {
+      ratios = [];
+    }
+  }
+  const ratio = observation.actualInputTokens / observation.rawEstimatedTokens;
+  ratios = [...ratios, ratio].slice(-20);
+  const ewmaRatio = existing
+    ? 0.25 * ratio + 0.75 * existing.ewmaRatio
+    : ratio;
+  db.prepare(
+    `insert into context_calibration (
+       provider_id, model_id, interaction_mode, estimator_version,
+       sample_count, ewma_ratio, rolling_ratios_json, updated_at
+     ) values (?, ?, ?, ?, ?, ?, ?, ?)
+     on conflict(provider_id, model_id, interaction_mode, estimator_version)
+     do update set sample_count = excluded.sample_count,
+                   ewma_ratio = excluded.ewma_ratio,
+                   rolling_ratios_json = excluded.rolling_ratios_json,
+                   updated_at = excluded.updated_at`
+  ).run(
+    key.providerId,
+    key.modelId,
+    key.interactionMode,
+    key.estimatorVersion,
+    (existing?.sampleCount ?? 0) + 1,
+    ewmaRatio,
+    JSON.stringify(ratios),
+    new Date().toISOString()
+  );
+}
+
+export interface PendingVercelGeneration {
+  generationId: string;
+  modelId: string;
+}
+
+/** Returns durable pending Gateway generations for a chat. */
+export async function getPendingVercelGenerationsForChat(
+  localChatId: string
+): Promise<PendingVercelGeneration[]> {
+  if (usingFallbackStorage()) return [];
+  const db = await getChatDatabase();
+  return db.prepare(
+    `select usage.gateway_generation_id as generationId, usage.model_id as modelId
+       from model_usage usage
+       join model_request request on request.id = usage.request_id
+       join chat_session session on session.id = request.chat_session_id
+      where session.local_chat_id = ? and usage.provider_id = 'vercel'
+        and usage.cost_status = 'pending'
+        and usage.gateway_generation_id is not null
+      order by usage.created_at asc
+      limit 20`
+  ).all(localChatId) as PendingVercelGeneration[];
+}
+
+/** Replaces a pending Gateway row with Vercel's authoritative generation data. */
+export async function reconcileVercelModelUsage(input: {
+  generationId: string;
+  totalCostUsd: number;
+  upstreamInferenceCostUsd: number;
+  servedProviderId: string;
+  isByok: boolean;
+  promptTokens: number;
+  completionTokens: number;
+  reasoningTokens: number;
+  cachedTokens: number;
+  cacheCreationTokens: number;
+}): Promise<boolean> {
+  if (usingFallbackStorage()) return false;
+  const db = await getChatDatabase();
+  const result = db.prepare(
+    `update model_usage
+        set actual_cost_usd = @totalCostUsd,
+            cost_usd = @totalCostUsd,
+            cost_status = 'exact',
+            cost_source = 'vercel_generation',
+            served_provider_id = @servedProviderId,
+            upstream_inference_cost_usd = @upstreamInferenceCostUsd,
+            gateway_is_byok = @isByok,
+            tokens_in = @promptTokens,
+            tokens_out = @completionTokens,
+            reasoning_tokens = @reasoningTokens,
+            cache_read_tokens = @cachedTokens,
+            cache_creation_tokens = @cacheCreationTokens,
+            actual_input_tokens = @promptTokens,
+            actual_output_tokens = @completionTokens,
+            actual_reasoning_tokens = @reasoningTokens,
+            actual_cache_read_tokens = @cachedTokens,
+            actual_cache_write_tokens = @cacheCreationTokens,
+            reconciled_at = @reconciledAt
+      where gateway_generation_id = @generationId`
+  ).run({
+    ...input,
+    isByok: input.isByok ? 1 : 0,
+    reconciledAt: new Date().toISOString(),
+  });
+  return result.changes > 0;
 }
 
 /** Aggregates cost by usage rows, but counts distinct logical model requests. */
@@ -1140,68 +1503,101 @@ export async function getChatCostSummary(
   }
 
   const db = await getChatDatabase();
-  const rows = db
-    .prepare(
-      `
-        select
-          usage.model_id as modelId,
-          usage.provider_id as providerId,
-          count(distinct request.id) as requestCount,
-          sum(coalesce(usage.cost_usd, 0)) as totalCostUsd,
-          sum(case when usage.cost_usd is not null then 1 else 0 end) as knownCostUsageCount,
-          count(distinct case when usage.cost_usd is null then request.id end) as unknownCostRequestCount
-        from model_usage usage
-        join model_request request on request.id = usage.request_id
-        join chat_session session on session.id = request.chat_session_id
-        where session.local_chat_id = ?
-          and request.origin != 'title_generation'
-        group by usage.model_id, usage.provider_id
-        order by totalCostUsd desc, requestCount desc, usage.model_id asc
-      `
-    )
-    .all(localChatId) as Array<{
-      modelId: string;
-      providerId: string;
-      requestCount: number;
-      totalCostUsd: number;
-      knownCostUsageCount: number;
-      unknownCostRequestCount: number;
-    }>;
-  const totalRow = db
-    .prepare(
-      `
-        select
-          count(distinct request.id) as requestCount,
-          count(distinct case when usage.id is null or usage.cost_usd is null then request.id end) as unknownCostRequestCount
-        from model_request request
-        join chat_session session on session.id = request.chat_session_id
-        left join model_usage usage on usage.request_id = request.id
-        where session.local_chat_id = ?
-          and request.origin != 'title_generation'
-      `
-    )
-    .get(localChatId) as
-    | { requestCount: number; unknownCostRequestCount: number }
-    | undefined;
+  type UsageCostRow = {
+    requestId: string;
+    usageId: string | null;
+    modelId: string | null;
+    providerId: string | null;
+    estimatedCostUsd: number | null;
+    actualCostUsd: number | null;
+    costStatus: ModelUsageCostStatus | null;
+  };
+  const rows = db.prepare(
+    `select request.id as requestId, usage.id as usageId,
+            usage.model_id as modelId, usage.provider_id as providerId,
+            usage.estimated_cost_usd as estimatedCostUsd,
+            usage.actual_cost_usd as actualCostUsd,
+            usage.cost_status as costStatus
+       from model_request request
+       join chat_session session on session.id = request.chat_session_id
+       left join model_usage usage on usage.request_id = request.id
+      where session.local_chat_id = ? and request.origin != 'title_generation'`
+  ).all(localChatId) as UsageCostRow[];
 
-  const requestCount = totalRow?.requestCount ?? 0;
-  const unknownCostRequestCount = totalRow?.unknownCostRequestCount ?? 0;
-  const knownCostTotal = rows.reduce((sum, row) => sum + row.totalCostUsd, 0);
-  const knownCostUsageCount = rows.reduce(
-    (sum, row) => sum + row.knownCostUsageCount,
-    0
+  /** Summarizes usage rows while counting distinct logical requests. */
+  const summarize = (input: UsageCostRow[]) => {
+    const requestIds = new Set(input.map((row) => row.requestId));
+    const exact = new Set<string>();
+    const estimated = new Set<string>();
+    const pending = new Set<string>();
+    const unavailable = new Set<string>();
+    const legacy = new Set<string>();
+    let bestAvailableTotalUsd = 0;
+    let exactTotalUsd = 0;
+    let estimatedTotalUsd = 0;
+    let legacyEstimatedTotalUsd = 0;
+    let hasBestAvailableCost = false;
+
+    for (const row of input) {
+      if (!row.usageId) {
+        unavailable.add(row.requestId);
+        continue;
+      }
+      const status = row.costStatus ?? "legacy_unavailable";
+      const best = row.actualCostUsd ?? row.estimatedCostUsd;
+      if (best != null) {
+        bestAvailableTotalUsd += best;
+        hasBestAvailableCost = true;
+      }
+      if (status === "exact") {
+        exact.add(row.requestId);
+        exactTotalUsd += row.actualCostUsd ?? 0;
+      } else if (status === "estimated") {
+        estimated.add(row.requestId);
+        estimatedTotalUsd += row.estimatedCostUsd ?? 0;
+      } else if (status === "pending") {
+        pending.add(row.requestId);
+        estimatedTotalUsd += row.estimatedCostUsd ?? 0;
+      } else if (status === "legacy_estimated") {
+        legacy.add(row.requestId);
+        legacyEstimatedTotalUsd += row.estimatedCostUsd ?? 0;
+      } else {
+        unavailable.add(row.requestId);
+        if (status === "legacy_unavailable") legacy.add(row.requestId);
+      }
+    }
+
+    const unknownCostRequestCount = new Set([...pending, ...unavailable]).size;
+    return {
+      totalCostUsd: hasBestAvailableCost ? bestAvailableTotalUsd : null,
+      requestCount: requestIds.size,
+      unknownCostRequestCount,
+      bestAvailableTotalUsd: hasBestAvailableCost ? bestAvailableTotalUsd : null,
+      exactTotalUsd,
+      estimatedTotalUsd,
+      legacyEstimatedTotalUsd,
+      exactRequestCount: exact.size,
+      estimatedRequestCount: estimated.size,
+      pendingRequestCount: pending.size,
+      unavailableRequestCount: unavailable.size,
+      legacyRequestCount: legacy.size,
+    };
+  };
+
+  const modelRows = new Map<string, UsageCostRow[]>();
+  for (const row of rows) {
+    if (!row.modelId || !row.providerId) continue;
+    const key = `${row.providerId}\u0000${row.modelId}`;
+    modelRows.set(key, [...(modelRows.get(key) ?? []), row]);
+  }
+  const models = Array.from(modelRows.entries()).map(([key, modelUsage]) => {
+    const [providerId, modelId] = key.split("\u0000");
+    return { modelId, providerId, ...summarize(modelUsage) };
+  }).sort((left, right) =>
+    (right.bestAvailableTotalUsd ?? -1) - (left.bestAvailableTotalUsd ?? -1) ||
+    right.requestCount - left.requestCount ||
+    left.modelId.localeCompare(right.modelId)
   );
 
-  return {
-    totalCostUsd: knownCostUsageCount === 0 ? null : knownCostTotal,
-    requestCount,
-    unknownCostRequestCount,
-    models: rows.map((row) => ({
-      modelId: row.modelId,
-      providerId: row.providerId,
-      requestCount: row.requestCount,
-      totalCostUsd: row.knownCostUsageCount === 0 ? null : row.totalCostUsd,
-      unknownCostRequestCount: row.unknownCostRequestCount,
-    })),
-  };
+  return { version: 2, ...summarize(rows), models };
 }

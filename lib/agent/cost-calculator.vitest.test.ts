@@ -57,7 +57,7 @@ describe("cost calculator", () => {
     );
 
     expect(breakdown).toMatchObject({
-      standardInputTokens: 1000,
+      standardInputTokens: 800,
       cacheCreationTokens: 120,
       cacheReadTokens: 80,
       outputTokens: 300,
@@ -118,6 +118,24 @@ describe("cost calculator", () => {
     });
   });
 
+  it("does not double-count generic cache categories", () => {
+    expect(
+      extractTokenBreakdown(
+        usage({
+          inputTokens: 1000,
+          outputTokens: 5,
+          inputTokenDetails: { cacheReadTokens: 200, cacheWriteTokens: 100 },
+        }),
+        undefined,
+        "vercel"
+      )
+    ).toMatchObject({
+      standardInputTokens: 700,
+      cacheCreationTokens: 100,
+      cacheReadTokens: 200,
+    });
+  });
+
   it("calculates cached, reasoning, and output cost", () => {
     const cost = calculateCostUsd(basePricing, {
       standardInputTokens: 800,
@@ -163,6 +181,29 @@ describe("cost calculator", () => {
     );
 
     expect(cost).toBeCloseTo(0.01451, 8);
+  });
+
+  it("uses snapshotted long-context cache read and write rates", () => {
+    const cost = calculateCostUsd(
+      {
+        ...basePricing,
+        cache_write_price_per_1m: 6,
+        long_context_threshold: 1000,
+        long_context_input_price_per_1m: 10,
+        long_context_output_price_per_1m: 45,
+        long_context_cached_price_per_1m: 1,
+        long_context_cache_write_price_per_1m: 12,
+      },
+      {
+        standardInputTokens: 801,
+        cacheCreationTokens: 100,
+        cacheReadTokens: 100,
+        outputTokens: 0,
+        reasoningTokens: 0,
+      }
+    );
+
+    expect(cost).toBeCloseTo(0.00931, 8);
   });
 
   it("returns null when pricing is incomplete", () => {

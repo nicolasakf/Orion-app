@@ -1345,7 +1345,7 @@ export function ChatBody({
                     isAgentTurnActive={
                       isAgentTurnActive && item.messageIndex === messages.length - 1
                     }
-                    isForkingDisabled={isAgentTurnActive}
+                    isForkingDisabled={isAgentTurnActive || isLoading}
                     onUserMessageClick={onUserMessageClick}
                     pendingApprovalIds={pendingApprovalIds}
                     onApprove={onApprove}

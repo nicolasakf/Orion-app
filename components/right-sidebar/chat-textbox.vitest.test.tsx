@@ -220,6 +220,20 @@ describe("ChatTextbox model intelligence settings", () => {
     expect(onModelSettingsChange).toHaveBeenCalledWith({ reasoningEffort: "high" });
   });
 
+  it("uses OpenAI's xhigh API value for the Extra High level", () => {
+    const onModelSettingsChange = vi.fn();
+    renderTextbox({
+      selectedModelProvider: "openai",
+      modelSettings: { reasoningEffort: "high" },
+      onModelSettingsChange,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Intelligence level: High" }));
+    fireEvent.click(screen.getByRole("button", { name: "Extra High" }));
+
+    expect(onModelSettingsChange).toHaveBeenCalledWith({ reasoningEffort: "xhigh" });
+  });
+
   it("limits mini OpenAI models to the supported three-level selector", () => {
     renderTextbox({
       selectedModelProvider: "openai",

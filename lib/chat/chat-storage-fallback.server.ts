@@ -22,15 +22,34 @@ export interface ModelUsageInsert {
 }
 
 export interface ChatCostSummary {
+  version: 2;
   totalCostUsd: number | null;
   requestCount: number;
   unknownCostRequestCount: number;
+  bestAvailableTotalUsd: number | null;
+  exactTotalUsd: number;
+  estimatedTotalUsd: number;
+  legacyEstimatedTotalUsd: number;
+  exactRequestCount: number;
+  estimatedRequestCount: number;
+  pendingRequestCount: number;
+  unavailableRequestCount: number;
+  legacyRequestCount: number;
   models: Array<{
     modelId: string;
     providerId: string;
     requestCount: number;
     totalCostUsd: number | null;
     unknownCostRequestCount: number;
+    bestAvailableTotalUsd: number | null;
+    exactTotalUsd: number;
+    estimatedTotalUsd: number;
+    legacyEstimatedTotalUsd: number;
+    exactRequestCount: number;
+    estimatedRequestCount: number;
+    pendingRequestCount: number;
+    unavailableRequestCount: number;
+    legacyRequestCount: number;
   }>;
 }
 
@@ -174,9 +193,19 @@ export async function getFallbackChatCostSummary(
   _chatId: string
 ): Promise<ChatCostSummary> {
   return {
-    totalCostUsd: 0,
+    version: 2,
+    totalCostUsd: null,
     requestCount: 0,
     unknownCostRequestCount: 0,
+    bestAvailableTotalUsd: null,
+    exactTotalUsd: 0,
+    estimatedTotalUsd: 0,
+    legacyEstimatedTotalUsd: 0,
+    exactRequestCount: 0,
+    estimatedRequestCount: 0,
+    pendingRequestCount: 0,
+    unavailableRequestCount: 0,
+    legacyRequestCount: 0,
     models: [],
   };
 }

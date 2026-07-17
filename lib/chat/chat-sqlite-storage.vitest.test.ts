@@ -15,6 +15,7 @@ import {
   getChatDatabase,
   getChatMetas,
   getChats,
+  getContextCalibration,
   getEditCheckpointByRequestId,
   getEditCheckpointsForChat,
   insertModelUsage,
@@ -26,6 +27,7 @@ import {
   updateEditCheckpointStatus,
   updateChatSessionStatus,
   updateCompactionSummary,
+  updateContextCalibration,
 } from "@/lib/chat/chat-sqlite-storage.server";
 import type { ChatWire } from "@/lib/chat/chat-types";
 import type { OrionDatabase } from "@/lib/chat/sqlite-adapter";
@@ -134,7 +136,7 @@ describe("SQLite chat storage", () => {
 
     const migratedDb = await getChatDatabase();
 
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(3);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(4);
     await expect(getChat("chat-1")).resolves.toMatchObject({
       id: "chat-1",
       messages: [{ id: "message-1" }],
@@ -146,12 +148,14 @@ describe("SQLite chat storage", () => {
     expect(tableExists(migratedDb, "edit_checkpoint")).toBe(true);
     expect(tableExists(migratedDb, "edit_checkpoint_target")).toBe(true);
     expect(indexExists(migratedDb, "model_usage_request_id_idx")).toBe(true);
+    expect(indexExists(migratedDb, "model_usage_gateway_generation_id_idx")).toBe(true);
+    expect(tableExists(migratedDb, "context_calibration")).toBe(true);
   });
 
   it("creates the full schema on a fresh database", async () => {
     const db = await getChatDatabase();
 
-    expect(db.pragma("user_version", { simple: true })).toBe(3);
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
     expect(tableExists(db, "chats")).toBe(true);
     expect(tableExists(db, "chat_messages")).toBe(true);
     expect(tableExists(db, "subagent_sessions")).toBe(true);
@@ -161,6 +165,40 @@ describe("SQLite chat storage", () => {
     expect(tableExists(db, "edit_checkpoint")).toBe(true);
     expect(tableExists(db, "edit_checkpoint_target")).toBe(true);
     expect(columnExists(db, "chats", "forked_from_json")).toBe(true);
+    expect(columnExists(db, "model_usage", "actual_cost_usd")).toBe(true);
+    expect(columnExists(db, "model_usage", "actual_reasoning_tokens")).toBe(true);
+    expect(columnExists(db, "model_usage", "estimated_output_tokens")).toBe(true);
+    expect(columnExists(db, "model_usage", "pricing_snapshot_json")).toBe(true);
+  });
+
+  it("preserves pre-ledger usage as legacy without recalculating it", async () => {
+    const db = await getChatDatabase();
+    db.prepare(`insert into chat_session
+      (id, local_chat_id, status, created_at, updated_at) values (?, ?, ?, ?, ?)`)
+      .run("session-legacy", "chat-legacy", "completed", "2026-01-01", "2026-01-01");
+    db.prepare(`insert into model_request
+      (id, chat_session_id, origin, created_at) values (?, ?, ?, ?)`)
+      .run("request-legacy", "session-legacy", "user", "2026-01-01");
+    db.prepare(`insert into model_usage
+      (id, request_id, model_id, provider_id, tokens_in, tokens_out, cost_usd,
+       is_byok, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run("usage-legacy", "request-legacy", "legacy-model", "openai", 10, 5, 0.123, 1, "2026-01-01");
+    db.exec("pragma user_version = 3");
+    closeChatDatabase();
+
+    const migrated = await getChatDatabase();
+    expect(migrated.prepare(`select cost_status, estimated_cost_usd, actual_cost_usd
+      from model_usage where id = ?`).get("usage-legacy")).toMatchObject({
+      cost_status: "legacy_estimated",
+      estimated_cost_usd: 0.123,
+      actual_cost_usd: null,
+    });
+    await expect(getChatCostSummary("chat-legacy")).resolves.toMatchObject({
+      legacyEstimatedTotalUsd: 0.123,
+      exactTotalUsd: 0,
+      estimatedTotalUsd: 0,
+      legacyRequestCount: 1,
+    });
   });
 
   it("saves, lists, loads, deletes, and clears chats", async () => {
@@ -361,7 +399,7 @@ describe("SQLite chat storage", () => {
 
     const migratedDb = await getChatDatabase();
 
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(3);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(4);
     expect(columnExists(migratedDb, "chats", "forked_from_json")).toBe(true);
   });
 
@@ -500,8 +538,13 @@ describe("SQLite chat storage", () => {
       isByok: true,
     });
 
-    await expect(getChatCostSummary("chat-1")).resolves.toEqual({
+    await expect(getChatCostSummary("chat-1")).resolves.toMatchObject({
+      version: 2,
       totalCostUsd: 0.0035,
+      bestAvailableTotalUsd: 0.0035,
+      estimatedTotalUsd: 0.0035,
+      estimatedRequestCount: 2,
+      unavailableRequestCount: 1,
       requestCount: 2,
       unknownCostRequestCount: 1,
       models: [
@@ -555,8 +598,10 @@ describe("SQLite chat storage", () => {
       isByok: true,
     });
 
-    await expect(getChatCostSummary("chat-title-cost")).resolves.toEqual({
+    await expect(getChatCostSummary("chat-title-cost")).resolves.toMatchObject({
+      version: 2,
       totalCostUsd: 0.001,
+      estimatedTotalUsd: 0.001,
       requestCount: 1,
       unknownCostRequestCount: 0,
       models: [
@@ -569,6 +614,32 @@ describe("SQLite chat storage", () => {
         },
       ],
     });
+  });
+
+  it("isolates context calibration by estimator key and uses conservative ratios", async () => {
+    const key = {
+      providerId: "vercel",
+      modelId: "openai/gpt-5",
+      interactionMode: "agent",
+      estimatorVersion: 1,
+    };
+    for (const actualInputTokens of [120, 130, 140]) {
+      await updateContextCalibration(key, {
+        rawEstimatedTokens: 100,
+        actualInputTokens,
+      });
+    }
+
+    await expect(getContextCalibration(key)).resolves.toMatchObject({
+      sampleCount: 3,
+      correctionRatio: 1.4,
+    });
+    await expect(
+      getContextCalibration({ ...key, interactionMode: "ask" })
+    ).resolves.toMatchObject({ sampleCount: 0, correctionRatio: 1.15 });
+    await expect(
+      getContextCalibration({ ...key, estimatorVersion: 2 })
+    ).resolves.toMatchObject({ sampleCount: 0, correctionRatio: 1.15 });
   });
 
   it("records and coalesces repeated text file edits for one request", async () => {

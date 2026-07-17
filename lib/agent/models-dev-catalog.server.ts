@@ -28,6 +28,7 @@ const ModelsDevModelSchema = z.object({
       input: z.number().optional(),
       output: z.number().optional(),
       cache_read: z.number().optional(),
+      cache_write: z.number().optional(),
     })
     .optional(),
   limit: z
@@ -60,7 +61,11 @@ const ModelCatalogEntryCacheSchema = z.object({
   input_price_per_1m: z.number().nullable(),
   output_price_per_1m: z.number().nullable(),
   cached_price_per_1m: z.number().nullable(),
+  cache_write_price_per_1m: z.number().nullable().optional(),
   context_window: z.number().nullable(),
+  context_window_source: z.literal("models_dev").optional(),
+  context_window_fetched_at: z.string().optional(),
+  context_window_is_fallback: z.boolean().optional(),
   max_output_tokens: z.number().nullable(),
   supports_image_input: z.boolean().optional(),
   supports_tool_calling: z.boolean().optional(),
@@ -95,7 +100,13 @@ type NormalizedModelsDevCatalog = {
   providers: ModelsDevProviderCatalogMeta[];
 };
 
-type ModelsDevModelCatalogEntry = ModelCatalogEntry & { source: "models_dev" };
+type ModelsDevModelCatalogEntry = Omit<
+  ModelCatalogEntry,
+  "source" | "context_window_source"
+> & {
+  source: "models_dev";
+  context_window_source?: "models_dev";
+};
 type ModelsDevProviderCatalogMeta = ProviderCatalogMeta & {
   credentialKind: "api_key";
   source: "models_dev";
@@ -124,7 +135,11 @@ function normalizeModelsDevCatalog(
           input_price_per_1m: model.cost?.input ?? null,
           output_price_per_1m: model.cost?.output ?? null,
           cached_price_per_1m: model.cost?.cache_read ?? null,
+          cache_write_price_per_1m: model.cost?.cache_write ?? null,
           context_window: model.limit?.context ?? null,
+          context_window_source: "models_dev",
+          context_window_fetched_at: new Date().toISOString(),
+          context_window_is_fallback: false,
           max_output_tokens: model.limit?.output ?? null,
           supports_image_input:
             model.modalities?.input?.includes("image") ?? model.attachment,

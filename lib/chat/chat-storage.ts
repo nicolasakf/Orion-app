@@ -20,19 +20,52 @@ export interface ChatCostSummaryModel {
   requestCount: number;
   totalCostUsd: number | null;
   unknownCostRequestCount: number;
+  bestAvailableTotalUsd: number | null;
+  exactTotalUsd: number;
+  estimatedTotalUsd: number;
+  legacyEstimatedTotalUsd: number;
+  exactRequestCount: number;
+  estimatedRequestCount: number;
+  pendingRequestCount: number;
+  unavailableRequestCount: number;
+  legacyRequestCount: number;
 }
 
 export interface ChatCostSummary {
+  version: 2;
   totalCostUsd: number | null;
   requestCount: number;
   unknownCostRequestCount: number;
+  bestAvailableTotalUsd: number | null;
+  exactTotalUsd: number;
+  estimatedTotalUsd: number;
+  legacyEstimatedTotalUsd: number;
+  exactRequestCount: number;
+  estimatedRequestCount: number;
+  pendingRequestCount: number;
+  unavailableRequestCount: number;
+  legacyRequestCount: number;
   models: ChatCostSummaryModel[];
 }
 
+const CostProvenanceFieldsSchema = z.object({
+  bestAvailableTotalUsd: z.number().nullable(),
+  exactTotalUsd: z.number(),
+  estimatedTotalUsd: z.number(),
+  legacyEstimatedTotalUsd: z.number(),
+  exactRequestCount: z.number(),
+  estimatedRequestCount: z.number(),
+  pendingRequestCount: z.number(),
+  unavailableRequestCount: z.number(),
+  legacyRequestCount: z.number(),
+});
+
 const ChatCostSummarySchema = z.object({
+  version: z.literal(2),
   totalCostUsd: z.number().nullable(),
   requestCount: z.number(),
   unknownCostRequestCount: z.number(),
+  ...CostProvenanceFieldsSchema.shape,
   models: z.array(
     z.object({
       modelId: z.string(),
@@ -40,9 +73,50 @@ const ChatCostSummarySchema = z.object({
       requestCount: z.number(),
       totalCostUsd: z.number().nullable(),
       unknownCostRequestCount: z.number(),
+      ...CostProvenanceFieldsSchema.shape,
     })
   ),
 });
+
+const LegacyChatCostSummarySchema = z.object({
+  totalCostUsd: z.number().nullable(),
+  requestCount: z.number(),
+  unknownCostRequestCount: z.number(),
+  models: z.array(z.object({
+    modelId: z.string(),
+    providerId: z.string(),
+    requestCount: z.number(),
+    totalCostUsd: z.number().nullable(),
+    unknownCostRequestCount: z.number(),
+  })),
+});
+
+/** Converts a v1 cost response into the provenance-aware compatibility shape. */
+function upgradeLegacyCostSummary(
+  legacy: z.infer<typeof LegacyChatCostSummarySchema>
+): ChatCostSummary {
+  const enrich = (value: {
+    totalCostUsd: number | null;
+    requestCount: number;
+    unknownCostRequestCount: number;
+  }) => ({
+    bestAvailableTotalUsd: value.totalCostUsd,
+    exactTotalUsd: 0,
+    estimatedTotalUsd: 0,
+    legacyEstimatedTotalUsd: value.totalCostUsd ?? 0,
+    exactRequestCount: 0,
+    estimatedRequestCount: 0,
+    pendingRequestCount: 0,
+    unavailableRequestCount: value.unknownCostRequestCount,
+    legacyRequestCount: value.requestCount,
+  });
+  return {
+    version: 2,
+    ...legacy,
+    ...enrich(legacy),
+    models: legacy.models.map((model) => ({ ...model, ...enrich(model) })),
+  };
+}
 
 /** Parses a JSON response body and throws a useful error for failed chat API calls. */
 async function parseJsonResponse(response: Response): Promise<unknown> {
@@ -204,17 +278,23 @@ class ChatStorage {
   }
 
   /** Get the recorded model cost summary for a specific chat. */
-  async getChatCostSummary(chatId: string): Promise<ChatCostSummary> {
+  async getChatCostSummary(
+    chatId: string,
+    options?: { refresh?: boolean }
+  ): Promise<ChatCostSummary> {
     const response = await fetch(
-      `${CHATS_API_PATH}/${encodeURIComponent(chatId)}/cost`,
+      `${CHATS_API_PATH}/${encodeURIComponent(chatId)}/cost${options?.refresh ? "?refresh=true" : ""}`,
       { method: "GET" }
     );
     const raw = await parseJsonResponse(response);
-    const parsed = ChatCostSummarySchema.safeParse(
-      raw && typeof raw === "object" && "summary" in raw
-        ? (raw as { summary: unknown }).summary
-        : raw
-    );
+    const value = raw && typeof raw === "object" && "summary" in raw
+      ? (raw as { summary: unknown }).summary
+      : raw;
+    const parsed = ChatCostSummarySchema.safeParse(value);
+    if (!parsed.success) {
+      const legacy = LegacyChatCostSummarySchema.safeParse(value);
+      if (legacy.success) return upgradeLegacyCostSummary(legacy.data);
+    }
     if (!parsed.success) {
       throw new Error("Chat API returned an invalid cost summary.");
     }

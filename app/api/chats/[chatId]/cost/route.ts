@@ -5,6 +5,7 @@ import {
   getChat,
   getChatCostSummary,
 } from "@/lib/chat/chat-sqlite-storage.server";
+import { reconcilePendingVercelUsageForChat } from "@/lib/agent/vercel-generation.server";
 
 interface ChatCostRouteContext {
   params: Promise<{ chatId: string }>;
@@ -12,7 +13,7 @@ interface ChatCostRouteContext {
 
 /** Returns the recorded model cost summary for one local chat session. */
 export async function GET(
-  _req: Request,
+  req: Request,
   context: ChatCostRouteContext
 ): Promise<Response> {
   const { chatId } = await context.params;
@@ -23,6 +24,10 @@ export async function GET(
       return NextResponse.json({ message: "Chat not found." }, { status: 404 });
     }
 
+    const shouldRefresh = new URL(req.url).searchParams.get("refresh") === "true";
+    if (shouldRefresh) {
+      await reconcilePendingVercelUsageForChat(chatId);
+    }
     const summary = await getChatCostSummary(chatId);
     return NextResponse.json({ summary });
   } catch (error) {

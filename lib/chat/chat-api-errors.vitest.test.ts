@@ -9,6 +9,22 @@ import {
 } from "./chat-api-errors";
 
 describe("buildChatApiErrorPayload", () => {
+  it("normalizes provider context errors to a structured recovery code", () => {
+    const error = new APICallError({
+      message: "maximum context length exceeded",
+      url: "https://api.openai.com/v1/responses",
+      requestBodyValues: {},
+      statusCode: 400,
+      responseBody: '{"error":{"code":"context_length_exceeded"}}',
+      data: { error: { code: "context_length_exceeded" } },
+    });
+
+    expect(buildChatApiErrorPayload(error, "openai")).toMatchObject({
+      code: "context_budget_exceeded",
+      title: "Context Budget Exceeded",
+    });
+  });
+
   it("adds a ChatGPT account link for usage_limit_reached errors", () => {
     const error = new APICallError({
       message: "The usage limit has been reached",

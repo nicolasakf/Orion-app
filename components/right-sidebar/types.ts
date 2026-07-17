@@ -13,6 +13,7 @@ export interface LLM {
   inputPrice?: number;
   outputPrice?: number;
   cachedPrice?: number;
+  cacheWritePrice?: number;
   icon?: React.ComponentType<{ className?: string }>;
   options?: any;
   /** Provider-specific model identifier sent to the API when it differs from value. */
@@ -21,6 +22,9 @@ export interface LLM {
   isAccessible?: boolean;
   /** Model context window size in tokens. */
   contextWindow?: number;
+  contextWindowSource?: string;
+  contextWindowFetchedAt?: string;
+  contextWindowIsFallback?: boolean;
   /** Max tokens the provider reports this model can generate in one response. */
   maxOutputTokens?: number;
   /** True when the model can receive image file parts as input. */
@@ -58,7 +62,7 @@ export interface EditingState {
 // ============================================================================
 
 export interface OpenAIModelSettings {
-  reasoningEffort?: "low" | "medium" | "high" | "extra-high";
+  reasoningEffort?: "low" | "medium" | "high" | "xhigh";
 }
 
 export interface AnthropicModelSettings {

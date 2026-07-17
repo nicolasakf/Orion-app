@@ -1,8 +1,5 @@
 /**
- * Token estimation and per-chat calibration for context-window budgeting.
- *
- * Uses character-based heuristics calibrated from actual usage reports
- * (updated via `updateCalibration` after each `onFinish` callback).
+ * Token estimation and model-aware context-window budgeting.
  */
 
 import type { UIMessage } from "ai";
@@ -11,8 +8,8 @@ import type { UIMessage } from "ai";
 // Constants
 // ────────────────────────────────────────────────────────────────────────────
 
-/** Our enforced hard cap regardless of model context window. */
-export const HARD_CAP_TOKENS = 200_000;
+/** Assumed context window when model metadata is unavailable. */
+export const UNKNOWN_CONTEXT_FALLBACK_TOKENS = 200_000;
 
 /** Fraction of cap at which auto-compaction triggers before a send. */
 export const COMPACTION_AUTO_THRESHOLD = 0.92;
@@ -32,9 +29,6 @@ const FIXED_IMAGE_TOKEN_COST = 1500;
 /** Default chars-per-token ratio before calibration data is available. */
 const DEFAULT_CHARS_PER_TOKEN = 3.7;
 
-/** localStorage key prefix for calibration data. */
-const CALIBRATION_KEY_PREFIX = "orion_token_cal_";
-
 // ────────────────────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────────────────────
@@ -42,85 +36,48 @@ const CALIBRATION_KEY_PREFIX = "orion_token_cal_";
 export interface TokenEstimate {
   /** Total estimated input tokens for the wire payload. */
   totalTokens: number;
-  /** Effective cap = min(HARD_CAP_TOKENS, model.contextWindow). */
+  /** Usable input budget after output headroom is reserved. */
   cap: number;
   /** 0..1+ (may exceed 1.0 when over budget). */
   percentUsed: number;
+  contextWindow: number;
+  outputReserve: number;
+  thresholdTokens: number;
   breakdown: {
     system: number;
     messages: number;
     tools: number;
     images: number;
+    framing: number;
   };
 }
 
-interface CalibrationEntry {
-  /** Running average of observed chars-per-token ratio for this chat. */
-  charsPerToken: number;
-  /** Number of observations used to build the average. */
-  sampleCount: number;
+/** Clamps a number to an inclusive range. */
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Calibration helpers (localStorage-backed, best-effort)
-// ────────────────────────────────────────────────────────────────────────────
-
-function readCalibration(chatId: string): CalibrationEntry {
-  if (typeof window === "undefined") {
-    return { charsPerToken: DEFAULT_CHARS_PER_TOKEN, sampleCount: 0 };
-  }
-  try {
-    const raw = localStorage.getItem(`${CALIBRATION_KEY_PREFIX}${chatId}`);
-    if (raw) {
-      const parsed = JSON.parse(raw) as CalibrationEntry;
-      if (typeof parsed.charsPerToken === "number" && parsed.charsPerToken > 0) {
-        return parsed;
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return { charsPerToken: DEFAULT_CHARS_PER_TOKEN, sampleCount: 0 };
-}
-
-function writeCalibration(chatId: string, entry: CalibrationEntry): void {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(
-      `${CALIBRATION_KEY_PREFIX}${chatId}`,
-      JSON.stringify(entry)
-    );
-  } catch {
-    // Ignore estimation overflow.
-  }
-}
-
-/**
- * Update the chars-per-token ratio for a chat from an actual usage report.
- * Uses an exponentially-weighted moving average (α = 0.3) so calibration
- * converges quickly while smoothing noisy single-call measurements.
- */
-export function updateCalibration(
-  chatId: string,
-  observed: { chars: number; tokens: number }
-): void {
-  if (observed.chars <= 0 || observed.tokens <= 0) return;
-  const newRatio = observed.chars / observed.tokens;
-  const current = readCalibration(chatId);
-  const alpha = 0.3;
-  const updated: CalibrationEntry = {
-    charsPerToken:
-      current.sampleCount === 0
-        ? newRatio
-        : alpha * newRatio + (1 - alpha) * current.charsPerToken,
-    sampleCount: current.sampleCount + 1,
+/** Calculates adaptive reply headroom and the resulting usable input budget. */
+export function calculateContextBudget(options: {
+  contextWindow: number;
+  maxOutputTokens?: number | null;
+  autoCompactThreshold?: number;
+}): { outputReserve: number; usableInputTokens: number; thresholdTokens: number } {
+  const contextWindow = Math.max(1, Math.floor(options.contextWindow));
+  const adaptiveReserve = clamp(Math.ceil(contextWindow * 0.05), 4096, 16384);
+  const outputReserve = Math.min(
+    adaptiveReserve,
+    options.maxOutputTokens && options.maxOutputTokens > 0
+      ? Math.floor(options.maxOutputTokens)
+      : adaptiveReserve
+  );
+  const usableInputTokens = Math.max(1, contextWindow - outputReserve);
+  const threshold = options.autoCompactThreshold ?? COMPACTION_AUTO_THRESHOLD;
+  return {
+    outputReserve,
+    usableInputTokens,
+    thresholdTokens: Math.floor(usableInputTokens * threshold),
   };
-  writeCalibration(chatId, updated);
-}
-
-/** Get the current calibrated chars-per-token ratio for a chat (default 3.7). */
-export function getCalibration(chatId: string): number {
-  return readCalibration(chatId).charsPerToken;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -182,10 +139,17 @@ function countImageParts(parts: unknown[]): number {
 export function estimateMessageTokens(
   messages: UIMessage[],
   systemPrompt: string,
-  opts: { contextWindow: number; calibrationRatio?: number; additionalImageCount?: number }
+  opts: {
+    contextWindow: number;
+    maxOutputTokens?: number | null;
+    autoCompactThreshold?: number;
+    calibrationRatio?: number;
+    additionalImageCount?: number;
+  }
 ): TokenEstimate {
   const ratio = opts.calibrationRatio ?? DEFAULT_CHARS_PER_TOKEN;
-  const cap = Math.min(HARD_CAP_TOKENS, opts.contextWindow);
+  const budget = calculateContextBudget(opts);
+  const cap = budget.usableInputTokens;
 
   // System prompt
   const systemChars = systemPrompt.length;
@@ -227,11 +191,15 @@ export function estimateMessageTokens(
     totalTokens,
     cap,
     percentUsed: cap > 0 ? totalTokens / cap : 1,
+    contextWindow: opts.contextWindow,
+    outputReserve: budget.outputReserve,
+    thresholdTokens: budget.thresholdTokens,
     breakdown: {
       system: systemTokens,
       messages: msgTokens,
       tools: toolTokens,
       images: imageTokens,
+      framing: 0,
     },
   };
 }

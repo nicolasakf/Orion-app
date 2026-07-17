@@ -10,14 +10,10 @@ import type { UIMessage } from "ai";
 import { callCompactionApi } from "@/lib/chat/compaction-client";
 import type { CompactionSummary } from "@/lib/chat/chat-storage";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
-import { HARD_CAP_TOKENS, COMPACTION_RETENTION_TURNS, estimateMessageTokens } from "./token-budget";
+import { COMPACTION_RETENTION_TURNS } from "./token-budget";
 
 export interface CompactionResult {
   summary: CompactionSummary;
-  /** Estimated input tokens before compaction (wire payload). */
-  tokensBefore: number;
-  /** Estimated input tokens after compaction (wire payload). */
-  tokensAfter: number;
 }
 
 /**
@@ -35,11 +31,6 @@ function findRetentionBoundary(messages: UIMessage[], retentionTurns: number): n
     }
   }
   return 0;
-}
-
-/** Rough token estimate for a simple messages array (no system prompt). */
-function roughTokenEstimate(messages: UIMessage[]): number {
-  return estimateMessageTokens(messages, "", { contextWindow: HARD_CAP_TOKENS }).totalTokens;
 }
 
 /**
@@ -65,8 +56,6 @@ export async function compactConversation(
   const boundaryIdx = findRetentionBoundary(messages, retentionTurns);
 
   const older = messages.slice(0, boundaryIdx);
-  const recent = messages.slice(boundaryIdx);
-
   // If nothing to compact, treat the whole conversation as the summary target
   const toSummarize = older.length > 0 ? older : messages;
   const coversThrough =
@@ -74,9 +63,7 @@ export async function compactConversation(
       ? (older[older.length - 1].id ?? "")
       : (messages[messages.length - 1]?.id ?? "");
 
-  const tokensBefore = roughTokenEstimate(messages);
-
-  const { summaryText, tokensUsed } = await callCompactionApi(
+  const { summaryText } = await callCompactionApi(
     toSummarize,
     opts.previousSummary?.text,
     opts.model,
@@ -84,18 +71,14 @@ export async function compactConversation(
     opts.chatId
   );
 
-  // Estimate tokens after: synthetic summary pair + recent turns
-  const syntheticChars = `Prior conversation summary:\n${summaryText}\nGot it. Continuing from here.`.length;
-  const recentTokens = roughTokenEstimate(recent);
-  const tokensAfter = Math.ceil(syntheticChars / 3.7) + recentTokens;
-
   const summary: CompactionSummary = {
     text: summaryText,
     coversThrough,
     createdAt: new Date(),
     model: opts.model,
-    tokensSaved: Math.max(0, tokensBefore - tokensAfter),
+    // The caller replaces this with before/after server preflight measurements.
+    tokensSaved: 0,
   };
 
-  return { summary, tokensBefore, tokensAfter };
+  return { summary };
 }

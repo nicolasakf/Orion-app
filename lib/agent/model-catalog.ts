@@ -1,6 +1,11 @@
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
 
-export type ModelCatalogSource = "snapshot" | "models_dev" | "user" | "local";
+export type ModelCatalogSource =
+  | "snapshot"
+  | "models_dev"
+  | "vercel_gateway"
+  | "user"
+  | "local";
 
 export interface ModelCatalogEntry {
   model_id: string;
@@ -10,7 +15,15 @@ export interface ModelCatalogEntry {
   input_price_per_1m: number | null;
   output_price_per_1m: number | null;
   cached_price_per_1m: number | null;
+  /** Cache-write price per million input tokens when separately billed. */
+  cache_write_price_per_1m?: number | null;
   context_window: number | null;
+  /** Source that supplied the context-window value. */
+  context_window_source?: ModelCatalogSource | "fallback";
+  /** Time the context-window metadata was fetched or snapshotted. */
+  context_window_fetched_at?: string;
+  /** True when Orion substituted its unknown-model fallback. */
+  context_window_is_fallback?: boolean;
   max_output_tokens: number | null;
   supports_image_input?: boolean;
   supports_tool_calling?: boolean;
@@ -19,6 +32,8 @@ export interface ModelCatalogEntry {
   long_context_threshold: number | null;
   long_context_input_price_per_1m: number | null;
   long_context_output_price_per_1m: number | null;
+  long_context_cached_price_per_1m?: number | null;
+  long_context_cache_write_price_per_1m?: number | null;
   client_avail: boolean;
   pinned_by_default: boolean;
   created_at: string;

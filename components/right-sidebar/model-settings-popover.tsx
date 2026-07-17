@@ -30,6 +30,7 @@ type IntelligenceLevelValue =
   | "low"
   | "medium"
   | "high"
+  | "xhigh"
   | "extra-high"
   | "max";
 
@@ -60,10 +61,10 @@ const OPENAI_INTELLIGENCE_LEVELS: IntelligenceLevelOption[] = [
     settings: { reasoningEffort: "high" } satisfies OpenAIModelSettings,
   },
   {
-    value: "extra-high",
+    value: "xhigh",
     label: "Extra High",
     shortLabel: "XHigh",
-    settings: { reasoningEffort: "extra-high" } satisfies OpenAIModelSettings,
+    settings: { reasoningEffort: "xhigh" } satisfies OpenAIModelSettings,
   },
 ];
 

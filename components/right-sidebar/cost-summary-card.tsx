@@ -48,6 +48,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   lmstudio: "LM Studio",
   mlx: "MLX",
   custom: "Custom Endpoint",
+  vercel: "Vercel AI Gateway",
 };
 
 /** Resolves a provider id to a display label. */
@@ -73,25 +74,48 @@ function formatUsd(costUsd: number | null): string {
 }
 
 /** Renders the cost cell, including a note when some requests were unpriced. */
-function CostCell({
-  costUsd,
-  unknownCount,
-}: {
-  costUsd: number | null;
-  unknownCount: number;
-}) {
-  if (unknownCount === 0) {
-    return <span className="font-mono tabular-nums">{formatUsd(costUsd)}</span>;
-  }
+type CostProvenance = Pick<
+  ChatCostSummary,
+  | "bestAvailableTotalUsd"
+  | "exactRequestCount"
+  | "estimatedRequestCount"
+  | "pendingRequestCount"
+  | "unavailableRequestCount"
+  | "legacyRequestCount"
+>;
 
-  const unknownLabel = `${unknownCount.toLocaleString()} unpriced ${
-    unknownCount === 1 ? "request" : "requests"
-  }`;
+/** Renders best-available cost without implying mixed provenance is exact. */
+function CostCell({ provenance }: { provenance: CostProvenance }) {
+  const label = provenance.pendingRequestCount > 0
+    ? "Pending"
+    : provenance.exactRequestCount > 0 &&
+        provenance.estimatedRequestCount === 0 &&
+        provenance.legacyRequestCount === 0 &&
+        provenance.unavailableRequestCount === 0
+      ? "Exact"
+      : provenance.estimatedRequestCount > 0 &&
+          provenance.exactRequestCount === 0 &&
+          provenance.legacyRequestCount === 0 &&
+          provenance.unavailableRequestCount === 0
+        ? "Estimated"
+        : provenance.legacyRequestCount > 0 &&
+            provenance.exactRequestCount === 0 &&
+            provenance.estimatedRequestCount === 0 &&
+            provenance.unavailableRequestCount === 0
+          ? "Legacy estimate"
+          : provenance.unavailableRequestCount > 0 &&
+              provenance.bestAvailableTotalUsd == null
+            ? "Unavailable"
+            : "Mixed";
 
   return (
     <div className="space-y-0.5">
-      <span className="font-mono tabular-nums">{formatUsd(costUsd)}</span>
-      <p className="text-[10px] text-muted-foreground">{unknownLabel}</p>
+      <span className="font-mono tabular-nums">
+        {formatUsd(provenance.bestAvailableTotalUsd)}
+      </span>
+      <span className="inline-block rounded border border-border/70 bg-muted/60 px-1 py-0.5 text-[9px] leading-none text-muted-foreground">
+        {label}
+      </span>
     </div>
   );
 }
@@ -173,8 +197,7 @@ export function CostSummaryCard({
                     </TableCell>
                     <TableCell className="px-3 py-2 text-right align-top text-xs">
                       <CostCell
-                        costUsd={model.totalCostUsd}
-                        unknownCount={model.unknownCostRequestCount}
+                        provenance={model}
                       />
                     </TableCell>
                   </TableRow>
@@ -189,8 +212,7 @@ export function CostSummaryCard({
                 </TableCell>
                 <TableCell className="px-3 py-2 text-right align-top text-xs font-medium">
                   <CostCell
-                    costUsd={summary.totalCostUsd}
-                    unknownCount={summary.unknownCostRequestCount}
+                    provenance={summary}
                   />
                 </TableCell>
               </TableRow>

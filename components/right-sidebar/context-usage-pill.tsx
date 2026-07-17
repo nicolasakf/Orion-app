@@ -10,7 +10,6 @@ import {
 } from "@/components/ui/hover-card";
 import {
   estimateMessageTokens,
-  COMPACTION_AUTO_THRESHOLD,
   type TokenEstimate,
 } from "@/lib/agent/token-budget";
 import { buildWirePayload } from "@/lib/agent/context-optimizer";
@@ -100,29 +99,47 @@ export function useContextEstimate(
   messages: UIMessage[],
   contextWindow: number,
   compactionSummary: CompactionSummary | null | undefined,
-  systemPromptEstimateChars?: number,
-  additionalImageCount = 0
+  options?: {
+    maxOutputTokens?: number | null;
+    autoCompactThreshold?: number;
+    optimizerRetentionTurns?: number;
+    systemPromptEstimateChars?: number;
+    additionalImageCount?: number;
+  }
 ) {
   const [estimate, setEstimate] = React.useState<ReturnType<typeof estimateMessageTokens> | null>(
     null
   );
 
   const systemPrompt = React.useMemo(
-    () => " ".repeat(systemPromptEstimateChars ?? 3000),
-    [systemPromptEstimateChars]
+    () => " ".repeat(options?.systemPromptEstimateChars ?? 3000),
+    [options?.systemPromptEstimateChars]
   );
 
   React.useEffect(() => {
     const id = window.setTimeout(() => {
-      const wire = buildWirePayload(messages, compactionSummary);
+      const wire = buildWirePayload(messages, compactionSummary, {
+        retentionTurns: options?.optimizerRetentionTurns,
+      });
       const est = estimateMessageTokens(wire, systemPrompt, {
         contextWindow,
-        additionalImageCount,
+        maxOutputTokens: options?.maxOutputTokens,
+        autoCompactThreshold: options?.autoCompactThreshold,
+        additionalImageCount: options?.additionalImageCount,
       });
       setEstimate(est);
     }, 150);
     return () => window.clearTimeout(id);
-  }, [messages, contextWindow, compactionSummary, systemPrompt, additionalImageCount]);
+  }, [
+    messages,
+    contextWindow,
+    compactionSummary,
+    systemPrompt,
+    options?.optimizerRetentionTurns,
+    options?.maxOutputTokens,
+    options?.autoCompactThreshold,
+    options?.additionalImageCount,
+  ]);
 
   return estimate;
 }
@@ -134,6 +151,8 @@ export function useContextEstimate(
 interface ContextUsagePillProps {
   estimate: TokenEstimate | null;
   hasMessages: boolean;
+  /** Hides technical token categories in simplified experiences. */
+  simple?: boolean;
   /** Called when the user clicks the pill at warn/over context levels. */
   onCompact?: () => void;
   className?: string;
@@ -142,6 +161,7 @@ interface ContextUsagePillProps {
 export function ContextUsagePill({
   estimate,
   hasMessages,
+  simple = false,
   onCompact,
   className,
 }: ContextUsagePillProps) {
@@ -150,7 +170,7 @@ export function ContextUsagePill({
   const level = usageLevelOf(estimate.percentUsed);
   const cap = estimate.cap;
   const isActionable = level === "warn" || level === "over";
-  const isOverBudget = estimate.percentUsed >= COMPACTION_AUTO_THRESHOLD;
+  const isOverBudget = estimate.totalTokens >= estimate.thresholdTokens;
   const pctLabel = `${Math.round(estimate.percentUsed * 100)}%`;
 
   const handleClick = () => {
@@ -208,24 +228,36 @@ export function ContextUsagePill({
         <p className="font-mono text-[11px] tabular-nums text-muted-foreground">
           {formatTokens(estimate.totalTokens)} / {formatTokens(cap)} tokens
         </p>
-        <div className="space-y-1 border-t border-border pt-2 text-[11px] text-muted-foreground">
-          <div className="flex justify-between gap-6">
-            <span>System</span>
-            <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.system)}</span>
+        {!simple && (
+          <div className="space-y-1 border-t border-border pt-2 text-[11px] text-muted-foreground">
+            <div className="flex justify-between gap-6">
+              <span>System</span>
+              <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.system)}</span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span>Messages</span>
+              <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.messages)}</span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span>Tools</span>
+              <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.tools)}</span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span>Images & attachments</span>
+              <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.images)}</span>
+            </div>
+            {estimate.breakdown.framing > 0 && (
+              <div className="flex justify-between gap-6">
+                <span>Message framing</span>
+                <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.framing)}</span>
+              </div>
+            )}
+            <div className="flex justify-between gap-6">
+              <span>Reply reserve</span>
+              <span className="font-mono tabular-nums">{formatTokens(estimate.outputReserve)}</span>
+            </div>
           </div>
-          <div className="flex justify-between gap-6">
-            <span>Messages</span>
-            <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.messages)}</span>
-          </div>
-          <div className="flex justify-between gap-6">
-            <span>Tools</span>
-            <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.tools)}</span>
-          </div>
-          <div className="flex justify-between gap-6">
-            <span>Images & attachments</span>
-            <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.images)}</span>
-          </div>
-        </div>
+        )}
         {isActionable && onCompact && (
           <p className="text-[11px] text-muted-foreground">Click the ring to compact and free space.</p>
         )}

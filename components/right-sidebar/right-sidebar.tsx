@@ -45,6 +45,7 @@ import {
   insertSkillIntoComposerInput,
   shouldDispatchAutoFix,
 } from "@/lib/chat/chat-composer-events";
+import { parseChatApiErrorMessage } from "@/lib/chat/chat-api-errors";
 import { compactConversation } from "@/lib/agent/context-manager";
 import { buildWirePayload, stripInspectedRasterData } from "@/lib/agent/context-optimizer";
 import { resolveModelDisplayLabel } from "@/lib/agent/model-display-label";
@@ -55,11 +56,11 @@ import {
   isLocalProvider,
   normalizeLocalEndpointModels,
 } from "@/lib/agent/local-provider-models";
+import { UNKNOWN_CONTEXT_FALLBACK_TOKENS } from "@/lib/agent/token-budget";
 import {
-  estimateMessageTokens,
-  HARD_CAP_TOKENS,
-  COMPACTION_AUTO_THRESHOLD,
-} from "@/lib/agent/token-budget";
+  ContextPreflightResultSchema,
+  type ContextPreflightResult,
+} from "@/lib/agent/context-preflight";
 import { useAssistantChatOptional } from "@/lib/agent";
 import type { AgentRule } from "@/lib/agent/rules";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
@@ -143,6 +144,7 @@ import type {
   ModelSettingsMap,
   QueuedMessage,
 } from "./types";
+
 import type { SettingsTab } from "@/components/settings-dialog/types";
 import {
   loadModelSettingsMapFromSession,
@@ -159,6 +161,28 @@ import {
   parseModelSelectionKey,
   resolveCatalogModelIdForApi,
 } from "@/lib/agent/model-selection-key";
+
+/** Builds the candidate transcript that will exist after the current draft is sent. */
+function appendDraftForPreflight(
+  messages: UIMessage[],
+  text: string,
+  files: FileUIPart[],
+  references: ResolvedChatReference[]
+): UIMessage[] {
+  if (!text.trim() && files.length === 0 && references.length === 0) return messages;
+  return [
+    ...messages,
+    {
+      id: "context-preflight-draft",
+      role: "user",
+      parts: [
+        ...(text.trim() ? [{ type: "text" as const, text }] : []),
+        ...files,
+      ],
+      ...(references.length > 0 ? { metadata: { references } } : {}),
+    },
+  ];
+}
 
 const MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS = 1;
 
@@ -738,6 +762,7 @@ export function RightSidebar({
   } | null>(null);
   const [isRefreshingCostSummary, setIsRefreshingCostSummary] = useState(false);
   const [emptyPromptLibraryResetCount, setEmptyPromptLibraryResetCount] = useState(0);
+  const [contextPreflight, setContextPreflight] = useState<ContextPreflightResult | null>(null);
 
   /** Shared request id for model calls triggered by the current user turn. */
   const modelRequestIdRef = useRef<string | undefined>(undefined);
@@ -745,6 +770,11 @@ export function RightSidebar({
   const compactionSummaryRef = useRef<CompactionSummary | undefined>(undefined);
   /** Prevents concurrent compaction runs. */
   const compactionInFlightRef = useRef(false);
+  /** Allows only one reactive context recovery attempt for the active user turn. */
+  const reactiveContextRetryRef = useRef(false);
+  /** Latest effective context settings for stable transport callbacks. */
+  const contextSettingsRef = useRef(effectiveSettings.agent.context);
+  contextSettingsRef.current = effectiveSettings.agent.context;
 
   /** Map provider ID to the models.dev provider logo component. */
   const getProviderIcon = (provider: ProviderId) =>
@@ -778,9 +808,13 @@ export function RightSidebar({
             inputPrice: m.input_price_per_1m ?? undefined,
             outputPrice: m.output_price_per_1m ?? undefined,
             cachedPrice: m.cached_price_per_1m ?? undefined,
+            cacheWritePrice: m.cache_write_price_per_1m ?? undefined,
             icon: getProviderIcon(provider),
             apiModelId: m.api_model_id,
             contextWindow: m.context_window ?? undefined,
+            contextWindowSource: m.context_window_source,
+            contextWindowFetchedAt: m.context_window_fetched_at,
+            contextWindowIsFallback: m.context_window_is_fallback,
             maxOutputTokens: m.max_output_tokens ?? undefined,
             supportsImageInput: m.supports_image_input === true,
             supportsToolCalling: m.supports_tool_calling,
@@ -1681,6 +1715,7 @@ export function RightSidebar({
   /** Starts a fresh model turn and clears UI-level cancellation state. */
   const beginAgentTurn = useCallback(() => {
     stopRequestedRef.current = false;
+    reactiveContextRetryRef.current = false;
     lastAutomaticContinuationKeyRef.current = null;
     automaticContinuationAttemptsRef.current.clear();
     researchNudgeRef.current = undefined;
@@ -2077,6 +2112,7 @@ export function RightSidebar({
         researchSession: researchSessionRef.current.active ? researchSessionRef.current : undefined,
         researchNudge: researchNudgeRef.current,
         businessExperienceMode: isBusinessExperience,
+        contextSettings: effectiveSettings.agent.context,
         ...overrides,
       };
     },
@@ -2099,7 +2135,36 @@ export function RightSidebar({
       selectedModel,
       workspaceDirectory,
       isBusinessExperience,
+      effectiveSettings.agent.context,
     ]
+  );
+
+  /** Runs the server-side context measurement against the real prepared prompt. */
+  const requestContextPreflight = useCallback(
+    async (candidateMessages: UIMessage[], signal?: AbortSignal): Promise<ContextPreflightResult> => {
+      const wireMessages = buildWirePayload(
+        candidateMessages,
+        compactionSummaryRef.current,
+        {
+          retentionTurns: contextSettingsRef.current.optimizerRetentionTurns,
+          researchActive: researchSessionRef.current.active,
+        }
+      );
+      const response = await fetch("/api/chat/context/preflight", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...buildChatRequestBody(),
+          messages: wireMessages,
+        }),
+        signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Context preflight returned HTTP ${response.status}`);
+      }
+      return ContextPreflightResultSchema.parse(await response.json());
+    },
+    [buildChatRequestBody]
   );
 
   // Ref for dynamic body values — read by the transport function at send time
@@ -2185,6 +2250,7 @@ export function RightSidebar({
         body: {
           ...body,
           messages: buildWirePayload(messages, compactionSummaryRef.current, {
+            retentionTurns: contextSettingsRef.current.optimizerRetentionTurns,
             researchActive: researchSessionRef.current.active,
           }),
         },
@@ -2354,37 +2420,52 @@ export function RightSidebar({
     },
     onError: (error) => {
       console.log(error);
-      const msg = (error?.message ?? "").toLowerCase();
-      const isContextError =
-        msg.includes("prompt is too long") ||
-        msg.includes("context_length") ||
-        msg.includes("context window") ||
-        msg.includes("maximum context") ||
-        msg.includes("too many tokens");
-      if (isContextError && !compactionInFlightRef.current && effectiveChatIdRef.current) {
+      const apiError = parseChatApiErrorMessage(error?.message);
+      const isContextError = apiError?.code === "context_budget_exceeded";
+      if (
+        isContextError &&
+        !reactiveContextRetryRef.current &&
+        !compactionInFlightRef.current &&
+        effectiveChatIdRef.current
+      ) {
         if (!modelInfo?.provider) return;
+        reactiveContextRetryRef.current = true;
         compactionInFlightRef.current = true;
         setIsCompacting(true);
         const chatId = effectiveChatIdRef.current;
         const currentMessages = messagesRef.current;
         const prevSummary = compactionSummaryRef.current;
-        compactConversation(currentMessages, {
-          chatId,
-          previousSummary: prevSummary,
-          model: apiModelId,
-          provider: modelInfo.provider,
-          retentionTurns: 2,
-        })
-          .then(async (result) => {
-            await chatStorage.updateCompactionSummary(chatId, result.summary);
-            compactionSummaryRef.current = result.summary;
+        void (async () => {
+          const before = await requestContextPreflight(currentMessages).catch(() => null);
+          const result = await compactConversation(currentMessages, {
+            chatId,
+            previousSummary: prevSummary,
+            model: apiModelId,
+            provider: modelInfo.provider,
+            retentionTurns: 2,
+          });
+          compactionSummaryRef.current = result.summary;
+          const after = await requestContextPreflight(currentMessages).catch(() => null);
+          const measuredSummary: CompactionSummary = {
+            ...result.summary,
+            tokensSaved:
+              before && after
+                ? Math.max(
+                  0,
+                  before.measurement.estimatedInputTokens -
+                    after.measurement.estimatedInputTokens
+                )
+                : 0,
+          };
+          await chatStorage.updateCompactionSummary(chatId, measuredSummary);
+          compactionSummaryRef.current = measuredSummary;
             setChats((prev) =>
               prev.map((c) =>
-                c.id === chatId ? { ...c, compactionSummary: result.summary } : c
+                c.id === chatId ? { ...c, compactionSummary: measuredSummary } : c
               )
             );
             regenerate();
-          })
+        })()
           .catch((err) => {
             console.error("Reactive compaction failed:", err);
             toast.error("Failed to compact conversation after context error.");
@@ -2400,19 +2481,65 @@ export function RightSidebar({
 
   // Derived isLoading for backward compat with child components
   const isLoading = status === "streaming" || status === "submitted";
-  const selectedContextWindow = getModel(selectedModel)?.contextWindow ?? HARD_CAP_TOKENS;
+  const selectedContextWindow =
+    getModel(selectedModel)?.contextWindow ?? UNKNOWN_CONTEXT_FALLBACK_TOKENS;
   const draftImageAttachmentCount = React.useMemo(
     () => draftAttachments.filter((attachment) => attachment.imageFilePart).length,
     [draftAttachments]
   );
   const deferredMessagesForContext = React.useDeferredValue(messages);
-  const contextEstimate = useContextEstimate(
+  const fallbackContextEstimate = useContextEstimate(
     deferredMessagesForContext,
     selectedContextWindow,
     currentChat?.compactionSummary,
-    undefined,
-    draftImageAttachmentCount
+    {
+      maxOutputTokens: getModel(selectedModel)?.maxOutputTokens,
+      autoCompactThreshold: effectiveSettings.agent.context.compactionAutoThreshold,
+      optimizerRetentionTurns: effectiveSettings.agent.context.optimizerRetentionTurns,
+      additionalImageCount: draftImageAttachmentCount,
+    }
   );
+  const draftPreflightMessages = React.useMemo(
+    () => appendDraftForPreflight(
+      deferredMessagesForContext,
+      input,
+      draftAttachments
+        .map((attachment) => attachment.imageFilePart)
+        .filter((part): part is FileUIPart => part !== undefined),
+      draftReferences
+    ),
+    [deferredMessagesForContext, input, draftAttachments, draftReferences]
+  );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void requestContextPreflight(draftPreflightMessages, controller.signal)
+        .then(setContextPreflight)
+        .catch((error) => {
+          if (!controller.signal.aborted) {
+            console.debug("Context preflight unavailable:", error);
+          }
+        });
+    }, 300);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [draftPreflightMessages, requestContextPreflight]);
+
+  const contextEstimate = React.useMemo(() => {
+    if (!contextPreflight) return fallbackContextEstimate;
+    return {
+      totalTokens: contextPreflight.measurement.estimatedInputTokens,
+      cap: contextPreflight.budget.usableInputTokens,
+      percentUsed: contextPreflight.measurement.percentUsed,
+      contextWindow: contextPreflight.model.contextWindow,
+      outputReserve: contextPreflight.budget.outputReserve,
+      thresholdTokens: contextPreflight.budget.thresholdTokens,
+      breakdown: contextPreflight.measurement.breakdown,
+    };
+  }, [contextPreflight, fallbackContextEstimate]);
 
   // Ref to always hold the latest addToolOutput so async tool callbacks
   // never invoke a stale closure (which would see an outdated `status`
@@ -2605,34 +2732,58 @@ export function RightSidebar({
   );
 
   /** Run compaction and update state + persisted chat. Returns the new summary on success, null on failure. */
-  const runCompaction = useCallback(async (opts?: { retentionTurns?: number }): Promise<CompactionSummary | null> => {
+  const runCompaction = useCallback(async (opts?: {
+    retentionTurns?: number;
+    measurementMessages?: UIMessage[];
+  }): Promise<CompactionSummary | null> => {
     if (compactionInFlightRef.current || !effectiveChatId) return null;
     if (!modelInfo?.provider) return null;
     compactionInFlightRef.current = true;
     setIsCompacting(true);
 
     try {
+      const measurementMessages = opts?.measurementMessages ?? messagesRef.current;
+      const beforePreflight = await requestContextPreflight(measurementMessages).catch(() => null);
       const result = await compactConversation(messagesRef.current, {
         chatId: effectiveChatId,
         previousSummary: currentChat?.compactionSummary,
         model: apiModelId,
         provider: modelInfo.provider,
-        ...opts,
+        retentionTurns:
+          opts?.retentionTurns ?? contextSettingsRef.current.compactionRetentionTurns,
       });
 
-      await chatStorage.updateCompactionSummary(effectiveChatId, result.summary);
+      // Install the summary before measuring so preflight builds the compacted replay.
       compactionSummaryRef.current = result.summary;
+      const afterPreflight = await requestContextPreflight(measurementMessages).catch(() => null);
+      const measuredSummary: CompactionSummary = {
+        ...result.summary,
+        tokensSaved:
+          beforePreflight && afterPreflight
+            ? Math.max(
+              0,
+              beforePreflight.measurement.estimatedInputTokens -
+                afterPreflight.measurement.estimatedInputTokens
+            )
+            : 0,
+      };
+      await chatStorage.updateCompactionSummary(effectiveChatId, measuredSummary);
+      compactionSummaryRef.current = measuredSummary;
 
       setChats((prev) =>
         prev.map((c) =>
-          c.id === effectiveChatId ? { ...c, compactionSummary: result.summary } : c
+          c.id === effectiveChatId ? { ...c, compactionSummary: measuredSummary } : c
         )
       );
 
-      const savedK = Math.round(result.summary.tokensSaved / 1000);
-      toast.success(`Compacted — freed ${savedK > 0 ? `${savedK}k` : "some"} tokens`);
+      const savedK = Math.round(measuredSummary.tokensSaved / 1000);
+      toast.success(
+        beforePreflight && afterPreflight
+          ? `Compacted — freed ${savedK > 0 ? `${savedK}k` : "some"} tokens`
+          : "Compacted — token savings will be measured on the next preflight"
+      );
 
-      return result.summary;
+      return measuredSummary;
     } catch (err) {
       console.error("Compaction failed:", err);
       toast.error("Failed to compact conversation. Please try again.");
@@ -2641,7 +2792,14 @@ export function RightSidebar({
       compactionInFlightRef.current = false;
       setIsCompacting(false);
     }
-  }, [effectiveChatId, currentChat?.compactionSummary, selectedModel, modelInfo?.provider, setChats]);
+  }, [
+    apiModelId,
+    currentChat?.compactionSummary,
+    effectiveChatId,
+    modelInfo?.provider,
+    requestContextPreflight,
+    setChats,
+  ]);
 
   /** Fetches recorded usage for this chat and renders it as a temporary assistant row. */
   const showCostSummary = useCallback(async (options?: { refresh?: boolean }): Promise<void> => {
@@ -2649,7 +2807,9 @@ export function RightSidebar({
 
     setIsRefreshingCostSummary(true);
     try {
-      const summary = await chatStorage.getChatCostSummary(effectiveChatId);
+      const summary = await chatStorage.getChatCostSummary(effectiveChatId, {
+        refresh: options?.refresh ?? true,
+      });
       const modelLabels = Object.fromEntries(
         modelsWithAccess.map((model) => [model.value, model.label])
       );
@@ -2682,6 +2842,20 @@ export function RightSidebar({
   const refreshCostSummary = useCallback((): void => {
     void showCostSummary({ refresh: true });
   }, [showCostSummary]);
+
+  // Re-run bounded Gateway reconciliation while the visible summary is pending.
+  useEffect(() => {
+    if (
+      ephemeralCostMessage?.chatId !== effectiveChatId ||
+      ephemeralCostMessage.summary.pendingRequestCount === 0
+    ) {
+      return;
+    }
+    const timeout = window.setTimeout(() => {
+      void showCostSummary({ refresh: true });
+    }, 2000);
+    return () => window.clearTimeout(timeout);
+  }, [effectiveChatId, ephemeralCostMessage, showCostSummary]);
 
   /** Runs slash commands that submit immediately without a trailing message. */
   const handleImmediateSlashCommand = useCallback(
@@ -3803,7 +3977,7 @@ export function RightSidebar({
   /** Creates a new chat branch through a completed assistant response without altering files. */
   const handleForkFromAssistantMessage = useCallback(
     (message: UIMessage, index: number): void => {
-      if (message.role !== "assistant" || isInputLocked || !currentChat) return;
+      if (message.role !== "assistant" || isInputLocked || isLoading || !currentChat) return;
 
       const sourceMessage = currentChat.messages[index];
       if (sourceMessage?.id !== message.id || sourceMessage.role !== "assistant") return;
@@ -3839,7 +4013,7 @@ export function RightSidebar({
       setShowKernelPrompt(false);
       toast.success("Chat fork created.");
     },
-    [currentChat, isInputLocked, setMessages, toChatStateMessages]
+    [currentChat, isInputLocked, isLoading, setMessages, toChatStateMessages]
   );
 
   /** Replaces a user message in the current chat and drops every later turn before resend. */
@@ -3966,6 +4140,7 @@ export function RightSidebar({
       beginAgentTurn();
       const modelRequestId = crypto.randomUUID();
       modelRequestIdRef.current = modelRequestId;
+      reactiveContextRetryRef.current = false;
       ensureResearchSessionActive(messageText);
       forcedSubagentForCurrentTurnRef.current = null;
       bodyRef.current = {
@@ -4056,20 +4231,32 @@ export function RightSidebar({
       }
       setEphemeralCostMessage(null);
 
-      // Pre-send context budget check: auto-compact if the estimated wire payload
-      // exceeds COMPACTION_AUTO_THRESHOLD × cap before sending.
-      if (!compactionInFlightRef.current) {
-        const ctxWindow = getModel(selectedModel)?.contextWindow ?? HARD_CAP_TOKENS;
-        const wirePayload = buildWirePayload(messagesRef.current, compactionSummaryRef.current, {
-          researchActive: researchSessionRef.current.active,
-        });
-        const est = estimateMessageTokens(wirePayload, "", {
-          contextWindow: ctxWindow,
-          additionalImageCount: imageFileParts.length,
-        });
-        if (est.percentUsed >= COMPACTION_AUTO_THRESHOLD) {
-          await runCompaction();
+      // Measure the real server-prepared prompt, compact once when needed, then
+      // remeasure. Per product policy, failures warn but do not block sending.
+      const candidateMessages = appendDraftForPreflight(
+        messagesRef.current,
+        messageText,
+        imageFileParts,
+        referencesForSubmit
+      );
+      try {
+        let preflight = await requestContextPreflight(candidateMessages);
+        setContextPreflight(preflight);
+        if (preflight.measurement.status !== "ok" && !compactionInFlightRef.current) {
+          const compacted = await runCompaction({ measurementMessages: candidateMessages });
+          if (compacted) {
+            preflight = await requestContextPreflight(candidateMessages);
+            setContextPreflight(preflight);
+            if (preflight.measurement.status !== "ok") {
+              toast.warning("The prepared prompt is still above the context budget; sending anyway.");
+            }
+          } else {
+            toast.warning("Context compaction failed; sending the request anyway.");
+          }
         }
+      } catch (error) {
+        console.warn("Context preflight failed:", error);
+        toast.warning("Context measurement is unavailable; sending the request anyway.");
       }
 
       // Update bodyRef with the request id before sending.
@@ -4102,6 +4289,7 @@ export function RightSidebar({
       isInputLocked,
       buildChatRequestBody,
       runCompaction,
+      requestContextPreflight,
       getModel,
       beginAgentTurn,
       ensureResearchSessionActive,
@@ -4739,6 +4927,7 @@ export function RightSidebar({
               onImmediateSlashCommand={handleImmediateSlashCommand}
               hasMessages={visibleMessages.length > 0}
               contextEstimate={contextEstimate}
+              simpleContextUsage={isBusinessExperience}
               onCompact={runCompaction}
               isOverContextBudget={isCompacting}
               referenceOptions={referenceOptions}
