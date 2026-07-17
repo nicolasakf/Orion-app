@@ -91,6 +91,7 @@ import { MarkdownEditorViewModeProvider } from "@/contexts/markdown-editor-view-
 import { NotebookViewModeProvider } from "@/contexts/notebook-view-mode-context";
 import { TerminalPanel } from "@/components/terminal/terminal-panel";
 import { useIsMobile } from "@/hooks/use-platform";
+import { usePersistentPanelLayout } from "@/hooks/use-persistent-panel-layout";
 import {
   MobileLayoutProvider,
   useMobileLayout,
@@ -102,15 +103,12 @@ import { openWorkspacePath } from "@/lib/desktop/workspace-actions.client";
 import { copyWorkspacePath } from "@/lib/workspace/copy-path.client";
 import {
   DEFAULT_NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS,
-  DEFAULT_PANEL_LAYOUT_STATE,
   DEFAULT_PANEL_VISIBILITY_STATE,
   loadNotebookPresentationHideAllCellInputs,
   loadPanelLayoutState,
   loadPanelVisibilityState,
   saveNotebookPresentationHideAllCellInputs,
-  savePanelLayoutState,
   savePanelVisibilityState,
-  type PanelLayoutState,
   type PanelVisibilityState,
 } from "@/lib/ui-session-state";
 import { isUserSettingsEditorPath } from "@/lib/settings/user-settings-editor-path";
@@ -827,23 +825,19 @@ export default function Page() {
   const isRightSidebarRevealed = focusRightHovered || focusRightFocused;
   const isLeftSidebarContentHidden = isFocusMode && !isLeftSidebarRevealed;
   const isRightSidebarContentHidden = isFocusMode && !isRightSidebarRevealed;
-  const [horizontalPanelSizes, setHorizontalPanelSizes] = useState<
-    [number, number, number]
-  >(DEFAULT_PANEL_LAYOUT_STATE.horizontal);
-  const [businessHorizontalPanelSizes, setBusinessHorizontalPanelSizes] =
-    useState<[number, number]>(DEFAULT_PANEL_LAYOUT_STATE.businessHorizontal);
-  const [verticalPanelSizes, setVerticalPanelSizes] = useState<
-    [number, number]
-  >(DEFAULT_PANEL_LAYOUT_STATE.vertical);
-  const panelLayoutRef = useRef<PanelLayoutState>(DEFAULT_PANEL_LAYOUT_STATE);
-  const persistPanelLayoutRef = useRef(false);
+  const {
+    layout: panelLayout,
+    restoreLayout,
+    setPersistenceEnabled: setPanelLayoutPersistenceEnabled,
+    handleResizeDragging,
+    handleHorizontalLayout,
+    handleBusinessHorizontalLayout,
+    handleVerticalLayout,
+  } = usePersistentPanelLayout();
 
   useEffect(() => {
     const savedLayout = loadPanelLayoutState();
-    panelLayoutRef.current = savedLayout;
-    setHorizontalPanelSizes(savedLayout.horizontal);
-    setBusinessHorizontalPanelSizes(savedLayout.businessHorizontal);
-    setVerticalPanelSizes(savedLayout.vertical);
+    restoreLayout(savedLayout);
 
     const savedVisibility = loadPanelVisibilityState();
     setLeftSidebarCollapsed(savedVisibility.leftCollapsed);
@@ -852,7 +846,7 @@ export default function Page() {
     setIsFocusMode(savedVisibility.isFocusMode);
     setPresentationHideAllCellInputs(loadNotebookPresentationHideAllCellInputs());
     setHasLoadedPanelVisibilityState(true);
-  }, []);
+  }, [restoreLayout]);
 
   useEffect(() => {
     if (!hasLoadedPanelVisibilityState) return;
@@ -878,7 +872,7 @@ export default function Page() {
   useEffect(() => {
     if (!isHydrated || !hasLoadedPanelVisibilityState) return;
 
-    persistPanelLayoutRef.current = false;
+    setPanelLayoutPersistenceEnabled(false);
 
     if (leftPanelRef.current) {
       if (leftSidebarCollapsed) {
@@ -905,7 +899,7 @@ export default function Page() {
     }
 
     const frameId = window.requestAnimationFrame(() => {
-      persistPanelLayoutRef.current = true;
+      setPanelLayoutPersistenceEnabled(true);
     });
 
     return () => {
@@ -917,6 +911,7 @@ export default function Page() {
     isHydrated,
     leftSidebarCollapsed,
     rightSidebarCollapsed,
+    setPanelLayoutPersistenceEnabled,
   ]);
 
   /**
@@ -2595,52 +2590,6 @@ export default function Page() {
     setPresentationHideAllCellInputs((current) => !current);
   }, []);
 
-  const handleHorizontalLayout = React.useCallback(
-    (sizes: number[]) => {
-      if (sizes.length !== 3) return;
-      const next = [sizes[0], sizes[1], sizes[2]] as [number, number, number];
-      setHorizontalPanelSizes(next);
-      panelLayoutRef.current = {
-        ...panelLayoutRef.current,
-        horizontal: next,
-      };
-      if (!persistPanelLayoutRef.current) return;
-      savePanelLayoutState(panelLayoutRef.current);
-    },
-    [],
-  );
-
-  const handleVerticalLayout = React.useCallback(
-    (sizes: number[]) => {
-      if (sizes.length !== 2) return;
-      const next = [sizes[0], sizes[1]] as [number, number];
-      setVerticalPanelSizes(next);
-      panelLayoutRef.current = {
-        ...panelLayoutRef.current,
-        vertical: next,
-      };
-      if (!persistPanelLayoutRef.current) return;
-      savePanelLayoutState(panelLayoutRef.current);
-    },
-    [],
-  );
-
-  /** Stores the business experience editor/chat split when panels are resized. */
-  const handleBusinessHorizontalLayout = React.useCallback(
-    (sizes: number[]) => {
-      if (sizes.length !== 2) return;
-      const next = [sizes[0], sizes[1]] as [number, number];
-      setBusinessHorizontalPanelSizes(next);
-      panelLayoutRef.current = {
-        ...panelLayoutRef.current,
-        businessHorizontal: next,
-      };
-      if (!persistPanelLayoutRef.current) return;
-      savePanelLayoutState(panelLayoutRef.current);
-    },
-    [],
-  );
-
   const handleLeftCollapse = React.useCallback(() => {
     setLeftSidebarCollapsed(true);
     persistPanelVisibilityState({ leftCollapsed: true });
@@ -2989,10 +2938,10 @@ export default function Page() {
 
   const editorPanelDefaultSize = bottomSidebarCollapsed
     ? 100
-    : verticalPanelSizes[0];
+    : panelLayout.vertical[0];
   const terminalPanelDefaultSize = bottomSidebarCollapsed
     ? 0
-    : verticalPanelSizes[1];
+    : panelLayout.vertical[1];
   return (
     <OpenSettingsProvider>
       <OnboardingFlow />
@@ -3020,8 +2969,9 @@ export default function Page() {
                   executionCountRef={executionCountRef}
                   openDocumentSnapshots={openDocumentSnapshots}
                   currentFileOutsideWorkspace={currentFileOutsideWorkspace}
-                  panelSizes={businessHorizontalPanelSizes}
+                  panelSizes={panelLayout.businessHorizontal}
                   onPanelLayout={handleBusinessHorizontalLayout}
+                  onPanelResizeDragging={handleResizeDragging}
                   recentFilesOpen={open}
                   onRecentFilesOpenChange={setOpen}
                   onOpenKernelDropdown={
@@ -3032,6 +2982,7 @@ export default function Page() {
                   onStopKernel={handleStopKernel}
                   onToggleFocusMode={toggleFocusMode}
                   onOpenFile={handleFileSelect}
+                  onNavigateToLine={handleNavigateToLine}
                   onCloseFile={handleCloseFile}
                   canNavigateBack={canNavigateBackInEditor}
                   canNavigateForward={canNavigateForwardInEditor}
@@ -3070,7 +3021,7 @@ export default function Page() {
                 {/* Left Sidebar Panel */}
                 <ResizablePanel
                   ref={leftPanelRef}
-                  defaultSize={horizontalPanelSizes[0]}
+                  defaultSize={panelLayout.horizontal[0]}
                   minSize={10}
                   maxSize={40}
                   collapsible={true}
@@ -3120,10 +3071,13 @@ export default function Page() {
                   </div>
                 </ResizablePanel>
 
-                <ResizableHandle variant="sidebar" />
+                <ResizableHandle
+                  variant="sidebar"
+                  onDragging={handleResizeDragging}
+                />
 
                 {/* Main Content Panel */}
-                <ResizablePanel defaultSize={horizontalPanelSizes[1]} minSize={30}>
+                <ResizablePanel defaultSize={panelLayout.horizontal[1]} minSize={30}>
                   <ResizablePanelGroup
                     direction="vertical"
                     onLayout={handleVerticalLayout}
@@ -3329,7 +3283,10 @@ export default function Page() {
                       </div>
                     </ResizablePanel>
 
-                    <ResizableHandle className="bg-transparent border-none h-0 transition-all data-[panel-group-direction=vertical]:h-0" />
+                    <ResizableHandle
+                      className="bg-transparent border-none h-0 transition-all data-[panel-group-direction=vertical]:h-0"
+                      onDragging={handleResizeDragging}
+                    />
 
                     {/* Bottom Panel - Terminal */}
                     <ResizablePanel
@@ -3353,13 +3310,16 @@ export default function Page() {
                   </ResizablePanelGroup>
                 </ResizablePanel>
 
-                <ResizableHandle variant="sidebar" />
+                <ResizableHandle
+                  variant="sidebar"
+                  onDragging={handleResizeDragging}
+                />
 
                 {/* Right Sidebar Panel */}
                 <ResizablePanel
                   ref={rightPanelRef}
                   className="min-w-0 overflow-hidden"
-                  defaultSize={horizontalPanelSizes[2]}
+                  defaultSize={panelLayout.horizontal[2]}
                   minSize={10}
                   maxSize={40}
                   collapsible={true}
