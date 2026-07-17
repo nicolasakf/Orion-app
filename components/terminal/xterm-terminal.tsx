@@ -4,6 +4,8 @@ import { memo, useRef, useEffect } from "react";
 import type { ITheme } from "@xterm/xterm";
 import type { Terminal as JupyterTerminal } from "@jupyterlab/services";
 
+import { createAnimationFrameScheduler } from "@/lib/animation-frame-scheduler";
+
 /**
  * Terminal shell colors from theme `--background` and `--foreground`.
  * Sets `cursor` explicitly: xterm's default cursor is light and is invisible on light themes.
@@ -124,15 +126,19 @@ export const XTermTerminal = memo(function XTermTerminal({
       });
 
       // Auto-fit on container resize
-      const resizeObserver = new ResizeObserver(() => {
+      const fitScheduler = createAnimationFrameScheduler(() => {
         try {
           fitAddon.fit();
         } catch {
           // Ignore fit errors when container is hidden
         }
       });
+      const resizeObserver = new ResizeObserver(fitScheduler.schedule);
       resizeObserver.observe(containerRef.current);
-      cleanupFns.push(() => resizeObserver.disconnect());
+      cleanupFns.push(() => {
+        resizeObserver.disconnect();
+        fitScheduler.cancel();
+      });
     }
 
     init();

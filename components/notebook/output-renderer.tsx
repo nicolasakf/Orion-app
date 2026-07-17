@@ -7,6 +7,7 @@ import { useMemo, useState, useRef, useCallback, useEffect } from "react";
 import { OutputContextMenu } from "./output-context-menu";
 import { OutputFullScreenDialog } from "./output-full-screen-dialog";
 import { cn } from "@/lib/utils";
+import { retainShallowEqualState } from "@/lib/retain-shallow-equal-state";
 import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import {
   getDefaultMimeRegistry,
@@ -75,10 +76,13 @@ function CollapsibleOutputWrapper({
     const el = scrollRef.current;
     if (!el) return;
     const { scrollTop, scrollHeight, clientHeight } = el;
-    setScrollEdges({
+    const nextEdges = {
       top: scrollTop > 0,
       bottom: scrollTop + clientHeight < scrollHeight - 1,
-    });
+    };
+    setScrollEdges((currentEdges) =>
+      retainShallowEqualState(currentEdges, nextEdges),
+    );
   }, []);
 
   const handleResizeMouseDown = useCallback(
@@ -169,7 +173,12 @@ function CollapsibleOutputWrapper({
       if (shouldCollapse) {
         updateScrollEdges();
       } else {
-        setScrollEdges({ top: false, bottom: false });
+        setScrollEdges((currentEdges) =>
+          retainShallowEqualState(currentEdges, {
+            top: false,
+            bottom: false,
+          }),
+        );
       }
     };
 

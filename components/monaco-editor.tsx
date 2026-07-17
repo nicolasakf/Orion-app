@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { useOrionSetting } from "@/hooks/use-orion-settings";
 import { useTheme } from "next-themes";
 import { registerPythonLanguageWithMultilineFStringFix } from "@/lib/editor/python-monaco-tokenizer";
+import { createAnimationFrameScheduler } from "@/lib/animation-frame-scheduler";
 
 const MonacoReactEditor = dynamic<EditorProps>(
   () => import("@monaco-editor/react").then((mod) => mod.Editor),
@@ -434,14 +435,14 @@ export function MonacoEditor({
       return;
 
     const editor = editorInstanceRef.current;
-    const ro = new ResizeObserver(() => {
-      window.requestAnimationFrame(() => {
-        editor.layout();
-      });
-    });
+    const layoutScheduler = createAnimationFrameScheduler(() =>
+      editor.layout(),
+    );
+    const ro = new ResizeObserver(layoutScheduler.schedule);
     ro.observe(editorContainerRef.current);
     return () => {
       ro.disconnect();
+      layoutScheduler.cancel();
     };
   }, [isEditorReady]);
 

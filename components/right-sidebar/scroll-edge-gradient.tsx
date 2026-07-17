@@ -7,6 +7,7 @@
 
 import * as React from "react";
 
+import { retainShallowEqualState } from "@/lib/retain-shallow-equal-state";
 import { cn } from "@/lib/utils";
 
 export type ScrollEdgeState = {
@@ -71,17 +72,22 @@ export function useScrollEdgeIndicators(
     const el = scrollRef.current;
     if (!el) return;
     const { scrollTop, scrollLeft, scrollHeight, clientHeight, scrollWidth, clientWidth } = el;
-    setScrollEdges({
+    const nextEdges: ScrollEdgeState = {
       top: scrollTop > 0,
       bottom: scrollTop + clientHeight < scrollHeight - 1,
       left: scrollLeft > 0,
       right: scrollLeft + clientWidth < scrollWidth - 1,
-    });
+    };
+    setScrollEdges((currentEdges) =>
+      retainShallowEqualState(currentEdges, nextEdges),
+    );
   }, []);
 
   React.useLayoutEffect(() => {
     if (!active) {
-      setScrollEdges(INITIAL_EDGES);
+      setScrollEdges((currentEdges) =>
+        retainShallowEqualState(currentEdges, INITIAL_EDGES),
+      );
       return;
     }
 

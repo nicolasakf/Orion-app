@@ -74,6 +74,7 @@ import {
   ArrowDown as ArrowDownIcon,
 } from "@/components/common/keyboard-icons";
 import { cn } from "@/lib/utils";
+import { retainShallowEqualState } from "@/lib/retain-shallow-equal-state";
 import { FileIcon } from "@/components/common/file-icon";
 import type { OnMount } from "@monaco-editor/react";
 import type {
@@ -1171,10 +1172,13 @@ function NotebookCellComponent({
     const el = outputContentRef.current;
     if (!el) return;
     setOutputScrollHeight(el.scrollHeight);
-    setOutputScrollEdges({
+    const nextEdges = {
       top: el.scrollTop > 0,
       bottom: el.scrollTop + el.clientHeight < el.scrollHeight - 1,
-    });
+    };
+    setOutputScrollEdges((currentEdges) =>
+      retainShallowEqualState(currentEdges, nextEdges),
+    );
   }, []);
 
   useEffect(() => {
@@ -1182,7 +1186,12 @@ function NotebookCellComponent({
       !isOutputHidden && !!cell.outputs && cell.outputs.length > 0;
     if (!hasVisibleOutputs) {
       setOutputScrollHeight(0);
-      setOutputScrollEdges({ top: false, bottom: false });
+      setOutputScrollEdges((currentEdges) =>
+        retainShallowEqualState(currentEdges, {
+          top: false,
+          bottom: false,
+        }),
+      );
       return;
     }
 

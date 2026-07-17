@@ -11,7 +11,7 @@
  */
 
 import * as React from "react";
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState } from "react";
 import { Bot, Loader2, Ban, Check, X, ChevronDown, ChevronRight, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -25,6 +25,7 @@ import {
   delegateResultTmpNotebookPath,
   delegateResultToDisplayText,
 } from "./delegate-result";
+import { useScrollEdgeIndicators } from "./scroll-edge-gradient";
 
 // ============================================================================
 // Types
@@ -159,25 +160,6 @@ export function DelegateInvocationCard({
   conversationReference,
 }: DelegateInvocationCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const [scrollEdges, setScrollEdges] = useState({
-    top: false,
-    bottom: false,
-    left: false,
-    right: false,
-  });
-
-  const updateScrollEdges = useCallback(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const { scrollTop, scrollLeft, scrollHeight, clientHeight, scrollWidth, clientWidth } = el;
-    setScrollEdges({
-      top: scrollTop > 0,
-      bottom: scrollTop + clientHeight < scrollHeight - 1,
-      left: scrollLeft > 0,
-      right: scrollLeft + clientWidth < scrollWidth - 1,
-    });
-  }, []);
 
   const isPending = isPendingState(state);
   const isCancelled = resultErrorCode(result) === "cancelled_by_user";
@@ -188,20 +170,10 @@ export function DelegateInvocationCard({
   const isOpenable = !!onOpenSubchat;
   const resolvedReportPath = reportPath ?? delegateResultTmpNotebookPath(result);
   const canShowReport = !!resolvedReportPath && !!onShowReport;
-
-  useEffect(() => {
-    if (!isExpanded || !resultText) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    updateScrollEdges();
-    el.addEventListener("scroll", updateScrollEdges);
-    const ro = new ResizeObserver(updateScrollEdges);
-    ro.observe(el);
-    return () => {
-      el.removeEventListener("scroll", updateScrollEdges);
-      ro.disconnect();
-    };
-  }, [isExpanded, resultText, updateScrollEdges]);
+  const { scrollRef, scrollEdges } = useScrollEdgeIndicators({
+    active: isExpanded && Boolean(resultText),
+    contentKey: resultText,
+  });
 
   return (
     <div
