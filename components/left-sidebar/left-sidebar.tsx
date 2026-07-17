@@ -313,6 +313,8 @@ export function LeftSidebar({
   isTerminalPanelOpen = false,
   mobileFilesOnly = false,
   bareFilesOnly = false,
+  expandedFolderPaths,
+  onFolderExpandedChange,
   className,
   ...props
 }: {
@@ -362,6 +364,10 @@ export function LeftSidebar({
   mobileFilesOnly?: boolean;
   /** When true, renders only the file browser content without accordion/card chrome. */
   bareFilesOnly?: boolean;
+  /** Folder paths restored as expanded when the file tree mounts. */
+  expandedFolderPaths?: readonly string[];
+  /** Receives folder expansion changes from the file tree. */
+  onFolderExpandedChange?: (path: string, isExpanded: boolean) => void;
   className?: string;
 } & React.HTMLAttributes<HTMLDivElement>) {
   const { effectiveSettings } = useOrionSettings();
@@ -725,7 +731,7 @@ export function LeftSidebar({
         event.key.toLowerCase() === "k";
 
       if (!isSearchShortcut) return;
-      if (mobileFilesOnly) return;
+      if (mobileFilesOnly || bareFilesOnly) return;
 
       event.preventDefault();
       activateSearchOnlyView();
@@ -734,7 +740,7 @@ export function LeftSidebar({
     // Capture phase ensures this works even when editors stop propagation.
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [activateSearchOnlyView, mobileFilesOnly]);
+  }, [activateSearchOnlyView, bareFilesOnly, mobileFilesOnly]);
 
   useEffect(() => {
     const handleSelectionUpdate = (event: Event) => {
@@ -818,6 +824,8 @@ export function LeftSidebar({
           items={fileTreeData}
           showHiddenFiles={showHiddenFiles}
           defaultCollapsed={true}
+          expandedFolderPaths={expandedFolderPaths}
+          onFolderExpandedChange={onFolderExpandedChange}
           contentsManager={kernelForFiles.getContentsManager()}
           onFileSelect={onFileSelect}
           onTreeChange={refreshFolder}

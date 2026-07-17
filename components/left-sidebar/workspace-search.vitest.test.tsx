@@ -121,6 +121,10 @@ function createKernelServiceWithFileChangeSignal(): {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
   workspaceSearchMocks.clear.mockReset();
   workspaceSearchMocks.clearPath.mockReset();
   workspaceSearchMocks.searchWorkspace.mockReset();
@@ -132,6 +136,63 @@ afterEach(() => {
 });
 
 describe("WorkspaceSearch", () => {
+  it("supports highlighted keyboard traversal, Enter selection, and mouse synchronization", async () => {
+    const onFileSelect = vi.fn();
+    const onNavigateToLine = vi.fn();
+    workspaceSearchMocks.searchWorkspace.mockResolvedValue({
+      fileMatches: ["alpha.txt", "beta.txt"],
+      contentMatches: new Map([
+        ["notes.txt", [{ line: 4, content: "needle in content" }]],
+      ]),
+      contentMatchCount: 1,
+      fileMatchesTruncated: false,
+      contentMatchesTruncated: false,
+      errors: [],
+    } satisfies WorkspaceSearchResult);
+
+    render(
+      <WorkspaceSearch
+        workspaceDirectory="project"
+        kernelService={createKernelService()}
+        keyboardNavigation
+        onFileSelect={onFileSelect}
+        onNavigateToLine={onNavigateToLine}
+      />
+    );
+
+    const input = screen.getByPlaceholderText("Search files and content");
+    input.focus();
+    fireEvent.change(input, { target: { value: "needle" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    const alphaButton = screen.getByRole("button", { name: "alpha.txt" });
+    const betaButton = screen.getByRole("button", { name: "beta.txt" });
+    expect(alphaButton).toHaveAttribute("aria-current", "true");
+    expect(input).toHaveFocus();
+
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(betaButton).toHaveAttribute("aria-current", "true");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onFileSelect).toHaveBeenCalledWith({
+      name: "beta.txt",
+      path: "project/beta.txt",
+    });
+
+    const contentMatchButton = screen.getByRole("button", {
+      name: /4.*needle.*in content/,
+    });
+    fireEvent.mouseEnter(contentMatchButton);
+    expect(contentMatchButton).toHaveAttribute("aria-current", "true");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onNavigateToLine).toHaveBeenCalledWith(
+      { name: "notes.txt", path: "project/notes.txt" },
+      4
+    );
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
+  });
+
   it("keeps a newer query result when an earlier request finishes later", async () => {
     const first = createDeferred<WorkspaceSearchResult>();
     const second = createDeferred<WorkspaceSearchResult>();

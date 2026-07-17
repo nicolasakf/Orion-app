@@ -4,6 +4,7 @@ import type { ContentsManager } from "@jupyterlab/services";
 import {
   WorkspaceSearchService,
   WORKSPACE_SEARCH_MAX_CANDIDATE_FILES,
+  WORKSPACE_SEARCH_MAX_CONTENT_MATCHES,
   WORKSPACE_SEARCH_MAX_TEXT_FILE_BYTES,
   WORKSPACE_SEARCH_MAX_TOTAL_TEXT_BYTES,
 } from "@/lib/workspace/workspace-search-service";
@@ -50,9 +51,11 @@ function entry(
 /** Creates a ContentsManager test double and records every requested path. */
 function createContentsFixture(
   models: Record<string, FixtureModel>,
-  failedPaths: ReadonlySet<string> = new Set()
+  failedPaths: ReadonlySet<string> = new Set(),
+  beforeGet?: (path: string) => void | Promise<void>
 ): ContentsFixture {
   const get = vi.fn(async (path: string) => {
+    await beforeGet?.(path);
     if (failedPaths.has(path)) {
       throw new Error(`Failed to read ${path}`);
     }
@@ -183,6 +186,138 @@ describe("WorkspaceSearchService", () => {
     expect(result.fileMatches).toEqual(["src/foo.ts"]);
   });
 
+  it("orders filename and path matches by predictable relevance tiers", async () => {
+    const fixture = createContentsFixture({
+      project: directory([
+        entry("archive", "project/archive", "directory"),
+        entry("reports", "project/reports", "directory"),
+        entry("annual-report.txt", "project/annual-report.txt", "file", 4),
+        entry("report", "project/report", "file", 4),
+        entry("report.csv", "project/report.csv", "file", 4),
+        entry("report-summary.txt", "project/report-summary.txt", "file", 4),
+      ]),
+      "project/archive": directory([
+        entry("reports", "project/archive/reports", "directory"),
+      ]),
+      "project/archive/reports": directory([
+        entry("notes.txt", "project/archive/reports/notes.txt", "file", 4),
+      ]),
+      "project/reports": directory([
+        entry("notes.txt", "project/reports/notes.txt", "file", 4),
+      ]),
+      "project/annual-report.txt": textFile("none"),
+      "project/report": textFile("none"),
+      "project/report.csv": textFile("none"),
+      "project/report-summary.txt": textFile("none"),
+      "project/archive/reports/notes.txt": textFile("none"),
+      "project/reports/notes.txt": textFile("none"),
+    });
+
+    const result = await new WorkspaceSearchService(
+      fixture.manager
+    ).searchWorkspace({
+      rootPath: "project",
+      query: "report",
+      caseSensitive: false,
+    });
+
+    expect(result.fileMatches).toEqual([
+      "report",
+      "report.csv",
+      "report-summary.txt",
+      "annual-report.txt",
+      "reports/notes.txt",
+      "archive/reports/notes.txt",
+    ]);
+  });
+
+  it("uses match position, path depth, path length, and alphabetic order as tie-breakers", async () => {
+    const fixture = createContentsFixture({
+      project: directory([
+        entry("deep", "project/deep", "directory"),
+        entry("needle-b.txt", "project/needle-b.txt", "file", 4),
+        entry("needle-a.txt", "project/needle-a.txt", "file", 4),
+        entry("xneedle.txt", "project/xneedle.txt", "file", 4),
+        entry("xxneedle.txt", "project/xxneedle.txt", "file", 4),
+      ]),
+      "project/deep": directory([
+        entry("needle-a.txt", "project/deep/needle-a.txt", "file", 4),
+      ]),
+      "project/needle-b.txt": textFile("none"),
+      "project/needle-a.txt": textFile("none"),
+      "project/xneedle.txt": textFile("none"),
+      "project/xxneedle.txt": textFile("none"),
+      "project/deep/needle-a.txt": textFile("none"),
+    });
+
+    const result = await new WorkspaceSearchService(
+      fixture.manager
+    ).searchWorkspace({
+      rootPath: "project",
+      query: "needle",
+      caseSensitive: true,
+    });
+
+    expect(result.fileMatches).toEqual([
+      "needle-a.txt",
+      "needle-b.txt",
+      "deep/needle-a.txt",
+      "xneedle.txt",
+      "xxneedle.txt",
+    ]);
+  });
+
+  it("ranks all filename matches before retaining the best fifty", async () => {
+    const entries: FixtureEntry[] = [];
+    const models: Record<string, FixtureModel> = {};
+    for (let index = 0; index < 50; index += 1) {
+      const name = `a-needle-${String(index).padStart(2, "0")}.png`;
+      entries.push(entry(name, `project/${name}`, "file", 1));
+    }
+    entries.push(entry("needle.png", "project/needle.png", "file", 1));
+    models.project = directory(entries);
+
+    const result = await new WorkspaceSearchService(
+      createContentsFixture(models).manager
+    ).searchWorkspace({
+      rootPath: "project",
+      query: "needle",
+      caseSensitive: true,
+    });
+
+    expect(result.fileMatches).toHaveLength(50);
+    expect(result.fileMatches[0]).toBe("needle.png");
+    expect(result.fileMatches).not.toContain("a-needle-49.png");
+    expect(result.fileMatchesTruncated).toBe(true);
+  });
+
+  it("orders content-result files by match count and earliest matching line", async () => {
+    const fixture = createContentsFixture({
+      project: directory([
+        entry("alpha.txt", "project/alpha.txt", "file", 20),
+        entry("beta.txt", "project/beta.txt", "file", 20),
+        entry("gamma.txt", "project/gamma.txt", "file", 20),
+      ]),
+      "project/alpha.txt": textFile("none\nneedle"),
+      "project/beta.txt": textFile("needle\nneedle"),
+      "project/gamma.txt": textFile("none\nnone\nneedle\nneedle"),
+    });
+
+    const result = await new WorkspaceSearchService(
+      fixture.manager
+    ).searchWorkspace({
+      rootPath: "project",
+      query: "needle",
+      caseSensitive: true,
+    });
+
+    expect(Array.from(result.contentMatches.keys())).toEqual([
+      "beta.txt",
+      "gamma.txt",
+      "alpha.txt",
+    ]);
+  });
+
   it("caps filename and content output at fifty results and trims previews", async () => {
     const entries: FixtureEntry[] = [];
     const models: Record<string, FixtureModel> = {};
@@ -211,6 +346,77 @@ describe("WorkspaceSearchService", () => {
     expect(
       Array.from(result.contentMatches.values())[0]?.[0]?.content.length
     ).toBe(150);
+  });
+
+  it("applies the content cap in candidate order regardless of read timing", async () => {
+    let releaseFirstRead: (() => void) | undefined;
+    const firstReadGate = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve;
+    });
+    const manyMatches = Array.from(
+      { length: WORKSPACE_SEARCH_MAX_CONTENT_MATCHES },
+      () => "needle",
+    ).join("\n");
+    const fixture = createContentsFixture(
+      {
+        project: directory([
+          entry("a.txt", "project/a.txt", "file", 6),
+          entry("b.txt", "project/b.txt", "file", manyMatches.length),
+        ]),
+        "project/a.txt": textFile("needle"),
+        "project/b.txt": textFile(manyMatches),
+      },
+      new Set(),
+      async (path) => {
+        if (path === "project/a.txt") await firstReadGate;
+      },
+    );
+
+    const pendingResult = new WorkspaceSearchService(
+      fixture.manager,
+    ).searchWorkspace({
+      rootPath: "project",
+      query: "needle",
+      caseSensitive: true,
+    });
+    await vi.waitFor(() => {
+      expect(requestCount(fixture.get, "project/b.txt")).toBe(1);
+    });
+    releaseFirstRead?.();
+    const result = await pendingResult;
+
+    expect(result.contentMatches.get("a.txt")).toEqual([
+      { line: 1, content: "needle" },
+    ]);
+    expect(result.contentMatches.get("b.txt")).toHaveLength(
+      WORKSPACE_SEARCH_MAX_CONTENT_MATCHES - 1,
+    );
+    expect(result.contentMatchCount).toBe(WORKSPACE_SEARCH_MAX_CONTENT_MATCHES);
+    expect(result.contentMatchesTruncated).toBe(true);
+  });
+
+  it("does not report truncation when exactly fifty content matches exist", async () => {
+    const content = Array.from(
+      { length: WORKSPACE_SEARCH_MAX_CONTENT_MATCHES },
+      () => "needle",
+    ).join("\n");
+    const fixture = createContentsFixture({
+      project: directory([
+        entry("exact.txt", "project/exact.txt", "file", content.length),
+      ]),
+      "project/exact.txt": textFile(content),
+    });
+
+    const result = await new WorkspaceSearchService(
+      fixture.manager,
+    ).searchWorkspace({
+      rootPath: "project",
+      query: "needle",
+      caseSensitive: true,
+    });
+
+    expect(result.contentMatchCount).toBe(WORKSPACE_SEARCH_MAX_CONTENT_MATCHES);
+    expect(result.contentMatchesTruncated).toBe(false);
   });
 
   it("marks per-file, total-text, and candidate scan safety limits as truncated", async () => {

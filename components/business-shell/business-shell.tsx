@@ -10,13 +10,13 @@ import {
   FileText,
   Folder,
   FolderSearch,
-  Loader2,
   MoreHorizontal,
   Pencil,
   Pin,
   PlugZap,
   Plus,
   RefreshCw,
+  Search,
   Share2,
   Square,
   X,
@@ -24,6 +24,11 @@ import {
 import { toast } from "sonner";
 
 import { Editor } from "@/components/editor";
+import {
+  BusinessWorkspaceSearchDialog,
+  isWorkspaceSearchShortcut,
+} from "@/components/business-shell/business-workspace-search-dialog";
+import { CmdOrCtrl } from "@/components/common/keyboard-icons";
 import { LeftSidebar } from "@/components/left-sidebar/left-sidebar";
 import { RecentFilesCombobox } from "@/components/recent-files-combobox";
 import { RightSidebar } from "@/components/right-sidebar/right-sidebar";
@@ -249,12 +254,14 @@ interface BusinessShellProps {
   currentFileOutsideWorkspace: boolean;
   panelSizes: [number, number];
   onPanelLayout: (sizes: number[]) => void;
+  onPanelResizeDragging: (isDragging: boolean) => void;
   recentFilesOpen: boolean;
   onRecentFilesOpenChange: (open: boolean) => void;
   onOpenKernelDropdown: () => void;
   onStopKernel: () => void | Promise<void>;
   onToggleFocusMode: () => void;
   onOpenFile: (file: BusinessShellFile) => void;
+  onNavigateToLine: (file: BusinessShellFile, line: number) => void;
   onCloseFile: (event: React.MouseEvent) => void;
   canNavigateBack: boolean;
   canNavigateForward: boolean;
@@ -316,12 +323,14 @@ export function BusinessShell({
   currentFileOutsideWorkspace,
   panelSizes,
   onPanelLayout,
+  onPanelResizeDragging,
   recentFilesOpen,
   onRecentFilesOpenChange,
   onOpenKernelDropdown,
   onStopKernel,
   onToggleFocusMode,
   onOpenFile,
+  onNavigateToLine,
   onCloseFile,
   canNavigateBack,
   canNavigateForward,
@@ -354,6 +363,10 @@ export function BusinessShell({
     setPresentationHideAllCellInputs,
   ] = React.useState(false);
   const [fileTreePopoverOpen, setFileTreePopoverOpen] = React.useState(false);
+  const [workspaceSearchDialogOpen, setWorkspaceSearchDialogOpen] =
+    React.useState(false);
+  const [fileTreeExpandedFolderPaths, setFileTreeExpandedFolderPaths] =
+    React.useState<string[]>([]);
   const [businessEditMode, setBusinessEditMode] = React.useState(false);
   const [analysisName, setAnalysisName] = React.useState(defaultAnalysisName);
   const [isCreatingAnalysis, setIsCreatingAnalysis] = React.useState(false);
@@ -421,12 +434,39 @@ export function BusinessShell({
     setBusinessEditMode(false);
   }, [currentFile.path]);
 
+  // Folder paths are relative to a workspace, so do not carry them into a new one.
+  React.useEffect(() => {
+    setFileTreeExpandedFolderPaths([]);
+  }, [workspaceDirectory]);
+
+  /** Opens the centered workspace search and dismisses the transient file tree. */
+  const openWorkspaceSearchDialog = React.useCallback(() => {
+    setFileTreePopoverOpen(false);
+    setWorkspaceSearchDialogOpen(true);
+  }, []);
+
+  React.useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isWorkspaceSearchShortcut(event)) return;
+
+      event.preventDefault();
+      openWorkspaceSearchDialog();
+    };
+
+    // Capture phase keeps the shortcut available while Monaco or another editor has focus.
+    window.addEventListener("keydown", handleKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown, { capture: true });
+    };
+  }, [openWorkspaceSearchDialog]);
+
   const isNotebookOpen =
     currentFile.openAsText !== true && currentFile.path.toLowerCase().endsWith(".ipynb");
   const canRefreshReport =
     isNotebookOpen &&
     Boolean(currentKernel) &&
-    kernelStatus === "connected" &&
+    kernelStatus !== "disconnected" &&
+    kernelStatus !== "connecting" &&
     !isRunning;
   const canControlKernel =
     Boolean(currentKernel) &&
@@ -502,6 +542,21 @@ export function BusinessShell({
       onOpenFile(file);
     },
     [onOpenFile],
+  );
+
+  /** Stores the Browse Files tree expansion state outside the transient popover. */
+  const handleFileTreeFolderExpandedChange = React.useCallback(
+    (path: string, isExpanded: boolean) => {
+      setFileTreeExpandedFolderPaths((currentPaths) => {
+        const isAlreadyExpanded = currentPaths.includes(path);
+        if (isExpanded === isAlreadyExpanded) return currentPaths;
+
+        return isExpanded
+          ? [...currentPaths, path]
+          : currentPaths.filter((currentPath) => currentPath !== path);
+      });
+    },
+    []
   );
 
   /** Copies the active Jupyter-relative workspace target and reports the result. */
@@ -654,10 +709,22 @@ export function BusinessShell({
                           onWorkspacePathDeleted={onWorkspacePathDeleted}
                           onOpenKernelDropdown={onOpenKernelDropdown}
                           bareFilesOnly
+                          expandedFolderPaths={fileTreeExpandedFolderPaths}
+                          onFolderExpandedChange={handleFileTreeFolderExpandedChange}
                           className="h-full bg-popover"
                         />
                       </PopoverContent>
                     </Popover>
+                    <ToolbarButton
+                      type="button"
+                      toolTipLabel="Search workspace"
+                      toolTipShortcut={[[CmdOrCtrl, "K"]]}
+                      aria-label="Search workspace files"
+                      className="shrink-0"
+                      onClick={openWorkspaceSearchDialog}
+                    >
+                      <Search className="h-4 w-4" />
+                    </ToolbarButton>
                     <div
                       aria-hidden="true"
                       className="electron-window-drag h-10 min-w-8 flex-1"
@@ -671,7 +738,7 @@ export function BusinessShell({
                             type="button"
                             variant="destructive"
                             size="sm"
-                            className="h-8 gap-1.5"
+                            className="h-8 w-[88px] gap-1.5"
                             onClick={() => void onStopKernel()}
                             disabled={!canControlKernel}
                             aria-label="Stop refresh"
@@ -680,25 +747,21 @@ export function BusinessShell({
                             <Square className="h-4 w-4" />
                             Stop
                           </Button>
-                        ) : null}
-
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 gap-1.5"
-                          onClick={dispatchNotebookRefresh}
-                          disabled={!canRefreshReport}
-                          aria-label="Refresh report"
-                          title="Update report with latest data and settings"
-                        >
-                          {isRunning ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 w-[88px] gap-1.5"
+                            onClick={dispatchNotebookRefresh}
+                            disabled={!canRefreshReport}
+                            aria-label="Refresh report"
+                            title="Update report with latest data and settings"
+                          >
                             <RefreshCw className="h-4 w-4" />
-                          )}
-                          Refresh
-                        </Button>
+                            Refresh
+                          </Button>
+                        )}
 
                         <Button
                           type="button"
@@ -912,7 +975,10 @@ export function BusinessShell({
           </div>
         </ResizablePanel>
 
-        <ResizableHandle variant="sidebar" />
+        <ResizableHandle
+          variant="sidebar"
+          onDragging={onPanelResizeDragging}
+        />
 
         <ResizablePanel defaultSize={panelSizes[1]} minSize={35}>
           <AssistantProvider
@@ -936,6 +1002,15 @@ export function BusinessShell({
           </AssistantProvider>
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      <BusinessWorkspaceSearchDialog
+        open={workspaceSearchDialogOpen}
+        onOpenChange={setWorkspaceSearchDialogOpen}
+        workspaceDirectory={workspaceDirectory}
+        kernelService={kernelService}
+        onFileSelect={onOpenFile}
+        onNavigateToLine={onNavigateToLine}
+      />
 
       <Dialog open={newAnalysisDialogOpen} onOpenChange={setNewAnalysisDialogOpen}>
         <DialogContent className="sm:max-w-md">

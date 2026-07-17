@@ -230,10 +230,94 @@ function getSearchableText(model: Contents.IModel): string | null {
   return null;
 }
 
-/** Sorts result paths predictably regardless of Contents request completion order. */
+/** Sorts candidate paths predictably before the bounded content scan begins. */
 function sortByPath<T extends { relativePath: string }>(items: readonly T[]): T[] {
   return [...items].sort((left, right) =>
     left.relativePath.localeCompare(right.relativePath)
+  );
+}
+
+/** Returns a filename without its final extension for exact stem matching. */
+function getFileStem(name: string): string {
+  const lastDot = name.lastIndexOf(".");
+  return lastDot > 0 ? name.slice(0, lastDot) : name;
+}
+
+/** Returns the number of path segments in a normalized relative path. */
+function getPathDepth(path: string): number {
+  return path.split("/").filter(Boolean).length;
+}
+
+interface FileMatchRelevance {
+  tier: number;
+  matchIndex: number;
+}
+
+/** Calculates the deterministic relevance tier for one literal file match. */
+function getFileMatchRelevance(
+  candidate: WorkspaceFileCandidate,
+  query: string,
+  caseSensitive: boolean
+): FileMatchRelevance {
+  const normalize = (value: string) =>
+    caseSensitive ? value : value.toLowerCase();
+  const needle = normalize(query);
+  const name = normalize(candidate.name);
+  const stem = normalize(getFileStem(candidate.name));
+  const relativePath = normalize(candidate.relativePath);
+
+  if (name === needle || stem === needle || relativePath === needle) {
+    return { tier: 0, matchIndex: 0 };
+  }
+  if (name.startsWith(needle)) {
+    return { tier: 1, matchIndex: 0 };
+  }
+
+  const nameMatchIndex = name.indexOf(needle);
+  if (nameMatchIndex >= 0) {
+    return { tier: 2, matchIndex: nameMatchIndex };
+  }
+  if (relativePath.startsWith(needle)) {
+    return { tier: 3, matchIndex: 0 };
+  }
+
+  return {
+    tier: 4,
+    matchIndex: Math.max(0, relativePath.indexOf(needle)),
+  };
+}
+
+/** Orders literal file matches by relevance with stable, predictable tie-breakers. */
+function compareFileMatchRelevance(
+  left: WorkspaceFileCandidate,
+  right: WorkspaceFileCandidate,
+  query: string,
+  caseSensitive: boolean
+): number {
+  const leftRelevance = getFileMatchRelevance(left, query, caseSensitive);
+  const rightRelevance = getFileMatchRelevance(right, query, caseSensitive);
+
+  return (
+    leftRelevance.tier - rightRelevance.tier ||
+    leftRelevance.matchIndex - rightRelevance.matchIndex ||
+    getPathDepth(left.relativePath) - getPathDepth(right.relativePath) ||
+    left.relativePath.length - right.relativePath.length ||
+    left.relativePath.localeCompare(right.relativePath)
+  );
+}
+
+/** Orders content-result files using the relevance available within the bounded scan. */
+function compareContentMatches(
+  [leftPath, leftMatches]: [string, WorkspaceSearchContentMatch[]],
+  [rightPath, rightMatches]: [string, WorkspaceSearchContentMatch[]]
+): number {
+  return (
+    rightMatches.length - leftMatches.length ||
+    (leftMatches[0]?.line ?? Number.MAX_SAFE_INTEGER) -
+      (rightMatches[0]?.line ?? Number.MAX_SAFE_INTEGER) ||
+    getPathDepth(leftPath) - getPathDepth(rightPath) ||
+    leftPath.length - rightPath.length ||
+    leftPath.localeCompare(rightPath)
   );
 }
 
@@ -316,17 +400,25 @@ export class WorkspaceSearchService {
     const enumeration = await this.enumerateCandidates(rootPath, errors);
     const candidates = sortByPath(enumeration.candidates);
 
-    const fileMatches: string[] = [];
-    let fileMatchesTruncated = enumeration.truncated;
-    for (const candidate of candidates) {
-      if (!matcher(candidate.name) && !matcher(candidate.relativePath)) continue;
-
-      fileMatches.push(candidate.relativePath);
-      if (fileMatches.length >= WORKSPACE_SEARCH_MAX_FILE_MATCHES) {
-        fileMatchesTruncated = true;
-        break;
-      }
-    }
+    const rankedFileCandidates = candidates
+      .filter(
+        (candidate) =>
+          matcher(candidate.name) || matcher(candidate.relativePath)
+      )
+      .sort((left, right) =>
+        compareFileMatchRelevance(
+          left,
+          right,
+          request.query,
+          request.caseSensitive
+        )
+      );
+    const fileMatches = rankedFileCandidates
+      .slice(0, WORKSPACE_SEARCH_MAX_FILE_MATCHES)
+      .map((candidate) => candidate.relativePath);
+    const fileMatchesTruncated =
+      enumeration.truncated ||
+      rankedFileCandidates.length > WORKSPACE_SEARCH_MAX_FILE_MATCHES;
 
     const contentSearch = await this.searchFileContents(candidates, matcher, {
       truncated: enumeration.truncated,
@@ -432,102 +524,97 @@ export class WorkspaceSearchService {
     truncated: boolean;
   }> {
     const matchesByPath = new Map<string, WorkspaceSearchContentMatch[]>();
-    let nextCandidateIndex = 0;
     let totalTextBytes = 0;
     let matchCount = 0;
     let truncated = state.truncated;
     let stopped = false;
 
-    const worker = async (): Promise<void> => {
-      while (!stopped) {
-        const candidate = candidates[nextCandidateIndex];
-        nextCandidateIndex += 1;
-        if (!candidate) return;
+    for (
+      let batchStart = 0;
+      batchStart < candidates.length && !stopped;
+      batchStart += WORKSPACE_SEARCH_MAX_CONCURRENT_REQUESTS
+    ) {
+      const batch = candidates.slice(
+        batchStart,
+        batchStart + WORKSPACE_SEARCH_MAX_CONCURRENT_REQUESTS
+      );
+      const reads = await Promise.all(
+        batch.map(async (candidate) => {
+          if (this.binaryExtensions.has(getExtension(candidate.name))) {
+            return { candidate, outcome: "skip" as const };
+          }
+          if (
+            candidate.size !== undefined &&
+            candidate.size > WORKSPACE_SEARCH_MAX_TEXT_FILE_BYTES
+          ) {
+            return { candidate, outcome: "too-large" as const };
+          }
+          try {
+            return {
+              candidate,
+              outcome: "read" as const,
+              result: await this.getCachedTextFile(candidate.path),
+            };
+          } catch {
+            return { candidate, outcome: "error" as const };
+          }
+        })
+      );
 
-        if (this.binaryExtensions.has(getExtension(candidate.name))) continue;
-        if (
-          candidate.size !== undefined &&
-          candidate.size > WORKSPACE_SEARCH_MAX_TEXT_FILE_BYTES
-        ) {
-          truncated = true;
-          continue;
-        }
-
-        let readResult: TextFileReadResult;
-        try {
-          readResult = await this.getCachedTextFile(candidate.path);
-        } catch {
+      // Promise.all preserves candidate order, so shared budgets are deterministic
+      // even when individual Contents API reads finish in a different order.
+      for (const read of reads) {
+        const { candidate } = read;
+        if (read.outcome === "skip") continue;
+        if (read.outcome === "error") {
           state.errors.push({ path: candidate.path, operation: "read-file" });
           continue;
         }
-
-        if (stopped) return;
-        if (readResult.kind === "too-large") {
+        if (read.outcome === "too-large" || read.result.kind === "too-large") {
           truncated = true;
           continue;
         }
-        if (readResult.kind === "not-text") continue;
+        if (read.result.kind === "not-text") continue;
 
         if (
-          totalTextBytes + readResult.value.byteLength >
+          totalTextBytes + read.result.value.byteLength >
           WORKSPACE_SEARCH_MAX_TOTAL_TEXT_BYTES
         ) {
           truncated = true;
           stopped = true;
-          return;
+          break;
         }
 
-        totalTextBytes += readResult.value.byteLength;
+        totalTextBytes += read.result.value.byteLength;
         const fileMatches: WorkspaceSearchContentMatch[] = [];
-        const lines = readResult.value.content.split(/\r?\n/);
+        const lines = read.result.value.content.split(/\r?\n/);
 
         for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
           const line = lines[lineIndex] ?? "";
           if (!matcher(line)) continue;
+          if (matchCount >= WORKSPACE_SEARCH_MAX_CONTENT_MATCHES) {
+            truncated = true;
+            stopped = true;
+            break;
+          }
 
           fileMatches.push({
             line: lineIndex + 1,
             content: line.slice(0, WORKSPACE_SEARCH_MAX_LINE_PREVIEW_CHARS),
           });
           matchCount += 1;
-
-          if (matchCount >= WORKSPACE_SEARCH_MAX_CONTENT_MATCHES) {
-            truncated = true;
-            stopped = true;
-            break;
-          }
         }
 
         if (fileMatches.length > 0) {
           matchesByPath.set(candidate.relativePath, fileMatches);
         }
-        if (stopped) return;
-
-        if (totalTextBytes >= WORKSPACE_SEARCH_MAX_TOTAL_TEXT_BYTES) {
-          truncated = true;
-          stopped = true;
-          return;
-        }
+        if (stopped) break;
       }
-    };
-
-    await Promise.all(
-      Array.from(
-        {
-          length: Math.min(
-            WORKSPACE_SEARCH_MAX_CONCURRENT_REQUESTS,
-            candidates.length
-          ),
-        },
-        () => worker()
-      )
-    );
+    }
 
     return {
       matches: new Map(
-        Array.from(matchesByPath.entries()).sort(([left], [right]) =>
-          left.localeCompare(right)
-        )
+        Array.from(matchesByPath.entries()).sort(compareContentMatches)
       ),
       count: matchCount,
       truncated,

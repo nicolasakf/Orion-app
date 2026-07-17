@@ -38,16 +38,28 @@ interface WorkspaceSearchProps {
   workspaceDirectory: string | null;
   kernelService: KernelService | null;
   caseSensitive?: boolean;
+  /** Enables command-palette keyboard selection while focus remains in the query input. */
+  keyboardNavigation?: boolean;
   onFileSelect?: (file: { name: string; path: string }) => void;
   onNavigateToLine?: (
     file: { name: string; path: string },
     line: number
   ) => void;
+  className?: string;
+  /** Optional sizing and appearance overrides for the search input. */
+  inputClassName?: string;
+  /** Optional control rendered immediately beside the search input. */
+  inputTrailingAction?: React.ReactNode;
+  resultsClassName?: string;
 }
 
 export interface WorkspaceSearchHandle {
   focus: () => void;
 }
+
+type WorkspaceSearchAction =
+  | { key: string; kind: "file"; path: string }
+  | { key: string; kind: "content"; path: string; line: number };
 
 // ============================================================================
 // Helpers
@@ -200,8 +212,13 @@ export const WorkspaceSearch = forwardRef<
     workspaceDirectory,
     kernelService,
     caseSensitive = false,
+    keyboardNavigation = false,
     onFileSelect,
     onNavigateToLine,
+    className,
+    inputClassName,
+    inputTrailingAction,
+    resultsClassName,
   },
   ref
 ) {
@@ -232,7 +249,10 @@ export const WorkspaceSearch = forwardRef<
   const [searchRevision, setSearchRevision] = useState(0);
   const [isFilesSectionOpen, setIsFilesSectionOpen] = useState(true);
   const [isContentSectionOpen, setIsContentSectionOpen] = useState(true);
+  const [activeResultKey, setActiveResultKey] = useState<string | null>(null);
   const searchGenerationRef = useRef(0);
+  const resultButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+  const resultsListId = React.useId();
 
   /** Expose a focus() method to the parent via forwardRef. */
   useImperativeHandle(ref, () => ({
@@ -380,6 +400,109 @@ export const WorkspaceSearch = forwardRef<
     [onNavigateToLine, workspaceDirectory]
   );
 
+  /** Builds the currently visible result actions in keyboard traversal order. */
+  const resultActions = React.useMemo<WorkspaceSearchAction[]>(() => {
+    if (!keyboardNavigation || !searchResult || isSearching) return [];
+
+    const actions: WorkspaceSearchAction[] = [];
+    if (isFilesSectionOpen) {
+      for (const rawPath of searchResult.fileMatches) {
+        const path = stripLeadingDotSlash(rawPath);
+        actions.push({ key: `file:${path}`, kind: "file", path });
+      }
+    }
+
+    if (isContentSectionOpen) {
+      for (const [rawFilePath, lineMatches] of searchResult.contentMatches) {
+        const path = stripLeadingDotSlash(rawFilePath);
+        actions.push({
+          key: `content-file:${path}`,
+          kind: "file",
+          path,
+        });
+        for (const match of lineMatches) {
+          actions.push({
+            key: `content-match:${path}:${match.line}`,
+            kind: "content",
+            path,
+            line: match.line,
+          });
+        }
+      }
+    }
+
+    return actions;
+  }, [
+    isContentSectionOpen,
+    isFilesSectionOpen,
+    isSearching,
+    keyboardNavigation,
+    searchResult,
+  ]);
+
+  // Select the first result after each result-set or section visibility change.
+  useEffect(() => {
+    if (!keyboardNavigation) return;
+    setActiveResultKey(resultActions[0]?.key ?? null);
+  }, [keyboardNavigation, resultActions]);
+
+  // Keep the highlighted result visible without moving focus away from the input.
+  useEffect(() => {
+    if (!keyboardNavigation || !activeResultKey) return;
+    resultButtonRefs.current
+      .get(activeResultKey)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [activeResultKey, keyboardNavigation]);
+
+  /** Opens the result represented by one flattened keyboard action. */
+  const activateResultAction = useCallback(
+    (action: WorkspaceSearchAction) => {
+      if (action.kind === "content") {
+        handleMatchClick(action.path, action.line);
+        return;
+      }
+      handleFileClick(action.path);
+    },
+    [handleFileClick, handleMatchClick]
+  );
+
+  /** Handles command-palette result traversal without removing focus from the query. */
+  const handleInputKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (!keyboardNavigation || resultActions.length === 0) return;
+
+      if (event.key === "Enter") {
+        const activeAction = resultActions.find(
+          (action) => action.key === activeResultKey
+        );
+        if (!activeAction) return;
+        event.preventDefault();
+        activateResultAction(activeAction);
+        return;
+      }
+
+      if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+      event.preventDefault();
+      const currentIndex = resultActions.findIndex(
+        (action) => action.key === activeResultKey
+      );
+      const direction = event.key === "ArrowDown" ? 1 : -1;
+      const fallbackIndex = direction > 0 ? -1 : 0;
+      const nextIndex =
+        (Math.max(currentIndex, fallbackIndex) +
+          direction +
+          resultActions.length) %
+        resultActions.length;
+      setActiveResultKey(resultActions[nextIndex]?.key ?? null);
+    },
+    [
+      activateResultAction,
+      activeResultKey,
+      keyboardNavigation,
+      resultActions,
+    ]
+  );
+
   // ── Derived state ────────────────────────────────────────────────────────
 
   const noWorkspace = workspaceDirectory === null;
@@ -392,47 +515,72 @@ export const WorkspaceSearch = forwardRef<
 
   const fileCount = searchResult?.fileMatches.length ?? 0;
   const contentCount = searchResult?.contentMatchCount ?? 0;
+  const activeResultIndex = activeResultKey
+    ? resultActions.findIndex((action) => action.key === activeResultKey)
+    : -1;
 
   // ── Render ───────────────────────────────────────────────────────────────
 
   const input = (
-    <div className="relative">
+    <div className="relative min-w-0 flex-1">
       <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
       <input
         ref={inputRef}
         type="text"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={handleInputKeyDown}
         placeholder="Search files and content"
+        aria-label="Search files and content"
         disabled={noWorkspace || noServer}
+        role={keyboardNavigation ? "combobox" : undefined}
+        aria-expanded={keyboardNavigation ? resultActions.length > 0 : undefined}
+        aria-controls={keyboardNavigation ? resultsListId : undefined}
+        aria-activedescendant={
+          keyboardNavigation && activeResultIndex >= 0
+            ? `${resultsListId}-${activeResultIndex}`
+            : undefined
+        }
         className={cn(
           "corner-squircle w-full rounded-md border border-input bg-background py-1.5 pl-8 pr-2 text-sm",
           "placeholder:text-muted-foreground",
           "focus:outline-none focus:ring-1 focus:ring-ring",
-          "disabled:cursor-not-allowed disabled:opacity-50"
+          "disabled:cursor-not-allowed disabled:opacity-50",
+          inputClassName
         )}
       />
     </div>
   );
 
+  const renderedInput = noWorkspace ? (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>{input}</TooltipTrigger>
+        <TooltipContent side="right">
+          Select a workspace to search
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  ) : (
+    input
+  );
+
   return (
-    <div className="flex flex-col gap-2 px-2 pb-2 pt-2">
-      {/* Search input — wrapped in tooltip when no workspace */}
-      {noWorkspace ? (
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>{input}</TooltipTrigger>
-            <TooltipContent side="right">
-              Select a workspace to search
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+    <div className={cn("flex flex-col gap-2 px-2 pb-2 pt-2", className)}>
+      {inputTrailingAction ? (
+        <div className="flex items-center gap-2">
+          {renderedInput}
+          <div className="shrink-0">{inputTrailingAction}</div>
+        </div>
       ) : (
-        input
+        renderedInput
       )}
 
       {/* Status / results area */}
-      <div className="flex flex-col">
+      <div
+        id={resultsListId}
+        className={cn("flex flex-col", resultsClassName)}
+      >
         {/* No server */}
         {!noWorkspace && noServer && (
           <p className="px-2 py-4 text-center text-xs text-muted-foreground">
@@ -491,12 +639,33 @@ export const WorkspaceSearch = forwardRef<
                 {searchResult.fileMatches.map((rawPath) => {
                   const path = stripLeadingDotSlash(rawPath);
                   const name = basename(path);
+                  const actionKey = `file:${path}`;
+                  const actionIndex = resultActions.findIndex(
+                    (action) => action.key === actionKey
+                  );
+                  const isActive = activeResultKey === actionKey;
                   return (
                     <button
                       key={path}
+                      id={
+                        actionIndex >= 0
+                          ? `${resultsListId}-${actionIndex}`
+                          : undefined
+                      }
+                      ref={(node) => {
+                        if (node) resultButtonRefs.current.set(actionKey, node);
+                        else resultButtonRefs.current.delete(actionKey);
+                      }}
                       type="button"
                       onClick={() => handleFileClick(path)}
-                      className="corner-squircle flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-accent hover:text-accent-foreground"
+                      onMouseEnter={() => {
+                        if (keyboardNavigation) setActiveResultKey(actionKey);
+                      }}
+                      aria-current={isActive ? "true" : undefined}
+                      className={cn(
+                        "corner-squircle flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-accent hover:text-accent-foreground",
+                        isActive && "bg-accent text-accent-foreground"
+                      )}
                     >
                       <FileIcon filename={name} className="h-3.5 w-3.5 shrink-0" />
                       <span className="truncate text-foreground">{path}</span>
@@ -529,13 +698,39 @@ export const WorkspaceSearch = forwardRef<
                   ([rawFilePath, lineMatches]) => {
                     const filePath = stripLeadingDotSlash(rawFilePath);
                     const name = basename(filePath);
+                    const fileActionKey = `content-file:${filePath}`;
+                    const fileActionIndex = resultActions.findIndex(
+                      (action) => action.key === fileActionKey
+                    );
+                    const isFileActive = activeResultKey === fileActionKey;
                     return (
                       <div key={filePath}>
                         {/* File header row */}
                         <button
+                          id={
+                            fileActionIndex >= 0
+                              ? `${resultsListId}-${fileActionIndex}`
+                              : undefined
+                          }
+                          ref={(node) => {
+                            if (node) {
+                              resultButtonRefs.current.set(fileActionKey, node);
+                            } else {
+                              resultButtonRefs.current.delete(fileActionKey);
+                            }
+                          }}
                           type="button"
                           onClick={() => handleFileClick(filePath)}
-                          className="corner-squircle flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-accent hover:text-accent-foreground"
+                          onMouseEnter={() => {
+                            if (keyboardNavigation) {
+                              setActiveResultKey(fileActionKey);
+                            }
+                          }}
+                          aria-current={isFileActive ? "true" : undefined}
+                          className={cn(
+                            "corner-squircle flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-accent hover:text-accent-foreground",
+                            isFileActive && "bg-accent text-accent-foreground"
+                          )}
                         >
                           <FileIcon
                             filename={name}
@@ -547,13 +742,40 @@ export const WorkspaceSearch = forwardRef<
                         </button>
 
                         {/* Match rows */}
-                        {lineMatches.map((match) => (
-                          <button
-                            key={`${filePath}:${match.line}`}
-                            type="button"
-                            onClick={() => handleMatchClick(filePath, match.line)}
-                            className="corner-squircle flex w-full items-start gap-2 rounded-md px-2 py-0.5 pl-6 text-left text-xs hover:bg-accent hover:text-accent-foreground"
-                          >
+                        {lineMatches.map((match) => {
+                          const matchActionKey = `content-match:${filePath}:${match.line}`;
+                          const matchActionIndex = resultActions.findIndex(
+                            (action) => action.key === matchActionKey
+                          );
+                          const isMatchActive = activeResultKey === matchActionKey;
+                          return (
+                            <button
+                              key={`${filePath}:${match.line}`}
+                              id={
+                                matchActionIndex >= 0
+                                  ? `${resultsListId}-${matchActionIndex}`
+                                  : undefined
+                              }
+                              ref={(node) => {
+                                if (node) {
+                                  resultButtonRefs.current.set(matchActionKey, node);
+                                } else {
+                                  resultButtonRefs.current.delete(matchActionKey);
+                                }
+                              }}
+                              type="button"
+                              onClick={() => handleMatchClick(filePath, match.line)}
+                              onMouseEnter={() => {
+                                if (keyboardNavigation) {
+                                  setActiveResultKey(matchActionKey);
+                                }
+                              }}
+                              aria-current={isMatchActive ? "true" : undefined}
+                              className={cn(
+                                "corner-squircle flex w-full items-start gap-2 rounded-md px-2 py-0.5 pl-6 text-left text-xs hover:bg-accent hover:text-accent-foreground",
+                                isMatchActive && "bg-accent text-accent-foreground"
+                              )}
+                            >
                             <span className="corner-squircle shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] font-mono text-muted-foreground">
                               {match.line}
                             </span>
@@ -564,8 +786,9 @@ export const WorkspaceSearch = forwardRef<
                                 caseSensitive={caseSensitive}
                               />
                             </span>
-                          </button>
-                        ))}
+                            </button>
+                          );
+                        })}
                       </div>
                     );
                   }

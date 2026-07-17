@@ -73,6 +73,10 @@ type FileTreeProps = {
   items: FileTreeItem[];
   className?: string;
   defaultCollapsed?: boolean;
+  /** Folder paths that should render expanded when their nodes mount. */
+  expandedFolderPaths?: readonly string[];
+  /** Reports a folder's expanded state after the user toggles it. */
+  onFolderExpandedChange?: (path: string, isExpanded: boolean) => void;
   loading?: boolean;
   /** When false, hide entries whose name starts with ".". */
   showHiddenFiles?: boolean;
@@ -129,6 +133,8 @@ export function FileTree({
   items,
   className,
   defaultCollapsed = false,
+  expandedFolderPaths,
+  onFolderExpandedChange,
   loading = false,
   showHiddenFiles = true,
   contentsManager,
@@ -163,6 +169,8 @@ export function FileTree({
               key={item.path}
               item={item}
               defaultCollapsed={defaultCollapsed}
+              expandedFolderPaths={expandedFolderPaths}
+              onFolderExpandedChange={onFolderExpandedChange}
               showHiddenFiles={showHiddenFiles}
               contentsManager={contentsManager}
               onFileSelect={onFileSelect}
@@ -187,6 +195,8 @@ export function FileTree({
 function FileTreeNode({
   item,
   defaultCollapsed,
+  expandedFolderPaths,
+  onFolderExpandedChange,
   showHiddenFiles,
   contentsManager,
   onFileSelect,
@@ -203,6 +213,8 @@ function FileTreeNode({
 }: {
   item: FileTreeItem;
   defaultCollapsed?: boolean;
+  expandedFolderPaths?: readonly string[];
+  onFolderExpandedChange?: FileTreeProps["onFolderExpandedChange"];
   showHiddenFiles?: boolean;
   contentsManager?: ContentsManager | null;
   onFileSelect?: (file: FileTreeSelection) => void;
@@ -217,8 +229,10 @@ function FileTreeNode({
   workspaceDirectory?: string | null;
   isTopLevel?: boolean;
 }) {
-  // Top-level folders always start expanded; others respect defaultCollapsed
-  const initialExpanded = isTopLevel ? true : !defaultCollapsed;
+  // Top-level folders always start expanded; nested nodes restore any saved state.
+  const initialExpanded = isTopLevel
+    ? true
+    : expandedFolderPaths?.includes(item.path) ?? !defaultCollapsed;
 
   const [isExpanded, setIsExpanded] = React.useState(initialExpanded);
   const [children, setChildren] = React.useState<FileTreeItem[]>(item.children ?? []);
@@ -226,6 +240,7 @@ function FileTreeNode({
     item.childrenLoaded ?? false
   );
   const [isLoadingChildren, setIsLoadingChildren] = React.useState(false);
+  const isLoadingChildrenRef = React.useRef(false);
   const shouldShowDotfiles = showHiddenFiles ?? true;
 
   // Sync local children state when the parent provides updated items (e.g. after a tree refresh)
@@ -296,31 +311,42 @@ function FileTreeNode({
     return () => clearTimeout(timer);
   }, [isRenaming, item.name]);
 
-  /** Handles folder click — lazily fetches children on first expand. */
-  const handleClick = React.useCallback(async () => {
-    if (isFolder) {
-      if (isExpanded) {
-        setIsExpanded(false);
-        return;
-      }
-      // Expanding: fetch children if not yet loaded
-      if (!localChildrenLoaded && onFetchChildren) {
-        setIsLoadingChildren(true);
-        try {
-          const fetched = await onFetchChildren(item.path);
-          setChildren(fetched);
-          setLocalChildrenLoaded(true);
-        } catch (err) {
-          console.error("Error fetching folder contents:", err);
-        } finally {
-          setIsLoadingChildren(false);
-        }
-      }
-      setIsExpanded(true);
-    } else if (onFileSelect) {
-      onFileSelect({ name: item.name, path: item.path });
+  /** Fetches children when an expanded folder has not yet been loaded. */
+  const loadChildren = React.useCallback(async () => {
+    if (localChildrenLoaded || !onFetchChildren || isLoadingChildrenRef.current) return;
+
+    isLoadingChildrenRef.current = true;
+    setIsLoadingChildren(true);
+    try {
+      const fetched = await onFetchChildren(item.path);
+      setChildren(fetched);
+      setLocalChildrenLoaded(true);
+    } catch (error) {
+      console.error("Error fetching folder contents:", error);
+    } finally {
+      isLoadingChildrenRef.current = false;
+      setIsLoadingChildren(false);
     }
-  }, [isFolder, isExpanded, localChildrenLoaded, onFetchChildren, onFileSelect, item.path, item.name]);
+  }, [item.path, localChildrenLoaded, onFetchChildren]);
+
+  // Re-fetch nested folders when their persisted expanded state restores on mount.
+  React.useEffect(() => {
+    if (isFolder && isExpanded && !localChildrenLoaded) {
+      void loadChildren();
+    }
+  }, [isExpanded, isFolder, loadChildren, localChildrenLoaded]);
+
+  /** Handles a node click and records folder expansion for state restoration. */
+  const handleClick = React.useCallback(() => {
+    if (isFolder) {
+      const nextExpanded = !isExpanded;
+      setIsExpanded(nextExpanded);
+      onFolderExpandedChange?.(item.path, nextExpanded);
+      return;
+    }
+
+    onFileSelect?.({ name: item.name, path: item.path });
+  }, [isExpanded, isFolder, item.name, item.path, onFileSelect, onFolderExpandedChange]);
 
   const handleCreateFile = async () => {
     const name = newItemName.trim();
@@ -363,7 +389,10 @@ function FileTreeNode({
       });
 
       if (onFileSelect) onFileSelect({ name, path: newPath });
-      if (!isExpanded) setIsExpanded(true);
+      if (!isExpanded) {
+        setIsExpanded(true);
+        onFolderExpandedChange?.(item.path, true);
+      }
 
       setShowFileDialog(false);
       setNewItemName("");
@@ -407,7 +436,10 @@ function FileTreeNode({
         });
       });
 
-      if (!isExpanded) setIsExpanded(true);
+      if (!isExpanded) {
+        setIsExpanded(true);
+        onFolderExpandedChange?.(item.path, true);
+      }
       setShowFolderDialog(false);
       setNewItemName("");
       onTreeChange?.(item.path);
@@ -813,6 +845,8 @@ function FileTreeNode({
               key={child.path}
               item={child}
               defaultCollapsed={defaultCollapsed}
+              expandedFolderPaths={expandedFolderPaths}
+              onFolderExpandedChange={onFolderExpandedChange}
               showHiddenFiles={showHiddenFiles}
               contentsManager={contentsManager}
               onFileSelect={onFileSelect}
