@@ -111,7 +111,7 @@ export function BusinessWorkspaceSearchDialog({
               }
               onClick={() => setCaseSensitive((current) => !current)}
             >
-              <span className="text-[9px] font-semibold tracking-wide">Aa</span>
+              <span className="text-[12px] font-semibold tracking-wide">Aa</span>
             </ToolbarButton>
           }
           resultsClassName="min-h-0 flex-1 overflow-y-auto"

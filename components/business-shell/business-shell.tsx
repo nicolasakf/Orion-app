@@ -637,7 +637,7 @@ export function BusinessShell({
         className="h-full"
         onLayout={onPanelLayout}
       >
-        <ResizablePanel defaultSize={panelSizes[0]} minSize={30}>
+        <ResizablePanel defaultSize={panelSizes[0]} minSize={45}>
           <div className="flex h-full min-w-0 flex-col bg-sidebar">
             <div
               className={cn(
@@ -814,18 +814,36 @@ export function BusinessShell({
                               Export
                             </Button>
                           </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-40">
+                          <DropdownMenuContent
+                            align="end"
+                            className="grid w-[28rem] grid-cols-2 gap-2 p-2"
+                          >
                             {businessExportOptions.map((option) => (
                               <DropdownMenuItem
                                 key={option.format}
-                                onClick={() => dispatchNotebookExport(option.format)}
+                                className="min-h-36 flex-col items-start gap-3 border p-3 focus:bg-accent"
+                                onSelect={() => dispatchNotebookExport(option.format)}
                               >
-                                {option.format === "pdf" ? (
-                                  <FileCode className="h-4 w-4" />
-                                ) : (
-                                  <FileText className="h-4 w-4" />
-                                )}
-                                {option.label}
+                                <div className="flex items-center gap-2">
+                                  {option.format === "html" ? (
+                                    <FileCode className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                                  ) : (
+                                    <FileText className="h-5 w-5 text-muted-foreground" />
+                                  )}
+                                  <div>
+                                    <p className="font-medium">{option.label}</p>
+                                    <p className="text-xs text-muted-foreground">
+                                      {option.format === "html"
+                                        ? "Interactive web page"
+                                        : "Fixed-layout document"}
+                                    </p>
+                                  </div>
+                                </div>
+                                <p className="text-sm leading-snug text-muted-foreground">
+                                  {option.format === "html"
+                                    ? "Open in a browser to explore live charts and controls. Best for interactive sharing."
+                                    : "A static snapshot that is best for printing, emailing, and preserving the layout."}
+                                </p>
                               </DropdownMenuItem>
                             ))}
                           </DropdownMenuContent>
@@ -980,7 +998,7 @@ export function BusinessShell({
           onDragging={onPanelResizeDragging}
         />
 
-        <ResizablePanel defaultSize={panelSizes[1]} minSize={35}>
+        <ResizablePanel defaultSize={panelSizes[1]} minSize={20}>
           <AssistantProvider
             kernelService={kernelService}
             notebook={notebook}
