@@ -131,7 +131,7 @@ export function extractTokenBreakdown(
         standardInputTokens: noCacheInput || Math.max(0, inputTokens - cacheWrite - cacheRead),
         cacheCreationTokens: cacheWrite,
         cacheReadTokens: cacheRead,
-        outputTokens,
+        outputTokens: Math.max(0, outputTokens - reasoning),
         reasoningTokens: reasoning,
       };
   }

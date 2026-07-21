@@ -38,10 +38,17 @@ function sanitizeAndCountImages(value: unknown): { value: unknown; images: numbe
     const record = input as Record<string, unknown>;
     const type = typeof record.type === "string" ? record.type : "";
     const mediaType = typeof record.mediaType === "string" ? record.mediaType : "";
-    if (type.includes("image") || mediaType.startsWith("image/")) images += 1;
+    const isImageBearing = type.includes("image") || mediaType.startsWith("image/");
+    if (isImageBearing) images += 1;
 
     return Object.fromEntries(
       Object.entries(record).map(([key, item]) => {
+        if (
+          isImageBearing &&
+          (key === "image" || key === "data" || key === "url")
+        ) {
+          return [key, "[binary image omitted]"];
+        }
         if (
           (key === "data" || key === "url") &&
           typeof item === "string" &&

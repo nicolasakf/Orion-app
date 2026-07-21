@@ -52,4 +52,23 @@ describe("measurePreparedPrompt", () => {
     expect(measured.estimatedInputTokens).toBe(Math.ceil(measured.rawInputTokens * 1.4));
     expect(measured).toMatchObject({ confidence: "calibrated", calibrationSampleCount: 3 });
   });
+
+  it("does not count inline image bytes as both text and fixed image tokens", async () => {
+    /** Measures one normalized inline image payload without model tools. */
+    const measureImage = (image: string) =>
+      measurePreparedPrompt({
+        messages: [{
+          role: "user",
+          content: [{ type: "image", image, mediaType: "image/png" }],
+        }] as unknown as ModelMessage[],
+        tools: {},
+      });
+
+    const small = await measureImage("aGVsbG8=");
+    const large = await measureImage("a".repeat(200_000));
+
+    expect(large.breakdown.images).toBe(1500);
+    expect(large.breakdown.messages).toBe(small.breakdown.messages);
+    expect(large.rawInputTokens).toBe(small.rawInputTokens);
+  });
 });

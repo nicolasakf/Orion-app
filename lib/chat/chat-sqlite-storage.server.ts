@@ -359,39 +359,45 @@ function migrateToVersion3(db: OrionDatabase): void {
   migrate();
 }
 
+const MODEL_USAGE_PROVENANCE_COLUMNS: Array<[string, string]> = [
+  ["estimated_input_tokens", "integer"],
+  ["estimated_output_tokens", "integer"],
+  ["estimated_cache_read_tokens", "integer"],
+  ["estimated_cache_write_tokens", "integer"],
+  ["estimated_reasoning_tokens", "integer"],
+  ["actual_input_tokens", "integer"],
+  ["actual_output_tokens", "integer"],
+  ["actual_cache_read_tokens", "integer"],
+  ["actual_cache_write_tokens", "integer"],
+  ["actual_reasoning_tokens", "integer"],
+  ["estimated_cost_usd", "real"],
+  ["actual_cost_usd", "real"],
+  ["cost_status", "text"],
+  ["cost_source", "text"],
+  ["gateway_generation_id", "text"],
+  ["served_provider_id", "text"],
+  ["upstream_inference_cost_usd", "real"],
+  ["gateway_is_byok", "integer"],
+  ["credential_mode", "text"],
+  ["pricing_snapshot_json", "text"],
+  ["interaction_mode", "text"],
+  ["estimator_version", "integer"],
+  ["reconciled_at", "text"],
+];
+
+/** Ensures every provenance column exists on `model_usage` (repairs partial v4 databases). */
+function ensureModelUsageProvenanceColumns(db: OrionDatabase): void {
+  for (const [name, definition] of MODEL_USAGE_PROVENANCE_COLUMNS) {
+    if (!tableColumnExists(db, "model_usage", name)) {
+      db.exec(`alter table model_usage add column ${name} ${definition};`);
+    }
+  }
+}
+
 /** Adds provenance-aware usage accounting and persistent context calibration. */
 function migrateToVersion4(db: OrionDatabase): void {
   const migrate = db.transaction(() => {
-    const columns: Array<[string, string]> = [
-      ["estimated_input_tokens", "integer"],
-      ["estimated_output_tokens", "integer"],
-      ["estimated_cache_read_tokens", "integer"],
-      ["estimated_cache_write_tokens", "integer"],
-      ["estimated_reasoning_tokens", "integer"],
-      ["actual_input_tokens", "integer"],
-      ["actual_output_tokens", "integer"],
-      ["actual_cache_read_tokens", "integer"],
-      ["actual_cache_write_tokens", "integer"],
-      ["actual_reasoning_tokens", "integer"],
-      ["estimated_cost_usd", "real"],
-      ["actual_cost_usd", "real"],
-      ["cost_status", "text"],
-      ["cost_source", "text"],
-      ["gateway_generation_id", "text"],
-      ["served_provider_id", "text"],
-      ["upstream_inference_cost_usd", "real"],
-      ["gateway_is_byok", "integer"],
-      ["credential_mode", "text"],
-      ["pricing_snapshot_json", "text"],
-      ["interaction_mode", "text"],
-      ["estimator_version", "integer"],
-      ["reconciled_at", "text"],
-    ];
-    for (const [name, definition] of columns) {
-      if (!tableColumnExists(db, "model_usage", name)) {
-        db.exec(`alter table model_usage add column ${name} ${definition};`);
-      }
-    }
+    ensureModelUsageProvenanceColumns(db);
 
     db.exec(`
       update model_usage
@@ -444,6 +450,11 @@ function migrateDatabase(db: OrionDatabase): void {
   }
   if (version < 4) {
     migrateToVersion4(db);
+  }
+
+  const finalVersion = db.pragma("user_version", { simple: true }) as number;
+  if (finalVersion >= 4) {
+    ensureModelUsageProvenanceColumns(db);
   }
 }
 

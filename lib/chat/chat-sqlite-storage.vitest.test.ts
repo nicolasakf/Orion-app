@@ -171,6 +171,50 @@ describe("SQLite chat storage", () => {
     expect(columnExists(db, "model_usage", "pricing_snapshot_json")).toBe(true);
   });
 
+  it("repairs a partial v4 database missing provenance token columns", async () => {
+    const dbPath = path.join(tempDirectory, "orion.db");
+    const partialDb = new Database(dbPath);
+    partialDb.exec(`
+      create table model_usage (
+        id text primary key,
+        request_id text,
+        model_id text not null,
+        provider_id text not null,
+        tokens_in integer,
+        tokens_out integer,
+        cost_usd real,
+        cache_read_tokens integer,
+        cache_creation_tokens integer,
+        reasoning_tokens integer,
+        is_byok integer not null default 0,
+        created_at text not null,
+        estimated_input_tokens integer,
+        estimated_cost_usd real,
+        actual_cost_usd real,
+        cost_status text,
+        cost_source text,
+        gateway_generation_id text,
+        served_provider_id text,
+        upstream_inference_cost_usd real,
+        gateway_is_byok integer,
+        credential_mode text,
+        pricing_snapshot_json text,
+        interaction_mode text,
+        estimator_version integer,
+        reconciled_at text
+      );
+      pragma user_version = 4;
+    `);
+    partialDb.close();
+
+    const db = await getChatDatabase();
+
+    expect(db.pragma("user_version", { simple: true })).toBe(4);
+    expect(columnExists(db, "model_usage", "estimated_output_tokens")).toBe(true);
+    expect(columnExists(db, "model_usage", "actual_output_tokens")).toBe(true);
+    expect(columnExists(db, "model_usage", "actual_reasoning_tokens")).toBe(true);
+  });
+
   it("preserves pre-ledger usage as legacy without recalculating it", async () => {
     const db = await getChatDatabase();
     db.prepare(`insert into chat_session

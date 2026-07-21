@@ -136,6 +136,23 @@ describe("cost calculator", () => {
     });
   });
 
+  it("does not double-count generic reasoning tokens", () => {
+    expect(
+      extractTokenBreakdown(
+        usage({
+          inputTokens: 10,
+          outputTokens: 50,
+          outputTokenDetails: { reasoningTokens: 20 },
+        }),
+        undefined,
+        "vercel"
+      )
+    ).toMatchObject({
+      outputTokens: 30,
+      reasoningTokens: 20,
+    });
+  });
+
   it("calculates cached, reasoning, and output cost", () => {
     const cost = calculateCostUsd(basePricing, {
       standardInputTokens: 800,
