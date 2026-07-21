@@ -139,6 +139,12 @@ describe("getBusinessMarkdownCompatibility", () => {
       source: "![Revenue chart]\n\n[Revenue chart]: https://example.com/revenue.png",
     },
     {
+      name: "a reference-style link",
+      reason: "Reference-style links can only be edited as Markdown source.",
+      source:
+        '[Orion][product]\n\n[product]: https://example.com "Product home"',
+    },
+    {
       name: "MathJax slash delimiters",
       reason: "This block uses an advanced MathJax delimiter.",
       source: "Inline \\(x^2\\) and display \\[E = mc^2\\].",

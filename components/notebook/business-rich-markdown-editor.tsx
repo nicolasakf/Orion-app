@@ -26,6 +26,8 @@ interface MarkdownCompatibility {
 const htmlLikePattern = /<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?>/;
 const directivePattern = /^\s*:::[^\n]*$/m;
 const imagePattern = /!\[[^\]]*\](?:\([^\n)]*\)|\[[^\]]*\])?/;
+const referenceLinkPattern =
+  /(?<!!)\[[^\]\n]+\]\s*\[[^\]\n]*\]|^\s{0,3}\[[^\]\n]+\]:[ \t]*\S/m;
 const mathJaxPattern = /\\(?:\(|\[)|\\begin\{[A-Za-z*]+\}/;
 const mdxExpressionPattern = /(?:^|\n)\s*\{[^{}\n]+\}\s*(?=\n|$)/;
 const mdxEsmPattern =
@@ -80,6 +82,13 @@ export function getBusinessMarkdownCompatibility(
     return {
       mode: "source-gate",
       reason: "Image editing is not available in Business View yet.",
+    };
+  }
+
+  if (referenceLinkPattern.test(source)) {
+    return {
+      mode: "source-gate",
+      reason: "Reference-style links can only be edited as Markdown source.",
     };
   }
 
