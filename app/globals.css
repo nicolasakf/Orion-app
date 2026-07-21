@@ -37,6 +37,10 @@ html {
 }
 
 @layer utilities {
+  .orion-loader-pulse {
+    animation: orion-loader-pulse 1s ease-in-out infinite;
+  }
+
   .text-balance {
     text-wrap: balance;
   }
@@ -96,6 +100,23 @@ html {
     background-clip: text;
     color: transparent;
     animation: ai-text-shine 2.1s linear infinite;
+  }
+}
+
+@keyframes orion-loader-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orion-loader-pulse {
+    animation: none;
   }
 }
 

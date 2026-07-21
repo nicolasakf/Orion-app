@@ -46,9 +46,9 @@ import {
   Check,
   ChevronsUpDown,
   HelpCircle,
-  Orbit,
   Plus,
 } from "lucide-react";
+import { OrionLoader } from "@/components/common/orion-loader";
 import { parseNotebook } from "@/lib/notebook/notebook-parser";
 import { NotebookCell } from "@/components/notebook/notebook-cell";
 import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
@@ -4070,10 +4070,7 @@ export function NotebookEditor({
               )}
             >
               <div className="flex h-[80vh] items-center justify-center">
-                <Orbit
-                  strokeWidth={1.5}
-                  className="h-16 w-16 animate-spin text-gray-500"
-                />
+                <OrionLoader className="h-16 w-16" aria-hidden />
               </div>
             </div>
           ) : error ? (

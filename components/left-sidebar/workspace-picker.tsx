@@ -6,13 +6,13 @@ import {
   ChevronDown,
   Folder,
   FolderOpen,
-  Orbit,
   Pin,
   RefreshCw,
   Server,
 } from "lucide-react";
 
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import { OrionLoader } from "@/components/common/orion-loader";
 import { MAX_PINNED_WORKSPACE_DIRECTORY_PATHS } from "@/lib/settings/schema";
 import { cn } from "@/lib/utils";
 import type { ContentsManager } from "@jupyterlab/services";
@@ -148,7 +148,7 @@ function PickerNode({
           aria-label={isExpanded ? "Collapse" : "Expand"}
         >
           {isLoading ? (
-            <Orbit className="h-3 w-3 animate-spin" />
+            <OrionLoader className="h-3 w-3" aria-hidden />
           ) : isExpanded ? (
             <ChevronDown className="h-3.5 w-3.5" />
           ) : (
@@ -379,7 +379,7 @@ export function WorkspacePicker({
 
       {loading ? (
         <div className="flex items-center justify-center py-6">
-          <Orbit className="h-6 w-6 animate-spin text-muted-foreground" strokeWidth={1.5} />
+          <OrionLoader className="h-6 w-6" aria-hidden />
         </div>
       ) : error ? (
         <div className="flex flex-col gap-2 px-2">

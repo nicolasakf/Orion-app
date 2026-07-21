@@ -6,7 +6,6 @@ import {
   ChevronRight,
   Folder,
   FolderOpen,
-  Orbit,
   Plus,
   FilePlusCorner,
   Trash2,
@@ -27,6 +26,7 @@ import { MAX_PINNED_FILE_PATHS } from "@/lib/settings/schema";
 import { cn } from "@/lib/utils";
 import { CustomIcon } from "@/components/common/custom-icon";
 import { FileIcon } from "@/components/common/file-icon";
+import { OrionLoader } from "@/components/common/orion-loader";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -157,10 +157,7 @@ export function FileTree({
     >
       {loading ? (
         <div className="flex h-[80vh] items-center justify-center">
-          <Orbit
-            strokeWidth={1.5}
-            className="h-16 w-16 animate-spin text-gray-500"
-          />
+          <OrionLoader className="h-16 w-16" aria-hidden />
         </div>
       ) : (
         <ul className="space-y-1">
@@ -615,7 +612,7 @@ function FileTreeNode({
                 aria-hidden
               >
                 {isLoadingChildren ? (
-                  <Orbit className="h-3 w-3 animate-spin text-muted-foreground" />
+                  <OrionLoader className="h-3 w-3" />
                 ) : isExpanded ? (
                   <ChevronDown className="h-4 w-4" />
                 ) : (
