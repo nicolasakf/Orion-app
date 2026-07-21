@@ -24,6 +24,7 @@ import {
 } from "@/lib/chat/chat-storage";
 import {
   createChatFork,
+  getInPlaceEditRestoreCheckpointIds as getRestorableInPlaceEditCheckpointIds,
   truncateChatForInPlaceEdit,
 } from "@/lib/chat/chat-forking";
 import { downloadChatTranscriptMarkdown } from "@/lib/chat/export-chat-transcript";
@@ -2996,19 +2997,13 @@ export function RightSidebar({
 
   /** Finds checkpoint ids that should be undone before resending an edited user turn. */
   const getInPlaceEditRestoreCheckpointIds = useCallback(
-    (action: PendingInPlaceEditAction): string[] => {
-      const checkpointIds: string[] = [];
-      for (let index = action.sourceChat.messages.length - 1; index >= action.sourceMessageIndex; index -= 1) {
-        const message = action.sourceChat.messages[index];
-        if (!message || message.role !== "user") continue;
-        const checkpointId =
-          message.checkpointId ?? checkpointRequestByMessageId.get(message.id);
-        if (!checkpointId) continue;
-        if (checkpointStatuses.get(checkpointId) === "reverted") continue;
-        checkpointIds.push(checkpointId);
-      }
-      return checkpointIds;
-    },
+    (action: PendingInPlaceEditAction): string[] =>
+      getRestorableInPlaceEditCheckpointIds({
+        sourceChat: action.sourceChat,
+        sourceMessageIndex: action.sourceMessageIndex,
+        checkpointRequestByMessageId,
+        checkpointStatuses,
+      }),
     [checkpointRequestByMessageId, checkpointStatuses]
   );
 

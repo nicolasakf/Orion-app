@@ -18,7 +18,10 @@ import {
   getOutputPresentationMimes,
   resolveOutputForPresentation,
 } from "@/components/notebook/output-presentation";
-import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
+import type {
+  OrionUiLocalValue,
+  OrionUiStateChangeContext,
+} from "@/components/notebook/orion-ui-primitives";
 import type {
   OrionTableCommResponse,
   OrionTableOutputMetadata,
@@ -280,8 +283,10 @@ interface OutputRendererProps {
     key: string,
     value: OrionUiLocalValue,
     outputId?: string,
+    change?: OrionUiStateChangeContext,
   ) => void;
   onOrionUiAction?: (action: unknown) => void;
+  onOrionUiUnmount?: (outputId?: string) => void;
   onOrionUiTableRequest?: (
     request: OrionTableRequest,
   ) => Promise<OrionTableCommResponse>;
@@ -316,6 +321,7 @@ export function OutputRenderer({
   onToggleOutputAppView,
   onOrionUiStateChange,
   onOrionUiAction,
+  onOrionUiUnmount,
   onOrionUiTableRequest,
   onOrionUiTableMetadataChange,
   isInAppView,
@@ -495,6 +501,7 @@ export function OutputRenderer({
       onToggleOutputAppView,
       onOrionUiStateChange,
       onOrionUiAction,
+      onOrionUiUnmount,
       onOrionUiTableRequest,
       onOrionUiTableMetadataChange,
       isInAppView: !!isInAppView,
@@ -512,6 +519,7 @@ export function OutputRenderer({
       onToggleOutputAppView,
       onOrionUiStateChange,
       onOrionUiAction,
+      onOrionUiUnmount,
       onOrionUiTableRequest,
       onOrionUiTableMetadataChange,
       isInAppView,

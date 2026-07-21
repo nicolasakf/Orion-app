@@ -79,6 +79,57 @@ class OrionUiTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             ui.button("Bad", action={"callback": object()})
 
+    def test_change_actions_serialize_for_every_editable_control(self):
+        action = {"type": "execute_cells", "cellIds": ["analysis-cell"]}
+        controls = [
+            ui.input("input", on_change=action, debounce_ms=125),
+            ui.textarea("textarea", on_change=action, debounce_ms=125),
+            ui.select("select", ["a", "b"], on_change=action, debounce_ms=125),
+            ui.slider("slider", on_change=action, debounce_ms=125),
+            ui.checkbox("checkbox", on_change=action, debounce_ms=125),
+            ui.switch("switch", on_change=action, debounce_ms=125),
+            ui.radio_group("radio", ["a", "b"], on_change=action, debounce_ms=125),
+            ui.toggle("toggle", on_change=action, debounce_ms=125),
+            ui.toggle_group("toggle_group", ["a", "b"], on_change=action, debounce_ms=125),
+            ui.calendar("calendar", on_change=action, debounce_ms=125),
+            ui.date_picker("date_picker", on_change=action, debounce_ms=125),
+            ui.date_range_slider("date_range", on_change=action, debounce_ms=125),
+            ui.date_time_picker("date_time", on_change=action, debounce_ms=125),
+        ]
+
+        for control in controls:
+            with self.subTest(control=control.type):
+                payload = control._repr_mimebundle_()[ui.ORION_UI_MIME_TYPE]
+                self.assertEqual(payload["root"]["props"]["onChange"], action)
+                self.assertEqual(payload["root"]["props"]["debounceMs"], 125)
+
+        date_time_payload = controls[-1]._repr_mimebundle_()[ui.ORION_UI_MIME_TYPE]
+        self.assertEqual(
+            set(date_time_payload["bindings"]),
+            {"date_time", "date_time_start_time", "date_time_end_time"},
+        )
+
+    def test_change_action_props_are_omitted_by_default(self):
+        props = ui.input("query")._repr_mimebundle_()[ui.ORION_UI_MIME_TYPE]["root"]["props"]
+
+        self.assertNotIn("onChange", props)
+        self.assertNotIn("debounceMs", props)
+
+    def test_change_action_arguments_are_validated(self):
+        with self.assertRaises(TypeError):
+            ui.input("query", on_change="not-a-mapping")
+        with self.assertRaises(TypeError):
+            ui.input("query", on_change={"callback": object()})
+        with self.assertRaises(TypeError):
+            ui.input("query", debounce_ms=1.5)
+        with self.assertRaises(TypeError):
+            ui.input("query", debounce_ms=True)
+        with self.assertRaises(ValueError):
+            ui.input("query", debounce_ms=-1)
+
+    def test_date_range_slider_is_exported(self):
+        self.assertIn("date_range_slider", ui.__all__)
+
     def test_state_api_round_trips_values(self):
         ui.set("region", "west")
         self.assertEqual(ui.get("region"), "west")

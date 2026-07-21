@@ -6,6 +6,8 @@ export interface CellRunJob {
   stopOnError: boolean;
   /** Set when the batch was started from a toolbar run-all action. */
   triggerSource?: RunAllTriggerSource;
+  /** Replaces an older pending automatic run with the same key. */
+  coalesceKey?: string;
 }
 
 /**
@@ -16,8 +18,13 @@ export class CellExecutionQueue {
   private jobs: CellRunJob[] = [];
   private processing = false;
 
-  /** Append a run request to the tail of the queue. */
+  /** Append a run request, replacing an older pending job with the same key. */
   enqueue(job: CellRunJob): void {
+    if (job.coalesceKey) {
+      this.jobs = this.jobs.filter(
+        (pendingJob) => pendingJob.coalesceKey !== job.coalesceKey,
+      );
+    }
     this.jobs.push(job);
   }
 

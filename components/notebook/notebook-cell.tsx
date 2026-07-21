@@ -21,7 +21,10 @@ import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
 import { MonacoEditor } from "@/components/monaco-editor";
 import { OutputRenderer } from "@/components/notebook/output-renderer";
 import { QueuedOutputSkeleton } from "@/components/notebook/queued-output-skeleton";
-import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
+import type {
+  OrionUiLocalValue,
+  OrionUiStateChangeContext,
+} from "@/components/notebook/orion-ui-primitives";
 import type {
   OrionTableCommResponse,
   OrionTableOutputMetadata,
@@ -151,8 +154,10 @@ interface NotebookCellProps {
     key: string,
     value: OrionUiLocalValue,
     outputId?: string,
+    change?: OrionUiStateChangeContext,
   ) => void;
   onOrionUiAction?: (action: unknown) => void;
+  onOrionUiUnmount?: (outputId?: string) => void;
   onOrionUiTableRequest?: (
     request: OrionTableRequest,
   ) => Promise<OrionTableCommResponse>;
@@ -898,6 +903,7 @@ function NotebookCellComponent({
   onMentionCell,
   onOrionUiStateChange,
   onOrionUiAction,
+  onOrionUiUnmount,
   onOrionUiTableRequest,
   variant,
   validationIssue,
@@ -2570,6 +2576,7 @@ function NotebookCellComponent({
                                   }
                                   onOrionUiStateChange={onOrionUiStateChange}
                                   onOrionUiAction={onOrionUiAction}
+                                  onOrionUiUnmount={onOrionUiUnmount}
                                   onOrionUiTableRequest={onOrionUiTableRequest}
                                   onOrionUiTableMetadataChange={
                                     handleOrionUiTableMetadataChange
@@ -2632,6 +2639,8 @@ export const NotebookCell = memo(NotebookCellComponent, (prev, next) => {
     prev.onOrionUiStateChange === next.onOrionUiStateChange;
   const sameOrionUiActionHandler =
     prev.onOrionUiAction === next.onOrionUiAction;
+  const sameOrionUiUnmountHandler =
+    prev.onOrionUiUnmount === next.onOrionUiUnmount;
   const sameOrionUiTableRequestHandler =
     prev.onOrionUiTableRequest === next.onOrionUiTableRequest;
   const samePresentationHide =
@@ -2647,6 +2656,7 @@ export const NotebookCell = memo(NotebookCellComponent, (prev, next) => {
     sameMentionHandler &&
     sameOrionUiStateHandler &&
     sameOrionUiActionHandler &&
+    sameOrionUiUnmountHandler &&
     sameOrionUiTableRequestHandler &&
     samePresentationHide
   );

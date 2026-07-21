@@ -48,4 +48,64 @@ describe("CellExecutionQueue", () => {
     expect(queue.pendingCount).toBe(0);
     expect(queue.dequeue()).toBeUndefined();
   });
+
+  it("replaces an older pending job with the same coalescing key", () => {
+    const queue = new CellExecutionQueue();
+    queue.enqueue({
+      indices: [0],
+      stopOnError: true,
+      coalesceKey: "orion-ui:a",
+    });
+    queue.enqueue({ indices: [1], stopOnError: true });
+    queue.enqueue({
+      indices: [2],
+      stopOnError: true,
+      coalesceKey: "orion-ui:a",
+    });
+
+    expect(queue.pendingCount).toBe(2);
+    expect(queue.dequeue()).toEqual({ indices: [1], stopOnError: true });
+    expect(queue.dequeue()).toEqual({
+      indices: [2],
+      stopOnError: true,
+      coalesceKey: "orion-ui:a",
+    });
+  });
+
+  it("keeps pending jobs with different coalescing keys", () => {
+    const queue = new CellExecutionQueue();
+    queue.enqueue({
+      indices: [0],
+      stopOnError: true,
+      coalesceKey: "orion-ui:a",
+    });
+    queue.enqueue({
+      indices: [1],
+      stopOnError: true,
+      coalesceKey: "orion-ui:b",
+    });
+
+    expect(queue.pendingCount).toBe(2);
+    expect(queue.dequeue()?.indices).toEqual([0]);
+    expect(queue.dequeue()?.indices).toEqual([1]);
+  });
+
+  it("retains only one keyed rerun while another job is active", () => {
+    const queue = new CellExecutionQueue();
+    queue.setProcessing(true);
+    queue.enqueue({
+      indices: [0],
+      stopOnError: true,
+      coalesceKey: "orion-ui:a",
+    });
+    queue.enqueue({
+      indices: [1],
+      stopOnError: true,
+      coalesceKey: "orion-ui:a",
+    });
+
+    expect(queue.isProcessing).toBe(true);
+    expect(queue.pendingCount).toBe(1);
+    expect(queue.dequeue()?.indices).toEqual([1]);
+  });
 });

@@ -25,7 +25,7 @@ This is different from App View metadata authoring:
 2. Build UI with Python component helpers such as `ui.card`, `ui.stack`, `ui.slider`, and `ui.select`.
 3. Put the final component expression as the last expression in a code cell so Jupyter displays its MIME bundle.
 4. Read values in later cells with `ui.get("key")` or `ui.state()`.
-5. Use explicit run buttons only when the target cells have stable Orion cell ids.
+5. Use `on_change` or explicit run buttons only when target cells have stable Orion cell ids.
 
 Controls define defaults, not forced values. If a user selects a new value and reruns the UI cell, Orion should preserve the current runtime state instead of resetting to the original default.
 
@@ -80,19 +80,19 @@ Layout and containers:
 
 Controls:
 
-- `ui.input("key", label=None, default_value="", value=<unset>, placeholder=None, input_type="text")`
-- `ui.textarea("key", label=None, default_value="", value=<unset>, placeholder=None)`
-- `ui.select("key", options, label=None, default_value=None, value=<unset>, placeholder=None)`
-- `ui.slider("key", label=None, min=0, max=100, default_value=0, value=<unset>, step=1)`
-- `ui.checkbox("key", label=None, default_value=False, value=<unset>)`
-- `ui.switch("key", label=None, default_value=False, value=<unset>)`
-- `ui.radio_group("key", options, label=None, default_value=None, value=<unset>)`
-- `ui.toggle("key", label=None, default_value=False, value=<unset>, variant=None)`
-- `ui.toggle_group("key", options, label=None, default_value=None, value=<unset>, variant=None)`
-- `ui.calendar("key", label=None, mode="single", default_value="", value=<unset>, caption_layout=None, from_year=None, to_year=None, number_of_months=None, show_outside_days=False, presets=None)`
-- `ui.date_picker("key", label=None, mode="single", default_value="", value=<unset>, placeholder=None, caption_layout=None, from_year=None, to_year=None, number_of_months=None, show_outside_days=False, presets=None)`
-- `ui.date_range_slider("key", label=None, default_value=None, value=<unset>, visible_months=4, min_days=1, presets=None)`
-- `ui.date_time_picker("key", label=None, default_value="", value=<unset>, start_time_key=None, end_time_key=None, start_time_label="Start time", end_time_label="End time", default_start_time="09:00:00", default_end_time="17:00:00", caption_layout=None, from_year=None, to_year=None, show_outside_days=False, presets=None)`
+- `ui.input("key", label=None, default_value="", value=<unset>, placeholder=None, input_type="text", on_change=None, debounce_ms=None)`
+- `ui.textarea("key", label=None, default_value="", value=<unset>, placeholder=None, on_change=None, debounce_ms=None)`
+- `ui.select("key", options, label=None, default_value=None, value=<unset>, placeholder=None, on_change=None, debounce_ms=None)`
+- `ui.slider("key", label=None, min=0, max=100, default_value=0, value=<unset>, step=1, on_change=None, debounce_ms=None)`
+- `ui.checkbox("key", label=None, default_value=False, value=<unset>, on_change=None, debounce_ms=None)`
+- `ui.switch("key", label=None, default_value=False, value=<unset>, on_change=None, debounce_ms=None)`
+- `ui.radio_group("key", options, label=None, default_value=None, value=<unset>, on_change=None, debounce_ms=None)`
+- `ui.toggle("key", label=None, default_value=False, value=<unset>, variant=None, on_change=None, debounce_ms=None)`
+- `ui.toggle_group("key", options, label=None, default_value=None, value=<unset>, variant=None, on_change=None, debounce_ms=None)`
+- `ui.calendar("key", label=None, mode="single", default_value="", value=<unset>, caption_layout=None, from_year=None, to_year=None, number_of_months=None, show_outside_days=False, presets=None, on_change=None, debounce_ms=None)`
+- `ui.date_picker("key", label=None, mode="single", default_value="", value=<unset>, placeholder=None, caption_layout=None, from_year=None, to_year=None, number_of_months=None, show_outside_days=False, presets=None, on_change=None, debounce_ms=None)`
+- `ui.date_range_slider("key", label=None, default_value=None, value=<unset>, visible_months=4, min_days=1, presets=None, on_change=None, debounce_ms=None)`
+- `ui.date_time_picker("key", label=None, default_value="", value=<unset>, start_time_key=None, end_time_key=None, start_time_label="Start time", end_time_label="End time", default_start_time="09:00:00", default_end_time="17:00:00", caption_layout=None, from_year=None, to_year=None, show_outside_days=False, presets=None, on_change=None, debounce_ms=None)`
 - `ui.button(label, action=None, variant=None, size=None)`
 
 Display:
@@ -150,7 +150,23 @@ ui.theme.plotly()
 px.line(df, x="date", y="value")
 ```
 
-## Button actions
+## Change and button actions
+
+State-bound controls may run existing cells after their new value reaches
+Python runtime state:
+
+```python
+ui.date_picker(
+    "start_date",
+    on_change={"type": "execute_cells", "cellIds": ["stable-orion-cell-id"]},
+)
+```
+
+Discrete controls, presets, and keyboard nudges run immediately. Text and time
+inputs wait 500 ms after the latest edit; slider and date-range dragging wait
+250 ms. A non-negative `debounce_ms` overrides those defaults. Calendar ranges
+run only after both endpoints exist. Prefer a button for expensive or
+destructive work.
 
 Buttons may explicitly run existing notebook cells:
 
@@ -169,8 +185,8 @@ Only use this action when the target cell ids already exist in `cells[i].metadat
 - Control changes update Python-side `orion_ui` runtime state through Orion's silent kernel bridge.
 - Rerunning a UI cell preserves existing control state when using `default_value`.
 - Component `value` arguments intentionally force/reset current state on rerun.
-- Control changes do not automatically rerun dependent cells.
-- Users should rerun dependent cells manually or use an explicit `ui.button(..., action={"type": "execute_cells", ...})`.
+- Control changes rerun cells only when the control declares `on_change`.
+- Rapid automatic runs are debounced and coalesced; buttons remain explicit and uncoalesced.
 - Components accept JSON-serializable props only.
 - `Calendar`, `DatePicker`, and `DateTimePicker` use ISO-like `YYYY-MM-DD` strings in Python state for single dates.
 - `Calendar` and `DatePicker` support `mode="range"`; range state is a JSON string such as `{"from":"2026-06-01","to":"2026-06-07"}`.
@@ -205,7 +221,7 @@ cd python/orion-ui && python -m pip install -e .
 - Defaults are declared with component `default_value` arguments or `ui.define_default()`, not with `ui.set()` unless replacing state is intentional.
 - `value=` is used only when intentionally forcing current state.
 - Later cells read values with `ui.get()` or `ui.state()`.
-- Button `execute_cells` actions reference real Orion cell ids.
+- Change and button `execute_cells` actions reference real Orion cell ids.
 - The UI uses Orion components for controls and existing plotting libraries for charts.
 - Plotly work calls `ui.theme.plotly()` once per kernel session unless the user explicitly requested different styling.
 - Plotly charts omit `displayModeBar=True` unless the user explicitly asked for the Plotly toolbar.

@@ -287,6 +287,59 @@ describe("NotebookAppView", () => {
     expect(screen.queryByText("This file is empty")).not.toBeInTheDocument();
   });
 
+  it("opens one complete contents card and navigates from a selected section", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    const notebook: NotebookType = {
+      cells: [
+        {
+          cell_type: CellType.MARKDOWN,
+          source: ["# Overview"],
+          metadata: { orion: { id: "overview" } },
+        },
+        {
+          cell_type: CellType.MARKDOWN,
+          source: ["## Revenue"],
+          metadata: { orion: { id: "revenue" } },
+        },
+        {
+          cell_type: CellType.MARKDOWN,
+          source: ["# Forecast"],
+          metadata: { orion: { id: "forecast" } },
+        },
+      ],
+      metadata: {},
+      nbformat: 4,
+      nbformat_minor: 5,
+    };
+
+    render(<NotebookAppView businessMode notebook={notebook} />);
+
+    fireEvent.pointerEnter(
+      screen.getByRole("button", { name: "Browse table of contents" }),
+      { pointerType: "mouse" },
+    );
+
+    const contents = await screen.findByRole("navigation", {
+      name: "App View table of contents",
+    });
+    expect(contents).toHaveTextContent("Overview");
+    expect(contents).toHaveTextContent("Revenue");
+    expect(contents).toHaveTextContent("Forecast");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Go to Forecast" }),
+    );
+
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "start",
+      behavior: "smooth",
+    });
+  });
+
   it("shows a business no-outputs state for content without renderable App View items", () => {
     render(
       <NotebookAppView

@@ -91,9 +91,22 @@ import { cn } from "@/lib/utils";
 
 export type OrionUiLocalValue = string | number | boolean;
 
+export type OrionUiChangeKind = "discrete" | "text" | "continuous";
+
+export interface OrionUiStateChangeContext {
+  action: unknown;
+  debounceMs: number;
+  execute: boolean;
+}
+
 export interface OrionUiRenderCallbacks {
-  onStateChange?: (key: string, value: OrionUiLocalValue) => void;
+  onStateChange?: (
+    key: string,
+    value: OrionUiLocalValue,
+    change?: OrionUiStateChangeContext,
+  ) => void;
   onAction?: (action: unknown) => void;
+  onUnmount?: () => void;
   onTableRequest?: (
     request: OrionTableRequest,
   ) => Promise<OrionTableCommResponse>;
@@ -127,6 +140,11 @@ interface SchemaRenderContext {
   callbacks: OrionUiRenderCallbacks;
   renderNode: (node: NotebookAppViewSchemaNode) => React.ReactNode;
   renderChildren: (node: NotebookAppViewSchemaNode) => React.ReactNode;
+}
+
+interface NodeStateChangeOptions {
+  kind?: OrionUiChangeKind;
+  execute?: boolean;
 }
 
 interface SelectOption {
@@ -188,6 +206,9 @@ const gridColumnClasses = {
   3: "grid-cols-1 md:grid-cols-3",
   4: "grid-cols-1 md:grid-cols-2 xl:grid-cols-4",
 } as const;
+
+const DEFAULT_TEXT_CHANGE_DEBOUNCE_MS = 500;
+const DEFAULT_CONTINUOUS_CHANGE_DEBOUNCE_MS = 250;
 
 const builtinPrimitiveRenderers: Record<string, PrimitiveRenderer> = {
   Page: renderPage,
@@ -392,11 +413,41 @@ function getNumberState(
   );
 }
 
+/** Resolves change-action metadata using the component's optional debounce override. */
+function nodeStateChangeContext(
+  node: NotebookAppViewSchemaNode,
+  options: NodeStateChangeOptions,
+): OrionUiStateChangeContext | undefined {
+  const action = node.props.onChange;
+  if (action === undefined) {
+    return undefined;
+  }
+
+  const override = numberProp(node.props, "debounceMs");
+  const kind = options.kind ?? "discrete";
+  const defaultDebounceMs =
+    kind === "text"
+      ? DEFAULT_TEXT_CHANGE_DEBOUNCE_MS
+      : kind === "continuous"
+        ? DEFAULT_CONTINUOUS_CHANGE_DEBOUNCE_MS
+        : 0;
+
+  return {
+    action,
+    debounceMs:
+      override === undefined
+        ? defaultDebounceMs
+        : Math.max(0, Math.floor(override)),
+    execute: options.execute ?? true,
+  };
+}
+
 /** Writes local control state and forwards bound updates to Orion runtime hooks. */
 function setNodeState(
   node: NotebookAppViewSchemaNode,
   context: SchemaRenderContext,
   value: OrionUiLocalValue,
+  options: NodeStateChangeOptions = {},
 ): void {
   const stateKey = stringProp(node.props, "stateKey");
   if (!stateKey) {
@@ -404,23 +455,32 @@ function setNodeState(
   }
 
   context.setStateValue(stateKey, value);
-  context.callbacks.onStateChange?.(stateKey, value);
+  context.callbacks.onStateChange?.(
+    stateKey,
+    value,
+    nodeStateChangeContext(node, options),
+  );
 }
 
 /** Writes local state through a prop-named state key. */
 function setStateByPropKey(
-  props: Record<string, unknown>,
+  node: NotebookAppViewSchemaNode,
   context: SchemaRenderContext,
   keyProp: string,
   value: OrionUiLocalValue,
+  options: NodeStateChangeOptions = {},
 ): void {
-  const stateKey = stringProp(props, keyProp);
+  const stateKey = stringProp(node.props, keyProp);
   if (!stateKey) {
     return;
   }
 
   context.setStateValue(stateKey, value);
-  context.callbacks.onStateChange?.(stateKey, value);
+  context.callbacks.onStateChange?.(
+    stateKey,
+    value,
+    nodeStateChangeContext(node, options),
+  );
 }
 
 /** Returns overlay trigger text from common schema prop names. */
@@ -501,6 +561,12 @@ function parseDateRange(value: string | undefined): DateRange | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Returns whether serialized range state contains both valid endpoints. */
+function isCompleteDateRangeValue(value: string | undefined): boolean {
+  const range = parseDateRange(value);
+  return Boolean(range?.from && range.to);
 }
 
 /** Formats DayPicker's DateRange shape as compact JSON string state. */
@@ -852,7 +918,10 @@ function renderDatePresets(
                   ? presetRangeValue(preset)
                   : presetSingleValue(preset);
               if (nextValue !== undefined) {
-                setNodeState(node, context, nextValue);
+                setNodeState(node, context, nextValue, {
+                  execute:
+                    mode !== "range" || isCompleteDateRangeValue(nextValue),
+                });
                 onPresetMonth?.(selectedCalendarMonth(nextValue, mode));
               }
             }}
@@ -878,6 +947,8 @@ export function OrionUiPrimitiveTree({
   callbacks,
   className,
 }: OrionUiPrimitiveTreeProps): React.JSX.Element {
+  const onUnmountRef = React.useRef(callbacks?.onUnmount);
+  onUnmountRef.current = callbacks?.onUnmount;
   const [state, setState] = useState<Record<string, OrionUiLocalValue>>(
     initialState ?? {},
   );
@@ -887,6 +958,13 @@ export function OrionUiPrimitiveTree({
     setState(initialState ?? {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialStateSignature]);
+
+  useEffect(
+    () => () => {
+      onUnmountRef.current?.();
+    },
+    [],
+  );
 
   const setStateValue = useCallback((key: string, value: OrionUiLocalValue) => {
     setState((current) => ({ ...current, [key]: value }));
@@ -1206,7 +1284,9 @@ function renderInput(
         stringProp(node.props, "stateKey") ??
         "Input"
       }
-      onChange={(event) => setNodeState(node, context, event.target.value)}
+      onChange={(event) =>
+        setNodeState(node, context, event.target.value, { kind: "text" })
+      }
     />
   );
 }
@@ -1226,7 +1306,9 @@ function renderTextarea(
         stringProp(node.props, "stateKey") ??
         "Textarea"
       }
-      onChange={(event) => setNodeState(node, context, event.target.value)}
+      onChange={(event) =>
+        setNodeState(node, context, event.target.value, { kind: "text" })
+      }
     />
   );
 }
@@ -1274,6 +1356,23 @@ function renderSlider(
 ): React.ReactNode {
   const value = getNumberState(node, context);
 
+  return <OrionUiSliderControl node={node} context={context} value={value} />;
+}
+
+interface OrionUiSliderControlProps {
+  node: NotebookAppViewSchemaNode;
+  context: SchemaRenderContext;
+  value: number;
+}
+
+/** Distinguishes immediate keyboard nudges from debounced pointer dragging. */
+function OrionUiSliderControl({
+  node,
+  context,
+  value,
+}: OrionUiSliderControlProps): React.JSX.Element {
+  const changeKindRef = React.useRef<OrionUiChangeKind>("continuous");
+
   return (
     <Slider
       value={[value]}
@@ -1286,9 +1385,18 @@ function renderSlider(
         stringProp(node.props, "stateKey") ??
         "Slider"
       }
-      onValueChange={(nextValue) =>
-        setNodeState(node, context, nextValue[0] ?? value)
-      }
+      onKeyDownCapture={() => {
+        changeKindRef.current = "discrete";
+      }}
+      onPointerDownCapture={() => {
+        changeKindRef.current = "continuous";
+      }}
+      onValueChange={(nextValue) => {
+        setNodeState(node, context, nextValue[0] ?? value, {
+          kind: changeKindRef.current,
+        });
+        changeKindRef.current = "continuous";
+      }}
     />
   );
 }
@@ -1732,9 +1840,12 @@ function renderCalendar(
             toYear={toYear}
             {...calendarMonthProps(node.props)}
             showOutsideDays={showOutsideDays}
-            onSelect={(range) =>
-              setNodeState(node, context, formatDateRange(range))
-            }
+            onSelect={(range) => {
+              const nextValue = formatDateRange(range);
+              setNodeState(node, context, nextValue, {
+                execute: isCompleteDateRangeValue(nextValue),
+              });
+            }}
             initialFocus
           >
             {(syncMonth) => renderDatePresets(node, context, mode, syncMonth)}
@@ -1820,9 +1931,12 @@ function renderDatePicker(
                 toYear={toYear}
                 {...calendarMonthProps(node.props)}
                 showOutsideDays={showOutsideDays}
-                onSelect={(range) =>
-                  setNodeState(node, context, formatDateRange(range))
-                }
+                onSelect={(range) => {
+                  const nextValue = formatDateRange(range);
+                  setNodeState(node, context, nextValue, {
+                    execute: isCompleteDateRangeValue(nextValue),
+                  });
+                }}
                 initialFocus
               >
                 {(syncMonth) =>
@@ -1952,7 +2066,11 @@ function DateRangeSliderControl({
   ]);
 
   const commitRange = useCallback(
-    (fromDay: number, toDay: number) => {
+    (
+      fromDay: number,
+      toDay: number,
+      kind: OrionUiChangeKind = "continuous",
+    ) => {
       const normalizedFromDay = Math.min(fromDay, toDay);
       const normalizedToDay = Math.max(fromDay, toDay);
       setNodeState(
@@ -1962,6 +2080,7 @@ function DateRangeSliderControl({
           from: dateFromLocalDayIndex(normalizedFromDay),
           to: dateFromLocalDayIndex(normalizedToDay),
         }),
+        { kind },
       );
     },
     [context, node],
@@ -2060,7 +2179,7 @@ function DateRangeSliderControl({
           visibleStartDay,
           visibleEndDay - duration,
         );
-        commitRange(nextFrom, nextFrom + duration);
+        commitRange(nextFrom, nextFrom + duration, "discrete");
         return;
       }
 
@@ -2072,6 +2191,7 @@ function DateRangeSliderControl({
             rangeToDay - minDays + 1,
           ),
           rangeToDay,
+          "discrete",
         );
         return;
       }
@@ -2083,6 +2203,7 @@ function DateRangeSliderControl({
           rangeFromDay + minDays - 1,
           visibleEndDay,
         ),
+        "discrete",
       );
     },
     [
@@ -2354,10 +2475,11 @@ function renderDateTimePicker(
               value={startTimeValue}
               onChange={(event) =>
                 setStateByPropKey(
-                  node.props,
+                  node,
                   context,
                   "startTimeKey",
                   event.target.value,
+                  { kind: "text" },
                 )
               }
             />
@@ -2372,10 +2494,11 @@ function renderDateTimePicker(
               value={endTimeValue}
               onChange={(event) =>
                 setStateByPropKey(
-                  node.props,
+                  node,
                   context,
                   "endTimeKey",
                   event.target.value,
+                  { kind: "text" },
                 )
               }
             />

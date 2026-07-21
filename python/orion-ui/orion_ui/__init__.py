@@ -218,18 +218,35 @@ def _control(
     key: str,
     default_value: StateValue,
     value: Any = _UNSET,
+    *,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     **props: Any,
 ) -> Component:
-    """Create a state-bound control using default or forced value semantics."""
+    """Create a state-bound control with optional change-action behavior."""
     if not isinstance(key, str) or not key:
         raise ValueError("Control key must be a non-empty string.")
+    if on_change is not None and not isinstance(on_change, Mapping):
+        raise TypeError("Control on_change must be a mapping or None.")
+    if debounce_ms is not None:
+        if isinstance(debounce_ms, bool) or not isinstance(debounce_ms, int):
+            raise TypeError("Control debounce_ms must be a non-negative integer or None.")
+        if debounce_ms < 0:
+            raise ValueError("Control debounce_ms must be non-negative.")
     if value is _UNSET:
         define_default(key, default_value)
     else:
         if not isinstance(value, (str, int, float, bool)):
             raise TypeError("Control value must be a string, number, or boolean.")
         _runtime.set_value(key, value)
-    return _component(component_type, stateKey=key, defaultValue=default_value, **props)
+    return _component(
+        component_type,
+        stateKey=key,
+        defaultValue=default_value,
+        onChange=on_change,
+        debounceMs=debounce_ms,
+        **props,
+    )
 
 
 def page(
@@ -565,6 +582,8 @@ def input(
     value: Any = _UNSET,
     placeholder: Optional[str] = None,
     input_type: str = "text",
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create a text input bound to Python state.
@@ -586,6 +605,10 @@ def input(
     input_type : str, optional
         HTML ``type`` attribute (for example ``"text"``, ``"email"``,
         ``"password"``, ``"number"``). Default is ``"text"``.
+    on_change : mapping or None, optional
+        Declarative action dispatched after changed state reaches Python.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -599,6 +622,8 @@ def input(
         key,
         default_value,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         placeholder=placeholder,
         inputType=input_type,
@@ -613,6 +638,8 @@ def textarea(
     default_value: str = "",
     value: Any = _UNSET,
     placeholder: Optional[str] = None,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create a textarea bound to Python state.
@@ -631,6 +658,10 @@ def textarea(
         or ``bool`` and forces that value into runtime state on rerun.
     placeholder : str or None, optional
         Placeholder hint shown when empty. Default is ``None``.
+    on_change : mapping or None, optional
+        Declarative action dispatched after changed state reaches Python.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -644,6 +675,8 @@ def textarea(
         key,
         default_value,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         placeholder=placeholder,
         class_name=class_name,
@@ -658,6 +691,8 @@ def select(
     default_value: Optional[str] = None,
     value: Any = _UNSET,
     placeholder: Optional[str] = None,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create a select control bound to Python state.
@@ -682,6 +717,10 @@ def select(
         rerun.
     placeholder : str or None, optional
         Placeholder shown when no value is selected. Default is ``None``.
+    on_change : mapping or None, optional
+        Declarative action dispatched after changed state reaches Python.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -700,6 +739,8 @@ def select(
         key,
         initial,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         options=option_list,
         placeholder=placeholder,
@@ -716,6 +757,8 @@ def slider(
     default_value: Union[int, float] = 0,
     value: Any = _UNSET,
     step: Union[int, float] = 1,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create a numeric slider bound to Python state.
@@ -738,6 +781,10 @@ def slider(
         or ``bool`` and forces that value into runtime state on rerun.
     step : int or float, optional
         Increment between allowed values. Default is ``1``.
+    on_change : mapping or None, optional
+        Declarative action dispatched after changed state reaches Python.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -751,6 +798,8 @@ def slider(
         key,
         default_value,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         min=min,
         max=max,
@@ -765,6 +814,8 @@ def checkbox(
     label: Optional[str] = None,
     default_value: bool = False,
     value: Any = _UNSET,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create a checkbox bound to Python state.
@@ -782,6 +833,10 @@ def checkbox(
         When omitted, registers ``default_value`` without overwriting user
         input on rerun. When provided, must be a ``str``, ``int``, ``float``,
         or ``bool`` and forces that value into runtime state on rerun.
+    on_change : mapping or None, optional
+        Declarative action dispatched after changed state reaches Python.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -795,6 +850,8 @@ def checkbox(
         key,
         default_value,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         class_name=class_name,
     )
@@ -806,6 +863,8 @@ def switch(
     label: Optional[str] = None,
     default_value: bool = False,
     value: Any = _UNSET,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create a switch bound to Python state.
@@ -823,6 +882,10 @@ def switch(
         When omitted, registers ``default_value`` without overwriting user
         input on rerun. When provided, must be a ``str``, ``int``, ``float``,
         or ``bool`` and forces that value into runtime state on rerun.
+    on_change : mapping or None, optional
+        Declarative action dispatched after changed state reaches Python.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -836,6 +899,8 @@ def switch(
         key,
         default_value,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         class_name=class_name,
     )
@@ -848,6 +913,8 @@ def radio_group(
     label: Optional[str] = None,
     default_value: Optional[str] = None,
     value: Any = _UNSET,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create a radio group bound to Python state.
@@ -870,6 +937,10 @@ def radio_group(
         selection on rerun. When provided, must be a ``str``, ``int``,
         ``float``, or ``bool`` and forces that value into runtime state on
         rerun.
+    on_change : mapping or None, optional
+        Declarative action dispatched after changed state reaches Python.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -888,6 +959,8 @@ def radio_group(
         key,
         initial,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         options=option_list,
         class_name=class_name,
@@ -901,6 +974,8 @@ def toggle(
     default_value: bool = False,
     value: Any = _UNSET,
     variant: Optional[str] = None,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create a boolean toggle bound to Python state.
@@ -921,6 +996,10 @@ def toggle(
     variant : str or None, optional
         Visual style. One of ``"default"`` or ``"outline"``. Unrecognized
         values fall back to ``"default"``. Default is ``None``.
+    on_change : mapping or None, optional
+        Declarative action dispatched after changed state reaches Python.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -934,6 +1013,8 @@ def toggle(
         key,
         default_value,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         variant=variant,
         class_name=class_name,
@@ -948,6 +1029,8 @@ def toggle_group(
     default_value: Optional[str] = None,
     value: Any = _UNSET,
     variant: Optional[str] = None,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create a toggle group bound to Python state.
@@ -973,6 +1056,10 @@ def toggle_group(
     variant : str or None, optional
         Visual style. One of ``"default"`` or ``"outline"``. Unrecognized
         values fall back to ``"default"``. Default is ``None``.
+    on_change : mapping or None, optional
+        Declarative action dispatched after changed state reaches Python.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -991,6 +1078,8 @@ def toggle_group(
         key,
         initial,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         options=option_list,
         variant=variant,
@@ -1011,6 +1100,8 @@ def calendar(
     number_of_months: Optional[int] = None,
     show_outside_days: bool = False,
     presets: Optional[Sequence[Mapping[str, Any]]] = None,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create a calendar bound to ISO date or JSON range string Python state.
@@ -1057,6 +1148,10 @@ def calendar(
         include ``"label"`` and may include any of ``"value"`` (ISO date),
         ``"from"``, ``"to"``, ``"daysOffset"``, ``"fromDaysOffset"``, or
         ``"toDaysOffset"``. Default is ``None``.
+    on_change : mapping or None, optional
+        Declarative action dispatched after changed state reaches Python.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -1070,6 +1165,8 @@ def calendar(
         key,
         default_value,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         mode=mode,
         captionLayout=caption_layout,
@@ -1096,6 +1193,8 @@ def date_picker(
     number_of_months: Optional[int] = None,
     show_outside_days: bool = False,
     presets: Optional[Sequence[Mapping[str, Any]]] = None,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create a popover date picker bound to ISO date or JSON range string state.
@@ -1145,6 +1244,10 @@ def date_picker(
         include ``"label"`` and may include any of ``"value"`` (ISO date),
         ``"from"``, ``"to"``, ``"daysOffset"``, ``"fromDaysOffset"``, or
         ``"toDaysOffset"``. Default is ``None``.
+    on_change : mapping or None, optional
+        Declarative action dispatched after changed state reaches Python.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -1158,6 +1261,8 @@ def date_picker(
         key,
         default_value,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         mode=mode,
         placeholder=placeholder,
@@ -1180,6 +1285,8 @@ def date_range_slider(
     visible_months: int = 4,
     min_days: int = 1,
     presets: Optional[Sequence[Mapping[str, Any]]] = None,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create an animated timeline date range slider bound to Python state.
@@ -1214,6 +1321,10 @@ def date_range_slider(
         ``"toDaysOffset"``, ``"value"``, or ``"daysOffset"``. When omitted,
         Orion renders ``"This month"``, ``"Last 7D"``, ``"30D"``, and
         ``"90D"`` presets.
+    on_change : mapping or None, optional
+        Declarative action dispatched after changed state reaches Python.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -1228,6 +1339,8 @@ def date_range_slider(
         key,
         resolved_default,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         visibleMonths=visible_months,
         minDays=min_days,
@@ -1253,6 +1366,8 @@ def date_time_picker(
     to_year: Optional[int] = None,
     show_outside_days: bool = False,
     presets: Optional[Sequence[Mapping[str, Any]]] = None,
+    on_change: Optional[Mapping[str, Any]] = None,
+    debounce_ms: Optional[int] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create a date picker paired with start and end time inputs.
@@ -1305,6 +1420,10 @@ def date_time_picker(
         Quick-pick date buttons. Each mapping must include ``"label"`` and may
         include ``"value"`` (ISO date) or ``"daysOffset"``. Default is
         ``None``.
+    on_change : mapping or None, optional
+        Declarative action shared by date, start-time, and end-time changes.
+    debounce_ms : int or None, optional
+        Non-negative action debounce override. ``None`` uses smart defaults.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -1323,6 +1442,8 @@ def date_time_picker(
         key,
         default_value,
         value,
+        on_change=on_change,
+        debounce_ms=debounce_ms,
         label=label,
         mode="single",
         startTimeKey=resolved_start_time_key,
@@ -2012,6 +2133,7 @@ __all__ = [
     "checkbox",
     "collapsible",
     "date_picker",
+    "date_range_slider",
     "date_time_picker",
     "define_default",
     "get",

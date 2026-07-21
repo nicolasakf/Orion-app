@@ -1,6 +1,9 @@
 import type ansiToHtml from "ansi-to-html";
 import type { NotebookOutputType } from "@/lib/types";
-import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
+import type {
+  OrionUiLocalValue,
+  OrionUiStateChangeContext,
+} from "@/components/notebook/orion-ui-primitives";
 import type {
   OrionTableCommResponse,
   OrionTableOutputMetadata,
@@ -30,8 +33,10 @@ export interface NotebookOutputActionHandlers {
     key: string,
     value: OrionUiLocalValue,
     outputId?: string,
+    change?: OrionUiStateChangeContext,
   ) => void;
   onOrionUiAction?: (action: unknown) => void;
+  onOrionUiUnmount?: (outputId?: string) => void;
   onOrionUiTableRequest?: (
     request: OrionTableRequest,
   ) => Promise<OrionTableCommResponse>;

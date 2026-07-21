@@ -1,8 +1,9 @@
 import * as React from "react";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OrionUiOutputRenderer } from "@/components/notebook/renderers/orion-ui";
+import type { OrionUiStateChangeContext } from "@/components/notebook/orion-ui-primitives";
 import type {
   OrionTableCommResponse,
   OrionTableOutputMetadata,
@@ -19,8 +20,20 @@ vi.mock("@/hooks/use-orion-settings", () => ({
   useExperienceMode: useExperienceModeMock,
 }));
 
+beforeEach(() => {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class ResizeObserver {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    },
+  );
+});
+
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   useExperienceModeMock.mockReturnValue("pro");
 });
 
@@ -28,6 +41,7 @@ function renderOrionUiOutput({
   value,
   onStateChange = vi.fn(),
   onAction = vi.fn(),
+  onUnmount = vi.fn(),
   onTableRequest = vi.fn(),
   onTableMetadataChange = vi.fn(),
   outputMetadata = {},
@@ -37,8 +51,10 @@ function renderOrionUiOutput({
     key: string,
     value: string | number | boolean,
     outputId?: string,
+    change?: OrionUiStateChangeContext,
   ) => void;
   onAction?: (action: unknown) => void;
+  onUnmount?: (outputId?: string) => void;
   onTableRequest?: (
     request: OrionTableRequest,
   ) => Promise<OrionTableCommResponse>;
@@ -69,13 +85,21 @@ function renderOrionUiOutput({
         outputIndex: 0,
         onOrionUiStateChange: onStateChange,
         onOrionUiAction: onAction,
+        onOrionUiUnmount: onUnmount,
         onOrionUiTableRequest: onTableRequest,
         onOrionUiTableMetadataChange: onTableMetadataChange,
       }}
     />,
   );
 
-  return { ...rendered, onStateChange, onAction, onTableRequest, onTableMetadataChange };
+  return {
+    ...rendered,
+    onStateChange,
+    onAction,
+    onUnmount,
+    onTableRequest,
+    onTableMetadataChange,
+  };
 }
 
 function tablePayload(overrides: Record<string, unknown> = {}) {
@@ -165,6 +189,240 @@ describe("OrionUiOutputRenderer", () => {
     expect(onStateChange).toHaveBeenCalledWith("region", "east", "ui-test");
   });
 
+  it("cancels output-scoped change actions when the renderer unmounts", () => {
+    const { onUnmount, unmount } = renderOrionUiOutput({
+      value: {
+        version: 1,
+        id: "ui-unmount",
+        root: {
+          type: "Input",
+          props: { stateKey: "query", defaultValue: "" },
+          children: [],
+        },
+        state: { query: "" },
+        bindings: { query: { kind: "python_state", valueType: "string" } },
+      },
+    });
+
+    unmount();
+
+    expect(onUnmount).toHaveBeenCalledWith("ui-unmount");
+  });
+
+  it("forwards text change actions with the smart debounce", () => {
+    const action = { type: "execute_cells", cellIds: ["cell-a"] };
+    const { onStateChange } = renderOrionUiOutput({
+      value: {
+        version: 1,
+        id: "ui-input-action",
+        root: {
+          type: "Input",
+          props: {
+            label: "Query",
+            stateKey: "query",
+            defaultValue: "",
+            onChange: action,
+          },
+          children: [],
+        },
+        state: { query: "" },
+        bindings: { query: { kind: "python_state", valueType: "string" } },
+      },
+    });
+
+    expect(onStateChange).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("Query"), {
+      target: { value: "revenue" },
+    });
+
+    expect(onStateChange).toHaveBeenLastCalledWith(
+      "query",
+      "revenue",
+      "ui-input-action",
+      { action, debounceMs: 500, execute: true },
+    );
+  });
+
+  it("uses immediate discrete actions and honors debounce overrides", () => {
+    const action = { type: "execute_cells", cellIds: ["cell-a"] };
+    const { onStateChange } = renderOrionUiOutput({
+      value: {
+        version: 1,
+        id: "ui-checkbox-action",
+        root: {
+          type: "Checkbox",
+          props: {
+            label: "Include archived",
+            stateKey: "archived",
+            defaultValue: false,
+            onChange: action,
+            debounceMs: 75,
+          },
+          children: [],
+        },
+        state: { archived: false },
+        bindings: {
+          archived: { kind: "python_state", valueType: "boolean" },
+        },
+      },
+    });
+
+    fireEvent.click(screen.getByRole("checkbox"));
+
+    expect(onStateChange).toHaveBeenLastCalledWith(
+      "archived",
+      true,
+      "ui-checkbox-action",
+      { action, debounceMs: 75, execute: true },
+    );
+  });
+
+  it("runs slider keyboard nudges immediately", () => {
+    const action = { type: "execute_cells", cellIds: ["cell-a"] };
+    const { onStateChange } = renderOrionUiOutput({
+      value: {
+        version: 1,
+        id: "ui-slider-action",
+        root: {
+          type: "Slider",
+          props: {
+            label: "Threshold",
+            stateKey: "threshold",
+            defaultValue: 10,
+            min: 0,
+            max: 100,
+            step: 1,
+            onChange: action,
+          },
+          children: [],
+        },
+        state: { threshold: 10 },
+        bindings: {
+          threshold: { kind: "python_state", valueType: "number" },
+        },
+      },
+    });
+
+    fireEvent.keyDown(screen.getByRole("slider"), { key: "ArrowRight" });
+
+    expect(onStateChange).toHaveBeenCalledWith(
+      "threshold",
+      11,
+      "ui-slider-action",
+      { action, debounceMs: 0, execute: true },
+    );
+  });
+
+  it("syncs incomplete calendar ranges without executing their action", () => {
+    const action = { type: "execute_cells", cellIds: ["cell-a"] };
+    const { onStateChange } = renderOrionUiOutput({
+      value: {
+        version: 1,
+        id: "ui-range-action",
+        root: {
+          type: "Calendar",
+          props: {
+            label: "Window",
+            stateKey: "window",
+            mode: "range",
+            defaultValue: "",
+            presets: [
+              { label: "Start only", from: "2026-07-01" },
+              {
+                label: "Full range",
+                from: "2026-07-01",
+                to: "2026-07-07",
+              },
+            ],
+            onChange: action,
+          },
+          children: [],
+        },
+        state: { window: "" },
+        bindings: { window: { kind: "python_state", valueType: "string" } },
+      },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start only" }));
+    expect(onStateChange).toHaveBeenLastCalledWith(
+      "window",
+      JSON.stringify({ from: "2026-07-01" }),
+      "ui-range-action",
+      { action, debounceMs: 0, execute: false },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Full range" }));
+    expect(onStateChange).toHaveBeenLastCalledWith(
+      "window",
+      JSON.stringify({ from: "2026-07-01", to: "2026-07-07" }),
+      "ui-range-action",
+      { action, debounceMs: 0, execute: true },
+    );
+  });
+
+  it("applies one date-time picker action to its time state keys", () => {
+    const action = { type: "execute_cells", cellIds: ["cell-a"] };
+    const { onStateChange } = renderOrionUiOutput({
+      value: {
+        version: 1,
+        id: "ui-date-time-action",
+        root: {
+          type: "DateTimePicker",
+          props: {
+            label: "Schedule",
+            stateKey: "date",
+            defaultValue: "2026-07-21",
+            startTimeKey: "start_time",
+            startTimeDefaultValue: "09:00:00",
+            endTimeKey: "end_time",
+            endTimeDefaultValue: "17:00:00",
+            presets: [{ label: "Tomorrow", value: "2026-07-22" }],
+            onChange: action,
+          },
+          children: [],
+        },
+        state: {
+          date: "2026-07-21",
+          start_time: "09:00:00",
+          end_time: "17:00:00",
+        },
+        bindings: {
+          date: { kind: "python_state", valueType: "string" },
+          start_time: { kind: "python_state", valueType: "string" },
+          end_time: { kind: "python_state", valueType: "string" },
+        },
+      },
+    });
+
+    fireEvent.change(screen.getByLabelText("Start time"), {
+      target: { value: "10:30:00" },
+    });
+    expect(onStateChange).toHaveBeenLastCalledWith(
+      "start_time",
+      "10:30:00",
+      "ui-date-time-action",
+      { action, debounceMs: 500, execute: true },
+    );
+
+    fireEvent.change(screen.getByLabelText("End time"), {
+      target: { value: "18:15:00" },
+    });
+    expect(onStateChange).toHaveBeenLastCalledWith(
+      "end_time",
+      "18:15:00",
+      "ui-date-time-action",
+      { action, debounceMs: 500, execute: true },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Tomorrow" }));
+    expect(onStateChange).toHaveBeenLastCalledWith(
+      "date",
+      "2026-07-22",
+      "ui-date-time-action",
+      { action, debounceMs: 0, execute: true },
+    );
+  });
+
   it("dispatches declarative button actions", () => {
     const action = { type: "execute_cells", cellIds: ["cell-a"] };
     const { onAction } = renderOrionUiOutput({
@@ -222,6 +480,62 @@ describe("OrionUiOutputRenderer", () => {
 
     expect(screen.getByRole("button", { name: "Styled" })).toHaveClass(
       "metric-action",
+    );
+  });
+
+  it("uses the continuous debounce while dragging a date range", () => {
+    const action = { type: "execute_cells", cellIds: ["cell-a"] };
+    const { onStateChange } = renderOrionUiOutput({
+      value: {
+        version: 1,
+        id: "ui-date-range-drag",
+        root: {
+          type: "DateRangeSlider",
+          props: {
+            label: "Analysis window",
+            stateKey: "analysis_window",
+            defaultValue: '{"from":"2026-05-01","to":"2026-05-07"}',
+            onChange: action,
+          },
+          children: [],
+        },
+        state: {
+          analysis_window: '{"from":"2026-05-01","to":"2026-05-07"}',
+        },
+        bindings: {
+          analysis_window: { kind: "python_state", valueType: "string" },
+        },
+      },
+    });
+    const rangeHandle = screen.getByRole("button", {
+      name: /Move selected range/,
+    });
+    const track = rangeHandle.parentElement;
+    expect(track).not.toBeNull();
+    Object.defineProperty(rangeHandle, "setPointerCapture", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    vi.spyOn(track!, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      width: 200,
+      top: 0,
+      right: 200,
+      bottom: 48,
+      height: 48,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+
+    fireEvent.pointerDown(rangeHandle, { pointerId: 1, clientX: 100 });
+    fireEvent.pointerMove(track!, { pointerId: 1, clientX: 120 });
+
+    expect(onStateChange).toHaveBeenCalledWith(
+      "analysis_window",
+      expect.any(String),
+      "ui-date-range-drag",
+      { action, debounceMs: 250, execute: true },
     );
   });
 

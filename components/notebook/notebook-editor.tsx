@@ -51,7 +51,10 @@ import {
 import { OrionLoader } from "@/components/common/orion-loader";
 import { parseNotebook } from "@/lib/notebook/notebook-parser";
 import { NotebookCell } from "@/components/notebook/notebook-cell";
-import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
+import type {
+  OrionUiLocalValue,
+  OrionUiStateChangeContext,
+} from "@/components/notebook/orion-ui-primitives";
 import {
   ORION_TABLE_COMM_TARGET,
   OrionTableCommEnvelopeSchema,
@@ -368,6 +371,41 @@ interface ScrollPositionSnapshot {
   container: HTMLElement;
   scrollTop: number;
   scrollLeft: number;
+}
+
+interface ExecuteCellsActionPlan {
+  cellIds: string[];
+  coalesceKey: string;
+}
+
+/** Validates and normalizes the shared Orion UI execute-cells action shape. */
+function normalizeExecuteCellsAction(
+  action: unknown,
+): ExecuteCellsActionPlan | null {
+  if (
+    !isRecord(action) ||
+    action.type !== "execute_cells" ||
+    !Array.isArray(action.cellIds)
+  ) {
+    return null;
+  }
+
+  const cellIds = Array.from(
+    new Set(
+      action.cellIds.filter(
+        (cellId): cellId is string =>
+          typeof cellId === "string" && cellId.length > 0,
+      ),
+    ),
+  );
+  if (cellIds.length === 0) {
+    return null;
+  }
+
+  return {
+    cellIds,
+    coalesceKey: `orion-ui-change:${JSON.stringify(cellIds)}`,
+  };
 }
 
 /**
@@ -725,6 +763,55 @@ export function NotebookEditor({
     Map<CellId, { getSource: () => string; focusSource: () => void }>
   >(new Map());
   const executionQueueRef = useRef(new CellExecutionQueue());
+  const orionUiChangeEpochRef = useRef(0);
+  const orionUiChangeGenerationsRef = useRef(new Map<string, number>());
+  const orionUiChangeOutputIdsRef = useRef(new Map<string, string>());
+  const orionUiChangeTimersRef = useRef(
+    new Map<string, ReturnType<typeof setTimeout>>(),
+  );
+
+  /** Invalidates debounced or in-flight Orion UI automatic runs. */
+  const cancelPendingOrionUiChangeActions = useCallback(() => {
+    orionUiChangeEpochRef.current += 1;
+    orionUiChangeGenerationsRef.current.clear();
+    orionUiChangeOutputIdsRef.current.clear();
+    orionUiChangeTimersRef.current.forEach((timer) => clearTimeout(timer));
+    orionUiChangeTimersRef.current.clear();
+  }, []);
+
+  /** Cancels automatic runs whose latest state change came from one output. */
+  const handleOrionUiUnmount = useCallback((outputId?: string): void => {
+    if (!outputId) {
+      return;
+    }
+
+    orionUiChangeOutputIdsRef.current.forEach((originOutputId, key) => {
+      if (originOutputId !== outputId) {
+        return;
+      }
+      const timer = orionUiChangeTimersRef.current.get(key);
+      if (timer) {
+        clearTimeout(timer);
+        orionUiChangeTimersRef.current.delete(key);
+      }
+      orionUiChangeGenerationsRef.current.set(
+        key,
+        (orionUiChangeGenerationsRef.current.get(key) ?? 0) + 1,
+      );
+      orionUiChangeOutputIdsRef.current.delete(key);
+    });
+  }, []);
+
+  useEffect(() => {
+    cancelPendingOrionUiChangeActions();
+    return cancelPendingOrionUiChangeActions;
+  }, [
+    cancelPendingOrionUiChangeActions,
+    filepath,
+    parentCurrentKernel?.name,
+    parentCurrentKernel?.path,
+    parentKernelService,
+  ]);
 
   /**
    * Publishes whether any notebook execution source is active. A queued run and
@@ -808,6 +895,7 @@ export function NotebookEditor({
         modifiedCellsRef.current = new Set();
         pendingCellChangesRef.current = new Map();
         cellComponentRefs.current = new Map();
+        cancelPendingOrionUiChangeActions();
         executionQueueRef.current.clear();
         updateExecutionRunningState();
         cellRefs.current = new Map();
@@ -835,6 +923,7 @@ export function NotebookEditor({
     };
   }, [
     applySelectionState,
+    cancelPendingOrionUiChangeActions,
     filepath,
     parentKernelService,
     markClean,
@@ -2358,12 +2447,14 @@ export function NotebookEditor({
    * @param stopOnError - Whether to stop on first cell error. Defaults to true for
    *   batch operations (run all, run all above/below) and false for explicit
    *   multi-select runs.
+   * @param coalesceKey - Optional key that replaces an older pending automatic run.
    */
   const handleRunCell = useCallback(
     (
       indicesToRun?: number[] | number,
       stopOnError = true,
       triggerSource?: RunAllTriggerSource,
+      coalesceKey?: string,
     ) => {
       if (!notebook || !isKernelAvailableForExecution()) {
         console.warn("Cannot run cell: kernel not available");
@@ -2387,6 +2478,7 @@ export function NotebookEditor({
         indices: finalIndices,
         stopOnError,
         triggerSource,
+        coalesceKey,
       });
       markCellsQueued(finalIndices);
       void processExecutionQueue();
@@ -2411,9 +2503,38 @@ export function NotebookEditor({
       key: string,
       value: OrionUiLocalValue,
       outputId?: string,
+      change?: OrionUiStateChangeContext,
     ): Promise<void> => {
-      if (!parentKernelService || !parentKernelService.isReady()) {
-        return;
+      const actionPlan = change
+        ? normalizeExecuteCellsAction(change.action)
+        : null;
+      const epoch = orionUiChangeEpochRef.current;
+      let generation: number | null = null;
+
+      if (actionPlan) {
+        generation =
+          (orionUiChangeGenerationsRef.current.get(
+            actionPlan.coalesceKey,
+          ) ?? 0) + 1;
+        orionUiChangeGenerationsRef.current.set(
+          actionPlan.coalesceKey,
+          generation,
+        );
+        if (outputId) {
+          orionUiChangeOutputIdsRef.current.set(
+            actionPlan.coalesceKey,
+            outputId,
+          );
+        } else {
+          orionUiChangeOutputIdsRef.current.delete(actionPlan.coalesceKey);
+        }
+        const pendingTimer = orionUiChangeTimersRef.current.get(
+          actionPlan.coalesceKey,
+        );
+        if (pendingTimer) {
+          clearTimeout(pendingTimer);
+          orionUiChangeTimersRef.current.delete(actionPlan.coalesceKey);
+        }
       }
 
       const toPythonJsonLoad = (payload: unknown): string =>
@@ -2426,17 +2547,84 @@ export function NotebookEditor({
         `_orion_ui._runtime.set_value(${toPythonJsonLoad(key)}, ${toPythonJsonLoad(value)}, output_id=${outputIdExpression})`,
       ].join("\n");
 
-      try {
-        const future = await parentKernelService.execute(code, undefined, {
-          silent: true,
-          storeHistory: false,
-        });
-        await future.done;
-      } catch (error) {
-        console.warn("Failed to sync Orion UI state", error);
+      const kernel = parentKernelService?.getKernelConnection();
+      const syncState = async (): Promise<boolean> => {
+        if (
+          !kernel ||
+          kernel.isDisposed ||
+          kernel.status === "dead" ||
+          kernel.status === "terminating"
+        ) {
+          return false;
+        }
+
+        try {
+          const future = kernel.requestExecute({
+            code,
+            silent: true,
+            store_history: false,
+          });
+          const reply = await future.done;
+          if (reply.content.status !== "ok") {
+            const content = reply.content as { evalue?: string };
+            console.warn(
+              "Failed to sync Orion UI state",
+              content.evalue ?? "Kernel rejected the state update.",
+            );
+            return false;
+          }
+          return true;
+        } catch (error) {
+          console.warn("Failed to sync Orion UI state", error);
+          return false;
+        }
+      };
+
+      const syncPromise = syncState();
+      if (!actionPlan || generation === null || !change?.execute) {
+        await syncPromise;
+        return;
       }
+
+      const timer = setTimeout(() => {
+        orionUiChangeTimersRef.current.delete(actionPlan.coalesceKey);
+        void (async () => {
+          const synced = await syncPromise;
+          if (
+            !synced ||
+            orionUiChangeEpochRef.current !== epoch ||
+            orionUiChangeGenerationsRef.current.get(
+              actionPlan.coalesceKey,
+            ) !== generation ||
+            parentKernelService?.getKernelConnection() !== kernel
+          ) {
+            return;
+          }
+
+          const currentNotebook = notebookRef.current;
+          if (!currentNotebook) {
+            return;
+          }
+          const indices = actionPlan.cellIds
+            .map((cellId) => getCellIndexById(currentNotebook, cellId))
+            .filter(
+              (index) =>
+                index >= 0 &&
+                currentNotebook.cells[index]?.cell_type === CellType.CODE,
+            );
+          if (indices.length > 0) {
+            handleRunCell(
+              indices,
+              true,
+              undefined,
+              actionPlan.coalesceKey,
+            );
+          }
+        })();
+      }, change.debounceMs);
+      orionUiChangeTimersRef.current.set(actionPlan.coalesceKey, timer);
     },
-    [parentKernelService],
+    [handleRunCell, parentKernelService],
   );
 
   /** Ensures the Python table comm target exists before sending table requests. */
@@ -2576,22 +2764,24 @@ export function NotebookEditor({
    */
   const handleOrionUiAction = useCallback(
     (action: unknown): void => {
-      if (!notebook || !isRecord(action)) {
+      const actionPlan = normalizeExecuteCellsAction(action);
+      const currentNotebook = notebookRef.current;
+      if (!actionPlan || !currentNotebook) {
         return;
       }
 
-      if (action.type === "execute_cells" && Array.isArray(action.cellIds)) {
-        const indices = action.cellIds
-          .filter((cellId): cellId is string => typeof cellId === "string")
-          .map((cellId) => getCellIndexById(notebook, cellId))
-          .filter((index) => index >= 0);
-
-        if (indices.length > 0) {
-          void handleRunCell(indices, true);
-        }
+      const indices = actionPlan.cellIds
+        .map((cellId) => getCellIndexById(currentNotebook, cellId))
+        .filter(
+          (index) =>
+            index >= 0 &&
+            currentNotebook.cells[index]?.cell_type === CellType.CODE,
+        );
+      if (indices.length > 0) {
+        handleRunCell(indices, true);
       }
     },
-    [handleRunCell, notebook],
+    [handleRunCell],
   );
 
   /**
@@ -2688,6 +2878,7 @@ export function NotebookEditor({
   // Clear pending runs when the user interrupts the kernel.
   useEffect(() => {
     const handleClearExecutionQueue = () => {
+      cancelPendingOrionUiChangeActions();
       executionQueueRef.current.clear();
       clearQueuedExecutionStatuses();
       updateExecutionRunningState();
@@ -2704,7 +2895,11 @@ export function NotebookEditor({
         handleClearExecutionQueue as EventListener,
       );
     };
-  }, [clearQueuedExecutionStatuses, updateExecutionRunningState]);
+  }, [
+    cancelPendingOrionUiChangeActions,
+    clearQueuedExecutionStatuses,
+    updateExecutionRunningState,
+  ]);
 
   /**
    * Handles kernel selection
@@ -4117,6 +4312,7 @@ export function NotebookEditor({
                   onRestoreAppViewReference={handleRestoreAppViewReference}
                   onOrionUiStateChange={handleOrionUiStateChange}
                   onOrionUiAction={handleOrionUiAction}
+                  onOrionUiUnmount={handleOrionUiUnmount}
                   onOrionUiTableRequest={handleOrionUiTableRequest}
                   onOrionUiTableMetadataChange={
                     handleOrionUiTableMetadataChange
@@ -4358,6 +4554,7 @@ export function NotebookEditor({
                               onMentionCell={handleMentionCell}
                               onOrionUiStateChange={handleOrionUiStateChange}
                               onOrionUiAction={handleOrionUiAction}
+                              onOrionUiUnmount={handleOrionUiUnmount}
                               onOrionUiTableRequest={handleOrionUiTableRequest}
                               validationIssue={subagentValidation.cellIssues.get(
                                 index,

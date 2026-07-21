@@ -48,6 +48,36 @@ model = ui.get("model")
 temperature = ui.get("temperature")
 ```
 
+## Run cells when a control changes
+
+Every user-editable, state-bound control accepts an optional `on_change`
+action. Target cells must already have stable Orion cell ids:
+
+```python
+ui.date_picker(
+    "start_date",
+    label="Start date",
+    on_change={
+        "type": "execute_cells",
+        "cellIds": ["stable-orion-cell-id"],
+    },
+)
+```
+
+Orion writes the new value to Python state before running the target cells.
+Selections, presets, and keyboard nudges run immediately. Typing waits 500 ms
+after the latest edit, while slider and date-range dragging wait 250 ms. Use
+`debounce_ms=0` for immediate execution or another non-negative millisecond
+value to override the default. Date ranges run only after both endpoints are
+selected, and `ui.date_time_picker()` applies one action to its date, start
+time, and end time values.
+
+The supported controls are `ui.input`, `ui.textarea`, `ui.select`,
+`ui.slider`, `ui.checkbox`, `ui.switch`, `ui.radio_group`, `ui.toggle`,
+`ui.toggle_group`, `ui.calendar`, `ui.date_picker`,
+`ui.date_range_slider`, and `ui.date_time_picker`. Prefer an explicit
+`ui.button(..., action=...)` when running cells is expensive or destructive.
+
 ## DataFrame tables
 
 Use `ui.table()` for interactive pandas DataFrame browsing without sending the

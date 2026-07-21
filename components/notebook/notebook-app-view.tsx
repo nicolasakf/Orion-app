@@ -10,7 +10,10 @@ import {
 
 import { BusinessRichMarkdownEditor } from "@/components/notebook/business-rich-markdown-editor";
 import { MarkdownRenderer } from "@/components/notebook/markdown-renderer";
-import type { OrionUiLocalValue } from "@/components/notebook/orion-ui-primitives";
+import type {
+  OrionUiLocalValue,
+  OrionUiStateChangeContext,
+} from "@/components/notebook/orion-ui-primitives";
 import type {
   OrionTableCommResponse,
   OrionTableOutputMetadata,
@@ -68,8 +71,10 @@ interface NotebookAppViewProps {
     key: string,
     value: OrionUiLocalValue,
     outputId?: string,
+    change?: OrionUiStateChangeContext,
   ) => void;
   onOrionUiAction?: (action: unknown) => void;
+  onOrionUiUnmount?: (outputId?: string) => void;
   onOrionUiTableRequest?: (
     request: OrionTableRequest,
   ) => Promise<OrionTableCommResponse>;
@@ -106,7 +111,6 @@ interface NotebookTocItem {
   title: string;
   level: number;
   cellIndex: number;
-  preview: string | null;
 }
 
 /** Extracts notebook cell source as a single markdown string. */
@@ -169,40 +173,9 @@ function notebookHasContent(notebook: NotebookType): boolean {
   });
 }
 
-/** Converts markdown source into a compact plain-text TOC preview. */
-function getMarkdownHeadingPreview(markdown: string): string | null {
-  const markdownLines = markdown.replace(/\r\n/g, "\n").split("\n");
-  const headingLineIndex = markdownLines.findIndex((line) =>
-    /^#{1,6}\s+/.test(line.trim()),
-  );
-  const sectionBodyLines =
-    headingLineIndex >= 0
-      ? markdownLines.slice(headingLineIndex + 1)
-      : markdownLines;
-  const withoutHeading = sectionBodyLines.join("\n").trim();
-
-  const preview = withoutHeading
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/^[\s>*#-]+/gm, "")
-    .replace(/[*_`~]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (!preview) {
-    return null;
-  }
-
-  return preview.length > 150
-    ? `${preview.slice(0, 147).trim()}...`
-    : preview;
-}
-
 /** Flattens the notebook minimap tree into heading-only TOC rows. */
 function flattenNotebookTocSections(
   sections: NotebookMinimapSection[],
-  notebook: NotebookType,
   visibleCellIndices: Set<number>,
 ): NotebookTocItem[] {
   const items: NotebookTocItem[] = [];
@@ -213,18 +186,11 @@ function flattenNotebookTocSections(
       section.headingCellIndex !== null &&
       visibleCellIndices.has(section.headingCellIndex)
     ) {
-      const headingCell = notebook.cells[section.headingCellIndex];
-      const markdown =
-        headingCell?.cell_type === CellType.MARKDOWN
-          ? sourceToString(headingCell.source)
-          : "";
-
       items.push({
         id: section.id,
         title: section.headingText,
         level: section.headingLevel,
         cellIndex: section.headingCellIndex,
-        preview: getMarkdownHeadingPreview(markdown),
       });
     }
 
@@ -235,7 +201,7 @@ function flattenNotebookTocSections(
   return items;
 }
 
-/** Compact business App View-only table-of-contents rail with hover previews. */
+/** Compact business App View-only table-of-contents rail with one full contents card. */
 function NotebookAppViewTocRail({
   items,
   onNavigate,
@@ -243,76 +209,53 @@ function NotebookAppViewTocRail({
   items: NotebookTocItem[];
   onNavigate: (cellIndex: number) => void;
 }): React.JSX.Element | null {
-  const [hoveredItemId, setHoveredItemId] = React.useState<string | null>(null);
-  const hoveredIndex = items.findIndex((item) => item.id === hoveredItemId);
-
   if (items.length === 0) {
     return null;
   }
 
   return (
-    <div
-      className="scrollbar-hide flex max-h-[70vh] flex-col items-start overflow-y-auto px-1 py-1"
-      aria-label="App View table of contents"
-      onMouseLeave={() => setHoveredItemId(null)}
-    >
-      {items.map((item, index) => {
-        const isHovered = item.id === hoveredItemId;
-        const hoverDistance =
-          hoveredIndex === -1
-            ? Number.POSITIVE_INFINITY
-            : Math.abs(index - hoveredIndex);
-        const widthClass =
-          hoverDistance === 0
-            ? "w-7"
-            : hoverDistance === 1
-              ? "w-5"
-              : hoverDistance === 2
-                ? "w-4"
-                : item.level <= 1
-                  ? "w-3.5"
-                  : "w-2.5";
-
-        return (
-          <HoverCard key={item.id} openDelay={80} closeDelay={40}>
-            <HoverCardTrigger asChild>
+    <HoverCard openDelay={80} closeDelay={80}>
+      <HoverCardTrigger asChild>
+        <button
+          type="button"
+          className="scrollbar-hide group flex max-h-[70vh] w-8 flex-col items-start gap-2 overflow-y-auto px-1 py-1 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          aria-label="Browse table of contents"
+        >
+          {items.map((item) => (
+            <span
+              key={item.id}
+              className={cn(
+                "h-0.5 rounded-full bg-muted-foreground/35 transition-colors group-hover:bg-muted-foreground/60",
+                item.level <= 1 ? "w-5" : item.level === 2 ? "w-4" : "w-3",
+              )}
+            />
+          ))}
+        </button>
+      </HoverCardTrigger>
+      <HoverCardContent
+        side="right"
+        align="center"
+        sideOffset={6}
+        className="max-h-96 w-80 overflow-y-auto p-2"
+      >
+        <nav aria-label="App View table of contents">
+          <div className="space-y-0.5">
+            {items.map((item) => (
               <button
+                key={item.id}
                 type="button"
-                className="group flex h-4 w-8 items-center bg-transparent p-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="flex w-full items-center rounded-sm py-1.5 pr-2 text-left text-sm hover:bg-accent focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                style={{ paddingLeft: `${8 + (item.level - 1) * 12}px` }}
                 aria-label={`Go to ${item.title}`}
-                onMouseEnter={() => setHoveredItemId(item.id)}
-                onFocus={() => setHoveredItemId(item.id)}
-                onBlur={() => setHoveredItemId(null)}
                 onClick={() => onNavigate(item.cellIndex)}
               >
-                <span
-                  className={cn(
-                    "h-0.5 rounded-full transition-all duration-150 ease-out",
-                    widthClass,
-                    isHovered
-                      ? "bg-foreground"
-                      : "bg-muted-foreground/35 group-hover:bg-muted-foreground/50",
-                  )}
-                />
+                <span className="truncate">{item.title}</span>
               </button>
-            </HoverCardTrigger>
-            <HoverCardContent
-              side="right"
-              align="center"
-              sideOffset={6}
-              className="max-h-96 w-80 overflow-y-auto px-4 py-3"
-            >
-              <p className="truncate text-sm font-medium">{item.title}</p>
-              {item.preview ? (
-                <p className="mt-1.5 line-clamp-6 text-xs leading-5 text-muted-foreground">
-                  {item.preview}
-                </p>
-              ) : null}
-            </HoverCardContent>
-          </HoverCard>
-        );
-      })}
-    </div>
+            ))}
+          </div>
+        </nav>
+      </HoverCardContent>
+    </HoverCard>
   );
 }
 
@@ -479,6 +422,7 @@ export function NotebookAppView({
   onRestoreAppViewReference,
   onOrionUiStateChange,
   onOrionUiAction,
+  onOrionUiUnmount,
   onOrionUiTableRequest,
   onOrionUiTableMetadataChange,
 }: NotebookAppViewProps): React.JSX.Element {
@@ -512,7 +456,6 @@ export function NotebookAppView({
       businessMode
         ? flattenNotebookTocSections(
             buildNotebookMinimap(notebook.cells),
-            notebook,
             visibleCellIndices,
           )
         : [],
@@ -811,10 +754,11 @@ export function NotebookAppView({
                           : undefined
                       }
                       isInAppView
-                      onOrionUiStateChange={(key, value, outputId) =>
-                        onOrionUiStateChange?.(key, value, outputId)
+                      onOrionUiStateChange={(key, value, outputId, change) =>
+                        onOrionUiStateChange?.(key, value, outputId, change)
                       }
                       onOrionUiAction={onOrionUiAction}
+                      onOrionUiUnmount={onOrionUiUnmount}
                       onOrionUiTableRequest={onOrionUiTableRequest}
                       onOrionUiTableMetadataChange={
                         onOrionUiTableMetadataChange

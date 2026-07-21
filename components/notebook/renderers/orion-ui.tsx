@@ -68,9 +68,20 @@ export function OrionUiOutputRenderer({
   }
 
   const callbacks: OrionUiRenderCallbacks = {
-    onStateChange: (key, nextValue) =>
-      actions.onOrionUiStateChange?.(key, nextValue, parsed.payload.id),
+    onStateChange: (key, nextValue, change) => {
+      if (change === undefined) {
+        actions.onOrionUiStateChange?.(key, nextValue, parsed.payload.id);
+        return;
+      }
+      actions.onOrionUiStateChange?.(
+        key,
+        nextValue,
+        parsed.payload.id,
+        change,
+      );
+    },
     onAction: actions.onOrionUiAction,
+    onUnmount: () => actions.onOrionUiUnmount?.(parsed.payload.id),
     onTableRequest: actions.onOrionUiTableRequest,
     tableMetadata: getOutputTableMetadata(output.metadata),
     onTableMetadataChange: (metadata) => {
