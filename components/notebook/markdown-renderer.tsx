@@ -1,6 +1,6 @@
 "use client";
 
-import MarkdownPreview from "@uiw/react-markdown-preview";
+import MarkdownPreview, { type MarkdownPreviewProps } from "@uiw/react-markdown-preview";
 import "@uiw/react-markdown-preview/markdown.css";
 import "katex/dist/katex.css";
 import remarkMath from "remark-math";
@@ -10,6 +10,11 @@ import {
   normalizeMarkdownMathSource,
   remarkMathJaxDelimiters,
 } from "@/lib/markdown/math-delimiters";
+import {
+  isInternalNotebookAnchor,
+  openNotebookLinkExternally,
+  shouldOpenNotebookLinkExternally,
+} from "@/lib/markdown/notebook-links";
 
 interface MarkdownRendererProps {
   source: string;
@@ -27,6 +32,33 @@ const defaultMarkdownStyle: React.CSSProperties = {
   fontFamily: "var(--font-sans), sans-serif",
 };
 
+const notebookMarkdownComponents: NonNullable<MarkdownPreviewProps["components"]> = {
+  a({ href, children, ...props }) {
+    if (shouldOpenNotebookLinkExternally(href)) {
+      return (
+        <a
+          {...props}
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(event) => {
+            event.preventDefault();
+            openNotebookLinkExternally(href);
+          }}
+        >
+          {children}
+        </a>
+      );
+    }
+
+    return (
+      <a {...props} href={href} target={isInternalNotebookAnchor(href) ? undefined : props.target}>
+        {children}
+      </a>
+    );
+  },
+};
+
 export function MarkdownRenderer({
   source,
   style,
@@ -37,6 +69,7 @@ export function MarkdownRenderer({
         source={normalizeMarkdownMathSource(source)}
         remarkPlugins={[remarkMath, remarkMathJaxDelimiters]}
         rehypePlugins={[rehypeKatex]}
+        components={notebookMarkdownComponents}
         style={{ ...defaultMarkdownStyle, ...style }}
       />
     </div>

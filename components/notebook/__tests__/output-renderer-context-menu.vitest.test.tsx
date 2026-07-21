@@ -11,6 +11,7 @@ vi.mock("next-themes", () => ({
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe("OutputRenderer context menu", () => {
@@ -118,6 +119,8 @@ describe("OutputRenderer context menu", () => {
   });
 
   it("renders ordinary HTML links that point to Plotly", () => {
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+
     render(
       <OutputRenderer
         output={{
@@ -132,6 +135,13 @@ describe("OutputRenderer context menu", () => {
       />,
     );
 
-    expect(screen.getByRole("link", { name: "Plotly guide" })).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: "Plotly guide" });
+    fireEvent.click(link);
+
+    expect(openSpy).toHaveBeenCalledWith(
+      "https://plotly.com/python/",
+      "_blank",
+      "noopener,noreferrer",
+    );
   });
 });

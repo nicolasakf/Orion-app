@@ -1,6 +1,7 @@
 "use client";
 
 import type { JSX } from "react";
+import { NotebookRenderedHtmlShell } from "@/components/notebook/notebook-rendered-html-shell";
 import { extractTableFromHTML, isEmptyDataframeHtmlTable } from "@/lib/notebook/table-extractor";
 import { scopeHtmlStyleTags } from "@/lib/notebook/scoped-html-styles";
 import { cn } from "@/lib/utils";
@@ -30,9 +31,9 @@ export function HtmlOutputRenderer({
 
   if (tableData.headers.length > 0 && tableData.rows.length > 0) {
     return (
-      <div
+      <NotebookRenderedHtmlShell
         className={htmlOutputShellClassName(actions.isFullScreen)}
-        dangerouslySetInnerHTML={{ __html: safeHtml }}
+        html={safeHtml}
       />
     );
   }
@@ -49,9 +50,9 @@ export function HtmlOutputRenderer({
   }
 
   return (
-    <div
+    <NotebookRenderedHtmlShell
       className={htmlOutputShellClassName(actions.isFullScreen)}
-      dangerouslySetInnerHTML={{ __html: safeHtml }}
+      html={safeHtml}
     />
   );
 }

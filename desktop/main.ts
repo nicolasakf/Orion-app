@@ -175,8 +175,27 @@ async function handleWorkspacePathAction(
   await executeManagedWorkspacePathAction(action, session, value, shell);
 }
 
+/** Keeps top-level Orion windows from navigating to external websites in-place. */
+function setupExternalNavigationHandler(
+  window: BrowserWindow,
+  appBaseUrl: string
+): void {
+  window.webContents.on("will-navigate", (event, url) => {
+    if (isOrionAppUrl(url, appBaseUrl)) {
+      return;
+    }
+
+    event.preventDefault();
+    void shell.openExternal(url);
+  });
+}
+
 /** Routes renderer-initiated window opens to matching Electron window chrome. */
 function setupWindowOpenHandler(window: BrowserWindow, appBaseUrl: string): void {
+  if (appWindows.has(window)) {
+    setupExternalNavigationHandler(window, appBaseUrl);
+  }
+
   window.webContents.setWindowOpenHandler(({ url, frameName, features }) => {
     const isNamedOAuthPopup = OAUTH_POPUP_WINDOW_NAMES.has(frameName);
     const isPopupRequest = features.includes("popup=yes") || isNamedOAuthPopup;

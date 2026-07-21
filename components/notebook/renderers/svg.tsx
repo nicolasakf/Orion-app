@@ -1,6 +1,7 @@
 "use client";
 
 import type { JSX } from "react";
+import { NotebookRenderedHtmlShell } from "@/components/notebook/notebook-rendered-html-shell";
 import type { NotebookMimeRendererProps } from "./types";
 import { toJoinedString } from "./types";
 
@@ -13,13 +14,13 @@ export function SvgOutputRenderer({
   actions,
 }: NotebookMimeRendererProps): JSX.Element {
   return (
-    <div
+    <NotebookRenderedHtmlShell
       className={
         actions.isFullScreen
           ? "max-w-[95vw] max-h-[95vh] w-fit overflow-auto"
           : "max-w-full overflow-x-auto"
       }
-      dangerouslySetInnerHTML={{ __html: sanitize(toJoinedString(value)) }}
+      html={sanitize(toJoinedString(value))}
     />
   );
 }
