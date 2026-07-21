@@ -183,7 +183,10 @@ export function CostSummaryCard({
                 const label = modelLabels[model.modelId] ?? model.modelId;
 
                 return (
-                  <TableRow key={model.modelId} className="hover:bg-muted/30">
+                  <TableRow
+                    key={`${model.providerId}:${model.modelId}`}
+                    className="hover:bg-muted/30"
+                  >
                     <TableCell className="px-3 py-2 align-top text-xs">
                       <div className="min-w-0 space-y-0.5">
                         <span className="font-medium text-foreground">{label}</span>

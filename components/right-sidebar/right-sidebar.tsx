@@ -127,6 +127,8 @@ import {
   shouldContinueAfterToolCalls,
 } from "./assistant-turn-state";
 import { useContextEstimate } from "./context-usage-pill";
+import { useDebouncedContextPreflight } from "./use-debounced-context-preflight";
+import { usePendingCostAutoRefresh } from "./use-pending-cost-auto-refresh";
 import {
   ORION_GITHUB_ISSUES_URL,
   buildSkillSlashCommands,
@@ -762,8 +764,6 @@ export function RightSidebar({
   } | null>(null);
   const [isRefreshingCostSummary, setIsRefreshingCostSummary] = useState(false);
   const [emptyPromptLibraryResetCount, setEmptyPromptLibraryResetCount] = useState(0);
-  const [contextPreflight, setContextPreflight] = useState<ContextPreflightResult | null>(null);
-
   /** Shared request id for model calls triggered by the current user turn. */
   const modelRequestIdRef = useRef<string | undefined>(undefined);
   /** Ref holding the latest compaction summary for the transport interceptor. */
@@ -2511,22 +2511,14 @@ export function RightSidebar({
     [deferredMessagesForContext, input, draftAttachments, draftReferences]
   );
 
-  useEffect(() => {
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      void requestContextPreflight(draftPreflightMessages, controller.signal)
-        .then(setContextPreflight)
-        .catch((error) => {
-          if (!controller.signal.aborted) {
-            console.debug("Context preflight unavailable:", error);
-          }
-        });
-    }, 300);
-    return () => {
-      window.clearTimeout(timer);
-      controller.abort();
-    };
-  }, [draftPreflightMessages, requestContextPreflight]);
+  const requestDraftContextPreflight = React.useCallback(
+    (signal: AbortSignal) =>
+      requestContextPreflight(draftPreflightMessages, signal),
+    [draftPreflightMessages, requestContextPreflight]
+  );
+  const [contextPreflight, setContextPreflight] = useDebouncedContextPreflight(
+    requestDraftContextPreflight
+  );
 
   const contextEstimate = React.useMemo(() => {
     if (!contextPreflight) return fallbackContextEstimate;
@@ -2764,9 +2756,10 @@ export function RightSidebar({
               0,
               beforePreflight.measurement.estimatedInputTokens -
                 afterPreflight.measurement.estimatedInputTokens
-            )
+              )
             : 0,
       };
+      setContextPreflight(afterPreflight);
       await chatStorage.updateCompactionSummary(effectiveChatId, measuredSummary);
       compactionSummaryRef.current = measuredSummary;
 
@@ -2798,6 +2791,7 @@ export function RightSidebar({
     effectiveChatId,
     modelInfo?.provider,
     requestContextPreflight,
+    setContextPreflight,
     setChats,
   ]);
 
@@ -2835,27 +2829,31 @@ export function RightSidebar({
     }
   }, [effectiveChatId, modelsWithAccess]);
 
-  const dismissCostSummary = useCallback((): void => {
-    setEphemeralCostMessage(null);
-  }, []);
-
-  const refreshCostSummary = useCallback((): void => {
+  const visibleCostSummary =
+    ephemeralCostMessage?.chatId === effectiveChatId
+      ? ephemeralCostMessage
+      : null;
+  const autoRefreshCostSummary = useCallback((): void => {
     void showCostSummary({ refresh: true });
   }, [showCostSummary]);
+  const resetPendingCostAutoRefresh = usePendingCostAutoRefresh({
+    refreshKey: visibleCostSummary
+      ? `${visibleCostSummary.chatId}:${visibleCostSummary.message.id}`
+      : null,
+    pendingRequestCount: visibleCostSummary?.summary.pendingRequestCount ?? 0,
+    summarySnapshot: visibleCostSummary?.summary ?? null,
+    onRefresh: autoRefreshCostSummary,
+  });
 
-  // Re-run bounded Gateway reconciliation while the visible summary is pending.
-  useEffect(() => {
-    if (
-      ephemeralCostMessage?.chatId !== effectiveChatId ||
-      ephemeralCostMessage.summary.pendingRequestCount === 0
-    ) {
-      return;
-    }
-    const timeout = window.setTimeout(() => {
-      void showCostSummary({ refresh: true });
-    }, 2000);
-    return () => window.clearTimeout(timeout);
-  }, [effectiveChatId, ephemeralCostMessage, showCostSummary]);
+  const dismissCostSummary = useCallback((): void => {
+    resetPendingCostAutoRefresh();
+    setEphemeralCostMessage(null);
+  }, [resetPendingCostAutoRefresh]);
+
+  const refreshCostSummary = useCallback((): void => {
+    resetPendingCostAutoRefresh();
+    void showCostSummary({ refresh: true });
+  }, [resetPendingCostAutoRefresh, showCostSummary]);
 
   /** Runs slash commands that submit immediately without a trailing message. */
   const handleImmediateSlashCommand = useCallback(

@@ -634,7 +634,7 @@ async function handleChatRequest(
     subagentStepIndex != null &&
     subagentStepIndex > 0;
 
-  if (!skipSubagentSessionBanner) {
+  if (!options.preflight && !skipSubagentSessionBanner) {
     logSessionStart(fileId);
   }
 
@@ -718,7 +718,7 @@ async function handleChatRequest(
   };
 
   // Returns a plain JSON response using the caller's selected model and credential.
-  if (origin === "compaction") {
+  if (!options.preflight && origin === "compaction") {
     if (!resolvedCredential) {
       return new Response(
         JSON.stringify({
@@ -872,7 +872,7 @@ async function handleChatRequest(
     credential: resolvedCredential,
   });
 
-  if (origin === "title_generation") {
+  if (!options.preflight && origin === "title_generation") {
     const chatSession = await resolveOrCreateChatSession(chatId);
     const modelRequest = await resolveOrCreateModelRequest({
       origin: "title_generation",
@@ -1027,25 +1027,27 @@ async function handleChatRequest(
         forcedSubagentName != null && hasDelegatedSubagentInHistory(forcedSubagentName),
     });
 
-    // Log the context injection details and final LLM call
-    logContextInject({
-      fileId,
-      requestId,
-      provider: providerId,
-      model: modelId,
-      supportsSystemMessages: processedMessages.some((m) => m.role === "system"),
-      hasAgentPrompt: !!agentSystemPrompt,
-      agentPromptLength: agentSystemPrompt?.length ?? 0,
-      finalSystemContentLength:
-        processedMessages
-          .filter((m) => m.role === "system")
-          .reduce((acc, m) => acc + (typeof m.content === "string" ? m.content.length : 0), 0),
-      injectionStrategy: processedMessages.some((m) => m.role === "system")
-        ? "system_message"
-        : agentSystemPrompt
-          ? "prepend_user"
-          : "none",
-    });
+    // Preflight prepares the same context but must not create model-call dev logs.
+    if (!options.preflight) {
+      logContextInject({
+        fileId,
+        requestId,
+        provider: providerId,
+        model: modelId,
+        supportsSystemMessages: processedMessages.some((m) => m.role === "system"),
+        hasAgentPrompt: !!agentSystemPrompt,
+        agentPromptLength: agentSystemPrompt?.length ?? 0,
+        finalSystemContentLength:
+          processedMessages
+            .filter((m) => m.role === "system")
+            .reduce((acc, m) => acc + (typeof m.content === "string" ? m.content.length : 0), 0),
+        injectionStrategy: processedMessages.some((m) => m.role === "system")
+          ? "system_message"
+          : agentSystemPrompt
+            ? "prepend_user"
+            : "none",
+      });
+    }
 
     const runtimeProfile = await getRuntimeModelProfile(providerId, modelId);
     const budget = calculateContextBudget({
@@ -1184,14 +1186,16 @@ async function handleChatRequest(
         }
       );
     }
-    logChatError({
-      fileId,
-      requestId,
-      model: modelId,
-      provider: providerId,
-      error,
-      phase: error instanceof GatewayConfigError ? "gateway" : "unknown",
-    });
+    if (!options.preflight) {
+      logChatError({
+        fileId,
+        requestId,
+        model: modelId,
+        provider: providerId,
+        error,
+        phase: error instanceof GatewayConfigError ? "gateway" : "unknown",
+      });
+    }
     console.error(error);
     if (error instanceof GatewayConfigError) {
       return new Response(
