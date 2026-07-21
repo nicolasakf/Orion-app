@@ -29,8 +29,8 @@ export const DEFAULT_PANEL_LAYOUT_STATE: PanelLayoutState = {
   vertical: [70, 30],
 };
 
-/** Default when no tab session value exists: hide code cell inputs (presentation mode). */
-export const DEFAULT_NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS = true;
+/** Default when no tab session value exists: show code cell inputs in notebook view. */
+export const DEFAULT_NOTEBOOK_PRESENTATION_HIDE_ALL_CELL_INPUTS = false;
 
 /**
  * Reads transient app-shell panel visibility from the current browser tab.
