@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   createChatFork,
+  getInPlaceEditRestoreCheckpointIds,
   truncateChatForInPlaceEdit,
 } from "@/lib/chat/chat-forking";
+import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
 import type { Chat } from "@/lib/chat/chat-types";
 
 const now = new Date("2026-07-07T12:00:00.000Z");
@@ -242,5 +244,49 @@ describe("truncateChatForInPlaceEdit", () => {
         now: editedAt,
       })
     ).toThrow("source message does not exist");
+  });
+});
+
+describe("getInPlaceEditRestoreCheckpointIds", () => {
+  it("ignores request checkpoints that did not record workspace changes", () => {
+    const sourceChat = createSourceChat();
+    const checkpointStatuses = new Map<string, EditCheckpointStatus>();
+
+    const checkpointIds = getInPlaceEditRestoreCheckpointIds({
+      sourceChat,
+      sourceMessageIndex: 2,
+      checkpointRequestByMessageId: new Map([["user-2", "request-2"]]),
+      checkpointStatuses,
+    });
+
+    expect(checkpointIds).toEqual([]);
+  });
+
+  it("returns only non-reverted workspace checkpoints after the edited message", () => {
+    const sourceChat = createSourceChat({
+      messages: [
+        ...createSourceChat().messages,
+        {
+          id: "user-3",
+          role: "user",
+          parts: [{ type: "text", text: "continue" }],
+          timestamp: now,
+          checkpointId: "request-3",
+        },
+      ],
+    });
+    const checkpointStatuses = new Map<string, EditCheckpointStatus>([
+      ["request-2", "completed"],
+      ["request-3", "reverted"],
+    ]);
+
+    const checkpointIds = getInPlaceEditRestoreCheckpointIds({
+      sourceChat,
+      sourceMessageIndex: 2,
+      checkpointRequestByMessageId: new Map(),
+      checkpointStatuses,
+    });
+
+    expect(checkpointIds).toEqual(["request-2"]);
   });
 });

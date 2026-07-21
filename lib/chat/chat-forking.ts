@@ -1,4 +1,5 @@
 import type { Chat, ChatMessage, SubagentSession } from "@/lib/chat/chat-types";
+import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
 
 export interface CreateChatForkOptions {
   sourceChat: Chat;
@@ -11,6 +12,13 @@ export interface TruncateChatForInPlaceEditOptions {
   sourceChat: Chat;
   sourceMessageIndex: number;
   now: Date;
+}
+
+export interface GetInPlaceEditRestoreCheckpointIdsOptions {
+  sourceChat: Chat;
+  sourceMessageIndex: number;
+  checkpointRequestByMessageId: ReadonlyMap<string, string>;
+  checkpointStatuses: ReadonlyMap<string, EditCheckpointStatus>;
 }
 
 /** Returns true when an unknown value is a non-null object record. */
@@ -156,4 +164,36 @@ export function truncateChatForInPlaceEdit(
     ),
     updatedAt: options.now,
   };
+}
+
+/**
+ * Returns non-empty workspace checkpoints created at or after an edited user
+ * message, newest first. Checkpoint ids are attached to every agent request,
+ * including requests that did not edit the workspace, so only ids present in
+ * checkpointStatuses can be restored.
+ */
+export function getInPlaceEditRestoreCheckpointIds(
+  options: GetInPlaceEditRestoreCheckpointIdsOptions
+): string[] {
+  const checkpointIds: string[] = [];
+
+  for (
+    let index = options.sourceChat.messages.length - 1;
+    index >= options.sourceMessageIndex;
+    index -= 1
+  ) {
+    const message = options.sourceChat.messages[index];
+    if (!message || message.role !== "user") continue;
+
+    const checkpointId =
+      message.checkpointId ?? options.checkpointRequestByMessageId.get(message.id);
+    const checkpointStatus = checkpointId
+      ? options.checkpointStatuses.get(checkpointId)
+      : undefined;
+    if (!checkpointId || !checkpointStatus || checkpointStatus === "reverted") continue;
+
+    checkpointIds.push(checkpointId);
+  }
+
+  return checkpointIds;
 }
