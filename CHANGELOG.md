@@ -4,6 +4,27 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.15.0] - 2026-07-21
+
+### Added
+
+- Notebook: controls in `orion-ui` can now rerun selected cells after state changes, with sensible debounce behavior
+- Notebook: restart-kernel and run-all controls, external-link handling, and richer Business View markdown editing
+- Chat: in-place resend/edit, copy and fork actions, context preflight, cost provenance, and Vercel billing visibility
+- Workspace: global search with Contents API and desktop-host path actions
+
+### Changed
+
+- Business: improved App View contents navigation, export menu, and panel sizing
+- UI: branded Orion loaders and persistent panel layout
+
+### Fixed
+
+- Notebook: harden Orion UI tables, agent state transitions, sticky headers, and callback compatibility
+- Chat: restore only workspace-edit checkpoints and correct partial model-usage provenance
+
+[0.15.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.15.0
+
 ## [0.14.0] - 2026-07-12
 
 ### Added
