@@ -923,6 +923,34 @@ await runTest("use_notebook create still prevents duplicate registered notebooks
   assert(getStartedKernelCount() === 0, "should not start another kernel");
 });
 
+await runTest("use_notebook connect on already-active notebook includes cell count", async () => {
+  const notebookPath = "active.ipynb";
+  const { ks } = createNotebookCreationKernelService({
+    initialNotebooks: {
+      [notebookPath]: makeNotebook([
+        makeMarkdownCell("# Title"),
+        makeCodeCell("x = 1", [], null),
+        makeCodeCell("y = 2", [], null),
+      ]),
+    },
+  });
+  const mgr = new NotebookManager();
+  const registeredId = mgr.addNotebook("active", notebookPath, "k1");
+  mgr.setCurrentNotebook(registeredId);
+  const tool = new UseNotebookTool(ks, null, mgr);
+
+  const result = await tool.execute({
+    notebookName: "active",
+    notebookPath,
+    mode: "connect",
+    kernelId: "",
+  });
+
+  assertIncludes(result, "already the active notebook", "should warn about duplicate activation");
+  assertIncludes(result, "DO NOT REACTIVATE AGAIN", "should tell the agent not to reactivate");
+  assertIncludes(result, "Notebook has 3 cells.", "should still include cell count");
+});
+
 // ============================================================================
 // File Tools
 // ============================================================================

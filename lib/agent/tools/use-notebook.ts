@@ -70,10 +70,19 @@ export class UseNotebookTool extends BaseTool {
       // mode === "connect": reactivate if not already current
       const currentId = this.notebookManager.getCurrentNotebookId();
       if (existing.id === currentId) {
-        return (
+        const warningParts: string[] = [
           `[WARNING] Notebook at '${notebookPath}' (id: ${existing.id}) is already the active notebook. ` +
-          `DO NOT REACTIVATE AGAIN.`
-        );
+            `DO NOT REACTIVATE AGAIN.`,
+        ];
+        try {
+          const notebook = await this.readNotebook(jupyterPath);
+          warningParts.push(`\nNotebook has ${notebook.cells.length} cells.`);
+        } catch (error) {
+          warningParts.push(
+            `\n[WARNING] Could not read notebook summary: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
+        return warningParts.join("\n");
       }
 
       infoList.push(
