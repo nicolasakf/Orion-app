@@ -2176,7 +2176,10 @@ function NotebookCellComponent({
       {/* Main cell */}
       <Card
         className={cn(
-          "overflow-hidden relative",
+          "relative",
+          // `overflow: clip` preserves the card's squircle clipping without
+          // becoming a scroll container that prevents the header from sticking.
+          effectiveVariant === "default" ? "overflow-clip" : "overflow-hidden",
           isSelected && "ring-1 ring-blue-500 ring-opacity-70",
           effectiveVariant === "ghost" && "border-none bg-transparent shadow-none",
         )}
@@ -2216,7 +2219,7 @@ function NotebookCellComponent({
             onMarkdownAction={handleMarkdownContextMenuAction}
           >
             <div
-              className="flex items-center px-1.5 py-0.5 bg-muted min-h-7 h-7"
+              className="sticky top-0 z-20 flex h-7 min-h-7 items-center bg-muted px-1.5 py-0.5 shadow-sm"
               data-notebook-export-remove
             >
               <div className="flex items-center flex-1 justify-between min-h-0">
