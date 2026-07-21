@@ -23,6 +23,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -132,6 +133,9 @@ export function NotebookEditorToolbar({
 }: NotebookEditorToolbarProps) {
   const [goToErrorState, setGoToErrorState] =
     React.useState<GoToErrorPopoverState | null>(null);
+  const runAllSplitRef = React.useRef<HTMLDivElement>(null);
+  const runAllMenuTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const [runAllMenuAlignOffset, setRunAllMenuAlignOffset] = React.useState(0);
 
   const canRun =
     Boolean(currentKernel) &&
@@ -158,6 +162,22 @@ export function NotebookEditorToolbar({
     },
     [dismissGoToError, onRunAll],
   );
+
+  /** Aligns the run-all menu's left edge with the primary run button in the split control. */
+  const syncRunAllMenuAlignOffset = React.useCallback(() => {
+    const group = runAllSplitRef.current;
+    const trigger = runAllMenuTriggerRef.current;
+    if (!group || !trigger) return;
+    setRunAllMenuAlignOffset(
+      group.getBoundingClientRect().left - trigger.getBoundingClientRect().left,
+    );
+  }, []);
+
+  const handleRestartAndRunAll = React.useCallback(async () => {
+    dismissGoToError();
+    await onRestartKernel();
+    handleRunAllClick(true);
+  }, [dismissGoToError, handleRunAllClick, onRestartKernel]);
 
   React.useEffect(() => {
     const handleRunAllStoppedOnError = (event: Event) => {
@@ -197,6 +217,7 @@ export function NotebookEditorToolbar({
         >
           <PopoverAnchor asChild>
             <div
+              ref={runAllSplitRef}
               role="group"
               aria-label="Run all cells"
               className="inline-flex h-8 overflow-hidden rounded-md border border-border/50 bg-background shadow-sm"
@@ -225,9 +246,14 @@ export function NotebookEditorToolbar({
                 </TooltipContent>
               </Tooltip>
 
-              <DropdownMenu>
+              <DropdownMenu
+                onOpenChange={(open) => {
+                  if (open) syncRunAllMenuAlignOffset();
+                }}
+              >
                 <DropdownMenuTrigger asChild>
                   <Button
+                    ref={runAllMenuTriggerRef}
                     variant="outline"
                     size="icon"
                     className="h-8 w-4 shrink-0 !rounded-none border-0 bg-background px-0 shadow-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:z-10"
@@ -236,7 +262,11 @@ export function NotebookEditorToolbar({
                     <ChevronDown className="h-3 w-3" />
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-56">
+                <DropdownMenuContent
+                  align="start"
+                  alignOffset={runAllMenuAlignOffset}
+                  className="w-56"
+                >
                   <DropdownMenuItem onClick={() => handleRunAllClick(true)}>
                     <Play className="h-4 w-4 mr-2" />
                     Run All Cells
@@ -244,6 +274,14 @@ export function NotebookEditorToolbar({
                   <DropdownMenuItem onClick={() => handleRunAllClick(false)}>
                     <Play className="h-4 w-4 mr-2 text-yellow-500" />
                     Run All Cells (Ignore Errors)
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={() => void handleRestartAndRunAll()}
+                    disabled={!canControlKernel}
+                  >
+                    <RotateCcw className="h-4 w-4 mr-2" />
+                    Restart Kernel and Run All Cells
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
