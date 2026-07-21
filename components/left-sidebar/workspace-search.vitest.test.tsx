@@ -193,6 +193,35 @@ describe("WorkspaceSearch", () => {
     expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalled();
   });
 
+  it("qualifies a workspace-relative result that starts with the workspace name", async () => {
+    const onFileSelect = vi.fn();
+    workspaceSearchMocks.searchWorkspace.mockResolvedValue(
+      fileResult("project/report.txt")
+    );
+
+    render(
+      <WorkspaceSearch
+        workspaceDirectory="project"
+        kernelService={createKernelService()}
+        onFileSelect={onFileSelect}
+      />
+    );
+
+    const input = screen.getByPlaceholderText("Search files and content");
+    fireEvent.change(input, { target: { value: "report" } });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "project/report.txt" })
+    );
+    expect(onFileSelect).toHaveBeenCalledWith({
+      name: "report.txt",
+      path: "project/project/report.txt",
+    });
+  });
+
   it("keeps a newer query result when an earlier request finishes later", async () => {
     const first = createDeferred<WorkspaceSearchResult>();
     const second = createDeferred<WorkspaceSearchResult>();

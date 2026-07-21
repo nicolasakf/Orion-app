@@ -4,8 +4,8 @@
  * ring when expanded, so there is no line between header and content.
  */
 export const SIDEBAR_ACCORDION_CARD =
-  "corner-squircle rounded-md border border-sidebar-border bg-transparent";
+  "corner-squircle overflow-clip rounded-md border border-sidebar-border bg-transparent";
 
-/** Sticky header: same squircle radius as the card, no extra outline. */
+/** Sticky header fills the clipped card top without becoming its own rounded surface. */
 export const SIDEBAR_ACCORDION_STICKY_HEADER =
-  "corner-squircle sticky top-0 z-[1] bg-sidebar";
+  "sticky top-0 z-[1] bg-sidebar";

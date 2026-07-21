@@ -87,12 +87,6 @@ function buildWorkspaceQualifiedPath(
   if (!workspaceDirectory || workspaceDirectory === "") {
     return normalizedPath;
   }
-  if (
-    normalizedPath === workspaceDirectory ||
-    normalizedPath.startsWith(`${workspaceDirectory}/`)
-  ) {
-    return normalizedPath;
-  }
   return `${workspaceDirectory}/${normalizedPath}`;
 }
 
