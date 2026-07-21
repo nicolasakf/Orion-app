@@ -754,9 +754,13 @@ export function NotebookAppView({
                           : undefined
                       }
                       isInAppView
-                      onOrionUiStateChange={(key, value, outputId, change) =>
-                        onOrionUiStateChange?.(key, value, outputId, change)
-                      }
+                      onOrionUiStateChange={(key, value, outputId, change) => {
+                        if (change === undefined) {
+                          onOrionUiStateChange?.(key, value, outputId);
+                          return;
+                        }
+                        onOrionUiStateChange?.(key, value, outputId, change);
+                      }}
                       onOrionUiAction={onOrionUiAction}
                       onOrionUiUnmount={onOrionUiUnmount}
                       onOrionUiTableRequest={onOrionUiTableRequest}
