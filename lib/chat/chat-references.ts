@@ -52,6 +52,10 @@ export type ChatReferenceLocator =
       mediaType: string;
       size: number;
       lastModified?: number;
+      /** Jupyter-relative path for an external file copied into Orion-managed storage. */
+      managedPath?: string;
+      /** Stable identifier for an external file copied into Orion-managed storage. */
+      attachmentId?: string;
     };
 
 export interface ChatReference {
@@ -136,6 +140,8 @@ const ChatReferenceLocatorSchema = z.discriminatedUnion("type", [
     mediaType: z.string().min(1),
     size: z.number().int().min(0),
     lastModified: z.number().int().min(0).optional(),
+    managedPath: z.string().min(1).optional(),
+    attachmentId: z.string().min(1).optional(),
   }),
 ]);
 
@@ -276,6 +282,9 @@ function formatLocator(reference: ResolvedChatReference): string {
       }
       return `Message ${locator.messageIndex + 1}, assistant response`;
     case "external-file":
+      if (locator.managedPath) {
+        return `${locator.managedPath} (${locator.mediaType}, ${formatBytes(locator.size)})`;
+      }
       return `${locator.fileName} (${locator.mediaType}, ${formatBytes(locator.size)})`;
   }
 }
@@ -314,7 +323,7 @@ export function formatReferencesForMessage(references: ResolvedChatReference[]):
 
   return `## Referenced Context For This Message
 
-The user attached these references specifically to this message. Treat regular mentions as pointers, and use tools when exact content is needed. Highlighted editor and conversation selections include their selected text inline. External file references are pointer-only unless a separate image input is present in the message.
+The user attached these references specifically to this message. Treat regular mentions as pointers, and use tools when exact content is needed. Highlighted editor and conversation selections include their selected text inline. External file references without a managed path are pointer-only unless a separate image input is present in the message.
 
 ${blocks.join("\n\n")}`;
 }

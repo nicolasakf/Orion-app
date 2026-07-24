@@ -32,6 +32,7 @@ import {
   Maximize2,
   Wrench,
   Zap,
+  RefreshCw,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
@@ -120,6 +121,8 @@ const MODE_ICONS: Record<
   Edit: PenLine,
 };
 
+const DESCRIPTION_PREVIEW_VIEWPORT_GUTTER_PX = 12;
+
 export interface ChatTextboxProps {
   input: string;
   handleInputChange: (
@@ -165,6 +168,8 @@ export interface ChatTextboxProps {
   onOpenSlashDefinition?: (path: string) => void;
   /** Runs slash commands configured with {@link SlashCommand.submissionMode} `immediate`. */
   onImmediateSlashCommand?: (command: SlashCommand) => void;
+  /** Re-scans workspace skills and subagents while the slash-command palette is open. */
+  onRefreshSlashCommands?: () => Promise<void>;
   /** Whether the active chat has messages; keeps the context pill hidden for empty chats. */
   hasMessages?: boolean;
   /** Precomputed context usage estimate for the active chat. */
@@ -191,6 +196,8 @@ export interface ChatTextboxProps {
   onAttachmentsChange?: (attachments: ChatDraftAttachment[]) => void;
   /** Called when the user adds external files from the composer. */
   onAttachFiles?: (files: AttachableFiles) => void;
+  /** Prevents submission and additional file selection while managed uploads are running. */
+  isAttachmentUploadActive?: boolean;
   /** Called when the @ picker opens, so the parent can refresh live candidates. */
   onReferencePickerOpen?: () => void;
   /** Called as the user searches references, scoped by the selected picker tab. */
@@ -535,6 +542,25 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Calculates how much vertical space a description preview can use before reaching the viewport edge. */
+function getDescriptionPreviewMaxHeight({
+  viewportHeight,
+  cardTop,
+  cardHeight,
+  descriptionHeight,
+}: {
+  viewportHeight: number;
+  cardTop: number;
+  cardHeight: number;
+  descriptionHeight: number;
+}): number {
+  const cardChromeHeight = Math.max(0, cardHeight - descriptionHeight);
+  return Math.max(
+    0,
+    viewportHeight - cardTop - DESCRIPTION_PREVIEW_VIEWPORT_GUTTER_PX - cardChromeHeight
+  );
+}
+
 /** Pulls selected skill command tokens out of the editable message body. */
 function extractSelectedSkillChips(
   value: string,
@@ -602,6 +628,7 @@ export function ChatTextbox({
   extraSlashCommands = [],
   onOpenSlashDefinition,
   onImmediateSlashCommand,
+  onRefreshSlashCommands,
   hasMessages = false,
   contextEstimate = null,
   simpleContextUsage = false,
@@ -615,6 +642,7 @@ export function ChatTextbox({
   attachments = [],
   onAttachmentsChange,
   onAttachFiles,
+  isAttachmentUploadActive = false,
   onReferencePickerOpen,
   onReferenceSearch,
   disabledReferenceTabs = [],
@@ -631,8 +659,12 @@ export function ChatTextbox({
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [isFileDragActive, setIsFileDragActive] = useState(false);
   const [isCardFocused, setIsCardFocused] = useState(false);
+  const [isRefreshingSlashCommands, setIsRefreshingSlashCommands] = useState(false);
+  const [slashDescriptionMaxHeight, setSlashDescriptionMaxHeight] = useState<number | null>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const fileDragDepthRef = React.useRef(0);
+  const slashDescriptionCardRef = React.useRef<HTMLDivElement>(null);
+  const slashDescriptionRef = React.useRef<HTMLParagraphElement>(null);
   const { theme } = useTheme();
   const { effectiveSettings } = useOrionSettings();
   const chatFontSize = effectiveSettings.chat.fontSize;
@@ -846,6 +878,50 @@ export function ChatTextbox({
     el?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [hasReferenceMatches, highlightedReferenceIndex, isReferenceTypeaheadOpen]);
 
+  /** Let the description preview fill the remaining viewport height before it begins scrolling. */
+  React.useLayoutEffect(() => {
+    if (!isTypeaheadOpen) {
+      setSlashDescriptionMaxHeight(null);
+      return;
+    }
+
+    const updateDescriptionMaxHeight = () => {
+      const card = slashDescriptionCardRef.current;
+      const description = slashDescriptionRef.current;
+      if (!card || !description) return;
+
+      const maxHeight = getDescriptionPreviewMaxHeight({
+        viewportHeight: window.innerHeight,
+        cardTop: card.getBoundingClientRect().top,
+        cardHeight: card.offsetHeight,
+        descriptionHeight: description.offsetHeight,
+      });
+      setSlashDescriptionMaxHeight((current) =>
+        current !== null && Math.abs(current - maxHeight) < 1 ? current : maxHeight
+      );
+    };
+
+    const frame = window.requestAnimationFrame(updateDescriptionMaxHeight);
+    window.addEventListener("resize", updateDescriptionMaxHeight);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("resize", updateDescriptionMaxHeight);
+    };
+  }, [highlightedIndex, isTypeaheadOpen, orderedSlashMatches]);
+
+  /** Refresh the dynamic slash-command sources without moving focus out of the composer. */
+  const handleRefreshSlashCommands = React.useCallback(async (): Promise<void> => {
+    if (!onRefreshSlashCommands || isRefreshingSlashCommands) return;
+
+    setIsRefreshingSlashCommands(true);
+    try {
+      await onRefreshSlashCommands();
+    } finally {
+      setIsRefreshingSlashCommands(false);
+      textareaRef.current?.focus();
+    }
+  }, [isRefreshingSlashCommands, onRefreshSlashCommands, textareaRef]);
+
   /** Commit a slash command by replacing the active trailing slash token. */
   const selectSlashCommand = React.useCallback(
     (cmd: SlashCommand) => {
@@ -1023,9 +1099,9 @@ export function ChatTextbox({
   );
 
   const openFilePicker = React.useCallback(() => {
-    if (readOnly) return;
+    if (readOnly || isAttachmentUploadActive) return;
     fileInputRef.current?.click();
-  }, [readOnly]);
+  }, [isAttachmentUploadActive, readOnly]);
 
   /** Handles Orion message payloads and pasted screenshots/images. */
   const handleTextareaPaste = React.useCallback(
@@ -1058,7 +1134,7 @@ export function ChatTextbox({
         return;
       }
 
-      if (!onAttachFiles) return;
+      if (!onAttachFiles || isAttachmentUploadActive) return;
 
       const imageFiles = getClipboardImageFiles(e.clipboardData);
       if (imageFiles.length === 0) return;
@@ -1069,6 +1145,7 @@ export function ChatTextbox({
     [
       onAttachFiles,
       onReferencesChange,
+      isAttachmentUploadActive,
       readOnly,
       references,
       resizeTextarea,
@@ -1083,10 +1160,11 @@ export function ChatTextbox({
       if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer)) return;
       e.preventDefault();
       e.stopPropagation();
+      if (isAttachmentUploadActive) return;
       fileDragDepthRef.current += 1;
       setIsFileDragActive(true);
     },
-    [onAttachFiles, readOnly]
+    [isAttachmentUploadActive, onAttachFiles, readOnly]
   );
 
   /** Keeps the browser from opening dropped files while the composer is the target. */
@@ -1095,10 +1173,14 @@ export function ChatTextbox({
       if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer)) return;
       e.preventDefault();
       e.stopPropagation();
+      if (isAttachmentUploadActive) {
+        e.dataTransfer.dropEffect = "none";
+        return;
+      }
       e.dataTransfer.dropEffect = "copy";
       setIsFileDragActive(true);
     },
-    [onAttachFiles, readOnly]
+    [isAttachmentUploadActive, onAttachFiles, readOnly]
   );
 
   /** Clears drop state once the external file drag leaves the composer. */
@@ -1107,12 +1189,17 @@ export function ChatTextbox({
       if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer)) return;
       e.preventDefault();
       e.stopPropagation();
+      if (isAttachmentUploadActive) {
+        fileDragDepthRef.current = 0;
+        setIsFileDragActive(false);
+        return;
+      }
       fileDragDepthRef.current = Math.max(0, fileDragDepthRef.current - 1);
       if (fileDragDepthRef.current === 0) {
         setIsFileDragActive(false);
       }
     },
-    [onAttachFiles, readOnly]
+    [isAttachmentUploadActive, onAttachFiles, readOnly]
   );
 
   /** Adds dropped files through the same attachment pipeline as the file picker. */
@@ -1123,12 +1210,13 @@ export function ChatTextbox({
       e.stopPropagation();
       fileDragDepthRef.current = 0;
       setIsFileDragActive(false);
+      if (isAttachmentUploadActive) return;
 
       if (e.dataTransfer.files.length > 0) {
         onAttachFiles(e.dataTransfer.files);
       }
     },
-    [onAttachFiles, readOnly]
+    [isAttachmentUploadActive, onAttachFiles, readOnly]
   );
 
   /**
@@ -1276,7 +1364,7 @@ export function ChatTextbox({
 
   const onFormSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (readOnly) return;
+    if (readOnly || isAttachmentUploadActive) return;
     handleSubmit(e);
   };
 
@@ -1440,6 +1528,7 @@ export function ChatTextbox({
             ref={fileInputRef}
             type="file"
             multiple
+            disabled={isAttachmentUploadActive}
             className="hidden"
             onChange={(event) => {
               const files = event.target.files;
@@ -1739,9 +1828,24 @@ export function ChatTextbox({
                   const highlighted = orderedSlashMatches[highlightedIndex];
                   if (!highlighted?.description) return null;
                   return (
-                    <div className="corner-squircle absolute right-full top-0 mr-2 w-52 rounded-md border border-border/50 bg-popover px-2.5 py-2 shadow-sm">
-                      <p className="text-inherit font-medium text-foreground leading-snug mb-0.5">{highlighted.label}</p>
-                      <p className="text-inherit text-muted-foreground leading-snug">{highlighted.description}</p>
+                    <div
+                      ref={slashDescriptionCardRef}
+                      className="corner-squircle absolute right-full top-0 mr-2 w-52 overflow-hidden rounded-md border border-border/50 bg-popover px-2.5 py-2 shadow-sm"
+                    >
+                      <p className="break-words text-inherit font-medium text-foreground leading-snug mb-0.5">
+                        {highlighted.label}
+                      </p>
+                      <p
+                        ref={slashDescriptionRef}
+                        className="scrollbar-hide overflow-y-auto overscroll-contain break-words pr-1 text-inherit text-muted-foreground leading-snug"
+                        style={
+                          slashDescriptionMaxHeight === null
+                            ? undefined
+                            : { maxHeight: `${slashDescriptionMaxHeight}px` }
+                        }
+                      >
+                        {highlighted.description}
+                      </p>
                     </div>
                   );
                 })()}
@@ -1892,16 +1996,39 @@ export function ChatTextbox({
                           {showGroupLabel && (
                             <div
                               className={cn(
-                                "px-1.5 pb-0.5 text-inherit font-medium tracking-wide text-muted-foreground/60",
+                                "flex items-center justify-between px-1.5 pb-0.5 text-inherit font-medium tracking-wide text-muted-foreground/60",
                                 i === 0 ? "pt-1" : "pt-1.5"
                               )}
                               role="presentation"
                             >
-                              {group === "builtin"
-                                ? "Commands"
-                                : group === "subagent"
-                                  ? "Subagents"
-                                  : "Skills"}
+                              <span>
+                                {group === "builtin"
+                                  ? "Commands"
+                                  : group === "subagent"
+                                    ? "Subagents"
+                                    : "Skills"}
+                              </span>
+                              {i === 0 && onRefreshSlashCommands ? (
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                  }}
+                                  onClick={() => {
+                                    void handleRefreshSlashCommands();
+                                  }}
+                                  disabled={isRefreshingSlashCommands}
+                                  className="corner-squircle flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:cursor-wait disabled:opacity-60"
+                                  aria-label="Refresh skills and subagents"
+                                >
+                                  <RefreshCw
+                                    className={cn(
+                                      "h-3.5 w-3.5",
+                                      isRefreshingSlashCommands && "animate-spin"
+                                    )}
+                                  />
+                                </button>
+                              ) : null}
                             </div>
                           )}
                           <div
@@ -2268,6 +2395,7 @@ export function ChatTextbox({
                   type="button"
                   variant="ghost"
                   size="icon"
+                  disabled={isAttachmentUploadActive}
                   className="h-7 w-7 text-muted-foreground hover:bg-transparent hover:text-foreground"
                   style={chatBoxFont}
                   onClick={openFilePicker}
@@ -2296,12 +2424,19 @@ export function ChatTextbox({
               ) : (
                 <Button
                   type="submit"
-                  disabled={readOnly || !hasDraftContent || isOverContextBudget}
+                  disabled={
+                    readOnly ||
+                    isAttachmentUploadActive ||
+                    !hasDraftContent ||
+                    isOverContextBudget
+                  }
                   size="icon"
                   className="h-7 w-7"
                   style={chatBoxFont}
                   title={
-                    isOverContextBudget
+                    isAttachmentUploadActive
+                      ? "Wait for file uploads to finish"
+                      : isOverContextBudget
                       ? "Compaction required before sending"
                       : isLoading
                         ? "Add to queue"

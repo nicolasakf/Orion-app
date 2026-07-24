@@ -1,5 +1,6 @@
 import * as React from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Brain } from "lucide-react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentRule } from "@/lib/agent/rules";
@@ -181,6 +182,39 @@ describe("ChatTextbox attachments", () => {
 
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
   });
+
+  it("blocks file selection and submission while attachments are processing", () => {
+    const handleSubmit = vi.fn((event: React.FormEvent) => event.preventDefault());
+    const onAttachFiles = vi.fn();
+    const { container } = renderTextbox({
+      input: "Analyze this file",
+      handleSubmit,
+      onAttachFiles,
+      isAttachmentUploadActive: true,
+    });
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const clickSpy = vi.spyOn(fileInput, "click").mockImplementation(() => undefined);
+    const form = container.querySelector("form") as HTMLFormElement;
+
+    expect(fileInput).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Attach external file" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Attach external file" }));
+    fireEvent.submit(form);
+    const droppedFile = new File(["next"], "next.txt", { type: "text/plain" });
+    const dropHandled = fireEvent.drop(form, {
+      dataTransfer: {
+        files: [droppedFile],
+        types: ["Files"],
+      },
+    });
+
+    expect(clickSpy).not.toHaveBeenCalled();
+    expect(handleSubmit).not.toHaveBeenCalled();
+    expect(onAttachFiles).not.toHaveBeenCalled();
+    expect(dropHandled).toBe(false);
+  });
 });
 
 describe("ChatTextbox generation state", () => {
@@ -270,5 +304,64 @@ describe("ChatTextbox rules", () => {
     fireEvent.click(screen.getByRole("button", { name: "AGENTS.md" }));
 
     expect(onOpenRule).toHaveBeenCalledWith(rule);
+  });
+});
+
+describe("ChatTextbox slash commands", () => {
+  it("refreshes skills and subagents from the slash-command palette", async () => {
+    const onRefreshSlashCommands = vi.fn().mockResolvedValue(undefined);
+    const handleInputChange = vi.fn();
+    renderTextbox({
+      input: "/",
+      handleInputChange,
+      extraSlashCommands: [
+        {
+          name: "skill:demo",
+          label: "/demo",
+          description: "Demo skill",
+          icon: Brain,
+          category: "skill",
+        },
+      ],
+      onRefreshSlashCommands,
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh skills and subagents" }),
+    );
+
+    await waitFor(() => {
+      expect(onRefreshSlashCommands).toHaveBeenCalledOnce();
+    });
+    expect(handleInputChange).not.toHaveBeenCalled();
+  });
+
+  it("makes long slash-command descriptions scrollable and wrap-safe", async () => {
+    const description = "A very long description ".repeat(40);
+    renderTextbox({
+      input: "/dem",
+      extraSlashCommands: [
+        {
+          name: "skill:demo",
+          label: "/demo",
+          description,
+          icon: Brain,
+          category: "skill",
+        },
+      ],
+    });
+
+    const descriptionCard = screen.getByText(
+      (content, element) =>
+        element?.tagName === "P" && content.trim() === description.trim()
+    );
+
+    expect(descriptionCard).toHaveClass(
+      "overflow-y-auto",
+      "break-words"
+    );
+    await waitFor(() => {
+      expect(descriptionCard.style.maxHeight).toMatch(/px$/);
+    });
   });
 });

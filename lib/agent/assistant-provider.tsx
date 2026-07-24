@@ -187,6 +187,8 @@ export type AssistantChatContextValue = Pick<
   | "availableRules"
   | "listVariables"
   | "listDirectoryEntries"
+  | "refreshSkills"
+  | "refreshSubagents"
   | "serverInfo"
   | "jupyterServerIsLocal"
   | "rootDirectory"
@@ -1072,6 +1074,8 @@ export function AssistantProvider({
       executeToolCall,
       listVariables,
       listDirectoryEntries,
+      refreshSkills,
+      refreshSubagents,
       createTmpSubagentNotebookCopy,
       setChatId,
     }),
@@ -1087,6 +1091,8 @@ export function AssistantProvider({
       executeToolCall,
       listVariables,
       listDirectoryEntries,
+      refreshSkills,
+      refreshSubagents,
       createTmpSubagentNotebookCopy,
     ]
   );

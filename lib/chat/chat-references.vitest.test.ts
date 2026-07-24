@@ -48,6 +48,38 @@ describe("external file chat references", () => {
     expect(context).toContain("pointer-only");
     expect(context).toContain("report.pdf (application/pdf, 2.0 KB)");
   });
+
+  it("parses and formats managed external-file paths for agent tools", () => {
+    const managedReference: ResolvedChatReference = {
+      ...externalFileReference,
+      locator: {
+        type: "external-file",
+        fileName: "report.pdf",
+        mediaType: "application/pdf",
+        size: 2048,
+        lastModified: 1_700_000_000_000,
+        managedPath: ".orion/chat-attachments/chat-1/file-1/report.pdf",
+        attachmentId: "file-1",
+      },
+      toolHint: "Use workspace tools to read the managed path.",
+    };
+
+    const [parsed] = parseChatMessageReferences({
+      references: [managedReference],
+    });
+    const context = formatReferencesForMessage([managedReference]);
+
+    expect(parsed?.locator).toMatchObject({
+      type: "external-file",
+      managedPath: ".orion/chat-attachments/chat-1/file-1/report.pdf",
+      attachmentId: "file-1",
+    });
+    expect(context).toContain(
+      ".orion/chat-attachments/chat-1/file-1/report.pdf"
+    );
+    expect(context).toContain("Use workspace tools");
+    expect(context).not.toContain("External file references are pointer-only");
+  });
 });
 
 describe("notebook output chat references", () => {

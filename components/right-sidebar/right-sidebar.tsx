@@ -27,6 +27,14 @@ import {
   getInPlaceEditRestoreCheckpointIds as getRestorableInPlaceEditCheckpointIds,
   truncateChatForInPlaceEdit,
 } from "@/lib/chat/chat-forking";
+import {
+  buildManagedExternalFileReference,
+  cleanupExpiredChatAttachments,
+  markManagedAttachmentMessageReferencesUnavailable,
+  markManagedAttachmentReferencesUnavailable,
+  scheduleChatAttachmentCleanup,
+  storeChatAttachment,
+} from "@/lib/chat/chat-attachments.client";
 import { downloadChatTranscriptMarkdown } from "@/lib/chat/export-chat-transcript";
 import {
   formatCellReferenceLabel,
@@ -1297,6 +1305,18 @@ export function RightSidebar({
 
   // AI Assistant context (optional — may not be in provider)
   const assistant = useAssistantChatOptional();
+  /** Re-scan skills and subagents so the slash palette reflects workspace changes immediately. */
+  const handleRefreshSlashCommands = useCallback(async (): Promise<void> => {
+    if (!assistant) return;
+
+    try {
+      await Promise.all([assistant.refreshSkills(), assistant.refreshSubagents()]);
+      toast.success("Skills and subagents refreshed.");
+    } catch (error) {
+      console.error("Failed to refresh slash commands:", error);
+      toast.error("Failed to refresh skills and subagents.");
+    }
+  }, [assistant]);
   const agentPromptPath = useCallback(
     (path: string): string =>
       isAbsoluteAgentPath(path)
@@ -1702,6 +1722,7 @@ export function RightSidebar({
   const [input, setInput] = useState("");
   const [draftReferences, setDraftReferences] = useState<ResolvedChatReference[]>([]);
   const [draftAttachments, setDraftAttachments] = useState<ChatDraftAttachment[]>([]);
+  const [pendingAttachmentUploadCount, setPendingAttachmentUploadCount] = useState(0);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
   const pendingSubmitRef = useRef<{
     text: string;
@@ -1713,6 +1734,8 @@ export function RightSidebar({
   >(() => { });
   const queueProcessingRef = useRef(false);
   const prevAgentTurnActiveRef = useRef(false);
+  const attachmentCleanupInFlightRef = useRef(false);
+  const isAttachmentUploadActive = pendingAttachmentUploadCount > 0;
   /** Starts a fresh model turn and clears UI-level cancellation state. */
   const beginAgentTurn = useCallback(() => {
     stopRequestedRef.current = false;
@@ -1738,48 +1761,90 @@ export function RightSidebar({
     }, 0);
   }, []);
 
-  /** Converts selected external files into session-only composer attachments. */
+  /**
+   * Converts images into model file parts and copies non-images into managed
+   * Jupyter storage before exposing them to the composer.
+   */
   const handleAttachFiles = useCallback(async (files: FileList | readonly File[]) => {
     const selectedFiles = Array.from(files);
     if (selectedFiles.length === 0) return;
 
     const supportsImageInput = getModel(selectedModel)?.supportsImageInput === true;
+    const hasManagedFiles = selectedFiles.some(
+      (file) => !(file.type || "application/octet-stream").startsWith("image/")
+    );
     const nextAttachments: ChatDraftAttachment[] = [];
     let unsupportedImageCount = 0;
 
-    for (const file of selectedFiles) {
-      const mediaType = file.type || "application/octet-stream";
-      const reference = makeExternalFileReference(file);
-      let imageFilePart: FileUIPart | undefined;
+    if (hasManagedFiles) {
+      setPendingAttachmentUploadCount((current) => current + 1);
+    }
 
-      if (mediaType.startsWith("image/")) {
-        if (supportsImageInput) {
-          try {
-            imageFilePart = {
-              type: "file",
-              mediaType,
-              filename: file.name,
-              url: await fileToDataUrl(file),
-            };
-          } catch (error) {
-            console.error("Failed to read image attachment:", error);
-            toast.error(`Could not attach ${file.name}.`);
-            continue;
+    try {
+      for (const file of selectedFiles) {
+        const mediaType = file.type || "application/octet-stream";
+        let reference: ResolvedChatReference;
+        let imageFilePart: FileUIPart | undefined;
+
+        if (mediaType.startsWith("image/")) {
+          reference = makeExternalFileReference(file);
+          if (supportsImageInput) {
+            try {
+              imageFilePart = {
+                type: "file",
+                mediaType,
+                filename: file.name,
+                url: await fileToDataUrl(file),
+              };
+            } catch (error) {
+              console.error("Failed to read image attachment:", error);
+              toast.error(`Could not attach ${file.name}.`);
+              continue;
+            }
+          } else {
+            unsupportedImageCount += 1;
           }
         } else {
-          unsupportedImageCount += 1;
-        }
-      }
+          if (!kernelService || !effectiveChatId) {
+            toast.error(`Could not attach ${file.name}: connect to a Jupyter server first.`);
+            continue;
+          }
 
-      nextAttachments.push({
-        id: `${reference.id}:${crypto.randomUUID()}`,
-        fileName: file.name,
-        mediaType,
-        size: file.size,
-        ...(file.lastModified > 0 ? { lastModified: file.lastModified } : {}),
-        reference,
-        ...(imageFilePart ? { imageFilePart } : {}),
-      });
+          const uploadToastId = toast.loading(`Uploading ${file.name}…`);
+          try {
+            const attachmentId = crypto.randomUUID();
+            const manifest = await storeChatAttachment(
+              kernelService.getContentsManager(),
+              effectiveChatId,
+              file,
+              { attachmentId }
+            );
+            reference = buildManagedExternalFileReference(file, manifest);
+            toast.success(`${file.name} attached.`, { id: uploadToastId });
+          } catch (error) {
+            console.error("Failed to store managed chat attachment:", error);
+            const message = error instanceof Error ? error.message : String(error);
+            toast.error(`Could not attach ${file.name}: ${message}`, {
+              id: uploadToastId,
+            });
+            continue;
+          }
+        }
+
+        nextAttachments.push({
+          id: `${reference.id}:${crypto.randomUUID()}`,
+          fileName: file.name,
+          mediaType,
+          size: file.size,
+          ...(file.lastModified > 0 ? { lastModified: file.lastModified } : {}),
+          reference,
+          ...(imageFilePart ? { imageFilePart } : {}),
+        });
+      }
+    } finally {
+      if (hasManagedFiles) {
+        setPendingAttachmentUploadCount((current) => Math.max(0, current - 1));
+      }
     }
 
     if (unsupportedImageCount > 0) {
@@ -1795,7 +1860,7 @@ export function RightSidebar({
     window.setTimeout(() => {
       textareaRef.current?.focus();
     }, 0);
-  }, [getModel, selectedModel, textareaRef]);
+  }, [effectiveChatId, getModel, kernelService, selectedModel, textareaRef]);
 
   useEffect(() => {
     const handleMentionNotebookCell = (event: Event) => {
@@ -3652,6 +3717,57 @@ export function RightSidebar({
     loadChats();
   }, []);
 
+  /**
+   * Periodically removes expired managed attachments from the active Jupyter
+   * server and updates persisted references only after deletion succeeds.
+   */
+  useEffect(() => {
+    if (!isChatsLoaded || !kernelService || !assistant?.toolsReady) return;
+
+    const runCleanup = async (): Promise<void> => {
+      if (attachmentCleanupInFlightRef.current) return;
+      attachmentCleanupInFlightRef.current = true;
+      try {
+        const cleanup = await cleanupExpiredChatAttachments(
+          kernelService.getContentsManager(),
+          chatsRef.current
+        );
+        if (cleanup.failedPaths.length > 0) {
+          console.warn(
+            "Failed to delete some expired managed chat attachments:",
+            cleanup.failedPaths
+          );
+        }
+        if (cleanup.deletedPaths.length === 0) return;
+
+        setChats((current) => {
+          const marked = markManagedAttachmentReferencesUnavailable(
+            current,
+            cleanup.deletedPaths
+          );
+          if (marked.changed) {
+            chatsRef.current = marked.chats;
+            return marked.chats;
+          }
+          return current;
+        });
+        setMessages((current) => {
+          const marked = markManagedAttachmentMessageReferencesUnavailable(
+            current,
+            cleanup.deletedPaths
+          );
+          return marked.changed ? marked.messages : current;
+        });
+      } catch (error) {
+        console.warn("Managed chat attachment cleanup failed:", error);
+      } finally {
+        attachmentCleanupInFlightRef.current = false;
+      }
+    };
+
+    return scheduleChatAttachmentCleanup(runCleanup);
+  }, [assistant?.toolsReady, isChatsLoaded, kernelService, setMessages]);
+
   // Persist chats when they change
   useEffect(() => {
     if (!isChatsLoaded) return;
@@ -3752,6 +3868,11 @@ export function RightSidebar({
   // ============================================================================
 
   const createNewChat = () => {
+    if (isAttachmentUploadActive) {
+      toast.info("Wait for file uploads to finish before changing chats.");
+      return;
+    }
+
     // If currently processing, show confirmation dialog instead
     if (isInputLocked && !stopRequestedRef.current) {
       setStopConfirmAction({ type: "new-chat" });
@@ -3867,6 +3988,11 @@ export function RightSidebar({
 
   /** Optimistically removes a chat from the UI while SQLite deletion completes. */
   const handleDeleteChat = async (chatId: string) => {
+    if (isAttachmentUploadActive) {
+      toast.info("Wait for file uploads to finish before deleting a chat.");
+      return;
+    }
+
     const chatToDelete = chats.find((chat) => chat.id === chatId);
     if (!chatToDelete) return;
 
@@ -3894,6 +4020,11 @@ export function RightSidebar({
   };
 
   const handleHistorySelect = (chatId: string) => {
+    if (isAttachmentUploadActive) {
+      toast.info("Wait for file uploads to finish before changing chats.");
+      return;
+    }
+
     // If currently processing, show confirmation dialog instead
     if (isInputLocked && !stopRequestedRef.current) {
       setStopConfirmAction({ type: "switch-chat", targetChatId: chatId });
@@ -3970,7 +4101,13 @@ export function RightSidebar({
   /** Creates a new chat branch through a completed assistant response without altering files. */
   const handleForkFromAssistantMessage = useCallback(
     (message: UIMessage, index: number): void => {
-      if (message.role !== "assistant" || isInputLocked || isLoading || !currentChat) return;
+      if (
+        message.role !== "assistant" ||
+        isInputLocked ||
+        isLoading ||
+        isAttachmentUploadActive ||
+        !currentChat
+      ) return;
 
       const sourceMessage = currentChat.messages[index];
       if (sourceMessage?.id !== message.id || sourceMessage.role !== "assistant") return;
@@ -4006,7 +4143,14 @@ export function RightSidebar({
       setShowKernelPrompt(false);
       toast.success("Chat fork created.");
     },
-    [currentChat, isInputLocked, isLoading, setMessages, toChatStateMessages]
+    [
+      currentChat,
+      isAttachmentUploadActive,
+      isInputLocked,
+      isLoading,
+      setMessages,
+      toChatStateMessages,
+    ]
   );
 
   /** Replaces a user message in the current chat and drops every later turn before resend. */
@@ -4292,6 +4436,10 @@ export function RightSidebar({
   /** Custom submit that handles message editing (replaces messages after the edited one) */
   const customHandleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (isAttachmentUploadActive) {
+      toast.info("Wait for file uploads to finish before sending.");
+      return;
+    }
 
     const pendingSubmit = pendingSubmitRef.current;
     const effectiveInput = pendingSubmit?.text ?? input;
@@ -4656,6 +4804,11 @@ export function RightSidebar({
 
   /** Handles confirmation from the stop-and-switch dialog */
   const handleStopConfirm = useCallback(() => {
+    if (isAttachmentUploadActive) {
+      toast.info("Wait for file uploads to finish before changing chats.");
+      return;
+    }
+
     const action = stopConfirmAction;
     if (!action) return;
 
@@ -4706,6 +4859,7 @@ export function RightSidebar({
     handleStopGeneration,
     currentChat,
     currentChatId,
+    isAttachmentUploadActive,
     setMessages,
     setChats,
     setInput,
@@ -4918,6 +5072,7 @@ export function RightSidebar({
               extraSlashCommands={[...subagentSlashCommands, ...skillSlashCommands]}
               onOpenSlashDefinition={handleOpenSlashDefinition}
               onImmediateSlashCommand={handleImmediateSlashCommand}
+              onRefreshSlashCommands={assistant ? handleRefreshSlashCommands : undefined}
               hasMessages={visibleMessages.length > 0}
               contextEstimate={contextEstimate}
               simpleContextUsage={isBusinessExperience}
@@ -4929,6 +5084,7 @@ export function RightSidebar({
               attachments={draftAttachments}
               onAttachmentsChange={setDraftAttachments}
               onAttachFiles={handleAttachFiles}
+              isAttachmentUploadActive={isAttachmentUploadActive}
               onReferenceSearch={refreshReferenceSearch}
               disabledReferenceTabs={disabledReferenceTabs}
               queuedMessages={messageQueue}
