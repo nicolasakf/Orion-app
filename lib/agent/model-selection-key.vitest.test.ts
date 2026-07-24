@@ -30,6 +30,20 @@ describe("model-selection-key", () => {
     );
   });
 
+  it("finds composite keys for providers discovered at runtime", () => {
+    const models = [
+      { value: "mistral-small-latest", provider: "mistral" },
+      { value: "mistral/mistral-small-latest", provider: "vercel" },
+    ];
+
+    expect(
+      findModelBySelectionKey(
+        models,
+        formatModelSelectionKey("mistral", "mistral-small-latest"),
+      )?.provider,
+    ).toBe("mistral");
+  });
+
   it("upgrades legacy pins when catalog match is unique", () => {
     expect(
       normalizePinnedModelKey("gemini-3.1-flash-lite", [

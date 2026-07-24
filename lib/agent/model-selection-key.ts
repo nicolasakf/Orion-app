@@ -34,6 +34,11 @@ export function findModelBySelectionKey<T extends ModelSelectionLookupRow>(
   models: readonly T[],
   key: string
 ): T | undefined {
+  const exactComposite = models.find(
+    (model) => formatModelSelectionKey(model.provider, model.value) === key
+  );
+  if (exactComposite) return exactComposite;
+
   const parsed = parseModelSelectionKey(key);
   if (parsed) {
     const byComposite = models.find(

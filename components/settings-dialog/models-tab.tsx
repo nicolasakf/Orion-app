@@ -64,6 +64,7 @@ import {
 } from "@/lib/agent/local-provider-models";
 import { getVisibleProviderIds } from "@/lib/settings/visible-providers";
 import {
+  findModelBySelectionKey,
   formatModelSelectionKey,
   normalizePinnedModelKeys,
   parseModelSelectionKey,
@@ -391,6 +392,8 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
   );
   const [labelDraft, setLabelDraft] = useState("");
   const [dragOverIndex, setDragOverIndex] = React.useState<number | null>(null);
+  const [isTitleGenerationModelValidating, setIsTitleGenerationModelValidating] =
+    useState(false);
   const initializedProvidersRef = React.useRef<Set<string>>(new Set());
 
   const visibleProviderIds = React.useMemo(
@@ -536,6 +539,19 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
       )
     );
   }, [modelsWithConfiguredLabels]);
+
+  const titleGenerationModelSelectionKey = React.useMemo(() => {
+    const configuredModel = findModelBySelectionKey(
+      titleGenerationModels.map((model) => ({
+        provider: model.provider_id,
+        value: model.model_id,
+      })),
+      effectiveSettings.chat.titleGenerationModelId
+    );
+    return configuredModel
+      ? formatModelSelectionKey(configuredModel.provider, configuredModel.value)
+      : effectiveSettings.chat.titleGenerationModelId;
+  }, [effectiveSettings.chat.titleGenerationModelId, titleGenerationModels]);
 
   const filteredModels = React.useMemo(
     () => filterAndRankModelsBySearch(modelsWithConfiguredLabels, searchQuery),
@@ -794,6 +810,59 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
     setAutoRunConfirmOpen(false);
   };
 
+  /** Verifies a model can generate a title before saving it as the user's preference. */
+  const handleTitleGenerationModelChange = async (selectionKey: string) => {
+    const selectedModel = titleGenerationModels.find(
+      (model) =>
+        formatModelSelectionKey(model.provider_id, model.model_id) === selectionKey
+    );
+    if (!selectedModel) {
+      toast.error("The selected title generation model is no longer available.");
+      return;
+    }
+
+    setIsTitleGenerationModelValidating(true);
+    try {
+      const response = await fetch("/api/models/title-generation/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: selectedModel.provider_id,
+          model: selectedModel.model_id,
+        }),
+      });
+      const result = (await response.json().catch(() => null)) as {
+        valid?: unknown;
+        message?: unknown;
+      } | null;
+      if (!response.ok || result?.valid !== true) {
+        throw new Error(
+          typeof result?.message === "string"
+            ? result.message
+            : "The selected model could not generate a title."
+        );
+      }
+
+      await setUserSettings((current) => ({
+        ...current,
+        chat: {
+          ...current.chat,
+          titleGenerationModelId: selectionKey,
+        },
+      }));
+      toast.success("Title generation model verified and saved.");
+    } catch (error) {
+      console.error("Failed to validate title generation model:", error);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "The selected model could not generate a title."
+      );
+    } finally {
+      setIsTitleGenerationModelValidating(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-4 p-6">
       {!isBusinessMode ? (
@@ -831,33 +900,30 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
             description="Used when generating short titles for new chats."
           />
           <Select
-            value={effectiveSettings.chat.titleGenerationModelId}
-            onValueChange={(modelId) => {
-              void setUserSettings((current) => ({
-                ...current,
-                chat: {
-                  ...current.chat,
-                  titleGenerationModelId: modelId,
-                },
-              })).catch((error) => {
-                console.error("Failed to save title generation model:", error);
-                toast.error(
-                  error instanceof Error
-                    ? error.message
-                    : "Failed to save title generation model."
-                );
-              });
+            value={titleGenerationModelSelectionKey}
+            onValueChange={(selectionKey) => {
+              void handleTitleGenerationModelChange(selectionKey);
             }}
-            disabled={isLoading || titleGenerationModels.length === 0}
+            disabled={
+              isLoading ||
+              isTitleGenerationModelValidating ||
+              titleGenerationModels.length === 0
+            }
           >
-            <SelectTrigger className="w-[280px] font-mono text-xs">
+            <SelectTrigger
+              className="w-[280px] font-mono text-xs"
+              aria-busy={isTitleGenerationModelValidating}
+            >
               <SelectValue placeholder="Select model" />
+              {isTitleGenerationModelValidating ? (
+                <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-label="Verifying model" />
+              ) : null}
             </SelectTrigger>
             <SelectContent>
               {titleGenerationModels.map((model) => (
                 <SelectItem
-                  key={model.model_id}
-                  value={model.model_id}
+                  key={formatModelSelectionKey(model.provider_id, model.model_id)}
+                  value={formatModelSelectionKey(model.provider_id, model.model_id)}
                   className="font-mono text-xs"
                 >
                   {formatModelSelectionKey(model.provider_id, model.model_id)}

@@ -6,6 +6,7 @@ import {
   getModelGateway,
   GatewayConfigError,
 } from "@/lib/agent/model-gateway";
+import { sanitizeTitleGenerationProviderOptions } from "@/lib/agent/non-streaming-provider-options";
 import type { CredentialMode, ProviderId } from "@/lib/agent/model-gateway-types";
 import { resolveProviderCredentialForModel } from "@/lib/credentials/provider-credential-store.server";
 import { getModelCatalogEntry, isKnownProvider } from "@/lib/agent/model-catalog";
@@ -895,7 +896,7 @@ async function handleChatRequest(
       const result = await generateText({
         model,
         messages: processedMessages,
-        providerOptions,
+        providerOptions: sanitizeTitleGenerationProviderOptions(providerOptions),
         maxOutputTokens: 48,
       });
 
