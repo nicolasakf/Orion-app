@@ -22,6 +22,70 @@ function parseMarkdown(source: string): Root {
 }
 
 describe("remarkMathJaxDelimiters", () => {
+  it("keeps numeric currency amounts out of inline math", () => {
+    const tree = parseMarkdown(
+      "Revenue was $119.8B of revenue and $40.8B, with EPS of **$6.26**.",
+    );
+
+    expect(tree.children[0]).toMatchObject({
+      type: "paragraph",
+      children: [
+        {
+          type: "text",
+          value: "Revenue was $119.8B of revenue and $40.8B, with EPS of ",
+        },
+        {
+          type: "strong",
+          children: [{ type: "text", value: "$6.26" }],
+        },
+        { type: "text", value: "." },
+      ],
+    });
+  });
+
+  it("continues to support single-dollar variable math", () => {
+    const tree = parseMarkdown("The result is $x^2 + y^2$.");
+
+    expect(tree.children[0]).toMatchObject({
+      type: "paragraph",
+      children: [
+        { type: "text", value: "The result is " },
+        { type: "inlineMath", value: "x^2 + y^2" },
+        { type: "text", value: "." },
+      ],
+    });
+  });
+
+  it.each([
+    { source: "$2 + 2 = 4$", value: "2 + 2 = 4" },
+    { source: "$-1$", value: "-1" },
+  ])("preserves numeric single-dollar math in $source", ({ source, value }) => {
+    const tree = parseMarkdown(source);
+
+    expect(tree.children[0]).toMatchObject({
+      type: "paragraph",
+      children: [{ type: "inlineMath", value }],
+    });
+  });
+
+  it("preserves same-line double-dollar math", () => {
+    const tree = parseMarkdown("$$2 + 2 = 4$$");
+
+    expect(tree.children[0]).toMatchObject({
+      type: "paragraph",
+      children: [{ type: "inlineMath", value: "2 + 2 = 4" }],
+    });
+  });
+
+  it("leaves indented code blocks untouched", () => {
+    const tree = parseMarkdown('    price = "$2"');
+
+    expect(tree.children[0]).toMatchObject({
+      type: "code",
+      value: 'price = "$2"',
+    });
+  });
+
   it("renders bare LaTeX environments as display math", () => {
     const tree = parseMarkdown(String.raw`
 \begin{align}
@@ -37,7 +101,7 @@ describe("remarkMathJaxDelimiters", () => {
   });
 
   it("supports MathJax inline and display delimiters", () => {
-    const tree = parseMarkdown(String.raw`Inline \(E=mc^2\)
+    const tree = parseMarkdown(String.raw`Inline \(2 + 2 = 4\)
 
 \[
 \int_0^1 x^2 dx
@@ -47,7 +111,7 @@ describe("remarkMathJaxDelimiters", () => {
       type: "paragraph",
       children: [
         { type: "text", value: "Inline " },
-        { type: "inlineMath", value: "E=mc^2" },
+        { type: "inlineMath", value: "2 + 2 = 4" },
       ],
     });
     expect(tree.children[1]).toMatchObject({

@@ -64,7 +64,73 @@ function getBacktickRunLength(value: string, offset: number): number {
 }
 
 /**
- * Converts MathJax delimiters on one line while preserving inline code spans.
+ * True when a dollar sign begins a numeric currency amount.
+ *
+ * Single-dollar math and currency are otherwise ambiguous. Treating a dollar
+ * followed by a number as currency preserves prose such as
+ * "$119.8B of revenue and $40.8B" while leaving `$variable` math available.
+ */
+function startsNumericCurrencyAmount(value: string, offset: number): boolean {
+  return /^\$[+-]?(?:\d|\.\d)/.test(value.slice(offset));
+}
+
+/**
+ * True when the first later single-dollar delimiter can close numeric math.
+ *
+ * A later dollar that starts another numeric amount is currency, while a
+ * delimiter preceded by whitespace cannot close inline math.
+ */
+function hasPlausibleClosingInlineMathDelimiter(
+  value: string,
+  openingOffset: number,
+): boolean {
+  let codeTickLength = 0;
+  let offset = openingOffset + 1;
+
+  while (offset < value.length) {
+    if (value[offset] === "`") {
+      const tickLength = getBacktickRunLength(value, offset);
+      if (codeTickLength === 0) {
+        codeTickLength = tickLength;
+      } else if (tickLength === codeTickLength) {
+        codeTickLength = 0;
+      }
+      offset += tickLength;
+      continue;
+    }
+
+    if (
+      codeTickLength === 0 &&
+      value[offset] === "$" &&
+      value[offset - 1] !== "\\"
+    ) {
+      if (value.slice(offset, offset + 2) === "$$") {
+        offset += 2;
+        continue;
+      }
+
+      const previousCharacter = value[offset - 1];
+      return (
+        previousCharacter !== undefined &&
+        !/\s/.test(previousCharacter) &&
+        !startsNumericCurrencyAmount(value, offset)
+      );
+    }
+
+    offset += 1;
+  }
+
+  return false;
+}
+
+/** True when a line is a top-level indented Markdown code block. */
+function isIndentedCodeLine(line: string): boolean {
+  return /^(?: {4}|\t)/.test(line);
+}
+
+/**
+ * Converts MathJax delimiters and escapes currency on one line while
+ * preserving inline code spans.
  */
 function normalizeLineMathJaxDelimiters(line: string): string {
   let normalized = "";
@@ -94,6 +160,21 @@ function normalizeLineMathJaxDelimiters(line: string): string {
       if (delimiter === "\\[" || delimiter === "\\]") {
         normalized += "$$";
         offset += 2;
+        continue;
+      }
+      if (delimiter === "$$") {
+        normalized += delimiter;
+        offset += 2;
+        continue;
+      }
+      if (
+        line[offset] === "$" &&
+        line[offset - 1] !== "\\" &&
+        startsNumericCurrencyAmount(line, offset) &&
+        !hasPlausibleClosingInlineMathDelimiter(line, offset)
+      ) {
+        normalized += "\\$";
+        offset += 1;
         continue;
       }
     }
@@ -150,6 +231,12 @@ export function normalizeMarkdownMathSource(source: string): string {
     }
 
     if (inFence) {
+      normalizedLines.push(line);
+      lineIndex += 1;
+      continue;
+    }
+
+    if (isIndentedCodeLine(line)) {
       normalizedLines.push(line);
       lineIndex += 1;
       continue;
