@@ -12,13 +12,15 @@ import {
 } from "@/components/ui/tooltip";
 import React from "react";
 
+import {
+  KeyboardShortcutBadge,
+  type ShortcutSequence,
+} from "@/components/common/keyboard-shortcut-badge";
+
 export type ToolbarButtonProps = ButtonProps & {
   toolTipLabel?: string | string[];
   toolTipShortcut?: ShortcutSequence | ShortcutSequence[];
 };
-
-type ShortcutElement = string | React.ComponentType<{ className?: string }>;
-type ShortcutSequence = ShortcutElement | ShortcutElement[];
 
 /**
  * Reusable icon button with optional tooltip labels and shortcuts for toolbar UIs.
@@ -45,33 +47,6 @@ export const ToolbarButton = React.forwardRef<HTMLButtonElement, ToolbarButtonPr
         "toolTipLabel and toolTipShortcut props should have the same number of elements for ToolbarButton."
       );
     }
-
-    const renderShortcut = (shortcutElement: ShortcutElement) => {
-      if (typeof shortcutElement === "string") {
-        return shortcutElement;
-      } else {
-        // It's a React component
-        const ShortcutComponent = shortcutElement;
-        return <ShortcutComponent className="h-3 w-3" />;
-      }
-    };
-
-    const renderShortcutSequence = (sequence: ShortcutSequence) => {
-      if (Array.isArray(sequence)) {
-        // Check if this is an array of ShortcutElements (a sequence)
-        if (
-          sequence.length > 0 &&
-          (typeof sequence[0] === "string" || typeof sequence[0] === "function")
-        ) {
-          return sequence.map((element, index) => (
-            <React.Fragment key={index}>
-              {renderShortcut(element as ShortcutElement)}
-            </React.Fragment>
-          ));
-        }
-      }
-      return renderShortcut(sequence as ShortcutElement);
-    };
 
     const onTooltipOpenChange = (open: boolean) => {
       if (open && isTooltipReopenFromOverlaySuppressed()) {
@@ -108,9 +83,10 @@ export const ToolbarButton = React.forwardRef<HTMLButtonElement, ToolbarButtonPr
                   <div className="flex items-center" key={index}>
                     <p>{label}</p>
                     {shortcuts[index] && (
-                      <kbd className="pointer-events-none ml-2 inline-flex shrink-0 flex-nowrap h-5 min-h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[12px] font-medium text-muted-foreground opacity-100">
-                        {renderShortcutSequence(shortcuts[index])}
-                      </kbd>
+                      <KeyboardShortcutBadge
+                        className="ml-2"
+                        sequence={shortcuts[index]}
+                      />
                     )}
                   </div>
                 ))}

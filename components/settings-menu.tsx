@@ -16,8 +16,12 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 import { CloudAuthDialog } from "@/components/cloud/cloud-auth-dialog";
-import { ToolbarButton } from "@/components/common/toolbar-button";
 import { AltOrOption, CmdOrCtrl } from "@/components/common/keyboard-icons";
+import {
+  KeyboardShortcutBadge,
+  type ShortcutSequence,
+} from "@/components/common/keyboard-shortcut-badge";
+import { ToolbarButton } from "@/components/common/toolbar-button";
 import { SettingsDialog } from "@/components/settings-dialog/settings-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button, ButtonProps } from "@/components/ui/button";
@@ -159,9 +163,9 @@ export function SettingsMenu({
 
   const avatarUrl =
     user?.user_metadata?.avatar_url ?? user?.user_metadata?.picture;
-  const settingsTooltipShortcut = isDesktopApp
-    ? [[CmdOrCtrl, ","]]
-    : [[CmdOrCtrl, AltOrOption, ","]];
+  const settingsShortcut: ShortcutSequence = isDesktopApp
+    ? [CmdOrCtrl, ","]
+    : [CmdOrCtrl, AltOrOption, ","];
 
   return (
     <>
@@ -172,7 +176,6 @@ export function SettingsMenu({
             size="icon"
             className="relative h-8 w-8"
             toolTipLabel="Account & settings"
-            toolTipShortcut={settingsTooltipShortcut}
             {...props}
           >
             <img
@@ -290,6 +293,11 @@ export function SettingsMenu({
             <DropdownMenuItem onClick={() => setIsSettingsDialogOpen(true)}>
               <Settings className="h-4 w-4" />
               Settings
+              <KeyboardShortcutBadge
+                className="ml-auto"
+                sequence={settingsShortcut}
+                size="sm"
+              />
             </DropdownMenuItem>
           </DropdownMenuGroup>
         </DropdownMenuContent>

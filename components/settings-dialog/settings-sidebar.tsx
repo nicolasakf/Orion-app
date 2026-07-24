@@ -30,11 +30,6 @@ import {
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import {
   AGENT_SETTINGS_SECTIONS,
   type AgentSettingsSection,
   type SettingsTab,
@@ -257,21 +252,14 @@ export function SettingsSidebar({
               </SidebarMenuItem>
             ) : null}
             <SidebarMenuItem>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <SidebarMenuButton
-                    type="button"
-                    className="cursor-pointer"
-                    onClick={handleAskOrion}
-                  >
-                    <Sparkles className="h-4 w-4" />
-                    Ask Orion
-                  </SidebarMenuButton>
-                </TooltipTrigger>
-                <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
-                  This is just one of the ways you can ask the Orion agent to change settings for you
-                </TooltipContent>
-              </Tooltip>
+              <SidebarMenuButton
+                type="button"
+                className="cursor-pointer"
+                onClick={handleAskOrion}
+              >
+                <Sparkles className="h-4 w-4" />
+                Ask Orion
+              </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton asChild className="cursor-pointer">
