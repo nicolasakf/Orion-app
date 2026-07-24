@@ -33,16 +33,6 @@ require_credentials() {
   fi
 }
 
-require_pypi_dist() {
-  local dir="$1"
-  local label="$2"
-
-  if [[ ! -d "${dir}/dist" ]] || [[ -z "$(find "${dir}/dist" -maxdepth 1 -type f 2>/dev/null | head -n 1)" ]]; then
-    echo "No PyPI artifacts in ${dir}. Build ${label} first (Phase 1 step 7)." >&2
-    exit 1
-  fi
-}
-
 NPMRC_FILE=""
 
 setup_npm_auth() {
@@ -67,11 +57,15 @@ publish_npm() {
 publish_pypi() {
   local dir="$1"
   local label="$2"
+  local release_dist
 
-  require_pypi_dist "${dir}" "${label}"
-  python3 -m twine check "${dir}"/dist/*
+  # Build into a fresh directory so stale artifacts can never be re-uploaded.
+  release_dist="$(mktemp -d "${TMPDIR:-/tmp}/orion-${label}.XXXXXX")"
+  python3 -m build "${dir}" --outdir "${release_dist}"
+  python3 -m twine check "${release_dist}"/*
   TWINE_USERNAME="${TWINE_USERNAME}" TWINE_PASSWORD="${TWINE_PASSWORD}" \
-    python3 -m twine upload --non-interactive "${dir}"/dist/*
+    python3 -m twine upload --non-interactive "${release_dist}"/*
+  rm -rf "${release_dist}"
 }
 
 check_only() {
@@ -94,7 +88,7 @@ main() {
       ;;
     --help|-h)
       cat <<'EOF'
-Usage: scripts/publish-release.sh [--check]
+Usage: scripts/publish-release.sh [--check|--pypi-only]
 
 Publishes orion-notebook to npm, then orion-ui and orion-notebook to PyPI.
 
@@ -105,6 +99,7 @@ Environment (typically in ~/.zprofile):
 
 Options:
   --check   Verify credentials without publishing
+  --pypi-only  Build fresh PyPI artifacts and publish orion-ui then orion-notebook
 EOF
       return 0
       ;;
@@ -112,6 +107,17 @@ EOF
 
   load_credentials
   require_credentials
+
+  if [[ "${1:-}" == "--pypi-only" ]]; then
+    echo "==> PyPI publish (orion-ui)"
+    publish_pypi "${ROOT}/python/orion-ui" "orion-ui"
+
+    echo "==> PyPI publish (orion-notebook)"
+    publish_pypi "${ROOT}/python" "orion-notebook"
+
+    echo "==> Both PyPI packages published."
+    return 0
+  fi
 
   echo "==> npm publish (orion-notebook)"
   publish_npm
