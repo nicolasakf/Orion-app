@@ -134,6 +134,8 @@ npm run lint
 bash scripts/publish-release.sh --check
 ```
 
+`npm run lint` is advisory for release gating. Run it and report any failures, but do not block a release solely on pre-existing lint debt or an unavailable/incompatible lint setup. Treat test, type-check, production build, package smoke tests, credentials, and required GitHub checks as the release blockers. Do not weaken or reconfigure lint rules merely to publish unless the user explicitly asks for that change.
+
 Do not publish from a dirty tree unless the user explicitly wants unreleased local changes included. Resolve or stash unrelated work first.
 
 Review `git log` since the last release tag to draft CHANGELOG entries.
