@@ -3,6 +3,7 @@
 import React, { useMemo } from "react";
 import {
   AtSign,
+  FileCode2,
   LayoutTemplate,
   Sparkles,
   X,
@@ -64,6 +65,8 @@ interface NotebookAppViewProps {
   undoRemovalEnabled?: boolean;
   /** Saves a Business-mode markdown edit and resolves only after it is persisted. */
   onSaveMarkdownCell?: (cellIndex: number, source: string) => Promise<void>;
+  /** Opens a source cell in Notebook View. Available in Pro experience only. */
+  onGoToSourceCell?: (cellIndex: number) => void;
   onNotebookViewRequest?: () => void;
   onRemoveAppViewReference?: (reference: NotebookAppViewReference) => void;
   onRestoreAppViewReference?: (reference: NotebookAppViewReference) => void;
@@ -262,6 +265,7 @@ function NotebookAppViewTocRail({
 interface AppViewMarkdownContextMenuProps {
   children: React.ReactNode;
   onMention?: () => void;
+  onGoToSource?: () => void;
   onRemove?: () => void;
   businessMode?: boolean;
   /** Leaves interactive rich-editor controls free of the surrounding menu. */
@@ -272,11 +276,12 @@ interface AppViewMarkdownContextMenuProps {
 function AppViewMarkdownContextMenu({
   children,
   onMention,
+  onGoToSource,
   onRemove,
   businessMode = false,
   disabled = false,
 }: AppViewMarkdownContextMenuProps): React.JSX.Element {
-  if (disabled || (!onMention && !onRemove)) {
+  if (disabled || (!onMention && !onGoToSource && !onRemove)) {
     return <>{children}</>;
   }
 
@@ -292,7 +297,15 @@ function AppViewMarkdownContextMenu({
             {businessMode ? "Mention in chat" : "Mention cell in chat"}
           </ContextMenuItem>
         ) : null}
-        {onMention && onRemove ? <ContextMenuSeparator /> : null}
+        {onGoToSource ? (
+          <ContextMenuItem onClick={onGoToSource}>
+            <FileCode2 className="mr-2 h-4 w-4" />
+            Go to source
+          </ContextMenuItem>
+        ) : null}
+        {(onMention || onGoToSource) && onRemove ? (
+          <ContextMenuSeparator />
+        ) : null}
         {onRemove ? (
           <ContextMenuItem onClick={onRemove}>
             {businessMode ? (
@@ -417,6 +430,7 @@ export function NotebookAppView({
   businessEditMode = false,
   undoRemovalEnabled = false,
   onSaveMarkdownCell,
+  onGoToSourceCell,
   onNotebookViewRequest,
   onRemoveAppViewReference,
   onRestoreAppViewReference,
@@ -589,6 +603,14 @@ export function NotebookAppView({
     [notebook.cells, notebookPath],
   );
 
+  /** Opens the source notebook cell for an App View item. */
+  const handleGoToSourceCell = React.useCallback(
+    (cellIndex: number) => {
+      onGoToSourceCell?.(cellIndex);
+    },
+    [onGoToSourceCell],
+  );
+
   /** Removes an output from App View through the editor-owned metadata path. */
   const handleRemoveOutput = React.useCallback(
     (cellIndex: number, outputIndex: number) => {
@@ -671,6 +693,11 @@ export function NotebookAppView({
                         ? () => handleMentionMarkdownCell(item.cellIndex)
                         : undefined
                     }
+                    onGoToSource={
+                      onGoToSourceCell
+                        ? () => handleGoToSourceCell(item.cellIndex)
+                        : undefined
+                    }
                     onRemove={
                       onRemoveAppViewReference
                         ? () =>
@@ -747,6 +774,9 @@ export function NotebookAppView({
                       businessMode={businessMode}
                       onMentionOutput={
                         notebookPath ? handleMentionOutput : undefined
+                      }
+                      onGoToSource={
+                        onGoToSourceCell ? handleGoToSourceCell : undefined
                       }
                       onToggleOutputAppView={
                         onRemoveAppViewReference

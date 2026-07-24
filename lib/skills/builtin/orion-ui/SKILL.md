@@ -136,7 +136,7 @@ Charts:
 
 - Use Plotly, Altair, Vega-Lite, or existing notebook chart libraries for charts.
 - **Plotly theme (required):** Call `ui.theme.plotly()` once per kernel session (for example in a setup cell) before creating Plotly figures. It registers the Orion template and sets it as Plotly's default, so all later figures in that session inherit Orion styling automatically. Skip this only when the user explicitly asks for a different Plotly theme or custom styling.
-- **Plotly mode bar:** Do not set `displayModeBar=True` in Plotly figure `config` (for example in `fig.show(config=...)` or the figure's `config` dict) unless the user explicitly asks for the Plotly toolbar (zoom, pan, download, etc.). Omit `displayModeBar` by default.
+- **Plotly mode bar:** Hide the Plotly toolbar with `config={"displayModeBar": False}` (for example in `fig.show(config=...)`) unless the user explicitly asks for zoom, pan, download, or other mode-bar controls. Use `True` only when requested.
 - Do not build a custom charting system with Orion UI primitives.
 
 Example:
@@ -147,7 +147,8 @@ import plotly.express as px
 
 ui.theme.plotly()
 
-px.line(df, x="date", y="value")
+fig = px.line(df, x="date", y="value")
+fig.show(config={"displayModeBar": False})
 ```
 
 ## Change and button actions
@@ -224,7 +225,7 @@ cd python/orion-ui && python -m pip install -e .
 - Change and button `execute_cells` actions reference real Orion cell ids.
 - The UI uses Orion components for controls and existing plotting libraries for charts.
 - Plotly work calls `ui.theme.plotly()` once per kernel session unless the user explicitly requested different styling.
-- Plotly charts omit `displayModeBar=True` unless the user explicitly asked for the Plotly toolbar.
+- Plotly charts set `displayModeBar=False` unless the user explicitly asked for the Plotly toolbar.
 - App View metadata references the rendered `orion_ui` output instead of recreating controls directly in metadata.
 - `ui.table()` supports pandas DataFrames in v1. The `source` argument is required so saved views can record readable pandas expressions.
 - Use `column_descriptions={...}` on `ui.table()` when column headers need info-icon tooltip descriptions.

@@ -17,6 +17,7 @@ export interface CellRunJob {
 export class CellExecutionQueue {
   private jobs: CellRunJob[] = [];
   private processing = false;
+  private clearGeneration = 0;
 
   /** Append a run request, replacing an older pending job with the same key. */
   enqueue(job: CellRunJob): void {
@@ -33,11 +34,17 @@ export class CellExecutionQueue {
     return this.jobs.shift();
   }
 
-  /** Drop all pending jobs and return the removed entries. */
+  /** Drop pending jobs, invalidate the active batch, and return removed entries. */
   clear(): CellRunJob[] {
+    this.clearGeneration += 1;
     const dropped = [...this.jobs];
     this.jobs = [];
     return dropped;
+  }
+
+  /** Monotonic token used by active batches to detect queue cancellation. */
+  get cancellationGeneration(): number {
+    return this.clearGeneration;
   }
 
   /** Number of jobs waiting to be processed. */

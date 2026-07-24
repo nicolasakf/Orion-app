@@ -30,3 +30,16 @@ describe("MarkdownRenderer external links", () => {
     );
   });
 });
+
+describe("MarkdownRenderer currency", () => {
+  it("renders numeric dollar amounts as prose instead of math", () => {
+    const { container } = render(
+      <MarkdownRenderer source="Revenue was $119.8B of revenue and $40.8B." />,
+    );
+
+    expect(
+      screen.getByText("Revenue was $119.8B of revenue and $40.8B."),
+    ).toBeVisible();
+    expect(container.querySelector(".katex")).not.toBeInTheDocument();
+  });
+});

@@ -13,6 +13,7 @@ import type {
 } from "@/components/notebook/orion-ui-primitives";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { dispatchAgentNotebookExecutionEvent } from "@/lib/notebook/agent-notebook-events";
+import { RUN_ALL_CELLS_EVENT_NAME } from "@/lib/notebook/notebook-execution-events";
 import {
   CellType,
   OutputType,
@@ -22,6 +23,7 @@ import {
 type NotebookAppViewTestProps = {
   notebook?: NotebookType;
   businessEditMode?: boolean;
+  onGoToSourceCell?: (cellIndex: number) => void;
   onSaveMarkdownCell?: (cellIndex: number, source: string) => Promise<void>;
   onOrionUiStateChange?: (
     key: string,
@@ -216,6 +218,61 @@ describe("NotebookEditor business markdown saves", () => {
   });
 });
 
+describe("NotebookEditor App View source navigation", () => {
+  it("switches Pro App View to Notebook View for the selected source cell", async () => {
+    const onActiveNotebookViewChange = vi.fn();
+    const contentsManager = {
+      get: vi.fn().mockResolvedValue({ content: makeNotebook() }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+
+    render(
+      <NotebookEditor
+        filepath="/workspace/report.ipynb"
+        activeNotebookView="app"
+        onActiveNotebookViewChange={onActiveNotebookViewChange}
+        kernelService={makeKernelService(contentsManager)}
+      />,
+    );
+
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.onGoToSourceCell).toBeTypeOf("function");
+    });
+
+    const props = notebookAppViewMock.mock.lastCall?.[0] as NotebookAppViewTestProps;
+    act(() => props.onGoToSourceCell?.(1));
+
+    expect(onActiveNotebookViewChange).toHaveBeenCalledWith("notebook");
+  });
+
+  it("does not expose source navigation in Business App View", async () => {
+    const contentsManager = {
+      get: vi.fn().mockResolvedValue({ content: makeNotebook() }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+
+    render(
+      <NotebookEditor
+        filepath="/workspace/report.ipynb"
+        businessMode
+        activeNotebookView="app"
+        kernelService={makeKernelService(contentsManager)}
+      />,
+    );
+
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.notebook?.cells).toHaveLength(2);
+      expect(props?.onGoToSourceCell).toBeUndefined();
+    });
+  });
+});
+
 describe("NotebookEditor agent execution state", () => {
   it("ignores a stale notebook load after the filepath changes", async () => {
     const firstPath = "/workspace/first.ipynb";
@@ -339,6 +396,93 @@ describe("NotebookEditor agent execution state", () => {
       expect(props?.notebook?.metadata.title).toBe("Second notebook");
       expect(onIsRunningChange).toHaveBeenLastCalledWith(true);
     });
+  });
+});
+
+describe("NotebookEditor execution queue cancellation", () => {
+  it("does not continue an ignore-errors batch after the queue is cleared", async () => {
+    const notebook: NotebookType = {
+      ...makeNotebook(),
+      cells: [
+        {
+          cell_type: CellType.CODE,
+          source: ["first"],
+          metadata: { orion: { id: "first-code-cell" } },
+          execution_count: null,
+          outputs: [],
+        },
+        {
+          cell_type: CellType.CODE,
+          source: ["second"],
+          metadata: { orion: { id: "second-code-cell" } },
+          execution_count: null,
+          outputs: [],
+        },
+      ],
+    };
+    const contentsManager = {
+      get: vi.fn().mockResolvedValue({ content: notebook }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    let resolveFirstExecution: (() => void) | undefined;
+    const firstExecution = new Promise<void>((resolve) => {
+      resolveFirstExecution = resolve;
+    });
+    let executionCount = 0;
+    const execute = vi.fn(async () => {
+      executionCount += 1;
+      return {
+        done: executionCount === 1 ? firstExecution : Promise.resolve(),
+      };
+    });
+    const kernelService = {
+      getContentsManager: () => contentsManager,
+      getAvailableKernels: vi.fn().mockResolvedValue([]),
+      getKernel: () => ({ name: "python", status: "idle" }),
+      getStatus: () => "idle",
+      execute,
+    } as unknown as KernelService;
+    const onIsRunningChange = vi.fn();
+
+    render(
+      <NotebookEditor
+        filepath="/workspace/report.ipynb"
+        activeNotebookView="app"
+        kernelService={kernelService}
+        onIsRunningChange={onIsRunningChange}
+      />,
+    );
+
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.notebook?.cells).toHaveLength(2);
+    });
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(RUN_ALL_CELLS_EVENT_NAME, {
+          detail: { stopOnError: false },
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(onIsRunningChange).toHaveBeenLastCalledWith(true);
+    });
+
+    act(() => {
+      window.dispatchEvent(new Event("clearCellExecutionQueue"));
+    });
+    await act(async () => {
+      resolveFirstExecution?.();
+      await firstExecution;
+    });
+
+    await waitFor(() => {
+      expect(onIsRunningChange).toHaveBeenLastCalledWith(false);
+    });
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 });
 

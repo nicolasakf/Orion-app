@@ -26,6 +26,7 @@ function ImageOutputWrapper({
     onCopyOutput,
     onHideOutput,
     onMentionOutput,
+    onGoToSource,
     onToggleOutputAppView,
     isInAppView,
     businessMode,
@@ -38,6 +39,7 @@ function ImageOutputWrapper({
     onCopyOutput ||
     onHideOutput ||
     onMentionOutput ||
+    onGoToSource ||
     onToggleOutputAppView
   );
   const imageNode = (
@@ -69,6 +71,7 @@ function ImageOutputWrapper({
       onCopyOutput={onCopyOutput}
       onHideOutput={onHideOutput}
       onMentionOutput={onMentionOutput}
+      onGoToSource={onGoToSource}
       onToggleAppView={onToggleOutputAppView}
       isInAppView={!!isInAppView}
       businessMode={businessMode}

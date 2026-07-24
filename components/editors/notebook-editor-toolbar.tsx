@@ -77,7 +77,7 @@ export interface NotebookEditorToolbarProps {
   presentationHideAllCellInputs: boolean;
   onRunAll: (stopOnError?: boolean, triggerSource?: RunAllTriggerSource) => void;
   onStopKernel: () => void | Promise<void>;
-  onRestartKernel: () => void | Promise<void>;
+  onRestartKernel: () => Promise<boolean>;
   onTogglePresentationHideAllCellInputs: () => void;
 }
 
@@ -173,9 +173,11 @@ export function NotebookEditorToolbar({
     );
   }, []);
 
+  /** Runs all cells only after the requested kernel restart succeeds. */
   const handleRestartAndRunAll = React.useCallback(async () => {
     dismissGoToError();
-    await onRestartKernel();
+    const restarted = await onRestartKernel();
+    if (!restarted) return;
     handleRunAllClick(true);
   }, [dismissGoToError, handleRunAllClick, onRestartKernel]);
 

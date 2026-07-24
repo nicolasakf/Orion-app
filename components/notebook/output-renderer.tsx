@@ -278,6 +278,8 @@ interface OutputRendererProps {
   onCopyOutput?: (cellIndex: number, outputIndex: number) => void;
   onHideOutput?: (cellIndex: number, outputIndex: number) => void;
   onMentionOutput?: (cellIndex: number, outputIndex: number) => void;
+  /** Opens the output's source cell in Notebook View. */
+  onGoToSource?: (cellIndex: number) => void;
   onToggleOutputAppView?: (cellIndex: number, outputIndex: number) => void;
   onOrionUiStateChange?: (
     key: string,
@@ -318,6 +320,7 @@ export function OutputRenderer({
   onCopyOutput,
   onHideOutput,
   onMentionOutput,
+  onGoToSource,
   onToggleOutputAppView,
   onOrionUiStateChange,
   onOrionUiAction,
@@ -444,6 +447,7 @@ export function OutputRenderer({
         onCopyOutput ||
         onHideOutput ||
         onMentionOutput ||
+        onGoToSource ||
         onToggleOutputAppView
       ) {
         return (
@@ -454,6 +458,7 @@ export function OutputRenderer({
             onCopyOutput={onCopyOutput}
             onHideOutput={onHideOutput}
             onMentionOutput={onMentionOutput}
+            onGoToSource={onGoToSource}
             onToggleAppView={onToggleOutputAppView}
             isInAppView={!!isInAppView}
             businessMode={businessMode}
@@ -477,6 +482,7 @@ export function OutputRenderer({
       onCopyOutput,
       onHideOutput,
       onMentionOutput,
+      onGoToSource,
       onToggleOutputAppView,
       isInAppView,
       businessMode,
@@ -498,6 +504,7 @@ export function OutputRenderer({
       onCopyOutput,
       onHideOutput,
       onMentionOutput,
+      onGoToSource,
       onToggleOutputAppView,
       onOrionUiStateChange,
       onOrionUiAction,
@@ -516,6 +523,7 @@ export function OutputRenderer({
       onCopyOutput,
       onHideOutput,
       onMentionOutput,
+      onGoToSource,
       onToggleOutputAppView,
       onOrionUiStateChange,
       onOrionUiAction,
@@ -614,17 +622,31 @@ export function OutputRenderer({
 
   // If hidden, render a minimal placeholder
   if (isHidden) {
-    return (
+    const canRevealHiddenOutput = Boolean(onHideOutput);
+    const hiddenPlaceholder = (
       <div
-        className="text-xs text-muted-foreground p-2 cursor-pointer hover:bg-accent rounded"
-        onClick={() => {
-          if (onHideOutput) {
-            onHideOutput(cellIndex, outputIndex);
-          }
-        }}
+        className={cn(
+          "text-xs text-muted-foreground p-2 rounded",
+          canRevealHiddenOutput && "cursor-pointer hover:bg-accent",
+        )}
+        onClick={
+          onHideOutput ? () => onHideOutput(cellIndex, outputIndex) : undefined
+        }
       >
-        Output hidden (click to show)
+        {canRevealHiddenOutput ? "Output hidden (click to show)" : "Output hidden"}
       </div>
+    );
+
+    if (!onGoToSource) return hiddenPlaceholder;
+
+    return (
+      <OutputContextMenu
+        cellIndex={cellIndex}
+        outputIndex={outputIndex}
+        onGoToSource={onGoToSource}
+      >
+        {hiddenPlaceholder}
+      </OutputContextMenu>
     );
   }
 

@@ -496,6 +496,7 @@ export function PlotlyJsonOutputRenderer({
     onCopyOutput,
     onHideOutput,
     onMentionOutput,
+    onGoToSource,
     onToggleOutputAppView,
     isInAppView,
     businessMode,
@@ -507,6 +508,7 @@ export function PlotlyJsonOutputRenderer({
     onCopyOutput ||
     onHideOutput ||
     onMentionOutput ||
+    onGoToSource ||
     onToggleOutputAppView
   );
   const containerRef = useRef<HTMLDivElement>(null);
@@ -815,6 +817,7 @@ export function PlotlyJsonOutputRenderer({
       onCopyOutput={onCopyOutput}
       onHideOutput={onHideOutput}
       onMentionOutput={onMentionOutput}
+      onGoToSource={onGoToSource}
       onToggleAppView={onToggleOutputAppView}
       isInAppView={!!isInAppView}
       businessMode={businessMode}

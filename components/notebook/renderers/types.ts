@@ -28,6 +28,8 @@ export interface NotebookOutputActionHandlers {
   onCopyOutput?: (cellIndex: number, outputIndex: number) => void;
   onHideOutput?: (cellIndex: number, outputIndex: number) => void;
   onMentionOutput?: (cellIndex: number, outputIndex: number) => void;
+  /** Opens the output's source cell in Notebook View. */
+  onGoToSource?: (cellIndex: number) => void;
   onToggleOutputAppView?: (cellIndex: number, outputIndex: number) => void;
   onOrionUiStateChange?: (
     key: string,

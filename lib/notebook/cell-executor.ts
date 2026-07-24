@@ -85,6 +85,8 @@ export interface RunCellsOptions {
   onCellComplete?: (index: number, result: CellExecutionResult) => void;
   /** Called immediately before a cell starts; may throw to stop that cell. */
   beforeCell?: (index: number) => Promise<void> | void;
+  /** Checked between cells; returning false cancels the remaining batch. */
+  shouldContinue?: () => boolean;
   /** Max execution time per cell in milliseconds. Omit for no timeout. */
   timeoutMs?: number;
   /** Interrupt the kernel when `timeoutMs` elapses. Defaults to false. */
@@ -106,6 +108,8 @@ export interface RunCellsOptions {
 export interface RunCellsResult {
   /** Whether all cells executed successfully. */
   success: boolean;
+  /** Whether execution stopped because `shouldContinue` returned false. */
+  cancelled: boolean;
   /** Per-cell results, keyed by cell index. */
   results: Map<number, CellExecutionResult>;
 }
@@ -357,6 +361,7 @@ export async function runCells(
     onCellExecutionCount,
     onCellComplete,
     beforeCell,
+    shouldContinue,
     timeoutMs,
     interruptOnTimeout = false,
     onCellProgress,
@@ -366,6 +371,7 @@ export async function runCells(
 
   const results = new Map<number, CellExecutionResult>();
   let allSucceeded = true;
+  let cancelled = false;
 
   // Wrap batch callbacks so executeSingleCell receives per-cell callbacks
   const makeOutputCb = (idx: number) =>
@@ -375,8 +381,19 @@ export async function runCells(
     onCellExecutionCount ? (count: number) => onCellExecutionCount(idx, count) : undefined;
 
   for (const { index, source } of cells) {
+    if (shouldContinue?.() === false) {
+      cancelled = true;
+      allSucceeded = false;
+      break;
+    }
+
     try {
       await beforeCell?.(index);
+      if (shouldContinue?.() === false) {
+        cancelled = true;
+        allSucceeded = false;
+        break;
+      }
       onCellStart?.(index);
 
       const result = await executeSingleCell({
@@ -397,6 +414,12 @@ export async function runCells(
 
       results.set(index, result);
       onCellComplete?.(index, result);
+
+      if (shouldContinue?.() === false) {
+        cancelled = true;
+        allSucceeded = false;
+        break;
+      }
 
       if (!result.success) {
         allSucceeded = false;
@@ -419,11 +442,16 @@ export async function runCells(
       onCellComplete?.(index, failResult);
       allSucceeded = false;
 
+      if (shouldContinue?.() === false) {
+        cancelled = true;
+        break;
+      }
+
       if (stopOnError) {
         break;
       }
     }
   }
 
-  return { success: allSucceeded, results };
+  return { success: allSucceeded, cancelled, results };
 }

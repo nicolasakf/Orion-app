@@ -491,6 +491,7 @@ function MobileLayout({
             onRefreshKernels={onRefreshKernels}
             kernelService={kernelService}
             workspaceDirectory={workspaceDirectory}
+            jupyterRootDirectory={jupyterRootDirectory}
             onWorkspaceChange={onWorkspaceChange}
             onWorkspacePathRenamed={onWorkspacePathRenamed}
             onWorkspacePathDeleted={onWorkspacePathDeleted}
@@ -1209,15 +1210,21 @@ export default function Page() {
     [editorNavigation, hasUnsavedChanges, selectFile],
   );
 
-  /** Copies a Jupyter-relative path when an external open is unavailable. */
+  /** Copies an absolute path when the Jupyter root is known. */
   const handleCopyExternalPath = useCallback((path: string) => {
-    void copyWorkspacePath(path)
-      .then(() => toast.success("Workspace path copied."))
+    void copyWorkspacePath(path, jupyterRootDirectory)
+      .then((copiedPath) =>
+        toast.success(
+          copiedPath.isAbsolute
+            ? "Absolute path copied."
+            : "Jupyter-relative path copied (server root unavailable).",
+        )
+      )
       .catch((error) => {
         console.error("Failed to copy workspace path:", error);
         toast.error("Could not copy the workspace path.");
       });
-  }, []);
+  }, [jupyterRootDirectory]);
 
   /** Opens an unsupported editor file through the managed local Electron runtime. */
   const openFileExternally = useCallback((path: string): boolean => {
@@ -2335,16 +2342,20 @@ export default function Page() {
     [],
   );
 
-  const handleRestartKernel = React.useCallback(async () => {
-    if (!kernelService) return;
+  /** Restarts the active kernel and reports whether the restart completed. */
+  const handleRestartKernel = React.useCallback(async (): Promise<boolean> => {
+    if (!kernelService) return false;
+    window.dispatchEvent(new CustomEvent("clearCellExecutionQueue"));
     try {
       setKernelStatus("connecting");
       await kernelService.restart();
       executionCountRef.current = 0;
       setKernelStatus("connected");
+      return true;
     } catch (error) {
       console.error("Error restarting kernel:", error);
       setKernelStatus("disconnected");
+      return false;
     }
   }, [kernelService]);
 
@@ -3056,6 +3067,7 @@ export default function Page() {
                         onRefreshKernels={handleRefreshKernels}
                         kernelService={kernelService}
                         workspaceDirectory={workspaceDirectory}
+                        jupyterRootDirectory={jupyterRootDirectory}
                         onWorkspaceChange={setWorkspaceDirectory}
                         onWorkspacePathRenamed={handleWorkspacePathRenamed}
                         onWorkspacePathDeleted={handleWorkspacePathDeleted}

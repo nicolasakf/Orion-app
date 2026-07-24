@@ -22,6 +22,8 @@ describe("notebook HTML style scoping", () => {
     expect(scoped).toContain('data-orion-style-scoped="notebook-editor"');
     expect(scoped).toContain(`${NOTEBOOK_RENDERED_STYLE_SCOPES[0]},`);
     expect(scoped).toContain(`${NOTEBOOK_RENDERED_STYLE_SCOPES[1]},`);
+    expect(scoped).toContain(`${NOTEBOOK_RENDERED_STYLE_SCOPES[2]},`);
+    expect(scoped).toContain(`${NOTEBOOK_RENDERED_STYLE_SCOPES[3]},`);
     expect(scoped).toContain(
       `${NOTEBOOK_RENDERED_STYLE_SCOPES[0]} h1`,
     );
@@ -47,6 +49,8 @@ describe("notebook HTML style scoping", () => {
     expect(scoped).toContain("@media (min-width: 800px)");
     expect(scoped).toContain(`${NOTEBOOK_RENDERED_STYLE_SCOPES[0]},`);
     expect(scoped).toContain(`${NOTEBOOK_RENDERED_STYLE_SCOPES[1]}`);
+    expect(scoped).toContain(`${NOTEBOOK_RENDERED_STYLE_SCOPES[2]},`);
+    expect(scoped).toContain(`${NOTEBOOK_RENDERED_STYLE_SCOPES[3]}`);
     expect(scoped).toContain("from { opacity: 0; }");
     expect(scoped).not.toContain(`${NOTEBOOK_RENDERED_STYLE_SCOPES[0]} from`);
   });

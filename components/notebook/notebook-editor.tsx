@@ -2011,6 +2011,24 @@ export function NotebookEditor({
     [scrollToCell, scrollToCellIdAfterLayout, selectCellByIndex],
   );
 
+  /** Switches to Notebook View and reveals the requested App View source cell. */
+  const handleGoToAppViewSourceCell = useCallback(
+    (cellIndex: number) => {
+      const currentNotebook = notebookRef.current;
+      if (
+        cellIndex < 0 ||
+        !currentNotebook ||
+        cellIndex >= currentNotebook.cells.length
+      ) {
+        return;
+      }
+
+      pendingScrollToCellIndexRef.current = cellIndex;
+      onActiveNotebookViewChange?.("notebook");
+    },
+    [onActiveNotebookViewChange],
+  );
+
   useEffect(() => {
     if (notebook) {
       // Initialize refs array with the correct length
@@ -2301,11 +2319,14 @@ export function NotebookEditor({
           job = queue.dequeue();
           continue;
         }
+        const cancellationGeneration = queue.cancellationGeneration;
 
         const batchResult = await runCellsBatch({
           kernelService: parentKernelService,
           cells: cellsToRun,
           stopOnError: job.stopOnError,
+          shouldContinue: () =>
+            queue.cancellationGeneration === cancellationGeneration,
 
           onCellStart: (idx) => {
             const source = resolveCellExecutionSource(idx);
@@ -2384,6 +2405,7 @@ export function NotebookEditor({
         });
 
         if (
+          !batchResult.cancelled &&
           job.stopOnError &&
           job.triggerSource &&
           !batchResult.success
@@ -2405,7 +2427,11 @@ export function NotebookEditor({
           }
         }
 
-        if (job.stopOnError && !batchResult.success) {
+        if (
+          !batchResult.cancelled &&
+          job.stopOnError &&
+          !batchResult.success
+        ) {
           clearQueuedExecutionStatuses(
             cellsToRun
               .map(({ index }) => index)
@@ -4304,6 +4330,9 @@ export function NotebookEditor({
                   undoRemovalEnabled={activeNotebookView === "app"}
                   onSaveMarkdownCell={
                     businessMode ? handleSaveBusinessMarkdownCell : undefined
+                  }
+                  onGoToSourceCell={
+                    businessMode ? undefined : handleGoToAppViewSourceCell
                   }
                   onNotebookViewRequest={() =>
                     onActiveNotebookViewChange?.("notebook")

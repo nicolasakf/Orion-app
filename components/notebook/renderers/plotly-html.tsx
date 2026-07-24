@@ -19,6 +19,7 @@ export function PlotlyHtmlOutputRenderer({
     onCopyOutput,
     onHideOutput,
     onMentionOutput,
+    onGoToSource,
     onToggleOutputAppView,
     isInAppView,
     businessMode,
@@ -28,6 +29,7 @@ export function PlotlyHtmlOutputRenderer({
     onCopyOutput ||
     onHideOutput ||
     onMentionOutput ||
+    onGoToSource ||
     onToggleOutputAppView
   );
 
@@ -56,6 +58,7 @@ export function PlotlyHtmlOutputRenderer({
       onCopyOutput={onCopyOutput}
       onHideOutput={onHideOutput}
       onMentionOutput={onMentionOutput}
+      onGoToSource={onGoToSource}
       onToggleAppView={onToggleOutputAppView}
       isInAppView={!!isInAppView}
       businessMode={businessMode}

@@ -34,10 +34,11 @@ describe("CellExecutionQueue", () => {
     expect(queue.isActive).toBe(false);
   });
 
-  it("clear returns and removes all pending jobs", () => {
+  it("clear removes pending jobs and advances cancellation generation", () => {
     const queue = new CellExecutionQueue();
     queue.enqueue({ indices: [0], stopOnError: true });
     queue.enqueue({ indices: [1], stopOnError: true });
+    const initialGeneration = queue.cancellationGeneration;
 
     const dropped = queue.clear();
 
@@ -45,8 +46,12 @@ describe("CellExecutionQueue", () => {
       { indices: [0], stopOnError: true },
       { indices: [1], stopOnError: true },
     ]);
+    expect(queue.cancellationGeneration).toBe(initialGeneration + 1);
     expect(queue.pendingCount).toBe(0);
     expect(queue.dequeue()).toBeUndefined();
+
+    expect(queue.clear()).toEqual([]);
+    expect(queue.cancellationGeneration).toBe(initialGeneration + 2);
   });
 
   it("replaces an older pending job with the same coalescing key", () => {

@@ -80,6 +80,74 @@ describe("OutputRenderer context menu", () => {
     expect(screen.queryByText("Presentation")).not.toBeInTheDocument();
   });
 
+  it("opens an App View output's source cell", async () => {
+    const onGoToSource = vi.fn();
+
+    render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: { "text/plain": ["plain output"] },
+          metadata: {},
+        }}
+        cellIndex={2}
+        outputIndex={1}
+        onGoToSource={onGoToSource}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByText("plain output"));
+    fireEvent.click(await screen.findByText("Go to source"));
+
+    expect(onGoToSource).toHaveBeenCalledWith(2);
+  });
+
+  it("opens a hidden App View output's source cell", async () => {
+    const onGoToSource = vi.fn();
+
+    render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: { "text/plain": ["plain output"] },
+          metadata: { orion: { hidden: true } },
+        }}
+        cellIndex={2}
+        outputIndex={1}
+        onGoToSource={onGoToSource}
+      />,
+    );
+
+    const hiddenOutput = screen.getByText("Output hidden");
+    expect(hiddenOutput).not.toHaveClass("cursor-pointer");
+
+    fireEvent.contextMenu(hiddenOutput);
+    fireEvent.click(await screen.findByText("Go to source"));
+
+    expect(onGoToSource).toHaveBeenCalledWith(2);
+  });
+
+  it("reveals a hidden editor output when its placeholder is clicked", () => {
+    const onHideOutput = vi.fn();
+
+    render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: { "text/plain": ["plain output"] },
+          metadata: { orion: { hidden: true } },
+        }}
+        cellIndex={2}
+        outputIndex={1}
+        onHideOutput={onHideOutput}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("Output hidden (click to show)"));
+
+    expect(onHideOutput).toHaveBeenCalledWith(2, 1);
+  });
+
   it("renders generic Plotly bootstrap HTML in the sandboxed Plotly frame", () => {
     render(
       <OutputRenderer

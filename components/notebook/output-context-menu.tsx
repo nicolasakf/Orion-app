@@ -5,6 +5,7 @@ import {
   AtSign,
   Copy,
   EyeOff,
+  FileCode2,
   LayoutTemplate,
   Maximize2,
   Trash2,
@@ -35,6 +36,8 @@ interface OutputContextMenuProps {
   onCopyOutput?: (cellIndex: number, outputIndex: number) => void;
   onHideOutput?: (cellIndex: number, outputIndex: number) => void;
   onMentionOutput?: (cellIndex: number, outputIndex: number) => void;
+  /** Opens the output's source cell in Notebook View. */
+  onGoToSource?: (cellIndex: number) => void;
   onToggleAppView?: (cellIndex: number, outputIndex: number) => void;
   isInAppView?: boolean;
   /** When true, the remove action label is shortened for Business View. */
@@ -60,6 +63,7 @@ export function OutputContextMenu({
   onCopyOutput,
   onHideOutput,
   onMentionOutput,
+  onGoToSource,
   onToggleAppView,
   isInAppView = false,
   businessMode = false,
@@ -142,6 +146,13 @@ export function OutputContextMenu({
           >
             <AtSign className="mr-2 h-4 w-4" />
             {businessMode ? "Mention in chat" : "Mention output in chat"}
+          </ContextMenuItem>
+        ) : null}
+
+        {onGoToSource ? (
+          <ContextMenuItem onClick={() => onGoToSource(cellIndex)}>
+            <FileCode2 className="mr-2 h-4 w-4" />
+            Go to source
           </ContextMenuItem>
         ) : null}
 

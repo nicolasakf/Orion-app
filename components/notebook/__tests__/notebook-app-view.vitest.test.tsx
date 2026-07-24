@@ -729,6 +729,22 @@ describe("NotebookAppView", () => {
     );
   });
 
+  it("opens a markdown cell's Notebook View source from its context menu", async () => {
+    const onGoToSourceCell = vi.fn();
+
+    render(
+      <NotebookAppView
+        notebook={makeNotebook()}
+        onGoToSourceCell={onGoToSourceCell}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByTestId("markdown"));
+    fireEvent.click(await screen.findByText("Go to source"));
+
+    expect(onGoToSourceCell).toHaveBeenCalledWith(0);
+  });
+
   it("leaves a rich markdown editor outside the App View context menu", async () => {
     render(
       <NotebookAppView

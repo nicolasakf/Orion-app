@@ -145,6 +145,11 @@ describe("getBusinessMarkdownCompatibility", () => {
         '[Orion][product]\n\n[product]: https://example.com "Product home"',
     },
     {
+      name: "a reference-style link with an escaped closing bracket",
+      reason: "Reference-style links can only be edited as Markdown source.",
+      source: "[foo\\]]\n\n[foo\\]]: https://example.com",
+    },
+    {
       name: "MathJax slash delimiters",
       reason: "This block uses an advanced MathJax delimiter.",
       source: "Inline \\(x^2\\) and display \\[E = mc^2\\].",

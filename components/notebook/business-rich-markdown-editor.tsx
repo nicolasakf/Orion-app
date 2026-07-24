@@ -27,7 +27,7 @@ const htmlLikePattern = /<\/?[A-Za-z][A-Za-z0-9:-]*(?:\s[^<>]*)?>/;
 const directivePattern = /^\s*:::[^\n]*$/m;
 const imagePattern = /!\[[^\]]*\](?:\([^\n)]*\)|\[[^\]]*\])?/;
 const referenceLinkPattern =
-  /(?<!!)\[[^\]\n]+\]\s*\[[^\]\n]*\]|^\s{0,3}\[[^\]\n]+\]:[ \t]*\S/m;
+  /(?<!!)\[(?:\\.|[^\]\\\n])+\]\s*\[(?:\\.|[^\]\\\n])*\]|^\s{0,3}\[(?:\\.|[^\]\\\n])+\]:[ \t]*\S/m;
 const mathJaxPattern = /\\(?:\(|\[)|\\begin\{[A-Za-z*]+\}/;
 const mdxExpressionPattern = /(?:^|\n)\s*\{[^{}\n]+\}\s*(?=\n|$)/;
 const mdxEsmPattern =

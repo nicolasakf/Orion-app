@@ -268,7 +268,7 @@ export function NotebookPublishDialog({
                 checked={allowSourceDownload}
                 onCheckedChange={(checked) => setAllowSourceDownload(checked === true)}
               />
-              Allow viewers to download the source .ipynb
+              Allow viewers to download the notebook source code
             </label>
             <div className="space-y-2">
               <Label htmlFor="publish-password">

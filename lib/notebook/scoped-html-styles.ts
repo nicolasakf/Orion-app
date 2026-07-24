@@ -2,6 +2,8 @@ export const NOTEBOOK_EDITOR_STYLE_SCOPE = ".notebook-editor-content-area";
 export const NOTEBOOK_RENDERED_STYLE_SCOPES = [
   `${NOTEBOOK_EDITOR_STYLE_SCOPE} .jp-RenderedHTMLCommon`,
   `${NOTEBOOK_EDITOR_STYLE_SCOPE} .jp-OutputArea-output`,
+  ".orion-app-view .jp-RenderedHTMLCommon",
+  ".orion-app-view .jp-OutputArea-output",
 ] as const;
 
 const STYLE_TAG_PATTERN = /<style\b([^>]*)>([\s\S]*?)<\/style>/gi;
