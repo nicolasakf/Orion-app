@@ -100,8 +100,6 @@ type FileTreeProps = {
   onRevealInFinder?: (path: string) => void;
   /** Called when the user requests a Jupyter-relative path be copied. */
   onCopyPath?: (path: string) => void;
-  /** Disabled reveal menu text when the connected workspace is not locally revealable. */
-  revealUnavailableLabel?: string;
   /**
    * Called after a successful rename so the app can update the open file and recent list.
    */
@@ -143,7 +141,6 @@ export function FileTree({
   onFetchChildren,
   onRevealInFinder,
   onCopyPath,
-  revealUnavailableLabel,
   onPathRenamed,
   onPathDeleted,
   revealLabel = "Reveal in Finder",
@@ -175,7 +172,6 @@ export function FileTree({
               onFetchChildren={onFetchChildren}
               onRevealInFinder={onRevealInFinder}
               onCopyPath={onCopyPath}
-              revealUnavailableLabel={revealUnavailableLabel}
               onPathRenamed={onPathRenamed}
               onPathDeleted={onPathDeleted}
               revealLabel={revealLabel}
@@ -201,7 +197,6 @@ function FileTreeNode({
   onFetchChildren,
   onRevealInFinder,
   onCopyPath,
-  revealUnavailableLabel,
   onPathRenamed,
   onPathDeleted,
   revealLabel = "Reveal in Finder",
@@ -219,7 +214,6 @@ function FileTreeNode({
   onFetchChildren?: (path: string) => Promise<FileTreeItem[]>;
   onRevealInFinder?: (path: string) => void;
   onCopyPath?: (path: string) => void;
-  revealUnavailableLabel?: string;
   onPathRenamed?: FileTreeProps["onPathRenamed"];
   onPathDeleted?: FileTreeProps["onPathDeleted"];
   revealLabel?: string;
@@ -734,16 +728,6 @@ function FileTreeNode({
             </>
           )}
 
-          {!onRevealInFinder && revealUnavailableLabel && (
-            <>
-              {item.type === "folder" && canCreateFile && <ContextMenuSeparator />}
-              <ContextMenuItem disabled>
-                <FolderSearch className="mr-2 h-4 w-4" />
-                {revealUnavailableLabel}
-              </ContextMenuItem>
-            </>
-          )}
-
           {onCopyPath && (
             <ContextMenuItem
               className="outline-none ring-0 focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0"
@@ -851,7 +835,6 @@ function FileTreeNode({
               onFetchChildren={onFetchChildren}
               onRevealInFinder={onRevealInFinder}
               onCopyPath={onCopyPath}
-              revealUnavailableLabel={revealUnavailableLabel}
               onPathRenamed={onPathRenamed}
               onPathDeleted={onPathDeleted}
               revealLabel={revealLabel}

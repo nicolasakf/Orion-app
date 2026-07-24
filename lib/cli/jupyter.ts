@@ -237,6 +237,8 @@ export async function startJupyterServer(
     `--ServerApp.token=${token}`,
     "--ServerApp.allow_origin=*",
     "--ServerApp.disable_check_xsrf=True",
+    // Orion-managed workspace features persist settings, skills, and chat files under `.orion`.
+    "--ContentsManager.allow_hidden=True",
   ];
 
   const proc = spawn(pythonCommand, args, {

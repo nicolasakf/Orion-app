@@ -305,6 +305,7 @@ export function LeftSidebar({
   onRefreshKernels,
   kernelService,
   workspaceDirectory,
+  jupyterRootDirectory,
   onWorkspaceChange,
   onWorkspacePathRenamed,
   onWorkspacePathDeleted,
@@ -340,6 +341,8 @@ export function LeftSidebar({
    * `""` means the server root is selected.
    */
   workspaceDirectory?: string | null;
+  /** Absolute Jupyter root when the active connection is locally managed. */
+  jupyterRootDirectory?: string | null;
   /** Called when the user selects or clears a workspace folder. */
   onWorkspaceChange?: (dir: string | null) => void;
   /** After a file or folder rename in the tree — sync open file and recents. */
@@ -611,15 +614,21 @@ export function LeftSidebar({
     }
   }, [kernelService, workspaceDirectory]);
 
-  /** Copies a Jupyter-relative workspace path and reports the clipboard result. */
+  /** Copies an absolute workspace path when the Jupyter root is known. */
   const handleCopyWorkspacePath = useCallback((path: string) => {
-    void copyWorkspacePath(path)
-      .then(() => toast.success("Workspace path copied."))
+    void copyWorkspacePath(path, jupyterRootDirectory)
+      .then((copiedPath) =>
+        toast.success(
+          copiedPath.isAbsolute
+            ? "Absolute path copied."
+            : "Jupyter-relative path copied (server root unavailable).",
+        )
+      )
       .catch((error) => {
         console.error("Failed to copy workspace path:", error);
         toast.error("Could not copy the workspace path.");
       });
-  }, []);
+  }, [jupyterRootDirectory]);
 
   /** Reveals a workspace item through the local Electron host when it owns the active runtime. */
   const handleRevealInFinder = useCallback(
@@ -835,11 +844,6 @@ export function LeftSidebar({
           onPathRenamed={onWorkspacePathRenamed}
           onPathDeleted={onWorkspacePathDeleted}
           revealLabel={revealLabel}
-          revealUnavailableLabel={
-            canRevealWorkspacePath
-              ? undefined
-              : "Reveal available for local desktop workspaces"
-          }
           workspaceDirectory={workspaceDirectory}
           fontSize={fileTreeFontSize}
         />

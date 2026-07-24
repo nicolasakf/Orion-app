@@ -559,17 +559,23 @@ export function BusinessShell({
     []
   );
 
-  /** Copies the active Jupyter-relative workspace target and reports the result. */
+  /** Copies the active workspace target as an absolute path when the root is known. */
   const handleCopyRevealTarget = React.useCallback(() => {
     if (revealTargetPath === null) return;
 
-    void copyWorkspacePath(revealTargetPath)
-      .then(() => toast.success("Workspace path copied."))
+    void copyWorkspacePath(revealTargetPath, jupyterRootDirectory)
+      .then((copiedPath) =>
+        toast.success(
+          copiedPath.isAbsolute
+            ? "Absolute path copied."
+            : "Jupyter-relative path copied (server root unavailable).",
+        )
+      )
       .catch((error) => {
         console.error("Failed to copy workspace path:", error);
         toast.error("Could not copy the workspace path.");
       });
-  }, [revealTargetPath]);
+  }, [jupyterRootDirectory, revealTargetPath]);
 
   /** Opens the active file, or the current project folder, through the local Electron host. */
   const handleRevealTarget = React.useCallback(() => {
@@ -704,6 +710,7 @@ export function BusinessShell({
                           onFileSelect={handleFileTreeSelect}
                           kernelService={kernelService}
                           workspaceDirectory={workspaceDirectory}
+                          jupyterRootDirectory={jupyterRootDirectory}
                           onWorkspaceChange={onWorkspaceChange}
                           onWorkspacePathRenamed={onWorkspacePathRenamed}
                           onWorkspacePathDeleted={onWorkspacePathDeleted}
@@ -880,12 +887,7 @@ export function BusinessShell({
                               <FolderSearch className="h-4 w-4" />
                               {revealTargetLabel}
                             </DropdownMenuItem>
-                          ) : (
-                            <DropdownMenuItem disabled>
-                              <FolderSearch className="h-4 w-4" />
-                              Reveal available for local desktop workspaces
-                            </DropdownMenuItem>
-                          )}
+                          ) : null}
                           <DropdownMenuItem
                             onClick={handleCopyRevealTarget}
                             disabled={revealTargetPath === null}
