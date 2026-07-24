@@ -4,6 +4,27 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.16.0] - 2026-07-24
+
+### Added
+
+- Chat: managed external-file attachments are stored on the connected Jupyter server, with safe cleanup and workspace-tool references
+- Chat: refresh workspace skills and subagents directly from the slash-command palette
+- Notebook: open the source cell directly from App View outputs
+- Settings: validate title-generation models before saving them
+
+### Changed
+
+- Workspace: copy absolute paths for locally managed Jupyter servers
+- Notebook: cancel queued execution batches when restarting the kernel
+
+### Fixed
+
+- Markdown: preserve dollar-denominated currency instead of interpreting it as inline math
+- Titles: use a ChatGPT OAuth-compatible fallback and omit streaming or long-reasoning options for short title requests
+
+[0.16.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.16.0
+
 ## [0.15.0] - 2026-07-21
 
 ### Added
