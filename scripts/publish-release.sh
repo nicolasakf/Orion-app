@@ -33,6 +33,15 @@ require_credentials() {
   fi
 }
 
+# Requires only the PyPI credential for targeted recovery publishes.
+require_pypi_credentials() {
+  if [[ -z "${TWINE_PASSWORD:-}" ]]; then
+    echo "Missing publish credentials: TWINE_PASSWORD or PYPI_TOKEN" >&2
+    echo "Set them in ~/.zprofile or export before running this script." >&2
+    exit 1
+  fi
+}
+
 NPMRC_FILE=""
 
 setup_npm_auth() {
@@ -54,17 +63,23 @@ publish_npm() {
   npm publish --access public --userconfig "${NPMRC_FILE}"
 }
 
+# Builds fresh PyPI artifacts and optionally skips files already uploaded by a partial release.
 publish_pypi() {
   local dir="$1"
   local label="$2"
+  local skip_existing="${3:-false}"
   local release_dist
+  local upload_args=(--non-interactive)
 
   # Build into a fresh directory so stale artifacts can never be re-uploaded.
   release_dist="$(mktemp -d "${TMPDIR:-/tmp}/orion-${label}.XXXXXX")"
   python3 -m build "${dir}" --outdir "${release_dist}"
   python3 -m twine check "${release_dist}"/*
+  if [[ "${skip_existing}" == "true" ]]; then
+    upload_args+=(--skip-existing)
+  fi
   TWINE_USERNAME="${TWINE_USERNAME}" TWINE_PASSWORD="${TWINE_PASSWORD}" \
-    python3 -m twine upload --non-interactive "${release_dist}"/*
+    python3 -m twine upload "${upload_args[@]}" "${release_dist}"/*
   rm -rf "${release_dist}"
 }
 
@@ -106,18 +121,21 @@ EOF
   esac
 
   load_credentials
-  require_credentials
 
   if [[ "${1:-}" == "--pypi-only" ]]; then
+    require_pypi_credentials
+
     echo "==> PyPI publish (orion-ui)"
-    publish_pypi "${ROOT}/python/orion-ui" "orion-ui"
+    publish_pypi "${ROOT}/python/orion-ui" "orion-ui" true
 
     echo "==> PyPI publish (orion-notebook)"
-    publish_pypi "${ROOT}/python" "orion-notebook"
+    publish_pypi "${ROOT}/python" "orion-notebook" true
 
     echo "==> Both PyPI packages published."
     return 0
   fi
+
+  require_credentials
 
   echo "==> npm publish (orion-notebook)"
   publish_npm

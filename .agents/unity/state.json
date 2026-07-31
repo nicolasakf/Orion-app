@@ -54,7 +54,7 @@
         },
         "publish-orion-release": {
           "files": {
-            "SKILL.md": "ebe4dc7d4e665c8af0c90550b087751d5f4f996ce137a0cab5b46d1a0ec6dc25"
+            "SKILL.md": "3e8c2ece72428cf598a021e7eba34c825cf18398bdc61553b732c2565bd897af"
           }
         }
       },
@@ -118,7 +118,7 @@
         },
         "publish-orion-release": {
           "files": {
-            "SKILL.md": "ebe4dc7d4e665c8af0c90550b087751d5f4f996ce137a0cab5b46d1a0ec6dc25"
+            "SKILL.md": "3e8c2ece72428cf598a021e7eba34c825cf18398bdc61553b732c2565bd897af"
           }
         }
       },

@@ -335,19 +335,27 @@ Verify the asset URL responds:
 curl -I "https://github.com/nicolasakf/Orion-app/releases/download/v<version>/orion-app-<version>.tar.gz"
 ```
 
-### Step 8: Validate PyPI package metadata
+### Step 8: Build PyPI artifacts
 
-Confirm both `pyproject.toml` versions match npm. `scripts/publish-release.sh` always builds fresh, version-specific artifacts in a temporary directory immediately before upload; it never reads `python/**/dist/`. This prevents stale files from an earlier release being selected or re-uploaded.
+Build both Python packages. Confirm each `pyproject.toml` version matches npm.
 
-For a non-publishing local validation, use fresh temporary output directories rather than deleting or reusing `dist/`:
+**`orion-ui`** (`python/orion-ui/pyproject.toml` → `name = "orion-ui"`):
 
 ```bash
-UI_DIST=$(mktemp -d)
-NOTEBOOK_DIST=$(mktemp -d)
-python3 -m build python/orion-ui --outdir "$UI_DIST"
-twine check "$UI_DIST"/*
-python3 -m build python --outdir "$NOTEBOOK_DIST"
-twine check "$NOTEBOOK_DIST"/*
+cd python/orion-ui
+rm -rf dist/ build/ *.egg-info/
+python3 -m pip install build twine
+python3 -m build
+twine check dist/*
+```
+
+**`orion-notebook`** (`python/pyproject.toml` → `name = "orion-notebook"`):
+
+```bash
+cd ../
+rm -rf dist/ build/ orion_notebook.egg-info/ orion_agent.egg-info/
+python3 -m build
+twine check dist/*
 ```
 
 Optional `orion-ui` import smoke test (agent may run from repo root):
@@ -370,13 +378,9 @@ bash scripts/publish-release.sh
 The script:
 1. Sources `~/.zprofile` if `NPM_TOKEN` / PyPI token are not already exported
 2. Publishes **npm** (`orion-notebook`) — `prepack` runs again via the npm lifecycle
-3. Builds fresh temporary PyPI artifacts, then publishes **`orion-ui`** first and **`orion-notebook`** second
+3. Publishes **PyPI `orion-ui`** first, then **`orion-notebook`**
 
-Do **not** echo or log token values. If npm succeeds but a PyPI upload does not, verify the npm version and use the targeted recovery command instead of rerunning npm:
-
-```bash
-bash scripts/publish-release.sh --pypi-only
-```
+Do **not** echo or log token values. On failure, diagnose from the error output and the troubleshooting table — do not re-run publish automatically unless the user asks.
 
 ### One-time legacy npm deprecation
 
@@ -494,11 +498,11 @@ Sibling repo sync (step 8) can run in parallel with PyPI artifact build (step 7)
 | npm `404` on `orion-notebook` at publish | Name taken or not logged in | Confirm `npm whoami`; check registry with `npm view orion-notebook` |
 | PyPI `403` / `401` | Invalid `TWINE_PASSWORD` / `PYPI_TOKEN` | Regenerate PyPI API token; update `~/.zprofile` |
 | PyPI `400` name too similar | Normalized name conflicts with existing project | Pick a distinct name (current: `orion-notebook`); use `--verbose` to confirm |
-| PyPI `400` generic | Bad metadata or description | Inspect the fresh temporary artifact output from `scripts/publish-release.sh`; it runs `twine check` before upload |
-| Verification: npm still on old version | Publish not finished or registry lag | Wait a minute and re-check; run the full script only when npm has not published |
+| PyPI `400` generic | Bad metadata or description | `twine check dist/*`; use `twine upload --verbose dist/*` for details |
+| Verification: npm still on old version | Publish not finished or registry lag | Wait a minute and re-check; re-run `bash scripts/publish-release.sh` if publish failed |
 | Verification: pip install 404 on bundle | PyPI published before GitHub asset | Upload GitHub asset first, then re-run PyPI publish |
 | Managed runtime `ModuleNotFoundError: orion_ui` | `orion-ui` not on PyPI for this version | Publish `orion-ui` first; users retry after both PyPI packages are live |
-| Verification: `orion-ui` missing on PyPI | Script stopped after npm | Verify npm is live, then run `bash scripts/publish-release.sh --pypi-only` |
+| Verification: `orion-ui` missing on PyPI | Script failed mid-run | `cd python/orion-ui && twine upload dist/*` (with token env set) |
 | Sibling tag missing after release | Phase 1b skipped or push failed | Re-run Step 6b for the missing repo; do not force-push unless user approves |
 | `npm version` fails in Orion-docs | No `"version"` field yet | Add `"version": "0.0.0"` to `package.json`, then re-run `npm version <x.y.z> --no-git-tag-version` |
 | Sibling repo dirty tree | Uncommitted local work | Commit or stash unrelated changes before the release commit |
