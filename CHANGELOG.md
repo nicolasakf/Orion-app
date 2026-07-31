@@ -4,6 +4,15 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+
+- Chat: answer Orion product questions from official documentation with the new `orion-docs` built-in skill
+- Ask mode: load skills and list available kernels while remaining read-only
+
+[Unreleased]: https://github.com/nicolasakf/Orion-app/compare/v0.16.0...HEAD
+
 ## [0.16.0] - 2026-07-24
 
 ### Added
