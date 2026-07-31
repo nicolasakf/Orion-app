@@ -90,6 +90,10 @@ ui.table(
     df,
     source="df",
     page_size=50,
+    default_filters=[
+        {"column": "status", "operation": "equals", "value": "active"},
+    ],
+    default_sort={"column": "score", "direction": "desc"},
     column_descriptions={
         "score": "Priority score from 1 to 10.",
         "status": "Current account status.",
@@ -102,6 +106,31 @@ Python kernel. Saved table views are stored on the notebook output metadata as
 structured operations plus a readable pandas expression.
 Column descriptions, when provided, appear as info-icon tooltips in table
 headers.
+
+Use `default_filters` and `default_sort` to set the table's initial operations.
+`default_filters` accepts the same `column`, `operation`, and `value` shape as
+the filter menu; `default_sort` accepts one `column` and `direction` (`"asc"`
+or `"desc"`). Resetting the Default view restores these defaults.
+
+Filter operations and controls follow each pandas column's semantic dtype.
+Text columns provide text matching, ordered numeric and temporal columns
+provide comparisons and inclusive `between`, booleans use a true/false
+selector, and bounded categoricals support `in` and `notIn`. Range filters use
+`{"lower": "...", "upper": "..."}` as their value, while categorical set
+filters use a list of values. Date and datetime values use ISO syntax:
+
+```python
+default_filters=[
+    {
+        "column": "created_at",
+        "operation": "between",
+        "value": {
+            "lower": "2026-01-01T00:00:00",
+            "upper": "2026-01-31T23:59:59",
+        },
+    },
+]
+```
 
 `class_name` adds semantic CSS hooks for Orion UI in Notebook View and App View. Do not write CSS into notebook metadata; if a notebook needs custom styling, include it in the relevant cell source/output and scope selectors to rendered markdown/output areas. Orion also exposes JupyterLab-compatible rendered-content selectors such as `.jp-MarkdownOutput`, `.jp-RenderedHTMLCommon`, and `.jp-OutputArea-output` for cell-authored styles. Do not rely on arbitrary Tailwind classes generated at runtime.
 

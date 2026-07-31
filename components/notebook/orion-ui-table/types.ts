@@ -9,11 +9,54 @@ const TableCellValueSchema = z.union([
   z.null(),
 ]);
 
+export const OrionTableFilterKindSchema = z.enum([
+  "text",
+  "categorical",
+  "boolean",
+  "number",
+  "date",
+  "datetime",
+  "timedelta",
+  "period",
+  "complex",
+  "interval",
+  "binary",
+  "fallback",
+  "empty",
+]);
+
+export const OrionTableFilterOperationSchema = z.enum([
+  "contains",
+  "doesNotContain",
+  "startsWith",
+  "endsWith",
+  "equals",
+  "notEquals",
+  "greaterThan",
+  "greaterThanOrEqual",
+  "lessThan",
+  "lessThanOrEqual",
+  "between",
+  "in",
+  "notIn",
+  "onDate",
+  "blank",
+  "notBlank",
+  "regex",
+]);
+
 export const OrionTableColumnSchema = z
   .object({
     key: z.string(),
     label: z.string(),
     dtype: z.string().optional(),
+    filterKind: OrionTableFilterKindSchema.optional(),
+    filterOperations: z.array(OrionTableFilterOperationSchema).optional(),
+    filterOptions: z.array(TableCellValueSchema).optional(),
+    ordered: z.boolean().optional(),
+    timezone: z.string().optional(),
+    frequency: z.string().optional(),
+    numericType: z.enum(["integer", "float", "decimal"]).optional(),
     isIndex: z.boolean().optional(),
     description: z.string().optional(),
   })
@@ -64,10 +107,17 @@ export const OrionTableExportSchema = z
   })
   .passthrough();
 
+export const OrionTableFilterValueResponseSchema = z
+  .object({
+    value: z.string(),
+  })
+  .passthrough();
+
 export const OrionTableCommResponseSchema = z.union([
   OrionTableWindowSchema,
   OrionTableStatsSchema,
   OrionTableExportSchema,
+  OrionTableFilterValueResponseSchema,
   z.object({ expression: z.string() }).passthrough(),
 ]);
 
@@ -98,31 +148,41 @@ export type OrionTableCommEnvelope = z.infer<typeof OrionTableCommEnvelopeSchema
 
 export type OrionTableMode = "paginated" | "virtual";
 export type OrionTableSortDirection = "asc" | "desc";
-export type OrionTableFilterOperation =
-  | "contains"
-  | "doesNotContain"
-  | "equals"
-  | "notEquals"
-  | "greaterThan"
-  | "greaterThanOrEqual"
-  | "lessThan"
-  | "lessThanOrEqual"
-  | "blank"
-  | "notBlank"
-  | "regex";
+export type OrionTableFilterKind = z.infer<typeof OrionTableFilterKindSchema>;
+export type OrionTableFilterOperation = z.infer<
+  typeof OrionTableFilterOperationSchema
+>;
+export type OrionTableFilterValue =
+  | string
+  | string[]
+  | { lower: string; upper: string };
 
-export interface OrionTableFilter {
-  column: string;
-  operation: OrionTableFilterOperation;
-  value: string;
-}
+export const OrionTableSortSchema = z.object({
+  column: z.string(),
+  direction: z.enum(["asc", "desc"]),
+});
 
-export interface OrionTableState {
-  search: string;
-  sort: { column: string; direction: OrionTableSortDirection } | null;
-  filters: OrionTableFilter[];
-  groupBy: string | null;
-}
+export const OrionTableFilterSchema = z.object({
+  column: z.string(),
+  operation: OrionTableFilterOperationSchema,
+  value: z
+    .union([
+      z.string(),
+      z.array(z.string()),
+      z.object({ lower: z.string(), upper: z.string() }),
+    ])
+    .default(""),
+});
+
+export const OrionTableStateSchema = z.object({
+  search: z.string(),
+  sort: OrionTableSortSchema.nullable(),
+  filters: z.array(OrionTableFilterSchema),
+  groupBy: z.string().nullable(),
+});
+
+export type OrionTableFilter = z.infer<typeof OrionTableFilterSchema>;
+export type OrionTableState = z.infer<typeof OrionTableStateSchema>;
 
 export type OrionTableRequest =
   | {
@@ -148,6 +208,13 @@ export type OrionTableRequest =
       action: "expression";
       tableId: string;
       state: OrionTableState;
+    }
+  | {
+      action: "filter_value";
+      tableId: string;
+      state: OrionTableState;
+      rowNumber: number;
+      column: string;
     };
 
 export interface OrionTableSavedView {
@@ -167,7 +234,7 @@ export interface OrionTableSavedView {
 }
 
 export interface OrionTableOutputMetadata {
-  version: 1;
+  version: 1 | 2;
   activeViewId?: string | null;
   views: OrionTableSavedView[];
 }

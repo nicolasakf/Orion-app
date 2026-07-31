@@ -22,6 +22,8 @@ export function tableNotRegisteredMessage(
         return "Refresh this report to export or copy this table.";
       case "expression":
         return "Refresh this report before saving this table view.";
+      case "filter_value":
+        return "Refresh this report before filtering from a selected cell.";
       default:
         return "Refresh this report to interact with this table.";
     }
@@ -36,6 +38,8 @@ export function tableNotRegisteredMessage(
       return `This table is showing saved output. ${RUN_CELL_HINT} Then you can export or copy the full table.`;
     case "expression":
       return `This table is showing saved output. ${RUN_CELL_HINT} Then you can save the current view expression.`;
+    case "filter_value":
+      return `This table is showing saved output. ${RUN_CELL_HINT} Then you can filter from selected cells.`;
     default:
       return `This table is showing saved output. ${RUN_CELL_HINT}`;
   }

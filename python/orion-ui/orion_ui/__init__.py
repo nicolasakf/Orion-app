@@ -475,6 +475,8 @@ def table(
     show_index: bool = True,
     max_cell_chars: int = 200,
     column_descriptions: Optional[Mapping[str, str]] = None,
+    default_filters: Optional[Sequence[Mapping[str, Any]]] = None,
+    default_sort: Optional[Mapping[str, str]] = None,
     class_name: Optional[str] = None,
 ) -> Component:
     """Create an interactive backend-backed table for a pandas DataFrame.
@@ -503,6 +505,17 @@ def table(
         Per-column descriptions shown in Orion table headers as info tooltips.
         Keys should match DataFrame column names after string conversion. Use
         ``"__index__"`` to describe the index column. Default is ``None``.
+    default_filters : sequence of mappings or None, optional
+        Filters applied when the table first renders and whenever its Default
+        view is reset. Each mapping has ``column``, ``operation``, and optional
+        ``value`` keys. Operations match the dtype-aware table filter menu.
+        Inclusive ``between`` values use ``{"lower": ..., "upper": ...}``;
+        categorical ``in`` and ``notIn`` values use a sequence. Default is
+        ``None``.
+    default_sort : mapping or None, optional
+        Sort applied when the table first renders and whenever its Default view
+        is reset. Provide ``{"column": "score", "direction": "desc"}``.
+        The table currently supports one sort at a time. Default is ``None``.
     class_name : str or None, optional
         Semantic CSS hook merged at render time. Default is ``None``.
 
@@ -512,6 +525,11 @@ def table(
         A ``Table`` component node backed by Python-side pandas operations.
     """
     table_id = f"orion-table-{uuid.uuid4().hex}"
+    default_state = _table_runtime.default_table_state(
+        dataframe,
+        default_filters=default_filters,
+        default_sort=default_sort,
+    )
     registration = _table_runtime.register_table(
         dataframe,
         table_id=table_id,
@@ -524,6 +542,7 @@ def table(
         registration,
         mode=mode,
         page_size=page_size,
+        default_state=default_state,
     )
     return _component("Table", (), **payload, class_name=class_name)
 

@@ -1,4 +1,6 @@
 import unittest
+from datetime import date, timedelta
+from decimal import Decimal
 from types import ModuleType
 from unittest.mock import patch
 
@@ -280,6 +282,86 @@ class OrionUiTests(unittest.TestCase):
         )
 
     @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_defaults_filter_and_sort_the_initial_window(self):
+        df = pd.DataFrame(
+            {
+                "status": ["active", "paused", "active"],
+                "score": [2, 9, 1],
+            }
+        )
+
+        component = ui.table(
+            df,
+            source="df",
+            show_index=False,
+            default_filters=[
+                {"column": "status", "operation": "equals", "value": "active"},
+            ],
+            default_sort={"column": "score", "direction": "desc"},
+        )
+        props = component._repr_mimebundle_()[ui.ORION_UI_MIME_TYPE]["root"]["props"]
+
+        self.assertEqual(
+            props["defaultState"],
+            {
+                "search": "",
+                "sort": {"column": "score", "direction": "desc"},
+                "filters": [
+                    {"column": "status", "operation": "equals", "value": "active"},
+                ],
+                "groupBy": None,
+            },
+        )
+        self.assertEqual(
+            [row["score"] for row in props["initialWindow"]["rows"]], [2, 1]
+        )
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_operations_resolve_non_string_column_labels(self):
+        df = pd.DataFrame(
+            {
+                1: ["active", "paused", "active"],
+                2: [2, 9, 1],
+            }
+        )
+
+        component = ui.table(
+            df,
+            source="df",
+            show_index=False,
+            default_filters=[
+                {"column": "1", "operation": "equals", "value": "active"},
+            ],
+            default_sort={"column": "2", "direction": "desc"},
+        )
+        table_id = component.props["tableId"]
+        props = component._repr_mimebundle_()[ui.ORION_UI_MIME_TYPE]["root"]["props"]
+        stats = _table.column_stats(table_id, "2")
+        exported = _table.export_csv(table_id, columns=["1"])
+
+        self.assertEqual(
+            [row["2"] for row in props["initialWindow"]["rows"]],
+            [2, 1],
+        )
+        self.assertEqual(stats["sum"], 12.0)
+        self.assertEqual(exported["csv"].splitlines()[0], "1")
+        self.assertIn(
+            ".sort_values(2, ascending=False)",
+            props["initialWindow"]["expression"],
+        )
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_defaults_reject_ambiguous_serialized_column_labels(self):
+        df = pd.DataFrame([[1, 2]], columns=[1, "1"])
+
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            ui.table(
+                df,
+                source="df",
+                default_sort={"column": "1", "direction": "asc"},
+            )
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
     def test_table_column_description_values_must_be_strings(self):
         df = pd.DataFrame({"status": ["active"]})
 
@@ -308,8 +390,198 @@ class OrionUiTests(unittest.TestCase):
         self.assertEqual([row["score"] for row in window["rows"]], [9, 2])
         self.assertEqual(window["groupBy"], "status")
         self.assertEqual(window["groupCounts"]["active"], 3)
-        self.assertIn("df.query", window["expression"])
+        self.assertIn("df.loc[lambda _df:", window["expression"])
         self.assertIn(".sort_values('score', ascending=False)", window["expression"])
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_column_metadata_advertises_semantic_filter_capabilities(self):
+        ordered_category = pd.CategoricalDtype(["low", "medium", "high"], ordered=True)
+        df = pd.DataFrame(
+            {
+                "text": pd.Series(["alpha", None], dtype="string"),
+                "category": pd.Series(["low", "high"], dtype=ordered_category),
+                "boolean": pd.Series([True, None], dtype="boolean"),
+                "integer": pd.Series([1, None], dtype="Int64"),
+                "date": [date(2026, 1, 1), None],
+                "datetime": pd.to_datetime(
+                    ["2026-01-01T10:00:00Z", None],
+                    utc=True,
+                ),
+                "duration": pd.to_timedelta(["1 day", None]),
+                "period": pd.Series([pd.Period("2026-01", freq="M"), None]),
+                "complex": pd.Series([1 + 2j, None], dtype="complex128"),
+                "interval": pd.Series([pd.Interval(0, 1), None]),
+                "binary": [b"alpha", None],
+                "mixed": [{"a": 1}, ["b"]],
+                "empty": [None, None],
+                "sparse": pd.arrays.SparseArray([1.0, 0.0]),
+            }
+        )
+
+        metadata = {
+            column["key"]: column
+            for column in _table._column_metadata(df)
+        }
+
+        self.assertEqual(metadata["text"]["filterKind"], "text")
+        self.assertNotIn("lessThan", metadata["text"]["filterOperations"])
+        self.assertEqual(metadata["category"]["filterKind"], "categorical")
+        self.assertTrue(metadata["category"]["ordered"])
+        self.assertIn("between", metadata["category"]["filterOperations"])
+        self.assertEqual(metadata["boolean"]["filterKind"], "boolean")
+        self.assertEqual(metadata["integer"]["numericType"], "integer")
+        self.assertEqual(metadata["date"]["filterKind"], "date")
+        self.assertEqual(metadata["datetime"]["timezone"], "UTC")
+        self.assertEqual(metadata["duration"]["filterKind"], "timedelta")
+        self.assertEqual(metadata["period"]["filterKind"], "period")
+        self.assertEqual(metadata["complex"]["filterOperations"], [
+            "equals",
+            "notEquals",
+            "blank",
+            "notBlank",
+        ])
+        self.assertEqual(metadata["interval"]["filterKind"], "interval")
+        self.assertEqual(metadata["binary"]["filterKind"], "binary")
+        self.assertEqual(metadata["mixed"]["filterKind"], "fallback")
+        self.assertEqual(metadata["empty"]["filterOperations"], ["blank", "notBlank"])
+        self.assertEqual(metadata["sparse"]["filterKind"], "number")
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_backend_applies_typed_filters_and_excludes_missing_values(self):
+        df = pd.DataFrame(
+            {
+                "number": pd.Series([1, 2, None, 4], dtype="Int64"),
+                "decimal": [Decimal("1.1"), Decimal("2.2"), None, Decimal("4.4")],
+                "boolean": pd.Series([True, False, None, True], dtype="boolean"),
+                "category": pd.Categorical(["a", "b", None, "c"]),
+                "date": [
+                    date(2026, 1, 1),
+                    date(2026, 1, 2),
+                    None,
+                    date(2026, 1, 4),
+                ],
+                "duration": pd.to_timedelta(["1 day", "2 days", None, "4 days"]),
+                "period": pd.Series(
+                    [
+                        pd.Period("2026-01", freq="M"),
+                        pd.Period("2026-02", freq="M"),
+                        None,
+                        pd.Period("2026-04", freq="M"),
+                    ]
+                ),
+            }
+        )
+        component = ui.table(df, source="df", show_index=False)
+        table_id = component.props["tableId"]
+
+        cases = [
+            ("number", "between", {"lower": "2", "upper": "4"}, [2, 4]),
+            ("decimal", "greaterThan", "2.1", [Decimal("2.2"), Decimal("4.4")]),
+            ("boolean", "equals", "true", [True, True]),
+            ("category", "in", ["a", "c"], ["a", "c"]),
+            ("date", "greaterThan", "2026-01-01", [date(2026, 1, 2), date(2026, 1, 4)]),
+            ("duration", "lessThanOrEqual", "2 days", list(pd.to_timedelta(["1 day", "2 days"]))),
+            ("period", "greaterThan", "2026-01", [pd.Period("2026-02", freq="M"), pd.Period("2026-04", freq="M")]),
+        ]
+        for column, operation, value, expected in cases:
+            with self.subTest(column=column, operation=operation):
+                result = _table._apply_operations(
+                    _table._require_table(table_id),
+                    {
+                        "filters": [
+                            {
+                                "column": column,
+                                "operation": operation,
+                                "value": value,
+                            }
+                        ]
+                    },
+                )
+                self.assertEqual(result[column].tolist(), expected)
+
+        not_equal = _table._apply_operations(
+            _table._require_table(table_id),
+            {
+                "filters": [
+                    {"column": "number", "operation": "notEquals", "value": "2"}
+                ]
+            },
+        )
+        self.assertEqual(not_equal["number"].tolist(), [1, 4])
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_datetime_filters_respect_timezone_calendar_days_and_expressions(self):
+        timestamps = pd.to_datetime(
+            [
+                "2026-03-08 00:30:00",
+                "2026-03-08 23:30:00",
+                "2026-03-09 00:00:00",
+                None,
+            ]
+        ).tz_localize("America/New_York")
+        df = pd.DataFrame({"created_at": timestamps, "value": [1, 2, 3, 4]})
+        component = ui.table(df, source="df", show_index=False)
+        table_id = component.props["tableId"]
+        state = {
+            "search": "",
+            "sort": None,
+            "filters": [
+                {
+                    "column": "created_at",
+                    "operation": "onDate",
+                    "value": "2026-03-08",
+                }
+            ],
+            "groupBy": None,
+        }
+
+        window = _table.get_table_window(table_id, state)
+        evaluated = eval(window["expression"], {"df": df})
+
+        self.assertEqual([row["value"] for row in window["rows"]], [1, 2])
+        self.assertEqual(evaluated["value"].tolist(), [1, 2])
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_table_rejects_invalid_operations_and_returns_untruncated_filter_values(self):
+        long_value = "x" * 500
+        df = pd.DataFrame({"name": [long_value], "score": [1]})
+
+        with self.assertRaisesRegex(ValueError, "unsupported.*name.*object"):
+            ui.table(
+                df,
+                source="df",
+                default_filters=[
+                    {"column": "name", "operation": "lessThan", "value": "z"}
+                ],
+            )
+
+        component = ui.table(df, source="df", max_cell_chars=20)
+        table_id = component.props["tableId"]
+        value = _table.filter_value(table_id, "name", 0)
+
+        self.assertEqual(value["value"], long_value)
+        with self.assertRaisesRegex(ValueError, "unsupported.*name"):
+            _table.get_table_window(
+                table_id,
+                {
+                    "filters": [
+                        {"column": "name", "operation": "lessThan", "value": "z"}
+                    ]
+                },
+            )
+
+    @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
+    def test_large_categories_omit_multi_value_filter_operations(self):
+        categories = [f"value-{index}" for index in range(201)]
+        series = pd.Series(
+            pd.Categorical(["value-0"], categories=categories)
+        )
+
+        metadata = _table._column_metadata(pd.DataFrame({"category": series}))[0]
+
+        self.assertNotIn("filterOptions", metadata)
+        self.assertNotIn("in", metadata["filterOperations"])
+        self.assertIn("equals", metadata["filterOperations"])
 
     @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
     def test_table_column_stats_and_export_are_backend_limited(self):

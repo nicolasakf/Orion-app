@@ -7,10 +7,10 @@ import React, {
   useRef,
   useState,
 } from "react";
+import { TooltipPortal } from "@radix-ui/react-tooltip";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   BarChart3,
-  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -22,10 +22,10 @@ import {
   Download,
   Eye,
   EyeOff,
-  Filter,
   HelpCircle,
-  Info,
+  ListFilter,
   Maximize2,
+  Minimize2,
   Plus,
   RotateCcw,
   Save,
@@ -35,6 +35,11 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  CheckmarkedButton,
+  useCheckmarkedFeedback,
+} from "@/components/common/checkmarked-button";
 import {
   Dialog,
   DialogContent,
@@ -48,6 +53,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { BoundedNumberInput } from "@/components/ui/bounded-number-input";
 import { Label } from "@/components/ui/label";
 import {
   Popover,
@@ -72,16 +78,28 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import {
+  ScrollGradientOverlays,
+  useScrollEdgeIndicators,
+} from "@/components/right-sidebar/scroll-edge-gradient";
+import {
+  openNotebookLinkExternally,
+  shouldOpenNotebookLinkExternally,
+} from "@/lib/markdown/notebook-links";
 import type { NotebookAppViewSchemaNode } from "@/lib/notebook/app-view";
 import { cn } from "@/lib/utils";
 import {
   OrionTableExportSchema,
+  OrionTableFilterValueResponseSchema,
   OrionTableStatsSchema,
+  OrionTableStateSchema,
   OrionTableWindowSchema,
   type OrionTableColumn,
   type OrionTableCommResponse,
   type OrionTableFilter,
+  type OrionTableFilterKind,
   type OrionTableFilterOperation,
+  type OrionTableFilterValue,
   type OrionTableMode,
   type OrionTableOutputMetadata,
   type OrionTableRequest,
@@ -113,6 +131,7 @@ interface TableProps {
   title?: string;
   mode: OrionTableMode;
   pageSize: number;
+  defaultState: OrionTableState;
   initialWindow: OrionTableWindow;
 }
 
@@ -131,31 +150,50 @@ interface DisplaySettings {
   rowHeight: number;
 }
 
+interface FilterDraft {
+  operation: OrionTableFilterOperation;
+  value: OrionTableFilterValue;
+}
+
 const DEFAULT_ROW_HEIGHT = 36;
 const DEFAULT_FONT_SIZE = 13;
 const MIN_COLUMN_WIDTH = 64;
 const DEFAULT_COLUMN_WIDTH = 150;
 const SEARCH_COLLAPSE_WIDTH = 560;
 const FOOTER_COMPACT_WIDTH = 620;
-const FILTER_OPERATIONS: Array<{
-  value: OrionTableFilterOperation;
-  label: string;
-}> = [
-  { value: "contains", label: "Contains" },
-  { value: "doesNotContain", label: "Does not contain" },
-  { value: "equals", label: "Equals" },
-  { value: "notEquals", label: "Not equals" },
-  { value: "greaterThan", label: "Greater than" },
-  { value: "greaterThanOrEqual", label: "Greater/equal" },
-  { value: "lessThan", label: "Less than" },
-  { value: "lessThanOrEqual", label: "Less/equal" },
-  { value: "blank", label: "Blank" },
-  { value: "notBlank", label: "Not blank" },
-  { value: "regex", label: "Regex" },
+const TableOverlayContainerContext = React.createContext<HTMLElement | null>(null);
+const LEGACY_FILTER_OPERATIONS: OrionTableFilterOperation[] = [
+  "contains",
+  "doesNotContain",
+  "equals",
+  "notEquals",
+  "regex",
+  "blank",
+  "notBlank",
 ];
 
+const FILTER_OPERATION_LABELS: Record<OrionTableFilterOperation, string> = {
+  contains: "Contains",
+  doesNotContain: "Does not contain",
+  startsWith: "Starts with",
+  endsWith: "Ends with",
+  equals: "Equals",
+  notEquals: "Not equals",
+  greaterThan: "Greater than",
+  greaterThanOrEqual: "Greater/equal",
+  lessThan: "Less than",
+  lessThanOrEqual: "Less/equal",
+  between: "Between",
+  in: "Is any of",
+  notIn: "Is none of",
+  onDate: "On date",
+  blank: "Blank",
+  notBlank: "Not blank",
+  regex: "Regex",
+};
+
 const emptyMetadata: OrionTableOutputMetadata = {
-  version: 1,
+  version: 2,
   activeViewId: null,
   views: [],
 };
@@ -174,6 +212,9 @@ function parseTableProps(node: NotebookAppViewSchemaNode): {
   const mode = stringProp(node.props, "mode") === "virtual" ? "virtual" : "paginated";
   const pageSize = finiteNumberProp(node.props, "pageSize") ?? 50;
   const title = stringProp(node.props, "title");
+  const parsedDefaultState = OrionTableStateSchema.safeParse(
+    node.props.defaultState ?? defaultTableState(),
+  );
   const parsedWindow = OrionTableWindowSchema.safeParse(node.props.initialWindow);
 
   if (!tableId) errors.push("Table props.tableId must be a string.");
@@ -181,8 +222,17 @@ function parseTableProps(node: NotebookAppViewSchemaNode): {
   if (!parsedWindow.success) {
     errors.push("Table props.initialWindow is invalid.");
   }
+  if (!parsedDefaultState.success) {
+    errors.push("Table props.defaultState is invalid.");
+  }
 
-  if (errors.length > 0 || !tableId || !source || !parsedWindow.success) {
+  if (
+    errors.length > 0 ||
+    !tableId ||
+    !source ||
+    !parsedDefaultState.success ||
+    !parsedWindow.success
+  ) {
     return { status: "invalid", errors };
   }
 
@@ -194,6 +244,7 @@ function parseTableProps(node: NotebookAppViewSchemaNode): {
       title,
       mode,
       pageSize: Math.max(1, Math.min(Math.floor(pageSize), 500)),
+      defaultState: parsedDefaultState.data,
       initialWindow: parsedWindow.data,
     },
   };
@@ -221,6 +272,145 @@ function finiteNumberProp(
 function formatCell(value: OrionTableRow[string]): string {
   if (value === null || value === undefined) return "";
   return String(value);
+}
+
+/** Return a safe external href when a table-cell value is a supported link. */
+function externalLinkForCell(value: OrionTableRow[string]): string | null {
+  const href = formatCell(value).trim();
+  return shouldOpenNotebookLinkExternally(href) ? href : null;
+}
+
+/** Return the conservative semantic kind used for legacy table output. */
+function filterKindForColumn(column: OrionTableColumn): OrionTableFilterKind {
+  return column.filterKind ?? "fallback";
+}
+
+/** Return the backend-supported operations for a column. */
+function filterOperationsForColumn(
+  column: OrionTableColumn,
+): OrionTableFilterOperation[] {
+  return column.filterOperations ?? LEGACY_FILTER_OPERATIONS;
+}
+
+/** Return the default operation for one semantic column kind. */
+function defaultFilterOperation(
+  column: OrionTableColumn,
+): OrionTableFilterOperation {
+  const operations = filterOperationsForColumn(column);
+  const preferred: Partial<Record<OrionTableFilterKind, OrionTableFilterOperation>> = {
+    text: "contains",
+    fallback: "contains",
+    boolean: "equals",
+    categorical: "equals",
+    number: "equals",
+    date: "equals",
+    datetime: "equals",
+    timedelta: "equals",
+    period: "equals",
+    complex: "equals",
+    interval: "equals",
+    binary: "equals",
+    empty: "blank",
+  };
+  const candidate = preferred[filterKindForColumn(column)];
+  return candidate && operations.includes(candidate) ? candidate : operations[0] ?? "blank";
+}
+
+/** Return an empty value with the shape required by an operation. */
+function emptyFilterValue(
+  operation: OrionTableFilterOperation,
+  column: OrionTableColumn,
+): OrionTableFilterValue {
+  if (operation === "between") return { lower: "", upper: "" };
+  if (operation === "in" || operation === "notIn") return [];
+  if (
+    filterKindForColumn(column) === "boolean" &&
+    (operation === "equals" || operation === "notEquals")
+  ) {
+    return "true";
+  }
+  return "";
+}
+
+/** Copy a structured filter value before putting it into component state. */
+function cloneFilterValue(value: OrionTableFilterValue): OrionTableFilterValue {
+  if (Array.isArray(value)) return [...value];
+  if (typeof value === "object") return { ...value };
+  return value;
+}
+
+/** Return a context-aware user-facing label for one operation. */
+function filterOperationLabel(
+  operation: OrionTableFilterOperation,
+  kind: OrionTableFilterKind,
+): string {
+  if (kind === "date") {
+    const labels: Partial<Record<OrionTableFilterOperation, string>> = {
+      equals: "On",
+      notEquals: "Not on",
+      greaterThan: "After",
+      greaterThanOrEqual: "On or after",
+      lessThan: "Before",
+      lessThanOrEqual: "On or before",
+    };
+    return labels[operation] ?? FILTER_OPERATION_LABELS[operation];
+  }
+  if (kind === "datetime") {
+    const labels: Partial<Record<OrionTableFilterOperation, string>> = {
+      equals: "Exactly at",
+      notEquals: "Not at",
+      greaterThan: "After",
+      greaterThanOrEqual: "At or after",
+      lessThan: "Before",
+      lessThanOrEqual: "At or before",
+    };
+    return labels[operation] ?? FILTER_OPERATION_LABELS[operation];
+  }
+  if (kind === "categorical") {
+    if (operation === "equals") return "Is";
+    if (operation === "notEquals") return "Is not";
+  }
+  if (kind === "boolean") {
+    if (operation === "equals") return "Is";
+    if (operation === "notEquals") return "Is not";
+  }
+  return FILTER_OPERATION_LABELS[operation];
+}
+
+/** Return whether a draft contains every value required for applying it. */
+function isFilterDraftValid(draft: FilterDraft): boolean {
+  if (draft.operation === "blank" || draft.operation === "notBlank") return true;
+  if (draft.operation === "between") {
+    return (
+      typeof draft.value === "object" &&
+      !Array.isArray(draft.value) &&
+      draft.value.lower.trim().length > 0 &&
+      draft.value.upper.trim().length > 0
+    );
+  }
+  if (draft.operation === "in" || draft.operation === "notIn") {
+    return Array.isArray(draft.value) && draft.value.length > 0;
+  }
+  return typeof draft.value === "string" && draft.value.trim().length > 0;
+}
+
+/** Return whether a column supports ordered comparison shortcuts. */
+function supportsOrderedFilters(column: OrionTableColumn | undefined): boolean {
+  return Boolean(
+    column?.filterOperations?.some((operation) =>
+      [
+        "greaterThan",
+        "greaterThanOrEqual",
+        "lessThan",
+        "lessThanOrEqual",
+      ].includes(operation),
+    ),
+  );
+}
+
+/** Return the current table overlay container, if the table is in a modal. */
+function useTableOverlayContainer(): HTMLElement | null {
+  return React.useContext(TableOverlayContainerContext);
 }
 
 /** Build a stable key for one selected table cell. */
@@ -261,7 +451,18 @@ function defaultDisplaySettings(
 }
 
 /** Return the neutral operation state used by the implicit Default view. */
-function defaultTableState(): OrionTableState {
+function defaultTableState(defaultState?: OrionTableState): OrionTableState {
+  if (defaultState) {
+    return {
+      search: defaultState.search,
+      sort: defaultState.sort ? { ...defaultState.sort } : null,
+      filters: defaultState.filters.map((filter) => ({
+        ...filter,
+        value: cloneFilterValue(filter.value),
+      })),
+      groupBy: defaultState.groupBy,
+    };
+  }
   return {
     search: "",
     sort: null,
@@ -345,6 +546,7 @@ function OrionUiTableInner({
   title,
   mode,
   pageSize,
+  defaultState,
   initialWindow,
   className,
   requestTableData,
@@ -354,10 +556,15 @@ function OrionUiTableInner({
   const experienceMode = useExperienceMode();
   const tableRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const scrollParentRef = useRef<HTMLDivElement | null>(null);
+  const [fullscreenOverlayContainer, setFullscreenOverlayContainer] =
+    useState<HTMLDivElement | null>(null);
+  /** Sync the dialog element into state so nested overlays receive its mounted node. */
+  const setFullscreenDialogContent = useCallback((node: HTMLDivElement | null) => {
+    setFullscreenOverlayContainer((current) => (current === node ? current : node));
+  }, []);
   const [windowData, setWindowData] = useState<OrionTableWindow>(initialWindow);
   const [tableState, setTableState] = useState<OrionTableState>(() =>
-    defaultTableState(),
+    defaultTableState(defaultState),
   );
   const [display, setDisplay] = useState<DisplaySettings>(() =>
     defaultDisplaySettings(initialWindow, mode, pageSize),
@@ -366,10 +573,10 @@ function OrionUiTableInner({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeFilterColumn, setActiveFilterColumn] = useState<string | null>(null);
-  const [filterDraft, setFilterDraft] = useState<{
-    operation: OrionTableFilterOperation;
-    value: string;
-  }>({ operation: "contains", value: "" });
+  const [filterDraft, setFilterDraft] = useState<FilterDraft>({
+    operation: "contains",
+    value: "",
+  });
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [selectedColumns, setSelectedColumns] = useState<Set<string>>(new Set());
@@ -395,18 +602,38 @@ function OrionUiTableInner({
   const currentPage = Math.floor(offset / display.pageSize) + 1;
   const pageCount = Math.max(1, Math.ceil(windowData.totalRows / display.pageSize));
   const windowSignature = JSON.stringify(initialWindow);
+  const defaultStateSignature = JSON.stringify(defaultState);
+  const tableScrollContentKey = JSON.stringify({
+    display,
+    offset,
+    visibleColumns: visibleColumns.map((column) => column.key),
+    rowCount: windowData.rows.length,
+    totalRows: windowData.totalRows,
+  });
+  const { scrollRef: tableScrollRef, scrollEdges: tableScrollEdges } =
+    useScrollEdgeIndicators({
+      active: !fullscreenOpen,
+      contentKey: tableScrollContentKey,
+    });
+  const {
+    scrollRef: fullscreenScrollRef,
+    scrollEdges: fullscreenScrollEdges,
+  } = useScrollEdgeIndicators({
+    active: fullscreenOpen,
+    contentKey: tableScrollContentKey,
+  });
 
   useEffect(() => {
     setWindowData(initialWindow);
     setOffset(initialWindow.offset);
     setDisplay(defaultDisplaySettings(initialWindow, mode, pageSize));
-    setTableState(defaultTableState());
+    setTableState(defaultTableState(defaultState));
     setSelectedCells(new Set());
     setSelectedRows(new Set());
     setSelectedColumns(new Set());
     setSelectionAnchor(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tableId, windowSignature, mode, pageSize]);
+  }, [tableId, windowSignature, mode, pageSize, defaultStateSignature]);
 
   /** Writes changed operations/display back to the currently active saved view. */
   const updateSavedView = useCallback(
@@ -420,7 +647,7 @@ function OrionUiTableInner({
       if (!hasView) return;
 
       onTableMetadataChange?.({
-        version: 1,
+        version: 2,
         activeViewId: viewId,
         views: views.map((view) =>
           view.id === viewId
@@ -483,9 +710,16 @@ function OrionUiTableInner({
     [display, experienceMode, requestTableData, tableId, tableState, updateSavedView],
   );
 
-  /** Applies a state update and refreshes the backend window from the first row. */
+  /**
+   * Applies a state update and refreshes the backend window from the first row.
+   * Keyboard sorting may retain the anchor solely to identify its column on a
+   * subsequent shortcut; every visible selection still clears.
+   */
   const applyState = useCallback(
-    (updater: (current: OrionTableState) => OrionTableState) => {
+    (
+      updater: (current: OrionTableState) => OrionTableState,
+      { preserveSelectionAnchor = false }: { preserveSelectionAnchor?: boolean } = {},
+    ) => {
       setTableState((current) => {
         const nextState = updater(current);
         if (activeViewId) {
@@ -497,7 +731,9 @@ function OrionUiTableInner({
       setSelectedCells(new Set());
       setSelectedRows(new Set());
       setSelectedColumns(new Set());
-      setSelectionAnchor(null);
+      if (!preserveSelectionAnchor) {
+        setSelectionAnchor(null);
+      }
     },
     [activeViewId, display, fetchWindow, updateSavedView],
   );
@@ -540,7 +776,7 @@ function OrionUiTableInner({
 
   /** Cycles sorting for one column and delegates sorting to pandas. */
   const handleSort = useCallback(
-    (columnKey: string) => {
+    (columnKey: string, preserveSelectionAnchor = false) => {
       if (columnKey === "__index__") return;
       applyState((current) => {
         const currentSort = current.sort;
@@ -551,7 +787,7 @@ function OrionUiTableInner({
           return { ...current, sort: { column: columnKey, direction: "desc" } };
         }
         return { ...current, sort: null };
-      });
+      }, { preserveSelectionAnchor });
     },
     [applyState],
   );
@@ -566,7 +802,7 @@ function OrionUiTableInner({
           {
             column: columnKey,
             operation: filterDraft.operation,
-            value: filterDraft.value,
+            value: cloneFilterValue(filterDraft.value),
           },
         ],
       }));
@@ -599,13 +835,80 @@ function OrionUiTableInner({
       const existing = tableState.filters.find(
         (filter) => filter.column === columnKey,
       );
+      const column = windowData.columns.find(
+        (candidate) => candidate.key === columnKey,
+      );
+      if (!column) return;
+      const defaultOperation = defaultFilterOperation(column);
       setFilterDraft({
-        operation: existing?.operation ?? "contains",
-        value: existing?.value ?? "",
+        operation: existing?.operation ?? defaultOperation,
+        value: existing
+          ? cloneFilterValue(existing.value)
+          : emptyFilterValue(defaultOperation, column),
       });
       setActiveFilterColumn(columnKey);
     },
-    [tableState.filters],
+    [tableState.filters, windowData.columns],
+  );
+
+  /** Create a filter from one selected cell using its untruncated backend value. */
+  const applyFilterFromCell = useCallback(
+    async (
+      columnKey: string,
+      selectedRowNumber: number,
+      operation: OrionTableFilterOperation,
+      visibleValue: OrionTableRow[string],
+    ) => {
+      if (visibleValue === null) {
+        if (operation === "equals") {
+          applyState((current) => ({
+            ...current,
+            filters: [
+              ...current.filters.filter((filter) => filter.column !== columnKey),
+              { column: columnKey, operation: "blank", value: "" },
+            ],
+          }));
+        }
+        return;
+      }
+      if (!requestTableData) {
+        setError(missingKernelMessage(experienceMode));
+        return;
+      }
+
+      try {
+        const response = await requestTableData({
+          action: "filter_value",
+          tableId,
+          state: tableState,
+          rowNumber: selectedRowNumber,
+          column: columnKey,
+        });
+        const parsedResponse =
+          OrionTableFilterValueResponseSchema.safeParse(response);
+        if (!parsedResponse.success) {
+          throw new Error("Kernel returned an invalid table filter value.");
+        }
+        applyState((current) => ({
+          ...current,
+          filters: [
+            ...current.filters.filter((filter) => filter.column !== columnKey),
+            { column: columnKey, operation, value: parsedResponse.data.value },
+          ],
+        }));
+      } catch (filterError) {
+        setError(
+          formatTableOperationError("filter_value", filterError, experienceMode),
+        );
+      }
+    },
+    [
+      applyState,
+      experienceMode,
+      requestTableData,
+      tableId,
+      tableState,
+    ],
   );
 
   /** Selects one cell or toggles it with Cmd/Ctrl. */
@@ -624,6 +927,7 @@ function OrionUiTableInner({
         }
         return new Set([key]);
       });
+      tableRef.current?.focus({ preventScroll: true });
     },
     [offset],
   );
@@ -698,42 +1002,41 @@ function OrionUiTableInner({
     ],
   );
 
-  /** Copies selected cells or the backend current view to the clipboard. */
-  const copyToClipboard = useCallback(async () => {
-    if (selectedCells.size > 0) {
-      const rowsByNumber = new Map<number, OrionTableRow>();
-      windowData.rows.forEach((row) => rowsByNumber.set(rowNumber(row, offset), row));
-      const selected = Array.from(selectedCells).map(parseCellKey);
-      const selectedColumnKeys = visibleColumns
-        .map((column) => column.key)
-        .filter((columnKey) =>
-          selected.some((cell) => cell.columnKey === columnKey),
-        );
-      const selectedRowsByNumber = new Map<number, SelectionAnchor[]>();
-      selected.forEach((cell) => {
-        selectedRowsByNumber.set(cell.rowNumber, [
-          ...(selectedRowsByNumber.get(cell.rowNumber) ?? []),
-          cell,
-        ]);
-      });
-      const lines = [
-        selectedColumnKeys
-          .map((columnKey) => visibleColumns.find((column) => column.key === columnKey)?.label ?? columnKey)
-          .join("\t"),
-        ...Array.from(selectedRowsByNumber.keys())
-          .sort((left, right) => left - right)
-          .map((selectedRowNumber) => {
-            const row = rowsByNumber.get(selectedRowNumber);
-            return selectedColumnKeys.map((columnKey) => formatCell(row?.[columnKey] ?? "")).join("\t");
-          }),
-      ];
-      await navigator.clipboard.writeText(lines.join("\n"));
-      return;
-    }
+  /** Copies the selected cell values as tab-separated text without column labels. */
+  const copySelectedCellsToClipboard = useCallback(async () => {
+    if (selectedCells.size === 0) return;
 
+    const rowsByNumber = new Map<number, OrionTableRow>();
+    windowData.rows.forEach((row) => rowsByNumber.set(rowNumber(row, offset), row));
+    const selected = Array.from(selectedCells).map(parseCellKey);
+    const selectedColumnKeys = visibleColumns
+      .map((column) => column.key)
+      .filter((columnKey) =>
+        selected.some((cell) => cell.columnKey === columnKey),
+      );
+    const selectedRowsByNumber = new Map<number, SelectionAnchor[]>();
+    selected.forEach((cell) => {
+      selectedRowsByNumber.set(cell.rowNumber, [
+        ...(selectedRowsByNumber.get(cell.rowNumber) ?? []),
+        cell,
+      ]);
+    });
+    const lines = Array.from(selectedRowsByNumber.keys())
+      .sort((left, right) => left - right)
+      .map((selectedRowNumber) => {
+        const row = rowsByNumber.get(selectedRowNumber);
+        return selectedColumnKeys
+          .map((columnKey) => formatCell(row?.[columnKey] ?? ""))
+          .join("\t");
+      });
+    await navigator.clipboard.writeText(lines.join("\n"));
+  }, [offset, selectedCells, visibleColumns, windowData.rows]);
+
+  /** Copies every row in the current table view and reports whether it succeeded. */
+  const copyTableToClipboard = useCallback(async (): Promise<boolean> => {
     if (!requestTableData) {
       setError(missingKernelMessage(experienceMode));
-      return;
+      return false;
     }
 
     setError(null);
@@ -749,21 +1052,20 @@ function OrionUiTableInner({
       const parsedResponse = OrionTableExportSchema.safeParse(response);
       if (!parsedResponse.success) {
         setError("Kernel returned an invalid export payload.");
-        return;
+        return false;
       }
       await navigator.clipboard.writeText(parsedResponse.data.csv);
+      return true;
     } catch (copyError) {
       setError(formatTableOperationError("export_csv", copyError, experienceMode));
+      return false;
     }
   }, [
     experienceMode,
-    offset,
     requestTableData,
-    selectedCells,
     tableId,
     tableState,
     visibleColumns,
-    windowData.rows,
   ]);
 
   /** Downloads the current backend view as CSV. */
@@ -856,7 +1158,7 @@ function OrionUiTableInner({
       },
     };
     const nextMetadata: OrionTableOutputMetadata = {
-      version: 1,
+      version: 2,
       activeViewId: view.id,
       views: [...views, view],
     };
@@ -881,22 +1183,31 @@ function OrionUiTableInner({
     (view: OrionTableSavedView | null) => {
       if (!view) {
         const nextDisplay = defaultDisplaySettings(initialWindow, mode, pageSize);
-        const nextState = defaultTableState();
+        const nextState = defaultTableState(defaultState);
         setDisplay(nextDisplay);
         setTableState(nextState);
         setActiveViewId(null);
         void fetchWindow(0, nextState, nextDisplay);
-        onTableMetadataChange?.({ ...tableMetadata, activeViewId: null });
+        onTableMetadataChange?.({
+          ...tableMetadata,
+          version: 2,
+          activeViewId: null,
+        });
         return;
       }
       setDisplay(view.display);
       setTableState(view.operations);
       setActiveViewId(view.id);
       void fetchWindow(0, view.operations, view.display);
-      onTableMetadataChange?.({ ...tableMetadata, activeViewId: view.id });
+      onTableMetadataChange?.({
+        ...tableMetadata,
+        version: 2,
+        activeViewId: view.id,
+      });
     },
     [
       fetchWindow,
+      defaultState,
       initialWindow,
       mode,
       onTableMetadataChange,
@@ -908,7 +1219,7 @@ function OrionUiTableInner({
   /** Resets the active view in place, or resets to Default when no view is active. */
   const resetTable = useCallback(() => {
     const nextDisplay = defaultDisplaySettings(initialWindow, mode, pageSize);
-    const nextState = defaultTableState();
+    const nextState = defaultTableState(defaultState);
 
     setDisplay(nextDisplay);
     setTableState(nextState);
@@ -925,9 +1236,14 @@ function OrionUiTableInner({
 
     setActiveViewId(null);
     void fetchWindow(0, nextState, nextDisplay);
-    onTableMetadataChange?.({ ...tableMetadata, activeViewId: null });
+    onTableMetadataChange?.({
+      ...tableMetadata,
+      version: 2,
+      activeViewId: null,
+    });
   }, [
     activeViewId,
+    defaultState,
     fetchWindow,
     initialWindow,
     mode,
@@ -943,7 +1259,7 @@ function OrionUiTableInner({
       const nextViews = views.filter((view) => view.id !== viewId);
       const nextActiveViewId = activeViewId === viewId ? null : activeViewId;
       onTableMetadataChange?.({
-        version: 1,
+        version: 2,
         activeViewId: nextActiveViewId,
         views: nextViews,
       });
@@ -972,6 +1288,9 @@ function OrionUiTableInner({
         anchor?.columnKey && anchor.columnKey !== "__index__"
           ? anchor.columnKey
           : visibleColumns.find((column) => column.key !== "__index__")?.key;
+      const selectedColumnMetadata = visibleColumns.find(
+        (column) => column.key === selectedColumn,
+      );
 
       if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(key)) {
         event.preventDefault();
@@ -993,8 +1312,9 @@ function OrionUiTableInner({
         return;
       }
       if (ctrlOrCmd && key.toLowerCase() === "c") {
+        event.preventDefault();
         event.stopPropagation();
-        void copyToClipboard();
+        void copySelectedCellsToClipboard();
         return;
       }
       if (event.shiftKey && key === " ") {
@@ -1023,10 +1343,10 @@ function OrionUiTableInner({
           searchInputRef.current?.focus();
         } else if (key.toLowerCase() === "f" && selectedColumn) {
           event.preventDefault();
-          setActiveFilterColumn(selectedColumn);
+          setColumnFilterOpen(selectedColumn, true);
         } else if (key.toLowerCase() === "s" && selectedColumn) {
           event.preventDefault();
-          handleSort(selectedColumn);
+          handleSort(selectedColumn, true);
         } else if (key.toLowerCase() === "g" && selectedColumn) {
           event.preventDefault();
           applyState((current) => ({
@@ -1041,7 +1361,7 @@ function OrionUiTableInner({
           setShortcutsOpen(true);
         } else if (key.toLowerCase() === "c") {
           event.preventDefault();
-          void copyToClipboard();
+          void copySelectedCellsToClipboard();
         } else if (key.toLowerCase() === "x") {
           event.preventDefault();
           void exportCsv();
@@ -1054,37 +1374,35 @@ function OrionUiTableInner({
             setSelectedColumns(new Set());
             setSelectionAnchor(null);
           }
-        } else if ((key === ">" || key === "<") && selectedColumn && anchor) {
+        } else if (
+          (key === ">" || key === "<") &&
+          selectedColumn &&
+          anchor &&
+          supportsOrderedFilters(selectedColumnMetadata)
+        ) {
           event.preventDefault();
           const row = windowData.rows.find(
             (candidate) => rowNumber(candidate, offset) === anchor.rowNumber,
           );
-          const value = formatCell(row?.[selectedColumn] ?? "");
-          applyState((current) => ({
-            ...current,
-            filters: [
-              ...current.filters.filter((filter) => filter.column !== selectedColumn),
-              {
-                column: selectedColumn,
-                operation: key === ">" ? "greaterThanOrEqual" : "lessThanOrEqual",
-                value,
-              },
-            ],
-          }));
+          void applyFilterFromCell(
+            selectedColumn,
+            anchor.rowNumber,
+            key === ">" ? "greaterThanOrEqual" : "lessThanOrEqual",
+            row?.[selectedColumn] ?? null,
+          );
         } else if (key === " " && selectedCells.size > 0) {
           event.preventDefault();
           const first = parseCellKey(Array.from(selectedCells)[0]!);
+          if (first.columnKey === "__index__") return;
           const row = windowData.rows.find(
             (candidate) => rowNumber(candidate, offset) === first.rowNumber,
           );
-          const value = formatCell(row?.[first.columnKey] ?? "");
-          applyState((current) => ({
-            ...current,
-            filters: [
-              ...current.filters.filter((filter) => filter.column !== first.columnKey),
-              { column: first.columnKey, operation: "equals", value },
-            ],
-          }));
+          void applyFilterFromCell(
+            first.columnKey,
+            first.rowNumber,
+            "equals",
+            row?.[first.columnKey] ?? null,
+          );
         }
       }
       if (event.shiftKey && key.toLowerCase() === "f") {
@@ -1095,24 +1413,19 @@ function OrionUiTableInner({
         event.altKey &&
         (key === ">" || key === "." || key === "<" || key === ",") &&
         selectedColumn &&
-        anchor
+        anchor &&
+        supportsOrderedFilters(selectedColumnMetadata)
       ) {
         event.preventDefault();
         const row = windowData.rows.find(
           (candidate) => rowNumber(candidate, offset) === anchor.rowNumber,
         );
-        const value = formatCell(row?.[selectedColumn] ?? "");
-        applyState((current) => ({
-          ...current,
-          filters: [
-            ...current.filters.filter((filter) => filter.column !== selectedColumn),
-            {
-              column: selectedColumn,
-              operation: key === ">" || key === "." ? "greaterThan" : "lessThan",
-              value,
-            },
-          ],
-        }));
+        void applyFilterFromCell(
+          selectedColumn,
+          anchor.rowNumber,
+          key === ">" || key === "." ? "greaterThan" : "lessThan",
+          row?.[selectedColumn] ?? null,
+        );
       }
       if (key === "Tab" && !event.shiftKey && anchor) {
         event.preventDefault();
@@ -1143,8 +1456,9 @@ function OrionUiTableInner({
       }
     },
     [
+      applyFilterFromCell,
       applyState,
-      copyToClipboard,
+      copySelectedCellsToClipboard,
       exportCsv,
       fullscreenOpen,
       handleSort,
@@ -1153,6 +1467,7 @@ function OrionUiTableInner({
       selectAllVisible,
       selectedCells,
       selectionAnchor,
+      setColumnFilterOpen,
       showColumnStats,
       visibleColumns,
       windowData,
@@ -1161,7 +1476,8 @@ function OrionUiTableInner({
 
   const virtualizer = useVirtualizer({
     count: windowData.totalRows,
-    getScrollElement: () => scrollParentRef.current,
+    getScrollElement: () =>
+      fullscreenOpen ? fullscreenScrollRef.current : tableScrollRef.current,
     estimateSize: () => display.rowHeight,
     overscan: 10,
     enabled: display.mode === "virtual",
@@ -1178,7 +1494,8 @@ function OrionUiTableInner({
     }
   }, [display.mode, display.pageSize, fetchWindow, firstVirtualIndex, offset]);
 
-  const tableBody = (
+  /** Render the table in exactly one viewport, avoiding duplicate modal controls. */
+  const renderTableBody = () => (
     <TableBody
       columns={visibleColumns}
       display={display}
@@ -1223,35 +1540,60 @@ function OrionUiTableInner({
       groupCounts={windowData.groupCounts ?? {}}
     />
   );
+  /** Render the shared commands with an appropriate fullscreen toggle. */
+  const renderTableToolbar = (isFullscreen: boolean) => (
+    <TableToolbar
+      activeViewId={activeViewId}
+      display={display}
+      isFullscreen={isFullscreen}
+      search={tableState.search}
+      searchInputRef={searchInputRef}
+      views={views}
+      windowData={windowData}
+      onApplyView={applyView}
+      onCopy={copyTableToClipboard}
+      onDeleteView={deleteView}
+      onExport={exportCsv}
+      onReset={resetTable}
+      onSaveView={() => setSaveViewOpen(true)}
+      onSearch={(nextSearch) =>
+        applyState((current) => ({ ...current, search: nextSearch }))
+      }
+      onSettingsChange={updateDisplay}
+      onShortcuts={() => setShortcutsOpen(true)}
+      onFullscreen={() => setFullscreenOpen((current) => !current)}
+      onToggleColumn={setColumnVisible}
+    />
+  );
+  /** Render the paginated status bar and navigation controls. */
+  const renderTableFooter = () => (
+    <TableFooter
+      currentPage={currentPage}
+      pageCount={pageCount}
+      pageSize={display.pageSize}
+      pending={pending}
+      selectedCells={selectedCells}
+      selectedColumns={selectedColumns}
+      selectedRows={selectedRows}
+      totalColumns={windowData.totalColumns}
+      totalRows={windowData.totalRows}
+      onPageChange={(page) =>
+        void fetchWindow((page - 1) * display.pageSize)
+      }
+      onPageSizeChange={(nextPageSize) =>
+        updateDisplay((current) => ({ ...current, pageSize: nextPageSize }))
+      }
+    />
+  );
 
   return (
     <div
       ref={tableRef}
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      className={cn("orion-ui-table w-full space-y-2 px-2 py-1.5 outline-none", className)}
+      className={cn("orion-ui-table w-full px-2 py-1.5 outline-none", className)}
     >
-      <TableToolbar
-        activeViewId={activeViewId}
-        display={display}
-        search={tableState.search}
-        searchInputRef={searchInputRef}
-        views={views}
-        windowData={windowData}
-        onApplyView={applyView}
-        onCopy={copyToClipboard}
-        onDeleteView={deleteView}
-        onExport={exportCsv}
-        onReset={resetTable}
-        onSaveView={() => setSaveViewOpen(true)}
-        onSearch={(nextSearch) =>
-          applyState((current) => ({ ...current, search: nextSearch }))
-        }
-        onSettingsChange={updateDisplay}
-        onShortcuts={() => setShortcutsOpen(true)}
-        onFullscreen={() => setFullscreenOpen(true)}
-        onToggleColumn={setColumnVisible}
-      />
+      {!fullscreenOpen && renderTableToolbar(false)}
 
       {error && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
@@ -1259,43 +1601,33 @@ function OrionUiTableInner({
         </div>
       )}
 
-      <div
-        data-testid="orion-table-viewport"
-        ref={scrollParentRef}
-        className={cn(
-          "relative border-y border-border",
-          display.mode === "virtual" ? "overflow-auto" : "overflow-x-auto overflow-y-visible",
-        )}
-        style={{
-          maxHeight:
+      <div className="relative min-h-0">
+        <div
+          data-testid="orion-table-viewport"
+          ref={tableScrollRef}
+          className={cn(
+            "border-b border-border",
             display.mode === "virtual"
-              ? `${Math.max(280, display.pageSize * display.rowHeight)}px`
-              : undefined,
-          fontSize: `${display.fontSize}px`,
-        }}
-      >
-        {tableBody}
+              ? "overflow-auto"
+              : "overflow-x-auto overflow-y-visible",
+          )}
+          style={{
+            maxHeight:
+              display.mode === "virtual"
+                ? `${Math.max(280, display.pageSize * display.rowHeight)}px`
+                : undefined,
+            fontSize: `${display.fontSize}px`,
+          }}
+        >
+          {!fullscreenOpen && renderTableBody()}
+        </div>
+        <ScrollGradientOverlays
+          edges={tableScrollEdges}
+          show={display.freezeHeader ? { top: false } : undefined}
+        />
       </div>
 
-      {display.mode === "paginated" && (
-        <TableFooter
-          currentPage={currentPage}
-          pageCount={pageCount}
-          pageSize={display.pageSize}
-          pending={pending}
-          selectedCells={selectedCells}
-          selectedColumns={selectedColumns}
-          selectedRows={selectedRows}
-          totalColumns={windowData.totalColumns}
-          totalRows={windowData.totalRows}
-          onPageChange={(page) =>
-            void fetchWindow((page - 1) * display.pageSize)
-          }
-          onPageSizeChange={(nextPageSize) =>
-            updateDisplay((current) => ({ ...current, pageSize: nextPageSize }))
-          }
-        />
-      )}
+      {!fullscreenOpen && display.mode === "paginated" && renderTableFooter()}
 
       <SaveViewDialog
         name={newViewName}
@@ -1314,15 +1646,35 @@ function OrionUiTableInner({
         onOpenChange={setShortcutsOpen}
       />
       <Dialog open={fullscreenOpen} onOpenChange={setFullscreenOpen}>
-        <DialogContent className="flex h-[90vh] max-w-[95vw] flex-col">
-          <DialogHeader>
-            <DialogTitle className={title ? undefined : "sr-only"}>
-              {title || "Table"}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 overflow-auto border-y border-border">
-            {tableBody}
-          </div>
+        <DialogContent
+          ref={setFullscreenDialogContent}
+          className="flex h-[90vh] max-w-[95vw] flex-col"
+        >
+          <TableOverlayContainerContext.Provider
+            value={fullscreenOverlayContainer}
+          >
+            <DialogHeader>
+              <DialogTitle className={title ? undefined : "sr-only"}>
+                {title || "Table"}
+              </DialogTitle>
+            </DialogHeader>
+            {renderTableToolbar(true)}
+            <div className="relative min-h-0 flex-1">
+              <div
+                data-testid="orion-table-fullscreen-viewport"
+                ref={fullscreenScrollRef}
+                className="h-full overflow-auto border-y border-border"
+                style={{ fontSize: `${display.fontSize}px` }}
+              >
+                {renderTableBody()}
+              </div>
+              <ScrollGradientOverlays
+                edges={fullscreenScrollEdges}
+                show={display.freezeHeader ? { top: false } : undefined}
+              />
+            </div>
+            {display.mode === "paginated" && renderTableFooter()}
+          </TableOverlayContainerContext.Provider>
         </DialogContent>
       </Dialog>
     </div>
@@ -1332,12 +1684,13 @@ function OrionUiTableInner({
 interface TableToolbarProps {
   activeViewId: string | null;
   display: DisplaySettings;
+  isFullscreen: boolean;
   search: string;
   searchInputRef: React.RefObject<HTMLInputElement | null>;
   views: OrionTableSavedView[];
   windowData: OrionTableWindow;
   onApplyView: (view: OrionTableSavedView | null) => void;
-  onCopy: () => Promise<void>;
+  onCopy: () => Promise<boolean>;
   onDeleteView: (viewId: string) => void;
   onExport: () => Promise<void>;
   onFullscreen: () => void;
@@ -1441,6 +1794,7 @@ function TableFooter({
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
 }): React.JSX.Element {
+  const overlayContainer = useTableOverlayContainer();
   const [footerRef, footerWidth] = useElementWidth<HTMLDivElement>();
   const pageOptions = paginationPageOptions(currentPage, pageCount);
   const pageSizeOptions = Array.from(
@@ -1484,7 +1838,7 @@ function TableFooter({
           >
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent container={overlayContainer}>
             {pageSizeOptions.map((option) => (
               <SelectItem key={option} value={String(option)}>
                 {option.toLocaleString()}
@@ -1525,7 +1879,7 @@ function TableFooter({
             <SelectTrigger className="h-6 w-12 shrink-0 px-2 text-xs">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent container={overlayContainer}>
               {pageOptions.map((page) => (
                 <SelectItem key={page} value={String(page)}>
                   {page.toLocaleString()}
@@ -1572,6 +1926,7 @@ function TableFooter({
 function TableToolbar({
   activeViewId,
   display,
+  isFullscreen,
   search,
   searchInputRef,
   views,
@@ -1588,16 +1943,28 @@ function TableToolbar({
   onShortcuts,
   onToggleColumn,
 }: TableToolbarProps): React.JSX.Element {
+  const { checked: copied, showCheckmark } = useCheckmarkedFeedback();
   const [toolbarRef, toolbarWidth] = useElementWidth<HTMLDivElement>();
   const compactSearch = toolbarWidth > 0 && toolbarWidth < SEARCH_COLLAPSE_WIDTH;
   const showViewTabs = views.length > 0;
+  /** Shows copy feedback only after the table contents reach the clipboard. */
+  const handleCopy = useCallback(async () => {
+    if (await onCopy()) showCheckmark();
+  }, [onCopy, showCheckmark]);
   const actionButtons = (
     <div className="flex h-8 shrink-0 items-center gap-1">
       <ToolbarIcon label="Keyboard shortcuts" onClick={onShortcuts}>
         <HelpCircle className="h-4 w-4" />
       </ToolbarIcon>
-      <ToolbarIcon label="Fullscreen" onClick={onFullscreen}>
-        <Maximize2 className="h-4 w-4" />
+      <ToolbarIcon
+        label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+        onClick={onFullscreen}
+      >
+        {isFullscreen ? (
+          <Minimize2 className="h-4 w-4" />
+        ) : (
+          <Maximize2 className="h-4 w-4" />
+        )}
       </ToolbarIcon>
       <ToolbarIcon label="Reset table" onClick={onReset}>
         <RotateCcw className="h-4 w-4" />
@@ -1607,9 +1974,11 @@ function TableToolbar({
         visibleColumns={display.visibleColumns}
         onToggleColumn={onToggleColumn}
       />
-      <ToolbarIcon label="Copy current view" onClick={() => void onCopy()}>
-        <Clipboard className="h-4 w-4" />
-      </ToolbarIcon>
+      <CheckmarkedToolbarIcon
+        checked={copied}
+        label="Copy entire table"
+        onClick={() => void handleCopy()}
+      />
       <ToolbarIcon label="Export CSV" onClick={() => void onExport()}>
         <Download className="h-4 w-4" />
       </ToolbarIcon>
@@ -1690,6 +2059,7 @@ function TableSearchControl({
   searchInputRef: React.RefObject<HTMLInputElement | null>;
   onSearch: (search: string) => void;
 }): React.JSX.Element {
+  const overlayContainer = useTableOverlayContainer();
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -1741,9 +2111,15 @@ function TableSearchControl({
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>
-        <TooltipContent>Search table</TooltipContent>
+        <TooltipPortal container={overlayContainer ?? undefined}>
+          <TooltipContent className="z-[100]">Search table</TooltipContent>
+        </TooltipPortal>
       </Tooltip>
-      <PopoverContent align="start" className="w-72 p-2">
+      <PopoverContent
+        align="start"
+        className="w-72 p-2"
+        container={overlayContainer}
+      >
         {searchInput}
       </PopoverContent>
     </Popover>
@@ -1760,6 +2136,7 @@ function ToolbarIcon({
   label: string;
   onClick: () => void;
 }): React.JSX.Element {
+  const overlayContainer = useTableOverlayContainer();
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -1774,7 +2151,44 @@ function ToolbarIcon({
           {children}
         </Button>
       </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
+      <TooltipPortal container={overlayContainer ?? undefined}>
+        <TooltipContent className="z-[100]">{label}</TooltipContent>
+      </TooltipPortal>
+    </Tooltip>
+  );
+}
+
+/** Icon-only table copy control with the app-wide transient checkmark animation. */
+function CheckmarkedToolbarIcon({
+  checked,
+  label,
+  onClick,
+}: {
+  checked: boolean;
+  label: string;
+  onClick: () => void;
+}): React.JSX.Element {
+  const overlayContainer = useTableOverlayContainer();
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <CheckmarkedButton
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          aria-label={label}
+          checked={checked}
+          icon={<Clipboard />}
+          iconClassName="h-4 w-4"
+          onClick={onClick}
+        />
+      </TooltipTrigger>
+      <TooltipPortal container={overlayContainer ?? undefined}>
+        <TooltipContent className="z-[100]">
+          {checked ? "Copied!" : label}
+        </TooltipContent>
+      </TooltipPortal>
     </Tooltip>
   );
 }
@@ -1789,6 +2203,7 @@ function ColumnMenu({
   visibleColumns: string[];
   onToggleColumn: (columnKey: string, visible: boolean) => void;
 }): React.JSX.Element {
+  const overlayContainer = useTableOverlayContainer();
   return (
     <DropdownMenu>
       <Tooltip>
@@ -1805,9 +2220,15 @@ function ColumnMenu({
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent>Columns</TooltipContent>
+        <TooltipPortal container={overlayContainer ?? undefined}>
+          <TooltipContent className="z-[100]">Columns</TooltipContent>
+        </TooltipPortal>
       </Tooltip>
-      <DropdownMenuContent align="end" className="max-h-72 overflow-y-auto">
+      <DropdownMenuContent
+        align="end"
+        className="max-h-72 overflow-y-auto"
+        container={overlayContainer}
+      >
         {columns.map((column) => (
           <DropdownMenuCheckboxItem
             key={column.key}
@@ -1830,6 +2251,7 @@ function SettingsMenu({
   display: DisplaySettings;
   onSettingsChange: (updater: (current: DisplaySettings) => DisplaySettings) => void;
 }): React.JSX.Element {
+  const overlayContainer = useTableOverlayContainer();
   return (
     <Popover>
       <Tooltip>
@@ -1846,9 +2268,15 @@ function SettingsMenu({
             </Button>
           </PopoverTrigger>
         </TooltipTrigger>
-        <TooltipContent>Settings</TooltipContent>
+        <TooltipPortal container={overlayContainer ?? undefined}>
+          <TooltipContent className="z-[100]">Settings</TooltipContent>
+        </TooltipPortal>
       </Tooltip>
-      <PopoverContent align="end" className="w-64 space-y-3">
+      <PopoverContent
+        align="end"
+        className="w-64 space-y-3"
+        container={overlayContainer}
+      >
         <div className="space-y-1">
           <Label className="text-xs">Mode</Label>
           <Select
@@ -1863,7 +2291,7 @@ function SettingsMenu({
             <SelectTrigger className="h-8">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent container={overlayContainer}>
               <SelectItem value="paginated">Paginated</SelectItem>
               <SelectItem value="virtual">Scrollable</SelectItem>
             </SelectContent>
@@ -1939,16 +2367,13 @@ function NumberSetting({
   return (
     <div className="space-y-1">
       <Label className="text-xs">{label}</Label>
-      <Input
-        type="number"
+      <BoundedNumberInput
         min={min}
         max={max}
+        integer
         value={value}
-        onChange={(event) => {
-          const next = Number.parseInt(event.target.value, 10);
-          if (Number.isFinite(next)) onChange(Math.min(max, Math.max(min, next)));
-        }}
         className="h-8"
+        onValueChange={onChange}
       />
     </div>
   );
@@ -1958,7 +2383,7 @@ interface TableBodyProps {
   activeFilterColumn: string | null;
   columns: OrionTableColumn[];
   display: DisplaySettings;
-  filterDraft: { operation: OrionTableFilterOperation; value: string };
+  filterDraft: FilterDraft;
   filters: OrionTableFilter[];
   groupBy: string | null;
   groupCounts: Record<string, number>;
@@ -1978,7 +2403,7 @@ interface TableBodyProps {
   onColumnResize: (columnKey: string, width: number) => void;
   onColumnSort: (columnKey: string) => void;
   onColumnStats: (columnKey: string) => void;
-  onFilterDraftChange: (draft: { operation: OrionTableFilterOperation; value: string }) => void;
+  onFilterDraftChange: (draft: FilterDraft) => void;
 }
 
 /** Render the scrollable table grid using the latest backend window. */
@@ -2013,7 +2438,8 @@ function TableBody({
     <table className="w-full min-w-max border-collapse">
       <thead
         className={cn(
-          display.freezeHeader && "sticky top-0 z-20 bg-muted/90 backdrop-blur",
+          "bg-transparent",
+          display.freezeHeader && "sticky top-0 z-20 backdrop-blur",
         )}
       >
         <tr>
@@ -2021,62 +2447,83 @@ function TableBody({
             const width = display.columnWidths[column.key] ?? DEFAULT_COLUMN_WIDTH;
             const isSorted = sort?.column === column.key;
             const hasFilter = filters.some((filter) => filter.column === column.key);
+            const hasActiveColumnAction = isSorted || hasFilter;
             return (
               <th
                 key={column.key}
                 className={cn(
-                  "relative border-b border-border px-2 py-1 text-left font-medium text-muted-foreground",
-                  selectedColumns.has(column.key) && "bg-primary/10",
+                  "relative px-1 py-2 text-left font-medium text-muted-foreground",
                 )}
                 style={{ width, maxWidth: width }}
               >
-                <div className="flex min-w-0 items-center gap-1">
-                  <button
-                    type="button"
-                    className="min-w-0 truncate"
-                    onDoubleClick={() => onColumnStats(column.key)}
-                  >
-                    {column.label}
-                  </button>
-                  {column.description ? (
-                    <ColumnDescriptionTooltip
-                      columnLabel={column.label}
-                      description={column.description}
-                    />
-                  ) : null}
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6"
-                    onClick={() => onColumnSort(column.key)}
-                  >
-                    {isSorted ? (
-                      <ChevronDown
-                        className={cn(
-                          "h-3.5 w-3.5 text-primary",
-                          sort.direction === "asc" && "rotate-180",
-                        )}
-                      />
-                    ) : (
-                      <ChevronsUpDown className="h-3.5 w-3.5" />
+                <ColumnDescriptionTooltip description={column.description}>
+                  <div
+                    className={cn(
+                      "group/header relative min-w-0 rounded-lg bg-muted px-2 py-1",
+                      selectedColumns.has(column.key) && "bg-primary/10",
                     )}
-                  </Button>
-                  {!column.isIndex && (
-                    <FilterPopover
-                      columnKey={column.key}
-                      draft={filterDraft}
-                      hasFilter={hasFilter}
-                      open={activeFilterColumn === column.key}
-                      onApply={() => onApplyColumnFilter(column.key)}
-                      onClear={() => onClearColumnFilter(column.key)}
-                      onDraftChange={onFilterDraftChange}
-                      onOpenChange={(open) =>
-                        onColumnFilterOpenChange(column.key, open)
-                      }
-                    />
-                  )}
-                </div>
+                  >
+                    <button
+                      type="button"
+                      className={cn(
+                        "block w-full min-w-0 truncate text-left transition-[padding]",
+                        column.isIndex
+                          ? "group-hover/header:pr-7 group-focus-within/header:pr-7"
+                          : "group-hover/header:pr-14 group-focus-within/header:pr-14",
+                        hasActiveColumnAction && (column.isIndex ? "pr-7" : "pr-14"),
+                      )}
+                      onDoubleClick={() => onColumnStats(column.key)}
+                    >
+                      {column.label}
+                    </button>
+                    <div className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          "h-6 w-6 transition-opacity",
+                          isSorted &&
+                            "text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300",
+                          !hasActiveColumnAction &&
+                            "pointer-events-none opacity-0 group-hover/header:pointer-events-auto group-hover/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:opacity-100",
+                        )}
+                        aria-label={`Sort ${column.key}`}
+                        onClick={() => onColumnSort(column.key)}
+                      >
+                        {isSorted ? (
+                          <ChevronDown
+                            className={cn(
+                              "h-3.5 w-3.5",
+                              sort.direction === "asc" && "rotate-180",
+                            )}
+                          />
+                        ) : (
+                          <ChevronsUpDown className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                      {!column.isIndex && (
+                        <FilterPopover
+                          column={column}
+                          draft={filterDraft}
+                          hasFilter={hasFilter}
+                          className={cn(
+                            "transition-opacity",
+                            !hasActiveColumnAction &&
+                              "pointer-events-none opacity-0 group-hover/header:pointer-events-auto group-hover/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:opacity-100",
+                          )}
+                          open={activeFilterColumn === column.key}
+                          onApply={() => onApplyColumnFilter(column.key)}
+                          onClear={() => onClearColumnFilter(column.key)}
+                          onDraftChange={onFilterDraftChange}
+                          onOpenChange={(open) =>
+                            onColumnFilterOpenChange(column.key, open)
+                          }
+                        />
+                      )}
+                    </div>
+                  </div>
+                </ColumnDescriptionTooltip>
                 <div
                   className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-primary/50"
                   onMouseDown={(event) => {
@@ -2145,18 +2592,20 @@ function TableBody({
                 )}
                 <tr
                   className={cn(
-                    "border-b border-border/60 hover:bg-muted/40",
+                    "hover:bg-muted/40",
                     selectedRows.has(absoluteRow) && "bg-primary/10",
                   )}
                 >
                   {columns.map((column) => {
                     const key = cellKey(absoluteRow, column.key);
                     const width = display.columnWidths[column.key] ?? DEFAULT_COLUMN_WIDTH;
+                    const cellValue = row[column.key];
+                    const externalHref = externalLinkForCell(cellValue);
                     return (
                       <td
                         key={column.key}
                         className={cn(
-                          "cursor-default select-none px-2 py-1 align-top font-mono",
+                          "relative cursor-default select-none px-2 py-1 align-top font-mono after:pointer-events-none after:absolute after:bottom-0 after:left-3 after:right-3 after:h-px after:bg-border/60 after:content-['']",
                           selectedCells.has(key) && "bg-primary/20",
                           selectedColumns.has(column.key) && "bg-primary/10",
                         )}
@@ -2169,7 +2618,22 @@ function TableBody({
                         onMouseDown={(event) => onCellClick(row, column.key, event)}
                       >
                         <div className="max-w-[24rem] truncate">
-                          {formatCell(row[column.key])}
+                          {externalHref ? (
+                            <a
+                              href={externalHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="underline underline-offset-2"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                openNotebookLinkExternally(externalHref);
+                              }}
+                            >
+                              {formatCell(cellValue)}
+                            </a>
+                          ) : (
+                            formatCell(cellValue)
+                          )}
                         </div>
                       </td>
                     );
@@ -2189,56 +2653,248 @@ function TableBody({
   );
 }
 
-/** Info affordance for a table column description. */
+/** Shows a column description whenever its header is hovered or focused. */
 function ColumnDescriptionTooltip({
-  columnLabel,
   description,
+  children,
 }: {
-  columnLabel: string;
-  description: string;
+  description?: string;
+  children: React.JSX.Element;
 }): React.JSX.Element {
+  if (!description) {
+    return children;
+  }
+
   return (
     <Tooltip delayDuration={0}>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-sm",
-            "text-muted-foreground transition-colors hover:text-foreground",
-            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-          )}
-          aria-label={`About ${columnLabel}`}
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipPortal>
+        <TooltipContent
+          side="top"
+          className="z-[100] max-w-xs text-xs leading-relaxed"
         >
-          <Info className="h-3.5 w-3.5" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-xs text-xs leading-relaxed">
-        {description}
-      </TooltipContent>
+          {description}
+        </TooltipContent>
+      </TooltipPortal>
     </Tooltip>
+  );
+}
+
+/** Return the native input type for a scalar filter value. */
+function filterInputType(
+  column: OrionTableColumn,
+  operation: OrionTableFilterOperation,
+): React.HTMLInputTypeAttribute {
+  const kind = filterKindForColumn(column);
+  if (kind === "date" || operation === "onDate") return "date";
+  if (kind === "datetime") return "datetime-local";
+  if (kind === "number") return "number";
+  return "text";
+}
+
+/** Format a stored ISO value for a native date or datetime input. */
+function filterInputValue(
+  value: string,
+  column: OrionTableColumn,
+  operation: OrionTableFilterOperation,
+): string {
+  const inputType = filterInputType(column, operation);
+  if (inputType === "date") return value.slice(0, 10);
+  if (inputType === "datetime-local") return value.slice(0, 19);
+  return value;
+}
+
+/** Render one scalar filter editor for a semantic column. */
+function ScalarFilterInput({
+  column,
+  operation,
+  value,
+  label,
+  onChange,
+  onEnter,
+}: {
+  column: OrionTableColumn;
+  operation: OrionTableFilterOperation;
+  value: string;
+  label: string;
+  onChange: (value: string) => void;
+  onEnter: () => void;
+}): React.JSX.Element {
+  const overlayContainer = useTableOverlayContainer();
+  const kind = filterKindForColumn(column);
+  const options = column.filterOptions?.map((option) => String(option)) ?? [];
+
+  if (kind === "boolean") {
+    return (
+      <Select value={value || "true"} onValueChange={onChange}>
+        <SelectTrigger className="h-8" aria-label={label}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent container={overlayContainer}>
+          <SelectItem value="true">True</SelectItem>
+          <SelectItem value="false">False</SelectItem>
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  if (kind === "categorical" && options.length > 0) {
+    return (
+      <Select value={value || undefined} onValueChange={onChange}>
+        <SelectTrigger className="h-8" aria-label={label}>
+          <SelectValue placeholder="Select a value" />
+        </SelectTrigger>
+        <SelectContent container={overlayContainer}>
+          {options.map((option) => (
+            <SelectItem key={option} value={option}>
+              {option}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  return (
+    <Input
+      type={filterInputType(column, operation)}
+      value={filterInputValue(value, column, operation)}
+      step={kind === "number" && column.numericType === "integer" ? 1 : undefined}
+      onChange={(event) => onChange(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") onEnter();
+      }}
+      aria-label={label}
+      placeholder={
+        kind === "timedelta"
+          ? "For example: 2 days 03:00:00"
+          : kind === "period"
+            ? `Period${column.frequency ? ` (${column.frequency})` : ""}`
+            : "Filter value..."
+      }
+      className="h-8"
+    />
+  );
+}
+
+/** Render the value control required by a typed filter operation. */
+function FilterValueEditor({
+  column,
+  draft,
+  onDraftChange,
+  onEnter,
+}: {
+  column: OrionTableColumn;
+  draft: FilterDraft;
+  onDraftChange: (draft: FilterDraft) => void;
+  onEnter: () => void;
+}): React.JSX.Element | null {
+  if (draft.operation === "blank" || draft.operation === "notBlank") {
+    return null;
+  }
+
+  if (draft.operation === "between") {
+    const range =
+      typeof draft.value === "object" && !Array.isArray(draft.value)
+        ? draft.value
+        : { lower: "", upper: "" };
+    return (
+      <div className="grid grid-cols-2 gap-2">
+        <ScalarFilterInput
+          column={column}
+          operation={draft.operation}
+          value={range.lower}
+          label={`Lower value for ${column.label}`}
+          onChange={(lower) =>
+            onDraftChange({ ...draft, value: { ...range, lower } })
+          }
+          onEnter={onEnter}
+        />
+        <ScalarFilterInput
+          column={column}
+          operation={draft.operation}
+          value={range.upper}
+          label={`Upper value for ${column.label}`}
+          onChange={(upper) =>
+            onDraftChange({ ...draft, value: { ...range, upper } })
+          }
+          onEnter={onEnter}
+        />
+      </div>
+    );
+  }
+
+  if (draft.operation === "in" || draft.operation === "notIn") {
+    const selected = Array.isArray(draft.value) ? draft.value : [];
+    const options = column.filterOptions?.map((option) => String(option)) ?? [];
+    return (
+      <div
+        className="max-h-40 space-y-1 overflow-y-auto rounded-md border p-2"
+        aria-label={`Values for ${column.label}`}
+      >
+        {options.map((option) => (
+          <label key={option} className="flex items-center gap-2 text-xs">
+            <Checkbox
+              checked={selected.includes(option)}
+              onCheckedChange={(checked) =>
+                onDraftChange({
+                  ...draft,
+                  value: checked
+                    ? [...selected, option]
+                    : selected.filter((candidate) => candidate !== option),
+                })
+              }
+            />
+            <span className="truncate">{option}</span>
+          </label>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <ScalarFilterInput
+      column={column}
+      operation={draft.operation}
+      value={typeof draft.value === "string" ? draft.value : ""}
+      label={`Value for ${column.label}`}
+      onChange={(value) => onDraftChange({ ...draft, value })}
+      onEnter={onEnter}
+    />
   );
 }
 
 /** Anchored popup for applying a filter to one table column. */
 function FilterPopover({
-  columnKey,
+  column,
   draft,
   hasFilter,
+  className,
   open,
   onApply,
   onClear,
   onDraftChange,
   onOpenChange,
 }: {
-  columnKey: string;
-  draft: { operation: OrionTableFilterOperation; value: string };
+  column: OrionTableColumn;
+  draft: FilterDraft;
   hasFilter: boolean;
+  className?: string;
   open: boolean;
   onApply: () => void;
   onClear: () => void;
-  onDraftChange: (draft: { operation: OrionTableFilterOperation; value: string }) => void;
+  onDraftChange: (draft: FilterDraft) => void;
   onOpenChange: (open: boolean) => void;
 }): React.JSX.Element {
+  const overlayContainer = useTableOverlayContainer();
+  const operations = filterOperationsForColumn(column);
+  const kind = filterKindForColumn(column);
+  const operationIsSupported = operations.includes(draft.operation);
+  const canApply = operationIsSupported && isFilterDraftValid(draft);
+  const applyIfValid = (): void => {
+    if (canApply) onApply();
+  };
+
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
@@ -2246,50 +2902,71 @@ function FilterPopover({
           type="button"
           variant="ghost"
           size="icon"
-          className={cn("h-6 w-6", hasFilter && "text-primary")}
-          aria-label={`Filter ${columnKey}`}
+          className={cn(
+            "h-6 w-6",
+            className,
+            hasFilter &&
+              "text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300",
+          )}
+          aria-label={`Filter ${column.key}`}
         >
-          <Filter className="h-3.5 w-3.5" />
+          <ListFilter className="h-3.5 w-3.5" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 space-y-3 p-3">
+      <PopoverContent
+        align="start"
+        className="w-72 space-y-3 p-3"
+        container={overlayContainer}
+      >
         <div className="space-y-1">
-          <Label className="text-xs">Filter {columnKey}</Label>
+          <Label className="text-xs">Filter {column.label}</Label>
           <Select
             value={draft.operation}
-            onValueChange={(value) =>
+            onValueChange={(value) => {
+              const operation = value as OrionTableFilterOperation;
               onDraftChange({
-                ...draft,
-                operation: value as OrionTableFilterOperation,
-              })
-            }
+                operation,
+                value: emptyFilterValue(operation, column),
+              });
+            }}
           >
-            <SelectTrigger className="h-8">
+            <SelectTrigger
+              className="h-8"
+              aria-label={`Filter operation for ${column.label}`}
+            >
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
-              {FILTER_OPERATIONS.map((operation) => (
-                <SelectItem key={operation.value} value={operation.value}>
-                  {operation.label}
+            <SelectContent container={overlayContainer}>
+              {!operationIsSupported && (
+                <SelectItem value={draft.operation} disabled>
+                  Unsupported: {FILTER_OPERATION_LABELS[draft.operation]}
+                </SelectItem>
+              )}
+              {operations.map((operation) => (
+                <SelectItem key={operation} value={operation}>
+                  {filterOperationLabel(operation, kind)}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
-        <Input
-          value={draft.value}
-          onChange={(event) => onDraftChange({ ...draft, value: event.target.value })}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") onApply();
-          }}
-          placeholder="Filter value..."
-          className="h-8"
+        {!operationIsSupported && (
+          <p className="text-xs text-destructive">
+            This saved filter is unsupported for {column.dtype ?? "this column type"}.
+            Choose another operation or clear it.
+          </p>
+        )}
+        <FilterValueEditor
+          column={column}
+          draft={draft}
+          onDraftChange={onDraftChange}
+          onEnter={applyIfValid}
         />
         <div className="flex justify-between">
           <Button type="button" variant="ghost" size="sm" onClick={onClear}>
             Clear
           </Button>
-          <Button type="button" size="sm" onClick={onApply}>
+          <Button type="button" size="sm" onClick={onApply} disabled={!canApply}>
             Apply
           </Button>
         </div>
@@ -2423,7 +3100,7 @@ function ShortcutsDialog({
     ["> / <", "Inclusive comparison filter"],
     ["Alt + > / <", "Strict comparison filter"],
     ["Shift + F", "Fullscreen"],
-    ["C / Cmd+C", "Copy"],
+    ["C / Cmd+C", "Copy selected cells"],
     ["X", "Export CSV"],
     ["Tab", "Transpose row"],
     ["Esc", "Clear or close"],

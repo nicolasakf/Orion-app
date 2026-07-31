@@ -15,9 +15,12 @@ function parseOutputTableMetadata(candidate: unknown): OrionTableOutputMetadata 
   }
   const views = (candidate as Record<string, unknown>).views;
   if (!Array.isArray(views)) {
-    return { version: 1, activeViewId: null, views: [] };
+    return { version: 2, activeViewId: null, views: [] };
   }
-  return candidate as OrionTableOutputMetadata;
+  return {
+    ...(candidate as OrionTableOutputMetadata),
+    version: 2,
+  };
 }
 
 /** Reads table metadata from MIME namespaced output metadata, with legacy fallback. */

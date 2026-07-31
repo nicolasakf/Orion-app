@@ -2225,7 +2225,7 @@ function NotebookCellComponent({
             onMarkdownAction={handleMarkdownContextMenuAction}
           >
             <div
-              className="sticky top-0 z-20 flex h-7 min-h-7 items-center bg-muted px-1.5 py-0.5 shadow-sm"
+              className="sticky top-0 z-30 flex h-7 min-h-7 items-center bg-muted px-1.5 py-0.5 shadow-sm"
               data-notebook-export-remove
             >
               <div className="flex items-center flex-1 justify-between min-h-0">
