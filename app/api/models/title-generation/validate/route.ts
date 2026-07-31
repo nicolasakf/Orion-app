@@ -1,7 +1,7 @@
-import { generateText } from "ai";
 import { APICallError } from "@ai-sdk/provider";
 import { z } from "zod";
 
+import { generateBufferedText } from "@/lib/agent/buffered-text-generation.server";
 import { getModelGateway } from "@/lib/agent/model-gateway";
 import { sanitizeTitleGenerationProviderOptions } from "@/lib/agent/non-streaming-provider-options";
 import { resolveProviderCredentialForModel } from "@/lib/credentials/provider-credential-store.server";
@@ -78,16 +78,16 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const { provider, model: modelId } = parsed.data;
-  const credential = await resolveProviderCredentialForModel(provider, modelId);
-  if (!credential) {
-    return Response.json({
-      valid: false,
-      message:
-        "Add a credential for this model's provider in Settings -> Providers first.",
-    });
-  }
-
   try {
+    const credential = await resolveProviderCredentialForModel(provider, modelId);
+    if (!credential) {
+      return Response.json({
+        valid: false,
+        message:
+          "Add a credential for this model's provider in Settings -> Providers first.",
+      });
+    }
+
     const gateway = getModelGateway();
     const request = gateway.processRequest({
       messages: titleGenerationValidationMessages,
@@ -95,14 +95,17 @@ export async function POST(req: Request): Promise<Response> {
       providerId: provider,
       credentials: credential,
     });
-    await generateText({
-      model: request.model,
-      messages: request.messages,
-      providerOptions: sanitizeTitleGenerationProviderOptions(
-        request.providerOptions,
-      ),
-      maxOutputTokens: 48,
-    });
+    await generateBufferedText(
+      {
+        model: request.model,
+        messages: request.messages,
+        providerOptions: sanitizeTitleGenerationProviderOptions(
+          request.providerOptions,
+        ),
+        maxOutputTokens: 48,
+      },
+      credential.type,
+    );
 
     return Response.json({ valid: true });
   } catch (error) {

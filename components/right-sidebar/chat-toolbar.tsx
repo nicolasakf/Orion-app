@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useCallback } from "react";
-import { Plus, History, Pencil, Trash2, MoreHorizontal } from "lucide-react";
+import {
+  Plus,
+  History,
+  Pencil,
+  Trash2,
+  MoreHorizontal,
+  LoaderCircle,
+  Sparkles,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -114,6 +122,8 @@ export interface ChatToolbarProps {
   onTitleChange: (value: string) => void;
   onTitleSave: () => void;
   onTitleCancel: () => void;
+  onTitleGenerate: () => void;
+  isGeneratingTitle: boolean;
   isHistoryPopoverOpen: boolean;
   onHistoryPopoverOpenChange: (open: boolean) => void;
   onNewChat: () => void;
@@ -134,6 +144,8 @@ export function ChatToolbar({
   onTitleChange,
   onTitleSave,
   onTitleCancel,
+  onTitleGenerate,
+  isGeneratingTitle,
   isHistoryPopoverOpen,
   onHistoryPopoverOpenChange,
   onNewChat,
@@ -213,6 +225,9 @@ export function ChatToolbar({
   const sortedChats = [...chats].sort(
     (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
   );
+  const canGenerateTitle =
+    currentChat?.messages.some((message) => message.role === "user") &&
+    currentChat.messages.some((message) => message.role === "assistant");
 
   const groupedChats = sortedChats.reduce((acc, chat) => {
     const dateLabel = getRelativeDay(chat.updatedAt);
@@ -241,17 +256,34 @@ export function ChatToolbar({
           }
         >
           {isEditingTitle ? (
-            <Input
-              ref={titleInputRef}
-              value={editedTitle}
-              onChange={(e) => onTitleChange(e.target.value)}
-              onBlur={onTitleSave}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") onTitleSave();
-                if (e.key === "Escape") onTitleCancel();
-              }}
-              className="w-full bg-transparent outline-none placeholder:text-muted-foreground resize-none"
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                ref={titleInputRef}
+                value={editedTitle}
+                onChange={(e) => onTitleChange(e.target.value)}
+                onBlur={onTitleSave}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") onTitleSave();
+                  if (e.key === "Escape") onTitleCancel();
+                }}
+                className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-muted-foreground resize-none"
+              />
+              <ToolbarButton
+                type="button"
+                toolTipLabel="Generate title with AI"
+                disabled={isGeneratingTitle || !canGenerateTitle}
+                aria-label="Generate title with AI"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={onTitleGenerate}
+                className="h-8 w-8 shrink-0 bg-transparent hover:bg-transparent text-muted-foreground hover:text-foreground"
+              >
+                {isGeneratingTitle ? (
+                  <LoaderCircle className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4" />
+                )}
+              </ToolbarButton>
+            </div>
           ) : (
             <ContextMenu>
               <ContextMenuTrigger asChild>

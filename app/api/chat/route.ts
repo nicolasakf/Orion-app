@@ -1,7 +1,8 @@
 import { type ModelMessage } from "@ai-sdk/provider-utils";
-import { convertToModelMessages, generateText, streamText, type UIMessage } from "ai";
+import { convertToModelMessages, streamText, type UIMessage } from "ai";
 import compactionSystemPrompt from "@/lib/agent/prompts/compaction-system-prompt.md";
 import { z } from "zod";
+import { generateBufferedText } from "@/lib/agent/buffered-text-generation.server";
 import {
   getModelGateway,
   GatewayConfigError,
@@ -252,7 +253,6 @@ async function handleChatRequest(
     messages: rawMessages,
     model: modelId,
     provider: providerId,
-    agentMode,
     interactionMode: rawInteractionMode,
     interactionModeConfig: rawInteractionModeConfig,
     chatId,
@@ -417,23 +417,35 @@ async function handleChatRequest(
     typeof forcedSubagentNameRaw === "string" && forcedSubagentNameRaw.trim().length > 0
       ? forcedSubagentNameRaw.trim()
       : undefined;
-  const allowsForcedToolSelection = agentMode || rawInteractionMode === "Edit";
+  // Resolve the actual mode capabilities before validating explicit tool selection.
+  // Ask and custom modes may expose skills without exposing sub-agent delegation.
+  const effectiveInteractionModeConfig =
+    origin === "subagent"
+      ? getDefaultInteractionModeConfig("Agent")
+      : resolveInteractionModeConfig({
+          modeId: rawInteractionMode,
+          requestConfig: rawInteractionModeConfig,
+        });
+  const allowsForcedSkillSelection =
+    effectiveInteractionModeConfig.toolNames.includes("load_skill");
+  const allowsForcedSubagentSelection =
+    effectiveInteractionModeConfig.toolNames.includes("delegate");
 
-  if (explicitForcedSkillNames.length > 0 && !allowsForcedToolSelection) {
+  if (explicitForcedSkillNames.length > 0 && !allowsForcedSkillSelection) {
     return new Response(
       JSON.stringify({
         title: "Invalid Request",
-        message: "Skill enforcement requires Agent or Edit mode.",
+        message: "Skill enforcement requires a mode with skill loading enabled.",
       }),
       { status: 400, headers: { "Content-Type": "application/json" } }
     );
   }
 
-  if (forcedSubagentName && !allowsForcedToolSelection) {
+  if (forcedSubagentName && !allowsForcedSubagentSelection) {
     return new Response(
       JSON.stringify({
         title: "Invalid Request",
-        message: "Sub-agent enforcement requires Agent or Edit mode.",
+        message: "Sub-agent enforcement requires a mode with delegation enabled.",
       }),
       { status: 400, headers: { "Content-Type": "application/json" } }
     );
@@ -752,17 +764,6 @@ async function handleChatRequest(
     });
 
     try {
-      const gateway = getModelGateway();
-      const { model } = gateway.processRequest({
-        messages: [],
-        modelId,
-        providerId,
-        agentSystemPrompt: undefined,
-        requestId,
-        modelSettings: undefined,
-        credentials: resolvedCredential,
-      });
-
       // Build model messages from the body's messages array
       let compactionMessages: ModelMessage[] = [];
       if (rawMessagesForModel.length > 0) {
@@ -794,12 +795,31 @@ async function handleChatRequest(
         ];
       }
 
-      const result = await generateText({
+      const gateway = getModelGateway();
+      const {
         model,
+        messages: processedCompactionMessages,
+        providerOptions,
+      } = gateway.processRequest({
         messages: compactionMessages,
-        system: compactionSystemPrompt as string,
-        maxOutputTokens: 1000,
+        modelId,
+        providerId,
+        agentSystemPrompt: undefined,
+        requestId,
+        modelSettings: undefined,
+        credentials: resolvedCredential,
       });
+
+      const result = await generateBufferedText(
+        {
+          model,
+          messages: processedCompactionMessages,
+          system: compactionSystemPrompt as string,
+          providerOptions: sanitizeTitleGenerationProviderOptions(providerOptions),
+          maxOutputTokens: 1000,
+        },
+        resolvedCredential.type,
+      );
 
       await logLocalModelUsage({
         resolvedModelRequestId: modelRequest.requestId,
@@ -893,12 +913,15 @@ async function handleChatRequest(
           credentials: resolvedCredential,
         });
 
-      const result = await generateText({
-        model,
-        messages: processedMessages,
-        providerOptions: sanitizeTitleGenerationProviderOptions(providerOptions),
-        maxOutputTokens: 48,
-      });
+      const result = await generateBufferedText(
+        {
+          model,
+          messages: processedMessages,
+          providerOptions: sanitizeTitleGenerationProviderOptions(providerOptions),
+          maxOutputTokens: 48,
+        },
+        resolvedCredential.type,
+      );
 
       await logLocalModelUsage({
         resolvedModelRequestId: modelRequest.requestId,
@@ -940,15 +963,6 @@ async function handleChatRequest(
     }
   }
 
-  // Derive effective mode early so it's available for logging and the request handler.
-  // Sub-agent requests always behave as full Agent mode regardless of what the UI sent.
-  const effectiveInteractionModeConfig =
-    origin === "subagent"
-      ? getDefaultInteractionModeConfig("Agent")
-      : resolveInteractionModeConfig({
-          modeId: rawInteractionMode,
-          requestConfig: rawInteractionModeConfig,
-        });
   const effectiveMode = effectiveInteractionModeConfig.baseMode;
   const enableSkills = effectiveInteractionModeConfig.toolNames.includes("load_skill");
   const missingForcedSkillNames =

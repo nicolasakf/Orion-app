@@ -138,7 +138,15 @@ export function prepareChatInvocation(
       businessExperienceMode: input.businessExperienceMode,
     });
   } else if (effectiveMode === "Ask") {
-    agentSystemPrompt = buildAskModeSystemPrompt(sharedPromptOptions);
+    agentSystemPrompt = buildAskModeSystemPrompt({
+      ...sharedPromptOptions,
+      availableSkills: input.availableSkills,
+      availableSubagents: input.availableSubagents,
+      forcedSkillNames: input.missingForcedSkillNames,
+      forcedSubagentName: input.forcedSubagentName,
+      enableSkills,
+      enableSubagents,
+    });
   } else {
     agentSystemPrompt = buildEditModeSystemPrompt({
       ...sharedPromptOptions,

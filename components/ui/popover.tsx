@@ -12,11 +12,17 @@ const PopoverAnchor = PopoverPrimitive.Anchor
 
 const PopoverTrigger = PopoverPrimitive.Trigger
 
+interface PopoverContentProps
+  extends React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content> {
+  /** Optional overlay container for popovers rendered from within a modal. */
+  container?: React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Portal>["container"]
+}
+
 const PopoverContent = React.forwardRef<
   React.ElementRef<typeof PopoverPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(({ className, align = "center", sideOffset = 4, onCloseAutoFocus, ...props }, ref) => (
-  <PopoverPrimitive.Portal>
+  PopoverContentProps
+>(({ className, align = "center", sideOffset = 4, onCloseAutoFocus, container, ...props }, ref) => (
+  <PopoverPrimitive.Portal container={container}>
     <PopoverPrimitive.Content
       ref={ref}
       align={align}

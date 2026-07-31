@@ -22,6 +22,7 @@ import {
   type SubagentSession,
   type SubagentSessionStatus,
 } from "@/lib/chat/chat-storage";
+import { deduplicateMessagesById } from "@/lib/chat/chat-message-deduplication";
 import {
   createChatFork,
   getInPlaceEditRestoreCheckpointIds as getRestorableInPlaceEditCheckpointIds,
@@ -98,8 +99,15 @@ import {
 } from "@/lib/agent/research-session";
 import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
 import { needsApproval } from "@/lib/agent/tool-approval";
+import {
+  OrderedToolExecutionScheduler,
+  throwIfToolExecutionAborted,
+} from "@/lib/agent/tool-execution-scheduler";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
-import { DEFAULT_TITLE_GENERATION_MODEL_ID } from "@/lib/settings/defaults";
+import {
+  DEFAULT_TITLE_GENERATION_MAX_LENGTH,
+  DEFAULT_TITLE_GENERATION_MODEL_ID,
+} from "@/lib/settings/defaults";
 import type { KernelStatus, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
@@ -489,6 +497,19 @@ function cancelStalePendingToolsInChat(chat: Chat): { chat: Chat; changed: boole
   };
 }
 
+/** Repair repeated AI SDK message snapshots left by an overlapping-send race. */
+function deduplicateMessagesInChat(chat: Chat): { chat: Chat; changed: boolean } {
+  const result = deduplicateMessagesById(chat.messages);
+  if (!result.changed) return { chat, changed: false };
+  return {
+    chat: {
+      ...chat,
+      messages: result.messages,
+    },
+    changed: true,
+  };
+}
+
 type ReferenceWorkspaceEntry = {
   name: string;
   path: string;
@@ -732,6 +753,10 @@ export function RightSidebar({
   const [currentChatId, setCurrentChatId] = useState<string | null>(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editedTitle, setEditedTitle] = useState("");
+  const editedTitleRef = useRef(editedTitle);
+  editedTitleRef.current = editedTitle;
+  const titleGenerationRequestIdRef = useRef(0);
+  const [isGeneratingTitle, setIsGeneratingTitle] = useState(false);
   const [isHistoryPopoverOpen, setIsHistoryPopoverOpen] = useState(false);
   const SESSION_MODE_KEY = "orion:interactionMode";
   const [interactionMode, setInteractionMode] = useState<InteractionMode>(() => {
@@ -1127,24 +1152,28 @@ export function RightSidebar({
     setPendingApprovalIds(new Set());
   }, [toolApprovalMode]);
 
-  /** Generate and persist a short title for a newly created chat. */
-  const generateAndSetTitle = async (
+  /** Generate a short title from the first user and assistant messages in a chat. */
+  const generateChatTitle = async (
     chatMessages: ChatMessage[],
     chatId: string
-  ) => {
+  ): Promise<string | null> => {
     const userMessage = chatMessages.find((m) => m.role === "user");
     const assistantMessage = chatMessages.find((m) => m.role === "assistant");
 
-    if (!userMessage || !assistantMessage) return;
+    if (!userMessage || !assistantMessage) return null;
 
     const userText = getTextContent(userMessage);
     const assistantText = getTextContent(assistantMessage);
 
+    const titleMaxLength =
+      effectiveSettings.chat.titleGenerationMaxLength ??
+      DEFAULT_TITLE_GENERATION_MAX_LENGTH;
     const fallbackTitle =
-      (userText.slice(0, 45) || "New Chat") +
-      (userText.length > 45 ? "..." : "");
+      userText.length > titleMaxLength
+        ? `${userText.slice(0, titleMaxLength - 3)}...`
+        : userText.slice(0, titleMaxLength) || "New Chat";
 
-    const titlePrompt = `Based on the following conversation, create a short, descriptive title for the chat session. The title must be in the same language as the user's message. Return only the title, no other text. The title must be 45 characters or less.\n\nUser: ${userText}\nAssistant: ${assistantText}\n\nTitle:`;
+    const titlePrompt = `Based on the following conversation, create a short, descriptive title for the chat session. The title must always be written in the same language as the user's first message. Do not translate the title or infer its language from the people, places, or subject matter discussed. Return only the title, no other text. The title must be ${titleMaxLength} characters or less.\n\nUser's first message: ${userText}\nAssistant's first response: ${assistantText}\n\nTitle:`;
 
     const titleGenerationModel = resolveTitleGenerationModel({
       configuredModelId: effectiveSettings.chat.titleGenerationModelId,
@@ -1154,7 +1183,7 @@ export function RightSidebar({
     });
     if (!titleGenerationModel) {
       console.error("Title generation model not found");
-      return;
+      return null;
     }
 
     const bodyPayload = {
@@ -1190,24 +1219,29 @@ export function RightSidebar({
       newTitle = newTitle.replace(/^"|"$/g, "").trim();
 
       if (newTitle) {
-        setChats((prev) =>
-          prev.map((chat) =>
-            chat.id === chatId
-              ? { ...chat, title: newTitle.slice(0, 45) }
-              : chat
-          )
-        );
+        return newTitle.slice(0, titleMaxLength);
       } else {
         throw new Error("Parsed title is empty");
       }
     } catch (error) {
       console.error("Error generating chat title:", error);
-      setChats((prev) =>
-        prev.map((chat) =>
-          chat.id === chatId ? { ...chat, title: fallbackTitle } : chat
-        )
-      );
+      return fallbackTitle;
     }
+  };
+
+  /** Generate and persist a short title for a newly created chat. */
+  const generateAndSetTitle = async (
+    chatMessages: ChatMessage[],
+    chatId: string
+  ) => {
+    const newTitle = await generateChatTitle(chatMessages, chatId);
+    if (!newTitle) return;
+
+    setChats((prev) =>
+      prev.map((chat) =>
+        chat.id === chatId ? { ...chat, title: newTitle } : chat
+      )
+    );
   };
 
   // Derived values — when `currentChatId` is briefly null after load, fall back to
@@ -1615,7 +1649,7 @@ export function RightSidebar({
   const messagesRef = useRef<UIMessage[]>([]);
 
   type ToolCallTracker = {
-    status: "running" | "completed";
+    status: "queued" | "running" | "completed";
     result?: unknown;
     lastResubmittedAt?: number;
   };
@@ -1640,7 +1674,12 @@ export function RightSidebar({
   const pendingServerToolCallsRef = useRef<
     Array<{ toolCallId: string; toolName: OrionToolName; args: Record<string, unknown> }>
   >([]);
-  const toolExecutionChainRef = useRef<Promise<void>>(Promise.resolve());
+  const toolExecutionSchedulerRef = useRef<OrderedToolExecutionScheduler | null>(
+    null
+  );
+  const toolExecutionAbortControllerRef = useRef<AbortController | null>(null);
+  const toolExecutionHandoffRef = useRef<Promise<void>>(Promise.resolve());
+  const toolExecutionTurnIdRef = useRef(0);
   const stopRequestedRef = useRef(false);
   const [stopRequestActive, setStopRequestActive] = useState(false);
   const lastStopRequestedAtRef = useRef<number>(0);
@@ -1716,6 +1755,7 @@ export function RightSidebar({
   const researchNudgeRef = useRef<ResearchNudge | undefined>(undefined);
   const lastAutomaticContinuationKeyRef = useRef<string | null>(null);
   const automaticContinuationAttemptsRef = useRef<Map<string, number>>(new Map());
+  const automaticContinuationPendingRef = useRef(false);
   const forcedSubagentForCurrentTurnRef = useRef<string | null>(null);
 
   // Manual input state — v6 useChat no longer manages input
@@ -1738,13 +1778,33 @@ export function RightSidebar({
   const isAttachmentUploadActive = pendingAttachmentUploadCount > 0;
   /** Starts a fresh model turn and clears UI-level cancellation state. */
   const beginAgentTurn = useCallback(() => {
+    const outgoingScheduler = toolExecutionSchedulerRef.current;
+    toolExecutionAbortControllerRef.current?.abort();
+    if (outgoingScheduler) {
+      toolExecutionHandoffRef.current = outgoingScheduler.drain();
+    }
+    const abortController = new AbortController();
+    toolExecutionAbortControllerRef.current = abortController;
+    toolExecutionTurnIdRef.current += 1;
+    toolExecutionSchedulerRef.current = new OrderedToolExecutionScheduler(
+      effectiveSettings.agent.execution.maxParallelReadOnlyCalls,
+      abortController.signal,
+      toolExecutionHandoffRef.current
+    );
     stopRequestedRef.current = false;
+    automaticContinuationPendingRef.current = false;
     reactiveContextRetryRef.current = false;
     lastAutomaticContinuationKeyRef.current = null;
     automaticContinuationAttemptsRef.current.clear();
     researchNudgeRef.current = undefined;
     setStopRequestActive(false);
-  }, []);
+  }, [effectiveSettings.agent.execution.maxParallelReadOnlyCalls]);
+  useEffect(
+    () => () => {
+      toolExecutionAbortControllerRef.current?.abort();
+    },
+    []
+  );
   const handleInputChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) => setInput(e.target.value),
     []
@@ -1770,15 +1830,10 @@ export function RightSidebar({
     if (selectedFiles.length === 0) return;
 
     const supportsImageInput = getModel(selectedModel)?.supportsImageInput === true;
-    const hasManagedFiles = selectedFiles.some(
-      (file) => !(file.type || "application/octet-stream").startsWith("image/")
-    );
     const nextAttachments: ChatDraftAttachment[] = [];
     let unsupportedImageCount = 0;
 
-    if (hasManagedFiles) {
-      setPendingAttachmentUploadCount((current) => current + 1);
-    }
+    setPendingAttachmentUploadCount((current) => current + 1);
 
     try {
       for (const file of selectedFiles) {
@@ -1842,9 +1897,7 @@ export function RightSidebar({
         });
       }
     } finally {
-      if (hasManagedFiles) {
-        setPendingAttachmentUploadCount((current) => Math.max(0, current - 1));
-      }
+      setPendingAttachmentUploadCount((current) => Math.max(0, current - 1));
     }
 
     if (unsupportedImageCount > 0) {
@@ -2241,6 +2294,7 @@ export function RightSidebar({
   const resetAutomaticContinuationGuards = useCallback(() => {
     lastAutomaticContinuationKeyRef.current = null;
     automaticContinuationAttemptsRef.current.clear();
+    automaticContinuationPendingRef.current = false;
     researchNudgeRef.current = undefined;
     bodyRef.current = {
       ...bodyRef.current,
@@ -2340,6 +2394,7 @@ export function RightSidebar({
       const nextAttempt = attempts + 1;
       automaticContinuationAttemptsRef.current.set(key, nextAttempt);
       lastAutomaticContinuationKeyRef.current = key;
+      automaticContinuationPendingRef.current = true;
       bodyRef.current = {
         ...bodyRef.current,
         automaticContinuationAttempt: nextAttempt,
@@ -2433,15 +2488,18 @@ export function RightSidebar({
       const persistId = effectiveChatIdRef.current;
       if (!persistId) return;
 
+      const normalizedFinalMessages = deduplicateMessagesById(finalMessages).messages;
       const latestChats = chatsRef.current;
       const chatForPersist = latestChats.find((c) => c.id === persistId);
       const checkpointRequestId = modelRequestIdRef.current;
       const checkpointUserMessageIndex = checkpointRequestId
-        ? finalMessages.findLastIndex((candidate) => candidate.role === "user")
+        ? normalizedFinalMessages.findLastIndex((candidate) => candidate.role === "user")
         : -1;
       const checkpointUserMessageId =
-        checkpointUserMessageIndex >= 0 ? finalMessages[checkpointUserMessageIndex]?.id : undefined;
-      const persistedMessages = stripInspectedRasterData(finalMessages);
+        checkpointUserMessageIndex >= 0
+          ? normalizedFinalMessages[checkpointUserMessageIndex]?.id
+          : undefined;
+      const persistedMessages = stripInspectedRasterData(normalizedFinalMessages);
       const newChatMessages: ChatMessage[] = persistedMessages.map((m, messageIndex) => {
         const messageForStorage = stripSessionOnlyFileParts(m);
         const existing = chatForPersist?.messages.find((msg) => msg.id === m.id);
@@ -2547,6 +2605,11 @@ export function RightSidebar({
 
   // Derived isLoading for backward compat with child components
   const isLoading = status === "streaming" || status === "submitted";
+  useEffect(() => {
+    if (status === "streaming" || status === "submitted" || status === "error") {
+      automaticContinuationPendingRef.current = false;
+    }
+  }, [status]);
   const selectedContextWindow =
     getModel(selectedModel)?.contextWindow ?? UNKNOWN_CONTEXT_FALLBACK_TOKENS;
   const draftImageAttachmentCount = React.useMemo(
@@ -2629,6 +2692,7 @@ export function RightSidebar({
   const isAgentTurnActive = React.useMemo(() => {
     if (stopRequestActive) return false;
     if (status === "streaming" || status === "submitted") return true;
+    if (automaticContinuationPendingRef.current) return true;
     if (hasPendingToolCalls) return true;
     if (pendingApprovalIds.size > 0) return true;
     if (researchSessionRef.current.active) {
@@ -3143,12 +3207,58 @@ export function RightSidebar({
   );
 
   const enqueueToolExecution = useCallback(
-    (toolCallId: string, toolName: OrionToolName, args: Record<string, unknown>) => {
+    (
+      toolCallId: string,
+      toolName: OrionToolName,
+      args: Record<string, unknown>,
+      approvalPromise?: Promise<"approve" | "reject">
+    ) => {
       if (!assistant) return;
 
-      toolExecutionChainRef.current = toolExecutionChainRef.current
-        .then(async () => {
-          if (stopRequestedRef.current) {
+      let abortController = toolExecutionAbortControllerRef.current;
+      let scheduler = toolExecutionSchedulerRef.current;
+      if (!abortController || !scheduler) {
+        abortController = new AbortController();
+        toolExecutionAbortControllerRef.current = abortController;
+        toolExecutionTurnIdRef.current += 1;
+        scheduler = new OrderedToolExecutionScheduler(
+          effectiveSettings.agent.execution.maxParallelReadOnlyCalls,
+          abortController.signal,
+          toolExecutionHandoffRef.current
+        );
+        toolExecutionSchedulerRef.current = scheduler;
+      }
+
+      const scheduledTurnId = toolExecutionTurnIdRef.current;
+      const signal = abortController.signal;
+      const modelRequestId = modelRequestIdRef.current;
+      const scheduledChatId = effectiveChatIdRef.current;
+      const isCurrentExecution = () =>
+        !signal.aborted &&
+        toolExecutionTurnIdRef.current === scheduledTurnId;
+
+      void scheduler
+        .schedule(toolName, async () => {
+          if (approvalPromise) {
+            const action = await approvalPromise;
+            if (action === "reject" || !isCurrentExecution()) {
+              if (!isCurrentExecution()) return;
+              trackedToolCallsRef.current.set(toolCallId, {
+                status: "completed",
+                result: REJECTED_TOOL_RESULT,
+              });
+              addTimedToolOutput({
+                state: "output-error",
+                tool: toolName,
+                toolCallId,
+                errorText: "rejected_by_user",
+              });
+              return;
+            }
+          }
+
+          throwIfToolExecutionAborted(signal);
+          if (!isCurrentExecution()) {
             trackedToolCallsRef.current.set(toolCallId, {
               status: "completed",
               result: CANCELLED_TOOL_RESULT,
@@ -3156,6 +3266,8 @@ export function RightSidebar({
             markToolEnded(toolCallId);
             return;
           }
+          trackedToolCallsRef.current.set(toolCallId, { status: "running" });
+          markToolStarted(toolCallId);
 
           // ---- delegate tool: run client-side subagent runner ----------
           if (toolName === "delegate") {
@@ -3177,7 +3289,7 @@ export function RightSidebar({
             const writeSubagentSession = (
               patch: Partial<SubagentSession> & { status?: SubagentSessionStatus }
             ) => {
-              if (!runChatId) return;
+              if (!runChatId || !isCurrentExecution()) return;
               const timestamp = new Date();
               setChats((prev) =>
                 prev.map((chat) => {
@@ -3212,6 +3324,7 @@ export function RightSidebar({
               errorText: string,
               patch?: Partial<SubagentSession>
             ) => {
+              if (!isCurrentExecution()) return;
               trackedToolCallsRef.current.set(toolCallId, {
                 status: "completed",
                 result: { error: errorText },
@@ -3284,14 +3397,9 @@ export function RightSidebar({
               return;
             }
 
-            const abortController = new AbortController();
-            // Link to parent stop signal so user cancellation propagates into the subagent loop
-            const stopUnlinkId = setInterval(() => {
-              if (stopRequestedRef.current) {
-                abortController.abort();
-                clearInterval(stopUnlinkId);
-              }
-            }, 100);
+            const subagentAbortController = new AbortController();
+            const abortSubagent = () => subagentAbortController.abort();
+            signal.addEventListener("abort", abortSubagent, { once: true });
             activeSubagentRunToolCallsRef.current.add(toolCallId);
 
             try {
@@ -3336,16 +3444,19 @@ export function RightSidebar({
                 subagentDevLogInstance: nextSubagentInstance,
                 reconnectTmpNotebookPath: reconnectTmpNotebookPath || undefined,
                 reconnectMessages: reconnectSourceSession?.messages,
-                executeToolCall: (name, input) =>
+                executeToolCall: (name, input, abortSignal) =>
                   assistant.executeToolCall(name, input, {
-                    modelRequestId: modelRequestIdRef.current,
-                    chatId: effectiveChatIdRef.current,
+                    modelRequestId,
+                    chatId: scheduledChatId,
                     toolCallId,
+                    abortSignal: abortSignal ?? subagentAbortController.signal,
                   }),
+                maxParallelReadOnlyCalls:
+                  effectiveSettings.agent.execution.maxParallelReadOnlyCalls,
                 onToolStart: markToolStarted,
                 onToolEnd: markToolEnded,
                 createTmpNotebookCopy: assistant.createTmpSubagentNotebookCopy,
-                abortSignal: abortController.signal,
+                abortSignal: subagentAbortController.signal,
                 onTmpNotebookPath: (tmpNotebookPath) => {
                   writeSubagentSession({
                     status: "running",
@@ -3365,7 +3476,7 @@ export function RightSidebar({
                 },
               });
 
-              clearInterval(stopUnlinkId);
+              if (!isCurrentExecution()) return;
               // Clear live progress — the card will show the final result instead
               setSubagentProgress((prev) => {
                 const next = new Map(prev);
@@ -3393,10 +3504,9 @@ export function RightSidebar({
                 result: delegateOutput,
               });
 
-              if (stopRequestedRef.current) return;
               addTimedToolOutput({ tool: toolName, toolCallId, output: delegateOutput });
             } catch (err) {
-              clearInterval(stopUnlinkId);
+              if (!isCurrentExecution()) return;
               // Clear live progress on error too
               setSubagentProgress((prev) => {
                 const next = new Map(prev);
@@ -3417,7 +3527,6 @@ export function RightSidebar({
                 status: "completed",
                 result: isCancelled ? CANCELLED_TOOL_RESULT : { error: errorText },
               });
-              if (stopRequestedRef.current) return;
               addTimedToolOutput({
                 state: "output-error",
                 tool: toolName,
@@ -3425,8 +3534,14 @@ export function RightSidebar({
                 errorText,
               });
             } finally {
-              clearInterval(stopUnlinkId);
+              signal.removeEventListener("abort", abortSubagent);
               activeSubagentRunToolCallsRef.current.delete(toolCallId);
+              setSubagentProgress((prev) => {
+                if (!prev.has(toolCallId)) return prev;
+                const next = new Map(prev);
+                next.delete(toolCallId);
+                return next;
+              });
             }
             return;
           }
@@ -3434,25 +3549,22 @@ export function RightSidebar({
           // ---- all other tools: delegate to AssistantProvider -------------
           try {
             const rawResult = await assistant.executeToolCall(toolName, args, {
-              modelRequestId: modelRequestIdRef.current,
-              chatId: effectiveChatIdRef.current,
+              modelRequestId,
+              chatId: scheduledChatId,
               toolCallId,
+              abortSignal: signal,
             });
             const result = await prepareAgentToolResult(rawResult);
+            if (!isCurrentExecution()) return;
             trackedToolCallsRef.current.set(toolCallId, { status: "completed", result });
-            if (stopRequestedRef.current) {
-              return;
-            }
             addTimedToolOutput({ tool: toolName, toolCallId, output: result });
           } catch (err) {
+            if (!isCurrentExecution()) return;
             const errorText = err instanceof Error ? err.message : String(err);
             trackedToolCallsRef.current.set(toolCallId, {
               status: "completed",
               result: { error: errorText },
             });
-            if (stopRequestedRef.current) {
-              return;
-            }
             addTimedToolOutput({
               state: "output-error",
               tool: toolName,
@@ -3461,8 +3573,19 @@ export function RightSidebar({
             });
           }
         })
-        .catch(() => {
-          // Keep the chain alive even if an unexpected error escapes.
+        .catch((err) => {
+          if (!isCurrentExecution()) return;
+          const errorText = err instanceof Error ? err.message : String(err);
+          trackedToolCallsRef.current.set(toolCallId, {
+            status: "completed",
+            result: { error: errorText },
+          });
+          addTimedToolOutput({
+            state: "output-error",
+            tool: toolName,
+            toolCallId,
+            errorText,
+          });
         });
     },
     [
@@ -3481,6 +3604,7 @@ export function RightSidebar({
       markToolEnded,
       setChats,
       prepareAgentToolResult,
+      effectiveSettings.agent.execution.maxParallelReadOnlyCalls,
     ]
   );
 
@@ -3490,7 +3614,7 @@ export function RightSidebar({
       resolvedInteractionModeConfig.toolNames.length > 0 ||
       resolvedInteractionModeConfig.baseMode === "Research" ||
       resolvedInteractionModeConfig.baseMode === "Agent";
-    if (!modeUsesTools || !assistant?.toolsReady) return;
+    if (!modeUsesTools || !assistant) return;
 
     for (const msg of messages) {
       for (const part of msg.parts) {
@@ -3499,6 +3623,7 @@ export function RightSidebar({
         const inv = part as { toolCallId: string; state: string; input: Record<string, unknown> };
         // Extract tool name from part type ("tool-execute_code" → "execute_code")
         const toolName = part.type.slice(5);
+        const toolNameTyped = toolName as OrionToolName;
 
         if (inv.state !== "input-available") continue;
 
@@ -3522,13 +3647,30 @@ export function RightSidebar({
           }
           continue;
         }
-        if (trackedCall?.status === "running") {
+        if (
+          trackedCall?.status === "queued" ||
+          trackedCall?.status === "running"
+        ) {
           continue;
         }
 
-        // Mark immediately to prevent duplicate execution while in-flight.
-        trackedToolCallsRef.current.set(inv.toolCallId, { status: "running" });
-        markToolStarted(inv.toolCallId);
+        // Dependency-free tools can run before Jupyter connects. Stop at the
+        // first unavailable dependency so later calls cannot overtake it; the
+        // normal gating and approval flow reruns when dependency readiness changes.
+        const requiresServer = !NO_DEPENDENCY_TOOLS.has(toolNameTyped);
+        const requiresKernel =
+          requiresServer && !SERVER_ONLY_TOOLS.has(toolNameTyped);
+        if (
+          (requiresServer && !assistant.toolsReady) ||
+          (requiresKernel && kernelStatus !== "connected")
+        ) {
+          setShowKernelPrompt(true);
+          return;
+        }
+
+        // Mark immediately to prevent duplicate scheduling across rerenders.
+        // Timing begins only after the scheduler grants an execution slot.
+        trackedToolCallsRef.current.set(inv.toolCallId, { status: "queued" });
 
         // Tool gating:
         // Tier 1 — NO_DEPENDENCY_TOOLS (load_skill, reload_page, delegate): always pass through.
@@ -3537,8 +3679,6 @@ export function RightSidebar({
         //
         // Do NOT call addToolOutput when blocking — leaving the tool call unresolved
         // naturally pauses useChat without triggering another LLM request.
-        const toolNameTyped = toolName as OrionToolName;
-
         if (!NO_DEPENDENCY_TOOLS.has(toolNameTyped)) {
           if (SERVER_ONLY_TOOLS.has(toolNameTyped)) {
             // Tier 2: need server connection only
@@ -3597,41 +3737,12 @@ export function RightSidebar({
             setPendingApprovalIds((prev) => new Set(prev).add(inv.toolCallId));
           });
 
-          toolExecutionChainRef.current = toolExecutionChainRef.current
-            .then(async () => {
-              const action = await approvalPromise;
-              if (action === "reject" || stopRequestedRef.current) {
-                const errorText = stopRequestedRef.current ? "cancelled_by_user" : "rejected_by_user";
-                trackedToolCallsRef.current.set(inv.toolCallId, {
-                  status: "completed",
-                  result: { error: errorText },
-                });
-                addTimedToolOutput({ state: "output-error", tool: toolNameTyped, toolCallId: inv.toolCallId, errorText });
-                return;
-              }
-              if (!assistant) return;
-              try {
-                const rawToolResult = await assistant.executeToolCall(toolNameTyped, inv.input, {
-                  modelRequestId: modelRequestIdRef.current,
-                  chatId: effectiveChatIdRef.current,
-                  toolCallId: inv.toolCallId,
-                });
-                const toolResult = await prepareAgentToolResult(rawToolResult);
-                trackedToolCallsRef.current.set(inv.toolCallId, { status: "completed", result: toolResult });
-                if (!stopRequestedRef.current) {
-                  addTimedToolOutput({ tool: toolNameTyped, toolCallId: inv.toolCallId, output: toolResult });
-                }
-              } catch (err) {
-                const errorText = err instanceof Error ? err.message : String(err);
-                trackedToolCallsRef.current.set(inv.toolCallId, { status: "completed", result: { error: errorText } });
-                if (!stopRequestedRef.current) {
-                  addTimedToolOutput({ state: "output-error", tool: toolNameTyped, toolCallId: inv.toolCallId, errorText });
-                }
-              }
-            })
-            .catch(() => {
-              // Keep the chain alive
-            });
+          enqueueToolExecution(
+            inv.toolCallId,
+            toolNameTyped,
+            inv.input,
+            approvalPromise
+          );
 
           continue;
         }
@@ -3639,6 +3750,8 @@ export function RightSidebar({
         enqueueToolExecution(inv.toolCallId, toolNameTyped, inv.input);
       }
     }
+    // Reaching the end means no unresolved call is blocked on server or kernel readiness.
+    setShowKernelPrompt(false);
   }, [
     messages,
     resolvedInteractionModeConfig.bashPolicy,
@@ -3649,9 +3762,7 @@ export function RightSidebar({
     enqueueToolExecution,
     isLoading,
     toolApprovalMode,
-    markToolStarted,
     addTimedToolOutput,
-    prepareAgentToolResult,
   ]);
 
   // When the Jupyter server connects (toolsReady), flush server-only tool calls that were
@@ -3699,9 +3810,10 @@ export function RightSidebar({
         const storedChats = await chatStorage.getChats();
         let repairedAnyChat = false;
         const repairedChats = storedChats.map((chat) => {
-          const result = cancelStalePendingToolsInChat(chat);
-          repairedAnyChat ||= result.changed;
-          return result.chat;
+          const deduplicated = deduplicateMessagesInChat(chat);
+          const cancelled = cancelStalePendingToolsInChat(deduplicated.chat);
+          repairedAnyChat ||= deduplicated.changed || cancelled.changed;
+          return cancelled.chat;
         });
         if (repairedAnyChat) {
           await chatStorage.saveChats(repairedChats);
@@ -3977,7 +4089,42 @@ export function RightSidebar({
     setIsEditingTitle(false);
   };
 
+  /** Generate a title suggestion that the user can review before saving. */
+  const handleGenerateTitle = async () => {
+    if (!currentChat) return;
+
+    const requestId = titleGenerationRequestIdRef.current + 1;
+    titleGenerationRequestIdRef.current = requestId;
+    const sourceChatId = currentChat.id;
+    const startingDraft = editedTitleRef.current;
+    setIsGeneratingTitle(true);
+    try {
+      const newTitle = await generateChatTitle(currentChat.messages, currentChat.id);
+      if (!newTitle) {
+        toast.error("Add a user message and assistant response before generating a title.");
+        return;
+      }
+      if (
+        titleGenerationRequestIdRef.current !== requestId ||
+        effectiveChatIdRef.current !== sourceChatId ||
+        editedTitleRef.current !== startingDraft
+      ) {
+        return;
+      }
+      setEditedTitle(newTitle);
+    } finally {
+      if (titleGenerationRequestIdRef.current === requestId) {
+        setIsGeneratingTitle(false);
+      }
+    }
+  };
+
   const handleRenameChat = (chatId: string) => {
+    if (isAttachmentUploadActive && chatId !== currentChatId) {
+      toast.info("Wait for file uploads to finish before changing chats.");
+      return;
+    }
+
     const chatToRename = chats.find((c) => c.id === chatId);
     if (chatToRename) {
       setCurrentChatId(chatId);
@@ -4645,25 +4792,42 @@ export function RightSidebar({
       return;
     }
 
-    void markCurrentEditCheckpointStatus(
-      stopRequestedRef.current ? "interrupted" : "completed"
-    );
+    // Let useChat's automatic-continuation effect run before releasing the queue.
+    // It marks automaticContinuationPendingRef during the brief ready-state gap.
+    const releaseTimer = window.setTimeout(() => {
+      if (
+        automaticContinuationPendingRef.current ||
+        prevAgentTurnActiveRef.current ||
+        queueProcessingRef.current
+      ) {
+        return;
+      }
 
-    const [next, ...rest] = messageQueue;
-    queueProcessingRef.current = true;
-    setMessageQueue(rest);
-    pendingSubmitRef.current = {
-      text: next.text,
-      references: next.references,
-      attachments: next.attachments,
-    };
+      void markCurrentEditCheckpointStatus(
+        stopRequestedRef.current ? "interrupted" : "completed"
+      );
 
-    void Promise.resolve(
-      customHandleSubmitRef.current({ preventDefault: () => { } } as React.FormEvent<HTMLFormElement>),
-    ).finally(() => {
-      pendingSubmitRef.current = null;
-      queueProcessingRef.current = false;
-    });
+      const [next, ...rest] = messageQueue;
+      if (!next) return;
+      queueProcessingRef.current = true;
+      setMessageQueue(rest);
+      pendingSubmitRef.current = {
+        text: next.text,
+        references: next.references,
+        attachments: next.attachments,
+      };
+
+      void Promise.resolve(
+        customHandleSubmitRef.current({
+          preventDefault: () => { },
+        } as React.FormEvent<HTMLFormElement>),
+      ).finally(() => {
+        pendingSubmitRef.current = null;
+        queueProcessingRef.current = false;
+      });
+    }, 0);
+
+    return () => window.clearTimeout(releaseTimer);
   }, [isAgentTurnActive, markCurrentEditCheckpointStatus, messageQueue]);
 
   const handleStopGeneration = useCallback(() => {
@@ -4742,6 +4906,15 @@ export function RightSidebar({
     };
 
     stopRequestedRef.current = true;
+    automaticContinuationPendingRef.current = false;
+    const outgoingScheduler = toolExecutionSchedulerRef.current;
+    toolExecutionAbortControllerRef.current?.abort();
+    if (outgoingScheduler) {
+      toolExecutionHandoffRef.current = outgoingScheduler.drain();
+    }
+    toolExecutionAbortControllerRef.current = null;
+    toolExecutionSchedulerRef.current = null;
+    toolExecutionTurnIdRef.current += 1;
     setStopRequestActive(true);
     lastStopRequestedAtRef.current = cancelledAt;
     setMessageQueue([]);
@@ -4997,6 +5170,8 @@ export function RightSidebar({
             onTitleChange={setEditedTitle}
             onTitleSave={saveTitle}
             onTitleCancel={() => setIsEditingTitle(false)}
+            onTitleGenerate={handleGenerateTitle}
+            isGeneratingTitle={isGeneratingTitle}
             onNewChat={createNewChat}
             onHistorySelect={handleHistorySelect}
             onRenameChat={handleRenameChat}

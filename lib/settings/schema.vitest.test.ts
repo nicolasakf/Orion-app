@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDefaultUserSettingsDocument,
   DEFAULT_SETTINGS,
+  DEFAULT_TITLE_GENERATION_MAX_LENGTH,
   DEFAULT_TITLE_GENERATION_MODEL_ID,
 } from "@/lib/settings/defaults";
 import { mergeSettings } from "@/lib/settings/merge";
@@ -37,6 +38,9 @@ describe("UserSettingsDocumentSchema", () => {
     expect(doc.settings.appearance.experienceMode).toBe("business");
     expect(doc.settings.appearance.experienceModeChosen).toBe(false);
     expect(doc.settings.providers.inferenceProviderChosen).toBe(false);
+    expect(doc.settings.chat.titleGenerationMaxLength).toBe(
+      DEFAULT_TITLE_GENERATION_MAX_LENGTH
+    );
     expect(doc.settings.shell.panelLayout.horizontal).toEqual([15, 50, 20]);
     expect(doc.settings.notebook.output.chartColors).toHaveLength(10);
     expect(doc.settings.chat.interactionModes.map((mode) => mode.id)).toEqual([
@@ -77,12 +81,16 @@ describe("settings migrations", () => {
     expect(migrated.settings.chat.titleGenerationModelId).toBe(
       DEFAULT_TITLE_GENERATION_MODEL_ID
     );
+    expect(migrated.settings.chat.titleGenerationMaxLength).toBe(
+      DEFAULT_TITLE_GENERATION_MAX_LENGTH
+    );
     expect(migrated.settings.appearance.experienceMode).toBe("business");
     expect(migrated.settings.onboarding.signInStepCompleted).toBe(true);
     expect(migrated.settings.appearance.experienceModeChosen).toBe(true);
     expect(migrated.settings.providers.inferenceProviderChosen).toBe(true);
     expect(migrated.settings.agent.context.compactionAutoThreshold).toBe(0.92);
     expect(migrated.settings.agent.toolOutput.textCharBudget).toBe(40_000);
+    expect(migrated.settings.agent.execution.maxParallelReadOnlyCalls).toBe(10);
     expect(migrated.settings.shell.mobileBreakpointPx).toBe(768);
     expect(migrated.settings.chat.interactionModes.map((mode) => mode.id)).toEqual([
       "Agent",
@@ -90,6 +98,42 @@ describe("settings migrations", () => {
       "Edit",
       "Ask",
     ]);
+  });
+
+  it("accepts any positive integer for read-only tool concurrency", () => {
+    const doc = createDefaultUserSettingsDocument();
+    doc.settings.agent.execution.maxParallelReadOnlyCalls = 100_000;
+    expect(UserSettingsDocumentSchema.safeParse(doc).success).toBe(true);
+
+    for (const invalidValue of [0, -1, 1.5, Number.NaN]) {
+      const invalidDoc = createDefaultUserSettingsDocument();
+      invalidDoc.settings.agent.execution.maxParallelReadOnlyCalls = invalidValue;
+      expect(UserSettingsDocumentSchema.safeParse(invalidDoc).success).toBe(false);
+    }
+
+    const workspace = parseWorkspaceSettingsDocumentFromJson(
+      JSON.stringify({
+        version: 1,
+        overrides: {
+          agent: {
+            execution: {
+              maxParallelReadOnlyCalls: 250_000,
+            },
+          },
+        },
+      })
+    );
+    expect(
+      workspace.overrides.agent?.execution?.maxParallelReadOnlyCalls
+    ).toBe(250_000);
+  });
+
+  it("requires title lengths between 10 and 100 characters", () => {
+    for (const titleGenerationMaxLength of [9, 101, 35.5]) {
+      const doc = createDefaultUserSettingsDocument();
+      doc.settings.chat.titleGenerationMaxLength = titleGenerationMaxLength;
+      expect(UserSettingsDocumentSchema.safeParse(doc).success).toBe(false);
+    }
   });
 
   it("migrates chatGenerationModelId to titleGenerationModelId", () => {
@@ -179,12 +223,16 @@ describe("mergeSettings", () => {
   it("applies workspace partial overrides while preserving other agent defaults", () => {
     const merged = mergeSettings(DEFAULT_SETTINGS, DEFAULT_SETTINGS, {
       agent: {
+        execution: {
+          maxParallelReadOnlyCalls: 999,
+        },
         terminal: {
           poolIdleTimeoutMs: 250,
         },
       },
     });
 
+    expect(merged.agent.execution.maxParallelReadOnlyCalls).toBe(999);
     expect(merged.agent.terminal.poolIdleTimeoutMs).toBe(250);
     expect(merged.agent.terminal.foregroundBudgetMs).toBe(
       DEFAULT_SETTINGS.agent.terminal.foregroundBudgetMs

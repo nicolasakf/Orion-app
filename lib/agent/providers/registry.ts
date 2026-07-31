@@ -215,12 +215,17 @@ function stripOpenAIProviderOptions(messages: ModelMessage[]): ModelMessage[] {
   });
 }
 
-function patchChatGPTBody(body: string | null): string | null {
+/**
+ * Adapts an OpenAI Responses request to the subset accepted by the ChatGPT
+ * Codex backend.
+ */
+export function patchChatGPTBody(body: string | null): string | null {
   if (!body) return body;
 
   type Body = {
     input?: Array<{ role: string; content: unknown }>;
     instructions?: string;
+    max_output_tokens?: number;
     store?: boolean;
     [key: string]: unknown;
   };
@@ -243,6 +248,11 @@ function patchChatGPTBody(body: string | null): string | null {
 
     if (parsed.store !== false) {
       parsed.store = false;
+      changed = true;
+    }
+
+    if ("max_output_tokens" in parsed) {
+      delete parsed.max_output_tokens;
       changed = true;
     }
 
@@ -357,7 +367,18 @@ const chatGPTOAuthAdapter: ProviderAdapter = {
   prepareMessages(input) {
     return stripOpenAIProviderOptions(prepared(input));
   },
-  providerOptions: openaiAdapter.providerOptions,
+  providerOptions(input) {
+    const options = openaiAdapter.providerOptions(input);
+    return {
+      ...options,
+      openai: {
+        ...options.openai,
+        // The SDK must know this before serializing history so it does not
+        // turn prior response item IDs into server-side item references.
+        store: false,
+      },
+    };
+  },
   normalizeUsage: openaiAdapter.normalizeUsage,
 };
 

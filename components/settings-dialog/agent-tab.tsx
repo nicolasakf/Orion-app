@@ -17,7 +17,7 @@ export function AgentTab({ section }: AgentTabProps) {
     case "modes":
       return <AgentInteractionModesSection />;
     case "context":
-    case "tool-output":
+    case "tool-execution":
     case "terminal":
     case "filesystem":
     case "web":

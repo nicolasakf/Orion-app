@@ -1,11 +1,48 @@
 "use client";
 
+import { BoundedNumberInput } from "@/components/ui/bounded-number-input";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
   SettingsInfoLabel,
 } from "@/components/settings-dialog/settings-info-label";
+
+interface SettingsNumberInputProps {
+  id: string;
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  integer?: boolean;
+  className?: string;
+  onChange: (value: number) => void;
+}
+
+/** Numeric settings control with range feedback. */
+export function SettingsNumberInput({
+  id,
+  value,
+  min,
+  max,
+  step = 1,
+  integer = true,
+  className,
+  onChange,
+}: SettingsNumberInputProps) {
+  return (
+    <BoundedNumberInput
+      id={id}
+      min={min}
+      max={max}
+      step={step}
+      integer={integer}
+      value={value}
+      className={className}
+      onValueChange={onChange}
+    />
+  );
+}
 
 interface SettingsNumberFieldProps {
   id: string;
@@ -15,10 +52,11 @@ interface SettingsNumberFieldProps {
   min?: number;
   max?: number;
   step?: number;
+  integer?: boolean;
   onChange: (value: number) => void;
 }
 
-/** Numeric settings input with optional clamping via min/max. */
+/** Numeric settings input with range feedback. */
 export function SettingsNumberField({
   id,
   label,
@@ -27,26 +65,20 @@ export function SettingsNumberField({
   min,
   max,
   step = 1,
+  integer = true,
   onChange,
 }: SettingsNumberFieldProps) {
   return (
     <div className="space-y-2">
       <SettingsInfoLabel htmlFor={id} label={label} description={description} />
-      <Input
+      <SettingsNumberInput
         id={id}
-        type="number"
         min={min}
         max={max}
         step={step}
+        integer={integer}
         value={value}
-        onChange={(event) => {
-          const next = Number(event.target.value);
-          if (!Number.isFinite(next)) return;
-          let clamped = next;
-          if (min !== undefined) clamped = Math.max(min, clamped);
-          if (max !== undefined) clamped = Math.min(max, clamped);
-          onChange(clamped);
-        }}
+        onChange={onChange}
       />
     </div>
   );

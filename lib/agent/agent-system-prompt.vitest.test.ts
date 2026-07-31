@@ -28,6 +28,33 @@ const rules: AgentRule[] = [
   },
 ];
 
+describe("parallel tool call guidance", () => {
+  it("injects the shared instruction exactly once in every agent prompt", () => {
+    const prompts = [
+      buildAgentSystemPrompt(),
+      buildAskModeSystemPrompt(),
+      buildEditModeSystemPrompt(),
+      buildResearchModeSystemPrompt(),
+      buildSubagentSystemPrompt({
+        subagent: {
+          name: "analyst",
+          label: "Analyst",
+          originalNotebookPath: ".agents/subagents/analyst.agent.ipynb",
+          tmpNotebookPath: ".agents/subagents/tmp/analyst/run.ipynb",
+          systemPrompt: "Analyze carefully.",
+        },
+      }),
+    ];
+
+    for (const prompt of prompts) {
+      expect(prompt.match(/## Parallel Tool Calls/g)).toHaveLength(1);
+      expect(prompt).toContain(
+        "When several read-only tool calls are independent"
+      );
+    }
+  });
+});
+
 describe("user-facing terminology", () => {
   it("injects Orion notebook terminology only in Business View mode", () => {
     const businessPrompt = buildAgentSystemPrompt({ businessExperienceMode: true });
@@ -105,6 +132,27 @@ describe("custom interaction mode prompt injection", () => {
 
     expect(prompt).not.toContain("## Available Skills");
     expect(prompt).not.toContain("## Sub-agent Delegation");
+  });
+});
+
+describe("Ask mode skills", () => {
+  it("advertises model-invocable skills and enforces user-selected skills", () => {
+    const prompt = buildAskModeSystemPrompt({
+      availableSkills: [
+        { name: "orion-docs", description: "Answers Orion product questions." },
+        {
+          name: "manual-only",
+          description: "Loads only when selected.",
+          disableModelInvocation: true,
+        },
+      ],
+      forcedSkillNames: ["manual-only"],
+    });
+
+    expect(prompt).toContain("## Available Skills");
+    expect(prompt).toContain("**orion-docs**");
+    expect(prompt).not.toContain("**manual-only**");
+    expect(prompt).toContain('load_skill` with `name: "manual-only"');
   });
 });
 

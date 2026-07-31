@@ -145,6 +145,7 @@ For `chat.interactionModes`, `[]` is accepted in authored JSON and is normalized
     "appearance": { "theme": "system" },
     "chat": {
       "titleGenerationModelId": "gemini-3.1-flash-lite",
+      "titleGenerationMaxLength": 40,
       "toolApprovalMode": "always_ask",
       "pinnedModelIds": [],
       "modelLabels": {},
@@ -197,6 +198,9 @@ For `chat.interactionModes`, `[]` is accepted in authored JSON and is normalized
         "textCharBudget": 40000,
         "imageBase64CharBudget": 100000,
         "maxOmittedRatio": 0.3333333333333333
+      },
+      "execution": {
+        "maxParallelReadOnlyCalls": 10
       },
       "terminal": {
         "pollIntervalMs": 150,
@@ -269,6 +273,7 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | Field | Type | Allowed values | Default | Description |
 | --- | --- | --- | --- | --- |
 | `titleGenerationModelId` | string | Non-empty model ID from Orion catalog | `gemini-3.1-flash-lite` | Model used for short chat title generation. |
+| `titleGenerationMaxLength` | integer | 10–100 | `40` | Maximum number of characters in an AI-generated chat title. |
 | `toolApprovalMode` | string | `always_ask`, `auto_run` (aliases like `Always Ask` normalized on load) | `always_ask` | Whether destructive tools require approval before run. |
 | `pinnedModelIds` | string[] | Model IDs; order preserved | `[]` | Models pinned to top of model selector. |
 | `modelLabels` | object | Map of `providerId/modelId` → display label | `{}` | User-defined labels for model picker and cost display. |
@@ -375,6 +380,12 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | `textCharBudget` | integer | > 0 | `40000` | Max characters returned from text tool outputs (~10k tokens × 4). |
 | `imageBase64CharBudget` | integer | > 0 | `100000` | Max base64 characters for image tool outputs. |
 | `maxOmittedRatio` | number | 0–1 | `≈0.333` (1/3) | Max fraction of content that may be omitted when truncating. |
+
+### `agent.execution`
+
+| Field | Type | Allowed values | Default | Description |
+| --- | --- | --- | --- | --- |
+| `maxParallelReadOnlyCalls` | integer | > 0 | `10` | Maximum independent read-only tool calls Orion may execute at once. Use `1` for sequential execution. |
 
 ### `agent.terminal`
 
@@ -505,6 +516,7 @@ Set workspace title generation model and model pins:
   "overrides": {
     "chat": {
       "titleGenerationModelId": "gemini-3-flash-preview",
+      "titleGenerationMaxLength": 40,
       "pinnedModelIds": ["gpt-5.4", "claude-sonnet-4-5"]
     }
   }

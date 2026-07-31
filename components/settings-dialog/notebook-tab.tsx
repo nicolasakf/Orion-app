@@ -157,6 +157,7 @@ export function NotebookTab() {
               min={0}
               max={1}
               step={0.01}
+              integer={false}
               onChange={(value) => updateOutput({ plotlyHoverCornerRatio: value })}
             />
             <SettingsNumberField

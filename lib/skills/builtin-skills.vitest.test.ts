@@ -25,6 +25,7 @@ describe("built-in skills", () => {
       expect.arrayContaining([
         "create-app",
         "create-rule",
+        "orion-docs",
         "orion-settings",
         "chat-history",
         "deep-eda",
@@ -42,6 +43,14 @@ describe("built-in skills", () => {
       expect(skill.description ?? "").not.toBe("");
       expect(skill.content.length).toBeGreaterThan(0);
     }
+  });
+
+  it("documents the parallel read-only execution setting", () => {
+    const skill = readBuiltinSkills().find(
+      (candidate) => candidate.name === "orion-settings"
+    );
+    expect(skill?.content).toContain('"maxParallelReadOnlyCalls": 10');
+    expect(skill?.content).toContain("### `agent.execution`");
   });
 
   it("keeps deep-EDA as an EDA research profile shortcut", () => {

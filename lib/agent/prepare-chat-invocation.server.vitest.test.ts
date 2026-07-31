@@ -17,6 +17,9 @@ describe("prepareChatInvocation", () => {
       credential: { type: "byok", apiKey: "test-key" },
       requestId: "request-1",
       interactionMode: getDefaultInteractionModeConfig("Ask"),
+      availableSkills: [
+        { name: "orion-docs", description: "Answers Orion product questions." },
+      ],
       agentRules: [],
       missingForcedSkillNames: [],
       communicationStyle: "default",
@@ -34,6 +37,74 @@ describe("prepareChatInvocation", () => {
       content: "Explain this notebook.",
     });
     expect(Object.keys(prepared.tools)).not.toContain("delegate");
+    expect(Object.keys(prepared.tools)).toContain("list_kernels");
+    expect(Object.keys(prepared.tools)).toContain("load_skill");
+    expect(prepared.agentSystemPrompt).toContain("**orion-docs**");
     expect(prepared.toolChoice).toBe("auto");
+  });
+
+  it("forces a user-selected skill in Ask mode", () => {
+    const prepared = prepareChatInvocation({
+      messages: [{ role: "user", content: "How do Orion interaction modes work?" }],
+      modelId: "gpt-test",
+      providerId: "openai",
+      credential: { type: "byok", apiKey: "test-key" },
+      requestId: "request-2",
+      interactionMode: getDefaultInteractionModeConfig("Ask"),
+      availableSkills: [
+        { name: "orion-docs", description: "Answers Orion product questions." },
+      ],
+      agentRules: [],
+      missingForcedSkillNames: ["orion-docs"],
+      communicationStyle: "default",
+      businessExperienceMode: false,
+      automaticContinuationAttempt: 0,
+      automaticContinuationReason: "",
+      canForceToolChoice: true,
+      hasDelegatedForcedSubagent: false,
+    });
+
+    expect(prepared.agentSystemPrompt).toContain('load_skill` with `name: "orion-docs"');
+    expect(prepared.toolChoice).toEqual({ type: "tool", toolName: "load_skill" });
+  });
+
+  it("includes a forced sub-agent name in a custom Ask-based mode", () => {
+    const askMode = getDefaultInteractionModeConfig("Ask");
+    const prepared = prepareChatInvocation({
+      messages: [{ role: "user", content: "Review the sales notebook." }],
+      modelId: "gpt-test",
+      providerId: "openai",
+      credential: { type: "byok", apiKey: "test-key" },
+      requestId: "request-3",
+      interactionMode: {
+        ...askMode,
+        id: "ask-with-delegation",
+        label: "Ask with delegation",
+        builtIn: false,
+        toolNames: [...askMode.toolNames, "delegate"],
+      },
+      availableSubagents: [
+        {
+          name: "analyst",
+          label: "Analyst",
+          description: "Reviews notebooks.",
+        },
+      ],
+      agentRules: [],
+      missingForcedSkillNames: [],
+      forcedSubagentName: "analyst",
+      communicationStyle: "default",
+      businessExperienceMode: false,
+      automaticContinuationAttempt: 0,
+      automaticContinuationReason: "",
+      canForceToolChoice: true,
+      hasDelegatedForcedSubagent: false,
+    });
+
+    expect(prepared.agentSystemPrompt).toContain("**Analyst (`analyst`)**");
+    expect(prepared.agentSystemPrompt).toContain(
+      'delegate` with `subagent: "analyst"',
+    );
+    expect(prepared.toolChoice).toEqual({ type: "tool", toolName: "delegate" });
   });
 });

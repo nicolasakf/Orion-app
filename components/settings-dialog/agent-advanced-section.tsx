@@ -34,6 +34,68 @@ export function AgentAdvancedSection({ section }: { section: AgentSettingsSectio
   };
 
   switch (section) {
+    case "tool-execution":
+      return (
+        <SettingsSectionLayout
+          title="Tools"
+          description="Configure tool concurrency and the size of results returned to the model."
+        >
+          <div className="space-y-6 max-w-2xl">
+            <div className="space-y-4">
+              <h3 className="text-sm font-medium">Execution</h3>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <SettingsNumberField
+                  id="agent-max-parallel-read-only-calls"
+                  label="Maximum parallel read-only calls"
+                  description="Maximum independent read-only tool calls Orion may execute at once. Use 1 for sequential execution."
+                  value={agent.execution.maxParallelReadOnlyCalls}
+                  min={1}
+                  onChange={(value) =>
+                    updateAgent("execution", { maxParallelReadOnlyCalls: value })
+                  }
+                />
+              </div>
+            </div>
+            <Separator />
+            <div className="space-y-4">
+              <h3 className="text-sm font-medium">Output</h3>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <SettingsNumberField
+                  id="agent-text-char-budget"
+                  label="Text character budget"
+                  value={agent.toolOutput.textCharBudget}
+                  min={1}
+                  onChange={(value) =>
+                    updateAgent("toolOutput", { textCharBudget: value })
+                  }
+                />
+                <SettingsNumberField
+                  id="agent-image-base64-char-budget"
+                  label="Image base64 character budget"
+                  value={agent.toolOutput.imageBase64CharBudget}
+                  min={1}
+                  onChange={(value) =>
+                    updateAgent("toolOutput", { imageBase64CharBudget: value })
+                  }
+                />
+                <SettingsNumberField
+                  id="agent-max-omitted-ratio"
+                  label="Max omitted ratio"
+                  description="Maximum fraction of content omitted when truncating (0–1)."
+                  value={agent.toolOutput.maxOmittedRatio}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  integer={false}
+                  onChange={(value) =>
+                    updateAgent("toolOutput", { maxOmittedRatio: value })
+                  }
+                />
+              </div>
+            </div>
+          </div>
+        </SettingsSectionLayout>
+      );
     case "context":
       return (
         <SettingsSectionLayout
@@ -49,6 +111,7 @@ export function AgentAdvancedSection({ section }: { section: AgentSettingsSectio
               min={0}
               max={1}
               step={0.01}
+              integer={false}
               onChange={(value) =>
                 updateAgent("context", { compactionAutoThreshold: value })
               }
@@ -72,42 +135,6 @@ export function AgentAdvancedSection({ section }: { section: AgentSettingsSectio
               onChange={(value) =>
                 updateAgent("context", { optimizerRetentionTurns: value })
               }
-            />
-          </div>
-        </SettingsSectionLayout>
-      );
-    case "tool-output":
-      return (
-        <SettingsSectionLayout
-          title="Tool output"
-          description="Limits on tool results sent back to the model."
-        >
-          <div className="grid gap-4 sm:grid-cols-2 max-w-2xl">
-            <SettingsNumberField
-              id="agent-text-char-budget"
-              label="Text character budget"
-              value={agent.toolOutput.textCharBudget}
-              min={1}
-              onChange={(value) => updateAgent("toolOutput", { textCharBudget: value })}
-            />
-            <SettingsNumberField
-              id="agent-image-base64-char-budget"
-              label="Image base64 character budget"
-              value={agent.toolOutput.imageBase64CharBudget}
-              min={1}
-              onChange={(value) =>
-                updateAgent("toolOutput", { imageBase64CharBudget: value })
-              }
-            />
-            <SettingsNumberField
-              id="agent-max-omitted-ratio"
-              label="Max omitted ratio"
-              description="Maximum fraction of content omitted when truncating (0–1)."
-              value={agent.toolOutput.maxOmittedRatio}
-              min={0}
-              max={1}
-              step={0.01}
-              onChange={(value) => updateAgent("toolOutput", { maxOmittedRatio: value })}
             />
           </div>
         </SettingsSectionLayout>

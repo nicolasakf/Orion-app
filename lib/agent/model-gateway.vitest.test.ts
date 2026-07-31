@@ -74,6 +74,9 @@ describe("ModelGateway ChatGPT OAuth history replay", () => {
         ],
       },
     ]);
+    expect(result.providerOptions).toMatchObject({
+      openai: { store: false },
+    });
   });
 });
 

@@ -115,7 +115,14 @@ export interface RunSubagentOptions {
    * AssistantProvider context. Tools are called through this function so that
    * the existing JupyterToolSet handles actual execution.
    */
-  executeToolCall: (toolName: OrionToolName, params: unknown) => Promise<unknown>;
+  executeToolCall: (
+    toolName: OrionToolName,
+    params: unknown,
+    abortSignal?: AbortSignal
+  ) => Promise<unknown>;
+
+  /** Maximum parallel-safe reads per sub-agent tool batch. */
+  maxParallelReadOnlyCalls?: number;
 
   /** Called immediately before a nested sub-agent tool starts executing. */
   onToolStart?: (toolCallId: string) => void;

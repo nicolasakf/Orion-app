@@ -10,6 +10,9 @@ import { DEFAULT_INTERACTION_MODE_CONFIGS } from "@/lib/agent/interaction-modes"
 /** Default model for generating short chat titles. */
 export const DEFAULT_TITLE_GENERATION_MODEL_ID = "gemini-3.1-flash-lite";
 
+/** Default maximum number of characters in an AI-generated chat title. */
+export const DEFAULT_TITLE_GENERATION_MAX_LENGTH = 40;
+
 /** Session-only default when no model is stored in sessionStorage. */
 export const DEFAULT_SELECTED_CHAT_MODEL_ID = "gpt-5.6-terra";
 
@@ -24,6 +27,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
   },
   chat: {
     titleGenerationModelId: DEFAULT_TITLE_GENERATION_MODEL_ID,
+    titleGenerationMaxLength: DEFAULT_TITLE_GENERATION_MAX_LENGTH,
     toolApprovalMode: "always_ask",
     pinnedModelIds: [],
     modelLabels: {},

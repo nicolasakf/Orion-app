@@ -44,6 +44,65 @@ describe("interaction mode defaults", () => {
     expect(custom?.toolNames).toEqual(["web_search", "web_fetch"]);
   });
 
+  it("upgrades the unchanged legacy Ask tool set to the current defaults", () => {
+    const modes = normalizeInteractionModeConfigs([
+      {
+        id: "Ask",
+        toolNames: [
+          "read_file",
+          "read_notebook",
+          "read_cell",
+          "read_cell_output",
+          "bash",
+          "await_command",
+          "web_fetch",
+          "web_search",
+        ],
+      },
+    ]);
+
+    expect(modes.find((mode) => mode.id === "Ask")?.toolNames).toEqual(
+      Object.keys(ASK_MODE_TOOLS)
+    );
+  });
+
+  it("preserves legacy Ask membership saved in the settings tool order", () => {
+    const customizedToolNames = [
+      "read_notebook",
+      "read_cell",
+      "read_cell_output",
+      "bash",
+      "await_command",
+      "read_file",
+      "web_fetch",
+      "web_search",
+    ] as const;
+    const modes = normalizeInteractionModeConfigs([
+      {
+        id: "Ask",
+        toolNames: customizedToolNames,
+      },
+    ]);
+
+    expect(modes.find((mode) => mode.id === "Ask")?.toolNames).toEqual(
+      customizedToolNames
+    );
+  });
+
+  it("preserves a customized Ask tool set", () => {
+    const modes = normalizeInteractionModeConfigs([
+      {
+        id: "Ask",
+        toolNames: ["read_file", "web_search"],
+      },
+    ]);
+
+    expect(modes.find((mode) => mode.id === "Ask")?.toolNames).toEqual([
+      "read_file",
+      "web_search",
+    ]);
+  });
+
   it("resolves request config and builds a matching tool object", () => {
     const mode = resolveInteractionModeConfig({
       modeId: "files",

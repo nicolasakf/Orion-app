@@ -12,6 +12,7 @@ import {
   ChevronsDownUp,
   ChevronsUpDown,
   GripVertical,
+  Check,
 } from "lucide-react";
 import {
   cn,
@@ -36,6 +37,20 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -47,8 +62,14 @@ import { Label } from "@/components/ui/label";
 import { AutoRunConfirmDialog } from "@/components/common/auto-run-confirm-dialog";
 import { ProviderLogo } from "@/components/provider-logo";
 import { SettingsInfoHeading } from "@/components/settings-dialog/settings-info-label";
+import { SettingsNumberInput } from "@/components/settings-dialog/settings-form-fields";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
-import type { ProviderCredential, ToolApprovalMode } from "@/lib/settings/schema";
+import {
+  MAX_TITLE_GENERATION_MAX_LENGTH,
+  MIN_TITLE_GENERATION_MAX_LENGTH,
+  type ProviderCredential,
+  type ToolApprovalMode,
+} from "@/lib/settings/schema";
 import { toast } from "sonner";
 import {
   buildModelLabelsUpdate,
@@ -394,7 +415,10 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
   const [dragOverIndex, setDragOverIndex] = React.useState<number | null>(null);
   const [isTitleGenerationModelValidating, setIsTitleGenerationModelValidating] =
     useState(false);
+  const [isTitleGenerationModelComboboxOpen, setIsTitleGenerationModelComboboxOpen] =
+    useState(false);
   const initializedProvidersRef = React.useRef<Set<string>>(new Set());
+  const titleGenerationModelListRef = React.useRef<HTMLDivElement>(null);
 
   const visibleProviderIds = React.useMemo(
     () => getVisibleProviderIds(effectiveSettings.providers),
@@ -552,6 +576,16 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
       ? formatModelSelectionKey(configuredModel.provider, configuredModel.value)
       : effectiveSettings.chat.titleGenerationModelId;
   }, [effectiveSettings.chat.titleGenerationModelId, titleGenerationModels]);
+
+  const selectedTitleGenerationModel = React.useMemo(
+    () =>
+      titleGenerationModels.find(
+        (model) =>
+          formatModelSelectionKey(model.provider_id, model.model_id) ===
+          titleGenerationModelSelectionKey
+      ),
+    [titleGenerationModelSelectionKey, titleGenerationModels]
+  );
 
   const filteredModels = React.useMemo(
     () => filterAndRankModelsBySearch(modelsWithConfiguredLabels, searchQuery),
@@ -810,6 +844,46 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
     setAutoRunConfirmOpen(false);
   };
 
+  /** Persist a title length after constraining it to the supported range. */
+  const handleTitleGenerationMaxLengthChange = useCallback(
+    (value: number) => {
+      const titleGenerationMaxLength = Math.min(
+        MAX_TITLE_GENERATION_MAX_LENGTH,
+        Math.max(MIN_TITLE_GENERATION_MAX_LENGTH, Math.round(value))
+      );
+      void setUserSettings((current) => ({
+        ...current,
+        chat: {
+          ...current.chat,
+          titleGenerationMaxLength,
+        },
+      }));
+    },
+    [setUserSettings]
+  );
+
+  /** Scrolls the portal-based model list when the settings dialog captures wheel input. */
+  const handleTitleGenerationModelListWheel = useCallback(
+    (event: React.WheelEvent<HTMLDivElement>) => {
+      const viewport = titleGenerationModelListRef.current?.querySelector<HTMLElement>(
+        "[data-radix-scroll-area-viewport]"
+      );
+      if (!viewport || viewport.scrollHeight <= viewport.clientHeight) return;
+
+      const scrollDistance =
+        event.deltaMode === 1
+          ? event.deltaY * 16
+          : event.deltaMode === 2
+            ? event.deltaY * viewport.clientHeight
+            : event.deltaY;
+
+      viewport.scrollTop += scrollDistance;
+      event.preventDefault();
+      event.stopPropagation();
+    },
+    []
+  );
+
   /** Verifies a model can generate a title before saving it as the user's preference. */
   const handleTitleGenerationModelChange = async (selectionKey: string) => {
     const selectedModel = titleGenerationModels.find(
@@ -899,38 +973,100 @@ export function ModelsTab({ onNavigateToProviders }: ModelsTabProps = {}) {
             label="Title generation model"
             description="Used when generating short titles for new chats."
           />
-          <Select
-            value={titleGenerationModelSelectionKey}
-            onValueChange={(selectionKey) => {
-              void handleTitleGenerationModelChange(selectionKey);
-            }}
-            disabled={
-              isLoading ||
-              isTitleGenerationModelValidating ||
-              titleGenerationModels.length === 0
-            }
+          <Popover
+            open={isTitleGenerationModelComboboxOpen}
+            onOpenChange={setIsTitleGenerationModelComboboxOpen}
           >
-            <SelectTrigger
-              className="w-[280px] font-mono text-xs"
-              aria-busy={isTitleGenerationModelValidating}
-            >
-              <SelectValue placeholder="Select model" />
-              {isTitleGenerationModelValidating ? (
-                <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-label="Verifying model" />
-              ) : null}
-            </SelectTrigger>
-            <SelectContent>
-              {titleGenerationModels.map((model) => (
-                <SelectItem
-                  key={formatModelSelectionKey(model.provider_id, model.model_id)}
-                  value={formatModelSelectionKey(model.provider_id, model.model_id)}
-                  className="font-mono text-xs"
+            <PopoverTrigger asChild>
+              <Button
+                variant="outline"
+                role="combobox"
+                aria-expanded={isTitleGenerationModelComboboxOpen}
+                aria-busy={isTitleGenerationModelValidating}
+                disabled={
+                  isLoading ||
+                  isTitleGenerationModelValidating ||
+                  titleGenerationModels.length === 0
+                }
+                className="w-[280px] justify-between font-mono text-xs font-normal"
+              >
+                <span className="min-w-0 truncate">
+                  {selectedTitleGenerationModel?.label ??
+                    titleGenerationModelSelectionKey ??
+                    "Select model"}
+                </span>
+                {isTitleGenerationModelValidating ? (
+                  <RefreshCw className="ml-2 h-3.5 w-3.5 shrink-0 animate-spin" aria-label="Verifying model" />
+                ) : (
+                  <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-50" />
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[360px] p-0" align="end">
+              <Command>
+                <CommandInput placeholder="Search models by name..." className="h-9" />
+                <CommandEmpty>No models found.</CommandEmpty>
+                <ScrollArea
+                  ref={titleGenerationModelListRef}
+                  type="always"
+                  className="h-[280px] max-h-[50vh]"
+                  onWheel={handleTitleGenerationModelListWheel}
                 >
-                  {formatModelSelectionKey(model.provider_id, model.model_id)}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+                  <CommandList className="max-h-none overflow-visible">
+                    <CommandGroup>
+                      {titleGenerationModels.map((model) => {
+                        const selectionKey = formatModelSelectionKey(
+                          model.provider_id,
+                          model.model_id
+                        );
+                        const isSelected = selectionKey === titleGenerationModelSelectionKey;
+
+                        return (
+                          <CommandItem
+                            key={selectionKey}
+                            value={`${model.label} ${selectionKey} ${model.provider_id}`}
+                            onSelect={() => {
+                              setIsTitleGenerationModelComboboxOpen(false);
+                              void handleTitleGenerationModelChange(selectionKey);
+                            }}
+                            className="gap-2"
+                          >
+                            <Check
+                              className={cn(
+                                "h-3.5 w-3.5 shrink-0",
+                                isSelected ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-xs">{model.label}</span>
+                              <span className="block truncate font-mono text-[11px] text-muted-foreground">
+                                {selectionKey}
+                              </span>
+                            </span>
+                          </CommandItem>
+                        );
+                      })}
+                    </CommandGroup>
+                  </CommandList>
+                </ScrollArea>
+              </Command>
+            </PopoverContent>
+          </Popover>
+        </div>
+        <div className="flex items-center justify-between max-w-xl">
+          <SettingsInfoHeading
+            label="Maximum title length"
+            description="The maximum number of characters in AI-generated chat titles."
+          />
+          <SettingsNumberInput
+            id="title-generation-max-length"
+            min={MIN_TITLE_GENERATION_MAX_LENGTH}
+            max={MAX_TITLE_GENERATION_MAX_LENGTH}
+            step={1}
+            value={effectiveSettings.chat.titleGenerationMaxLength}
+            onChange={handleTitleGenerationMaxLengthChange}
+            className="w-24 text-right"
+          />
         </div>
       </div>
 

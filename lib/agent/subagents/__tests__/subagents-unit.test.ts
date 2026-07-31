@@ -851,6 +851,107 @@ disable-model-invocation: true
     );
   });
 
+  await runTest("subagent read-only tool calls respect configured concurrency", async () => {
+    let releaseReads!: () => void;
+    const readGate = new Promise<void>((resolve) => {
+      releaseReads = resolve;
+    });
+    let activeReads = 0;
+    let maxActiveReads = 0;
+    const execution = executeSubagentToolCallPartsForTest(
+      Array.from({ length: 12 }, (_, index) => ({
+        type: "tool-read_file",
+        toolCallId: `call-read-${index}`,
+        state: "input-available" as const,
+        input: { filePath: `notes-${index}.md` },
+      })),
+      {
+        subagentType: "analyst",
+        availableSubagents: [subagentDefinition()],
+        description: "test",
+        modelId: "claude-sonnet-4-5",
+        providerId: "anthropic",
+        subagentDevLogInstance: 1,
+        maxParallelReadOnlyCalls: 10,
+        executeToolCall: async () => {
+          activeReads += 1;
+          maxActiveReads = Math.max(maxActiveReads, activeReads);
+          await readGate;
+          activeReads -= 1;
+          return "contents";
+        },
+        createTmpNotebookCopy: async () => ".agents/subagents/tmp/analyst/run.ipynb",
+      }
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    assert(activeReads === 10, `expected 10 active reads, got ${activeReads}`);
+    releaseReads();
+    await execution;
+    assert(maxActiveReads === 10, `expected max concurrency 10, got ${maxActiveReads}`);
+  });
+
+  await runTest("subagent stateful tools are ordering barriers", async () => {
+    let releaseRead!: () => void;
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const events: string[] = [];
+    const execution = executeSubagentToolCallPartsForTest(
+      [
+        {
+          type: "tool-read_file",
+          toolCallId: "call-read-before",
+          state: "input-available",
+          input: { filePath: "before.md" },
+        },
+        {
+          type: "tool-bash",
+          toolCallId: "call-barrier",
+          state: "input-available",
+          input: { command: "pwd" },
+        },
+        {
+          type: "tool-read_file",
+          toolCallId: "call-read-after",
+          state: "input-available",
+          input: { filePath: "after.md" },
+        },
+      ],
+      {
+        subagentType: "analyst",
+        availableSubagents: [subagentDefinition()],
+        description: "test",
+        modelId: "claude-sonnet-4-5",
+        providerId: "anthropic",
+        subagentDevLogInstance: 1,
+        maxParallelReadOnlyCalls: 10,
+        executeToolCall: async (toolName) => {
+          if (toolName === "read_file" && events.length === 0) {
+            events.push("read-before:start");
+            await readGate;
+            events.push("read-before:end");
+          } else {
+            events.push(toolName);
+          }
+          return "ok";
+        },
+        createTmpNotebookCopy: async () => ".agents/subagents/tmp/analyst/run.ipynb",
+      }
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+    assert(!events.includes("bash"), "barrier should wait for the preceding read");
+    releaseRead();
+    await execution;
+    assert(
+      events.join(",") === "read-before:start,read-before:end,bash,read_file",
+      `unexpected barrier order: ${events.join(",")}`
+    );
+  });
+
   await runTest("runSubagent reports transcript snapshots through completion", async () => {
     const originalFetch = globalThis.fetch;
     const snapshots: UIMessage[][] = [];

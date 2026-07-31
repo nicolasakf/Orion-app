@@ -14,6 +14,7 @@ import createRuleRaw from "./builtin/create-rule/SKILL.md";
 import createSkillRaw from "./builtin/create-skill/SKILL.md";
 import createSubagentRaw from "./builtin/create-subagent/SKILL.md";
 import chatHistoryRaw from "./builtin/chat-history/SKILL.md";
+import orionDocsRaw from "./builtin/orion-docs/SKILL.md";
 import orionMetadataRaw from "./builtin/orion-metadata/SKILL.md";
 import orionSettingsRaw from "./builtin/orion-settings/SKILL.md";
 import orionUiRaw from "./builtin/orion-ui/SKILL.md";
@@ -41,6 +42,7 @@ export const BUILTIN_SKILLS: SkillInfo[] = [
   parseBuiltinSkill(createSubagentRaw),
   parseBuiltinSkill(orionSettingsRaw),
   parseBuiltinSkill(chatHistoryRaw),
+  parseBuiltinSkill(orionDocsRaw),
   parseBuiltinSkill(orionMetadataRaw),
   parseBuiltinSkill(orionUiRaw),
   parseBuiltinSkill(deepEdaRaw),

@@ -14,6 +14,7 @@ import { filterDiscoverableSubagents } from "@/lib/agent/subagents/discovery";
 import { filterModelInvocableSkills } from "@/lib/skills/discovery";
 import { buildRequiredSkillsPromptSection } from "@/lib/agent/implicit-skills";
 import { buildRulesPromptSection, type AgentRule } from "@/lib/agent/rules";
+import { PARALLEL_TOOL_CALLS_PROMPT_SECTION } from "@/lib/agent/tool-execution-policy";
 import type { AgentCommunicationStyle } from "@/lib/settings/schema";
 import { isAbsoluteAgentPath, toAgentAbsolutePath } from "./path-resolver";
 export { buildSubagentSystemPrompt } from "@/lib/agent/subagents";
@@ -92,6 +93,30 @@ function buildCustomInteractionModeSection(customSystemPrompt?: string): string 
   const trimmed = customSystemPrompt?.trim();
   if (!trimmed) return "";
   return `## Custom Interaction Mode Instructions\n\n${trimmed}`;
+}
+
+/** Builds the shared model-invocable skills section used by interaction modes. */
+function buildAvailableSkillsPromptSection(
+  availableSkills?: Array<{
+    name: string;
+    description: string;
+    disableModelInvocation?: boolean;
+  }>
+): string {
+  if (!availableSkills || availableSkills.length === 0) return "";
+
+  const modelInvocableSkills = filterModelInvocableSkills(availableSkills);
+  if (modelInvocableSkills.length === 0) return "";
+
+  const skillLines = modelInvocableSkills
+    .map((skill) => `- **${skill.name}**: ${skill.description}`)
+    .join("\n");
+  return `## Available Skills
+
+Skills provide specialized workflow instructions for specific task types.
+Use the \`load_skill\` tool to load a skill when the user's task matches its description.
+
+${skillLines}`;
 }
 
 /** Non-placeholder values only — omit fields we could not determine. */
@@ -307,6 +332,20 @@ Use the \`delegate\` tool to offload tasks to a focused notebook-defined sub-age
 ${agentLines}`;
 }
 
+/** Builds the mandatory first delegation instruction for a user-selected sub-agent. */
+function buildForcedSubagentPromptSection(
+  forcedSubagentName?: string
+): string {
+  if (!forcedSubagentName) return "";
+
+  return `## Active Sub-agent Requirement
+
+The user explicitly selected the \`${forcedSubagentName}\` sub-agent for this turn.
+- You MUST call \`delegate\` with \`subagent: "${forcedSubagentName}"\` IMMEDIATELY. This MUST be the first thing you do.
+- Pass the user's request as the \`description\`.
+- Pass \`reconnectTmpNotebookPath: ""\` unless the user is explicitly asking about a prior sub-agent run and you have that run's \`tmpNotebookPath\`.`;
+}
+
 /**
  * Returns the agent system prompt with dynamic context sections appended.
  *
@@ -392,7 +431,10 @@ export function buildAgentSystemPrompt(options?: {
   // XOR enforcement: a request has either a notebook or a file, never both.
   // If both are somehow provided, notebookPath takes precedence.
   const activeFilePath = notebookPath ? undefined : options?.activeFilePath;
-  const sections: string[] = [ORION_AGENT_SYSTEM_PROMPT];
+  const sections: string[] = [
+    ORION_AGENT_SYSTEM_PROMPT,
+    PARALLEL_TOOL_CALLS_PROMPT_SECTION,
+  ];
 
   const styleSection = buildCommunicationStyleSection({
     style: communicationStyle,
@@ -411,21 +453,10 @@ export function buildAgentSystemPrompt(options?: {
     : null;
   if (subagentSection) sections.push(subagentSection);
 
-  // Inject skills section when skills are available.
-  if (enableSkills && availableSkills && availableSkills.length > 0) {
-    const modelInvocableSkills = filterModelInvocableSkills(availableSkills);
-    if (modelInvocableSkills.length > 0) {
-      const skillLines = modelInvocableSkills
-        .map((s) => `- **${s.name}**: ${s.description}`)
-        .join("\n");
-      sections.push(`## Available Skills
-
-Skills provide specialized workflow instructions for specific task types.
-Use the \`load_skill\` tool to load a skill when the user's task matches its description.
-
-${skillLines}`);
-    }
-  }
+  const skillsSection = enableSkills
+    ? buildAvailableSkillsPromptSection(availableSkills)
+    : "";
+  if (skillsSection) sections.push(skillsSection);
 
   const requiredSkillNames = forcedSkillNames?.length
     ? forcedSkillNames
@@ -438,14 +469,9 @@ ${skillLines}`);
     if (requiredSkillsSection) sections.push(requiredSkillsSection);
   }
 
-  if (forcedSubagentName) {
-    sections.push(`## Active Sub-agent Requirement
-
-The user explicitly selected the \`${forcedSubagentName}\` sub-agent for this turn.
-- You MUST call \`delegate\` with \`subagent: "${forcedSubagentName}"\` IMMEDIATELY. This MUST be the first thing you do.
-- Pass the user's request as the \`description\`.
-- Pass \`reconnectTmpNotebookPath: ""\` unless the user is explicitly asking about a prior sub-agent run and you have that run's \`tmpNotebookPath\`.`);
-  }
+  const forcedSubagentSection =
+    buildForcedSubagentPromptSection(forcedSubagentName);
+  if (forcedSubagentSection) sections.push(forcedSubagentSection);
 
   const envContext = buildAgentEnvironmentContextPrompt({
     serverInfo,
@@ -484,6 +510,23 @@ interface ModeModePromptOptions {
   clientPlatformOs?: PlatformOS;
   /** AGENTS.md / CLAUDE.md rule files loaded for this workspace. */
   agentRules?: AgentRule[];
+  /** Skills available in this session — injected as an Available Skills section. */
+  availableSkills?: Array<{ name: string; description: string; disableModelInvocation?: boolean }>;
+  /** Sub-agents available in this session — injected when delegation is enabled. */
+  availableSubagents?: Array<{
+    name: string;
+    label?: string;
+    description: string;
+    options?: { disableModelInvocation?: boolean };
+  }>;
+  /** Skills selected by the user for this turn. */
+  forcedSkillNames?: string[];
+  /** Sub-agent selected by the user for this turn. */
+  forcedSubagentName?: string;
+  /** Whether to advertise loadable skills in this mode. */
+  enableSkills?: boolean;
+  /** Whether to advertise notebook-defined sub-agent delegation in this mode. */
+  enableSubagents?: boolean;
   /** Communication style preset; omitting or "default" uses minimal narration instructions */
   communicationStyle?: AgentCommunicationStyle;
   /** Custom communication instructions; overrides preset when non-empty */
@@ -493,10 +536,13 @@ interface ModeModePromptOptions {
 
 /**
  * Builds the system prompt for Ask mode (read-only tool access).
- * No skills or sub-agent delegation sections — Ask mode is exploration only.
+ * Skills remain available because loading instructions does not mutate user state.
  */
 export function buildAskModeSystemPrompt(options?: ModeModePromptOptions): string {
-  const sections: string[] = [ORION_AGENT_SYSTEM_PROMPT_ASK];
+  const sections: string[] = [
+    ORION_AGENT_SYSTEM_PROMPT_ASK,
+    PARALLEL_TOOL_CALLS_PROMPT_SECTION,
+  ];
 
   const styleSection = buildCommunicationStyleSection({
     style: options?.communicationStyle,
@@ -509,6 +555,25 @@ export function buildAskModeSystemPrompt(options?: ModeModePromptOptions): strin
 
   const customModeSection = buildCustomInteractionModeSection(options?.customSystemPrompt);
   if (customModeSection) sections.push(customModeSection);
+
+  const subagentSection = options?.enableSubagents === false
+    ? null
+    : buildSubagentDelegationSection(options?.availableSubagents);
+  if (subagentSection) sections.push(subagentSection);
+
+  const skillsSection = options?.enableSkills === false
+    ? ""
+    : buildAvailableSkillsPromptSection(options?.availableSkills);
+  if (skillsSection) sections.push(skillsSection);
+
+  if (options?.forcedSkillNames && options.forcedSkillNames.length > 0) {
+    const requiredSkillsSection = buildRequiredSkillsPromptSection(options.forcedSkillNames);
+    if (requiredSkillsSection) sections.push(requiredSkillsSection);
+  }
+
+  const forcedSubagentSection =
+    buildForcedSubagentPromptSection(options?.forcedSubagentName);
+  if (forcedSubagentSection) sections.push(forcedSubagentSection);
 
   const envContext = buildAgentEnvironmentContextPrompt({
     serverInfo: options?.serverInfo,
@@ -558,7 +623,10 @@ export function buildEditModeSystemPrompt(options?: {
   /** Whether to advertise notebook-defined sub-agent delegation in this mode. */
   enableSubagents?: boolean;
 }): string {
-  const sections: string[] = [ORION_AGENT_SYSTEM_PROMPT_EDIT];
+  const sections: string[] = [
+    ORION_AGENT_SYSTEM_PROMPT_EDIT,
+    PARALLEL_TOOL_CALLS_PROMPT_SECTION,
+  ];
 
   const styleSection = buildCommunicationStyleSection({
     style: options?.communicationStyle,
@@ -577,19 +645,10 @@ export function buildEditModeSystemPrompt(options?: {
     : buildSubagentDelegationSection(options?.availableSubagents);
   if (subagentSection) sections.push(subagentSection);
 
-  // Skills
-  if (options?.enableSkills !== false && options?.availableSkills && options.availableSkills.length > 0) {
-    const modelInvocableSkills = filterModelInvocableSkills(options.availableSkills);
-    if (modelInvocableSkills.length > 0) {
-      const skillLines = modelInvocableSkills.map((s) => `- **${s.name}**: ${s.description}`).join("\n");
-      sections.push(`## Available Skills
-
-Skills provide specialized workflow instructions for specific task types.
-Use the \`load_skill\` tool to load a skill when the user's task matches its description.
-
-${skillLines}`);
-    }
-  }
+  const skillsSection = options?.enableSkills === false
+    ? ""
+    : buildAvailableSkillsPromptSection(options?.availableSkills);
+  if (skillsSection) sections.push(skillsSection);
 
   const requiredSkillNames = options?.forcedSkillNames?.length
     ? options.forcedSkillNames
@@ -602,14 +661,9 @@ ${skillLines}`);
     if (requiredSkillsSection) sections.push(requiredSkillsSection);
   }
 
-  if (options?.forcedSubagentName) {
-    sections.push(`## Active Sub-agent Requirement
-
-The user explicitly selected the \`${options.forcedSubagentName}\` sub-agent for this turn.
-- You MUST call \`delegate\` with \`subagent: "${options.forcedSubagentName}"\` IMMEDIATELY. This MUST be the first thing you do.
-- Pass the user's request as the \`description\`.
-- Pass \`reconnectTmpNotebookPath: ""\` unless the user is explicitly asking about a prior sub-agent run and you have that run's \`tmpNotebookPath\`.`);
-  }
+  const forcedSubagentSection =
+    buildForcedSubagentPromptSection(options?.forcedSubagentName);
+  if (forcedSubagentSection) sections.push(forcedSubagentSection);
 
   const activeFilePath = options?.notebookPath ? undefined : options?.activeFilePath;
   const envContext = buildAgentEnvironmentContextPrompt({

@@ -19,6 +19,13 @@ describe("resolveWorkspaceCopyPath", () => {
     });
   });
 
+  it("does not duplicate the separator when the Jupyter root is the POSIX root", () => {
+    expect(resolveWorkspaceCopyPath("projects/forecast.ipynb", "/")).toEqual({
+      path: "/projects/forecast.ipynb",
+      isAbsolute: true,
+    });
+  });
+
   it("retains the Jupyter-relative path when the server root is unknown", () => {
     expect(resolveWorkspaceCopyPath("projects/forecast/analysis.ipynb", null)).toEqual({
       path: "projects/forecast/analysis.ipynb",

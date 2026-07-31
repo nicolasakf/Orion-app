@@ -68,6 +68,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ProviderLogo } from "@/components/provider-logo";
+import { getAdjacentIntelligenceSettings } from "./model-intelligence";
 import { ModelSettingsPopover } from "./model-settings-popover";
 import type {
   ChatDraftAttachment,
@@ -1321,6 +1322,89 @@ export function ChatTextbox({
     );
   }, [modelSearchQuery, pinnedModels]);
 
+  /** Applies empty-textbox arrow shortcuts without interfering with text editing or pickers. */
+  const handleEmptyComposerArrowKey = React.useCallback(
+    (event: React.KeyboardEvent<HTMLTextAreaElement>): boolean => {
+      const isTextboxEmpty =
+        !editingState &&
+        textareaValue.length === 0 &&
+        !slashChip &&
+        selectedSkillChips.length === 0 &&
+        attachments.length === 0 &&
+        references.length === 0;
+      const hasModifier =
+        event.altKey || event.ctrlKey || event.metaKey || event.shiftKey;
+
+      if (
+        !isTextboxEmpty ||
+        hasModifier ||
+        isModelComboboxOpen ||
+        isModePopoverOpen ||
+        isTypeaheadOpen ||
+        isReferenceTypeaheadOpen
+      ) {
+        return false;
+      }
+
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        const selectableModels = pinnedModels.filter(
+          (model) => model.isAccessible !== false
+        );
+        const selectedIndex = selectableModels.findIndex(
+          (model) =>
+            model.provider === selectedLlm?.provider &&
+            model.value === selectedLlm?.value
+        );
+        const direction = event.key === "ArrowDown" ? 1 : -1;
+        const nextModel = selectableModels[selectedIndex + direction];
+        if (!nextModel) return false;
+
+        event.preventDefault();
+        event.stopPropagation();
+        onModelChange(formatModelSelectionKey(nextModel.provider, nextModel.value));
+        return true;
+      }
+
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        const provider = selectedModelProvider ?? selectedLlm?.provider;
+        if (!provider) return false;
+
+        const nextSettings = getAdjacentIntelligenceSettings(
+          provider,
+          selectedLlm,
+          modelSettings,
+          event.key === "ArrowRight" ? 1 : -1
+        );
+        if (!nextSettings) return false;
+
+        event.preventDefault();
+        event.stopPropagation();
+        onModelSettingsChange(nextSettings);
+        return true;
+      }
+
+      return false;
+    },
+    [
+      attachments.length,
+      editingState,
+      isModePopoverOpen,
+      isModelComboboxOpen,
+      isReferenceTypeaheadOpen,
+      isTypeaheadOpen,
+      modelSettings,
+      onModelChange,
+      onModelSettingsChange,
+      pinnedModels,
+      references.length,
+      selectedLlm,
+      selectedModelProvider,
+      selectedSkillChips.length,
+      slashChip,
+      textareaValue.length,
+    ]
+  );
+
   const highlightedModel = visiblePinnedModels[highlightedModelIndex] ?? null;
 
   React.useEffect(() => {
@@ -1717,6 +1801,8 @@ export function ChatTextbox({
                           return;
                         }
                       }
+
+                      if (handleEmptyComposerArrowKey(e)) return;
 
                       if (selectedSkillChips.length > 0 && e.key === "Backspace") {
                         const target = e.target as HTMLTextAreaElement;

@@ -13,6 +13,7 @@ import {
   TOOL_OUTPUT_MAX_OMITTED_RATIO,
   TOOL_OUTPUT_TEXT_CHAR_BUDGET,
 } from "@/lib/agent/tool-output-guard";
+import { DEFAULT_MAX_PARALLEL_READ_ONLY_CALLS } from "@/lib/agent/tool-execution-policy";
 import {
   DEFAULT_AWAIT_BUDGET_MS,
   DEFAULT_FOREGROUND_BUDGET_MS,
@@ -37,6 +38,7 @@ import {
 } from "@/lib/ui-session-state";
 import type {
   AgentContextSettings,
+  AgentExecutionSettings,
   AgentFilesystemSettings,
   AgentSettings,
   AgentTerminalSettings,
@@ -145,6 +147,11 @@ export const BUILTIN_AGENT_TOOL_OUTPUT_DEFAULTS: AgentToolOutputSettings = {
   maxOmittedRatio: TOOL_OUTPUT_MAX_OMITTED_RATIO,
 };
 
+/** Built-in agent tool execution defaults. */
+export const BUILTIN_AGENT_EXECUTION_DEFAULTS: AgentExecutionSettings = {
+  maxParallelReadOnlyCalls: DEFAULT_MAX_PARALLEL_READ_ONLY_CALLS,
+};
+
 /** Built-in terminal tool defaults. */
 export const BUILTIN_AGENT_TERMINAL_DEFAULTS: AgentTerminalSettings = {
   pollIntervalMs: TERMINAL_POLL_INTERVAL_MS,
@@ -178,6 +185,7 @@ export const BUILTIN_AGENT_WEB_DEFAULTS: AgentWebSettings = {
 export const BUILTIN_AGENT_DEFAULTS: AgentSettings = {
   context: BUILTIN_AGENT_CONTEXT_DEFAULTS,
   toolOutput: BUILTIN_AGENT_TOOL_OUTPUT_DEFAULTS,
+  execution: BUILTIN_AGENT_EXECUTION_DEFAULTS,
   terminal: BUILTIN_AGENT_TERMINAL_DEFAULTS,
   filesystem: BUILTIN_AGENT_FILESYSTEM_DEFAULTS,
   web: BUILTIN_AGENT_WEB_DEFAULTS,

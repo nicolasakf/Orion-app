@@ -73,6 +73,20 @@ describe("agent path resolver", () => {
     );
   });
 
+  it("round-trips a child path when the Jupyter root is the POSIX root", () => {
+    const promptPath = toAgentAbsolutePath("project/file.txt", {
+      rootDirectory: "/",
+    });
+
+    expect(promptPath).toBe("/project/file.txt");
+    expect(resolveAgentPath(promptPath!, { rootDirectory: "/" })).toEqual({
+      ok: true,
+      originalPath: "/project/file.txt",
+      jupyterPath: "project/file.txt",
+      wasAbsolute: true,
+    });
+  });
+
   it("preserves a Windows drive-root separator in prompt-facing paths", () => {
     const windowsRoot = "C:\\";
     const promptRoot = toAgentAbsolutePath("", { rootDirectory: windowsRoot });

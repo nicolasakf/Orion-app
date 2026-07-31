@@ -8,6 +8,10 @@ export const MAX_PINNED_WORKSPACE_DIRECTORY_PATHS = 50;
 /** Max entries for `workspace.pinnedFilePaths` in user settings. */
 export const MAX_PINNED_FILE_PATHS = 50;
 
+/** Inclusive bounds for the number of characters in AI-generated chat titles. */
+export const MIN_TITLE_GENERATION_MAX_LENGTH = 10;
+export const MAX_TITLE_GENERATION_MAX_LENGTH = 100;
+
 export const ThemeSettingSchema = z.enum(["light", "dark", "system"]);
 export const ExperienceModeSchema = z.enum(["pro", "business"]).catch("pro");
 export const InteractionModeSchema = z.enum(["Agent", "Research", "Edit", "Ask"]).catch("Agent");
@@ -96,6 +100,11 @@ export const AgentToolOutputSettingsSchema = z.object({
   maxOmittedRatio: z.number().min(0).max(1),
 });
 
+export const AgentExecutionSettingsSchema = z.object({
+  /** Maximum number of independent read-only tool calls executed concurrently. */
+  maxParallelReadOnlyCalls: z.number().int().positive(),
+});
+
 export const AgentTerminalSettingsSchema = z.object({
   pollIntervalMs: z.number().int().positive(),
   foregroundBudgetMs: z.number().int().positive(),
@@ -126,6 +135,7 @@ export const AgentWebSettingsSchema = z.object({
 export const AgentSettingsSchema = z.object({
   context: AgentContextSettingsSchema,
   toolOutput: AgentToolOutputSettingsSchema,
+  execution: AgentExecutionSettingsSchema,
   terminal: AgentTerminalSettingsSchema,
   filesystem: AgentFilesystemSettingsSchema,
   web: AgentWebSettingsSchema,
@@ -257,6 +267,12 @@ const SettingsDataSchema = z.object({
   chat: z.object({
     /** Model ID used when generating short chat titles. */
     titleGenerationModelId: z.string().min(1),
+    /** Maximum number of characters permitted in AI-generated chat titles. */
+    titleGenerationMaxLength: z
+      .number()
+      .int()
+      .min(MIN_TITLE_GENERATION_MAX_LENGTH)
+      .max(MAX_TITLE_GENERATION_MAX_LENGTH),
     toolApprovalMode: ToolApprovalModeSchema,
     /** Model IDs shown in the chat model selector. Order preserved. */
     pinnedModelIds: z.array(z.string()),
@@ -353,6 +369,7 @@ export type NotebookMinimapPreviewMode = z.infer<
 >;
 export type AgentContextSettings = z.infer<typeof AgentContextSettingsSchema>;
 export type AgentToolOutputSettings = z.infer<typeof AgentToolOutputSettingsSchema>;
+export type AgentExecutionSettings = z.infer<typeof AgentExecutionSettingsSchema>;
 export type AgentTerminalSettings = z.infer<typeof AgentTerminalSettingsSchema>;
 export type AgentFilesystemSettings = z.infer<typeof AgentFilesystemSettingsSchema>;
 export type AgentWebSettings = z.infer<typeof AgentWebSettingsSchema>;

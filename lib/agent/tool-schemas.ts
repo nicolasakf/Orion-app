@@ -611,6 +611,7 @@ export const SERVER_ONLY_TOOLS: ReadonlySet<OrionToolName> = new Set<OrionToolNa
  */
 export const ASK_MODE_TOOLS: Pick<
   typeof orionTools,
+  | "list_kernels"
   | "read_file"
   | "read_notebook"
   | "read_cell"
@@ -619,7 +620,9 @@ export const ASK_MODE_TOOLS: Pick<
   | "await_command"
   | "web_fetch"
   | "web_search"
+  | "load_skill"
 > = {
+  list_kernels: orionTools.list_kernels,
   read_file: orionTools.read_file,
   read_notebook: orionTools.read_notebook,
   read_cell: orionTools.read_cell,
@@ -628,6 +631,7 @@ export const ASK_MODE_TOOLS: Pick<
   await_command: orionTools.await_command,
   web_fetch: orionTools.web_fetch,
   web_search: orionTools.web_search,
+  load_skill: orionTools.load_skill,
 };
 
 /** Tool names excluded from Edit mode (notebook cell execution). */

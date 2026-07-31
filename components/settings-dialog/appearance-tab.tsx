@@ -1,6 +1,5 @@
 "use client";
 
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -16,6 +15,7 @@ import {
   SettingsInfoLabel,
   SettingsInfoSectionTitle,
 } from "@/components/settings-dialog/settings-info-label";
+import { SettingsNumberInput } from "@/components/settings-dialog/settings-form-fields";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import type {
   EmptyEditorCardContent,
@@ -91,11 +91,6 @@ function SettingsTabsField<T extends string>({
       </TabsList>
     </Tabs>
   );
-}
-
-/** Keeps autosave intervals valid while the user edits the milliseconds field. */
-function clampAutosaveIntervalMs(value: number): number {
-  return Math.max(1, Math.floor(value));
 }
 
 /** Appearance tab: theme, editor preferences, and persistent display defaults. */
@@ -180,20 +175,17 @@ export function AppearanceTab() {
           <div className="grid gap-4 sm:grid-cols-2 max-w-2xl">
             <div className="space-y-2">
               <Label htmlFor="chat-font-size">Chat font size</Label>
-              <Input
+              <SettingsNumberInput
                 id="chat-font-size"
-                type="number"
                 min={10}
                 max={20}
                 value={chat.fontSize}
-                onChange={(e) => {
-                  const next = Number(e.target.value);
-                  if (!Number.isFinite(next)) return;
+                onChange={(fontSize) => {
                   void setUserSettings((current) => ({
                     ...current,
                     chat: {
                       ...current.chat,
-                      fontSize: Math.max(10, Math.min(20, next)),
+                      fontSize,
                     },
                   }));
                 }}
@@ -201,20 +193,17 @@ export function AppearanceTab() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="file-tree-font-size">File tree font size</Label>
-              <Input
+              <SettingsNumberInput
                 id="file-tree-font-size"
-                type="number"
                 min={10}
                 max={20}
                 value={fileTree.fontSize}
-                onChange={(e) => {
-                  const next = Number(e.target.value);
-                  if (!Number.isFinite(next)) return;
+                onChange={(fontSize) => {
                   void setUserSettings((current) => ({
                     ...current,
                     fileTree: {
                       ...current.fileTree,
-                      fontSize: Math.max(10, Math.min(20, next)),
+                      fontSize,
                     },
                   }));
                 }}
@@ -230,20 +219,17 @@ export function AppearanceTab() {
           <div className="grid gap-4 sm:grid-cols-3 max-w-2xl">
             <div className="space-y-2">
               <Label htmlFor="editor-font-size">Font size</Label>
-              <Input
+              <SettingsNumberInput
                 id="editor-font-size"
-                type="number"
                 min={10}
                 max={28}
                 value={editor.fontSize}
-                onChange={(e) => {
-                  const next = Number(e.target.value);
-                  if (!Number.isFinite(next)) return;
+                onChange={(fontSize) => {
                   void setUserSettings((current) => ({
                     ...current,
                     editor: {
                       ...current.editor,
-                      fontSize: Math.max(10, Math.min(28, next)),
+                      fontSize,
                     },
                   }));
                 }}
@@ -252,20 +238,17 @@ export function AppearanceTab() {
 
             <div className="space-y-2">
               <Label htmlFor="editor-tab-size">Tab size</Label>
-              <Input
+              <SettingsNumberInput
                 id="editor-tab-size"
-                type="number"
                 min={1}
                 max={8}
                 value={editor.tabSize}
-                onChange={(e) => {
-                  const next = Number(e.target.value);
-                  if (!Number.isFinite(next)) return;
+                onChange={(tabSize) => {
                   void setUserSettings((current) => ({
                     ...current,
                     editor: {
                       ...current.editor,
-                      tabSize: Math.max(1, Math.min(8, next)),
+                      tabSize,
                     },
                   }));
                 }}
@@ -410,20 +393,17 @@ export function AppearanceTab() {
                 label="Autosave interval"
                 description="How often autosave should save dirty editor files, in milliseconds."
               />
-              <Input
+              <SettingsNumberInput
                 id="editor-autosave-interval-ms"
-                type="number"
                 min={1}
                 step={100}
                 value={editor.autosaveIntervalMs}
-                onChange={(e) => {
-                  const next = Number(e.target.value);
-                  if (!Number.isFinite(next)) return;
+                onChange={(autosaveIntervalMs) => {
                   void setUserSettings((current) => ({
                     ...current,
                     editor: {
                       ...current.editor,
-                      autosaveIntervalMs: clampAutosaveIntervalMs(next),
+                      autosaveIntervalMs,
                     },
                   }));
                 }}
@@ -502,22 +482,19 @@ export function AppearanceTab() {
 
             <div className="space-y-2">
               <Label htmlFor="empty-editor-max-items">Max items</Label>
-              <Input
+              <SettingsNumberInput
                 id="empty-editor-max-items"
-                type="number"
                 min={1}
                 max={20}
                 value={emptyEditor.maxItems}
-                onChange={(e) => {
-                  const next = Number(e.target.value);
-                  if (!Number.isFinite(next)) return;
+                onChange={(maxItems) => {
                   void setUserSettings((current) => ({
                     ...current,
                     editor: {
                       ...current.editor,
                       emptyEditor: {
                         ...current.editor.emptyEditor,
-                        maxItems: Math.max(1, Math.min(20, next)),
+                        maxItems,
                       },
                     },
                   }));

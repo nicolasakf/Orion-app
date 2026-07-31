@@ -1,6 +1,7 @@
 import { buildRulesPromptSection, type AgentRule } from "@/lib/agent/rules";
 import { buildRequiredSkillsPromptSection } from "@/lib/agent/implicit-skills";
 import { isAbsoluteAgentPath, toAgentAbsolutePath } from "@/lib/agent/path-resolver";
+import { PARALLEL_TOOL_CALLS_PROMPT_SECTION } from "@/lib/agent/tool-execution-policy";
 import type { SubagentPromptPayload } from "./types";
 
 export function buildSubagentSystemPrompt(options: {
@@ -42,6 +43,7 @@ You **do not need to read or run the first three cells** after connecting to the
 The content below defines your **task and goals** for this sub-agent role (notebook cell 3). Use it to decide what to do and how to judge when the work is complete.
 
 ${fencedSystemPrompt}`,
+    PARALLEL_TOOL_CALLS_PROMPT_SECTION,
     rulesSection,
     buildRequiredSkillsPromptSection(forcedSkillNames ?? []),
     `## Runtime Instructions

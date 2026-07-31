@@ -12,7 +12,7 @@ export type AgentSettingsSection =
   | "communication"
   | "modes"
   | "context"
-  | "tool-output"
+  | "tool-execution"
   | "terminal"
   | "filesystem"
   | "web";
@@ -26,7 +26,7 @@ export const AGENT_SETTINGS_SECTIONS: {
   { id: "communication", title: "Communication" },
   { id: "modes", title: "Interaction modes" },
   { id: "context", title: "Context" },
-  { id: "tool-output", title: "Tool output" },
+  { id: "tool-execution", title: "Tools" },
   { id: "terminal", title: "Terminal" },
   { id: "filesystem", title: "Filesystem" },
   { id: "web", title: "Web" },

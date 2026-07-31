@@ -112,6 +112,21 @@ const DEFAULT_MODE_BY_ID = new Map(
   DEFAULT_INTERACTION_MODE_CONFIGS.map((mode) => [mode.id, mode])
 );
 
+/**
+ * Ask-mode tools shipped before read-only kernel discovery and skill loading
+ * were added. Exact matches can be upgraded without overwriting customized modes.
+ */
+const LEGACY_ASK_MODE_DEFAULT_TOOL_NAMES: readonly OrionToolName[] = [
+  "read_file",
+  "read_notebook",
+  "read_cell",
+  "read_cell_output",
+  "bash",
+  "await_command",
+  "web_fetch",
+  "web_search",
+];
+
 /** Returns a fresh default config for a built-in mode. */
 export function getDefaultInteractionModeConfig(
   id: BuiltInInteractionModeId = "Agent"
@@ -150,6 +165,26 @@ function parseBashPolicy(
 
 function parseBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
+}
+
+/** Upgrades an unchanged legacy Ask tool set while preserving user customizations. */
+function normalizeBuiltInToolNames(
+  id: BuiltInInteractionModeId,
+  rawToolNames: unknown,
+  defaults: OrionToolName[]
+): OrionToolName[] {
+  const normalized = normalizeToolNames(rawToolNames);
+  if (
+    id === "Ask" &&
+    normalized.length === LEGACY_ASK_MODE_DEFAULT_TOOL_NAMES.length &&
+    normalized.every(
+      (toolName, index) =>
+        toolName === LEGACY_ASK_MODE_DEFAULT_TOOL_NAMES[index]
+    )
+  ) {
+    return defaults;
+  }
+  return normalized;
 }
 
 function normalizeCustomMode(
@@ -198,7 +233,9 @@ export function normalizeInteractionModeConfigs(
 
     result.push({
       ...defaults,
-      toolNames: raw ? normalizeToolNames(raw.toolNames) : defaults.toolNames,
+      toolNames: raw
+        ? normalizeBuiltInToolNames(builtinId, raw.toolNames, defaults.toolNames)
+        : defaults.toolNames,
       customSystemPrompt:
         raw && typeof raw.customSystemPrompt === "string"
           ? raw.customSystemPrompt

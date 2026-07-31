@@ -110,7 +110,7 @@ export function UserMessage({
       {/* Message content — max height with gradient fade when truncated */}
       <div
         ref={contentRef}
-        className={`corner-squircle relative max-h-[8rem] overflow-hidden px-3 py-1 bg-primary text-primary-foreground rounded-l-lg rounded-tr-lg ${isClickable ? "hover:text-background/70 transition-colors" : ""
+        className={`corner-squircle relative max-h-[8rem] max-w-full min-w-0 overflow-hidden px-3 py-1 bg-primary text-primary-foreground rounded-l-lg rounded-tr-lg ${isClickable ? "hover:text-background/70 transition-colors" : ""
           }`}
         onClick={onClick}
       >
@@ -149,7 +149,7 @@ export function UserMessage({
             })}
           </div>
         )}
-        <p className="whitespace-pre-wrap" style={{ fontSize: chatFontSize }}>
+        <p className="whitespace-pre-wrap [overflow-wrap:anywhere]" style={{ fontSize: chatFontSize }}>
           {textContent}
         </p>
         {/* Gradient overlay to indicate more text below when content overflows */}

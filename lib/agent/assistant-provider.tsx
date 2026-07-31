@@ -53,7 +53,13 @@ import {
 } from "@/lib/agent/subagents";
 import { detectClientPlatformOs, isJupyterServerHostLocal } from "@/lib/utils";
 import { guardExecutionToolResult, isExecutionToolResult } from "./visual-evidence";
+import { throwIfToolExecutionAborted } from "./tool-execution-scheduler";
 import { resolveAgentPath } from "./path-resolver";
+
+/** Request-scoped metadata and cancellation passed to local tool execution. */
+export interface ToolExecutionContext extends EditCheckpointContext {
+  abortSignal?: AbortSignal;
+}
 
 // ============================================================================
 // Types
@@ -161,7 +167,7 @@ export interface AssistantContextValue {
   executeToolCall: (
     toolName: OrionToolName,
     params: unknown,
-    checkpointContext?: EditCheckpointContext
+    executionContext?: ToolExecutionContext
   ) => Promise<unknown>;
 
   /** Create a writable tmp copy of a subagent source notebook for one delegate run. */
@@ -725,8 +731,10 @@ export function AssistantProvider({
     async (
       toolName: OrionToolName,
       params: unknown,
-      checkpointContext?: EditCheckpointContext
+      executionContext?: ToolExecutionContext
     ): Promise<unknown> => {
+      throwIfToolExecutionAborted(executionContext?.abortSignal);
+
       // Handle kernel-free tools before checking for the Jupyter tool set
       if (toolName === "load_skill") {
         const { name } = (sanitizeToolParams(params) ?? {}) as { name?: string };
@@ -761,8 +769,10 @@ export function AssistantProvider({
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(sanitizedParams ?? {}),
+            signal: executionContext?.abortSignal,
           });
           const data = await response.json().catch(() => ({})) as { output?: unknown; error?: unknown };
+          throwIfToolExecutionAborted(executionContext?.abortSignal);
           if (!response.ok) {
             throw new Error(typeof data.error === "string" ? data.error : `Request failed with status ${response.status}`);
           }
@@ -774,6 +784,9 @@ export function AssistantProvider({
           logToolResult({ requestId, toolName, params, result: finalResult, durationMs }, chatIdRef.current);
           return finalResult;
         } catch (err) {
+          if (err instanceof DOMException && err.name === "AbortError") {
+            throw err;
+          }
           const message = err instanceof Error ? err.message : String(err);
           const durationMs = Date.now() - startMs;
           logToolError({ requestId, toolName, params, error: message, durationMs }, chatIdRef.current);
@@ -823,6 +836,7 @@ export function AssistantProvider({
           );
           return finalResult;
         }
+        throwIfToolExecutionAborted(executionContext?.abortSignal);
 
         const executeWithCheckpointContext = async <
           TTool extends { setCheckpointContext: (context: EditCheckpointContext | null) => void; execute: (params: any) => Promise<string | string[]> },
@@ -830,7 +844,7 @@ export function AssistantProvider({
           tool: TTool,
           toolParams: unknown
         ): Promise<string | string[]> => {
-          tool.setCheckpointContext(checkpointContext ?? null);
+          tool.setCheckpointContext(executionContext ?? null);
           try {
             return await tool.execute(toolParams as any);
           } finally {
@@ -909,6 +923,12 @@ export function AssistantProvider({
             return { error: `Unknown tool: ${toolName}` };
         }
 
+        const requiresPostExecutionSync =
+          MODIFYING_TOOLS.has(toolName) || toolName === "edit_file";
+        if (!requiresPostExecutionSync) {
+          throwIfToolExecutionAborted(executionContext?.abortSignal);
+        }
+
         if (isExecutionToolResult(result)) {
           // Preserve raster bytes until RightSidebar applies the selected model's
           // image capability and configured preview budget.
@@ -924,6 +944,7 @@ export function AssistantProvider({
           if (MODIFYING_TOOLS.has(toolName)) {
             onAgentNotebookChangeRef.current?.();
           }
+          throwIfToolExecutionAborted(executionContext?.abortSignal);
           return finalResult;
         }
 
@@ -964,8 +985,12 @@ export function AssistantProvider({
           }
         }
 
+        throwIfToolExecutionAborted(executionContext?.abortSignal);
         return finalResult;
       } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          throw err;
+        }
         const message = err instanceof Error ? err.message : String(err);
         const durationMs = Date.now() - startMs;
         logToolError({ requestId, toolName, params, error: message, durationMs }, chatIdRef.current);

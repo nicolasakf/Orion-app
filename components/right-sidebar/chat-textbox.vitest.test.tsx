@@ -286,6 +286,101 @@ describe("ChatTextbox model intelligence settings", () => {
     expect(screen.getByRole("button", { name: "High" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Extra High" })).not.toBeInTheDocument();
   });
+
+  it("changes intelligence with left and right arrows in an empty chat", () => {
+    const onModelSettingsChange = vi.fn();
+    const props = createTextboxProps({
+      selectedModelProvider: "openai",
+      modelSettings: { reasoningEffort: "medium" },
+      onModelSettingsChange,
+    });
+    const { rerender } = render(<ChatTextbox {...props} />);
+
+    const textarea = screen.getByRole("textbox");
+    fireEvent.keyDown(textarea, { key: "ArrowRight" });
+    rerender(
+      <ChatTextbox
+        {...props}
+        modelSettings={{ reasoningEffort: "high" }}
+      />
+    );
+    fireEvent.keyDown(textarea, { key: "ArrowLeft" });
+
+    expect(onModelSettingsChange).toHaveBeenNthCalledWith(1, {
+      reasoningEffort: "high",
+    });
+    expect(onModelSettingsChange).toHaveBeenNthCalledWith(2, {
+      reasoningEffort: "medium",
+    });
+  });
+
+  it("changes pinned models with up and down arrows in an empty chat", () => {
+    const onModelChange = vi.fn();
+    const props = createTextboxProps({
+      selectedModel: "openai/gpt-test",
+      onModelChange,
+      pinnedModelIds: ["openai/gpt-test", "anthropic/claude-test"],
+      models: [
+        models[0],
+        {
+          value: "claude-test",
+          label: "Claude Test",
+          provider: "anthropic",
+        },
+      ],
+    });
+    const { rerender } = render(<ChatTextbox {...props} />);
+
+    const textarea = screen.getByRole("textbox");
+    fireEvent.keyDown(textarea, { key: "ArrowDown" });
+    rerender(<ChatTextbox {...props} selectedModel="anthropic/claude-test" />);
+    fireEvent.keyDown(textarea, { key: "ArrowUp" });
+
+    expect(onModelChange).toHaveBeenNthCalledWith(1, "anthropic/claude-test");
+    expect(onModelChange).toHaveBeenNthCalledWith(2, "openai/gpt-test");
+  });
+
+  it("changes models when the chat has messages but the textbox is empty", () => {
+    const onModelChange = vi.fn();
+    renderTextbox({
+      hasMessages: true,
+      onModelChange,
+      pinnedModelIds: ["openai/gpt-test", "anthropic/claude-test"],
+      models: [
+        models[0],
+        {
+          value: "claude-test",
+          label: "Claude Test",
+          provider: "anthropic",
+        },
+      ],
+    });
+
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "ArrowDown" });
+
+    expect(onModelChange).toHaveBeenCalledWith("anthropic/claude-test");
+  });
+
+  it("keeps arrow shortcuts disabled when the textbox has text", () => {
+    const onModelChange = vi.fn();
+    renderTextbox({
+      input: "Draft response",
+      onModelChange,
+      pinnedModelIds: ["openai/gpt-test", "anthropic/claude-test"],
+      models: [
+        models[0],
+        {
+          value: "claude-test",
+          label: "Claude Test",
+          provider: "anthropic",
+        },
+      ],
+    });
+
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "ArrowDown" });
+
+    expect(onModelChange).not.toHaveBeenCalled();
+  });
 });
 
 describe("ChatTextbox rules", () => {

@@ -23,6 +23,13 @@ describe("web access tool schemas", () => {
   });
 });
 
+describe("Ask mode tool schemas", () => {
+  it("allows read-only kernel discovery and skill loading", () => {
+    expect(ASK_MODE_TOOLS.list_kernels).toBe(orionTools.list_kernels);
+    expect(ASK_MODE_TOOLS.load_skill).toBe(orionTools.load_skill);
+  });
+});
+
 describe("page reload tool schema", () => {
   it("is available without Jupyter or kernel readiness", () => {
     expect(orionTools.reload_page).toBeDefined();

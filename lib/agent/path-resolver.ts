@@ -125,7 +125,11 @@ export function toAgentAbsolutePath(
   if (!relative) return normalizeAbsolutePath(rootDirectory);
 
   const separator = root.windows ? "\\" : "/";
-  return `${normalizeAbsolutePath(rootDirectory)}${separator}${relative
+  const normalizedRoot = normalizeAbsolutePath(rootDirectory);
+  const rootPrefix = normalizedRoot.endsWith(separator)
+    ? normalizedRoot
+    : `${normalizedRoot}${separator}`;
+  return `${rootPrefix}${relative
     .split("/")
     .join(separator)}`;
 }

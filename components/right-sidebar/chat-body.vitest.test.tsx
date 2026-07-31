@@ -326,6 +326,21 @@ describe("ChatBody assistant message actions", () => {
     expect(screen.getByRole("button", { name: "Copy message" })).toBeInTheDocument();
   });
 
+  it("keeps long unbroken user-message text within the chat panel", () => {
+    const url = "https://jobs2.smartsearchonline.com/Stefanini/jobs/process_jobsearch.asp?jobTitle=&cityZip=&country=USA";
+    const message: UIMessage = {
+      id: "user-message-long-url",
+      role: "user",
+      parts: [{ type: "text", text: url }],
+    };
+
+    renderMessageChatBody([message]);
+
+    const messageText = screen.getByText(url);
+    expect(messageText).toHaveClass("[overflow-wrap:anywhere]");
+    expect(messageText.parentElement).toHaveClass("max-w-full", "min-w-0");
+  });
+
   it("keeps copy available but suppresses forks while editing a user message", () => {
     const message: UIMessage = {
       id: "assistant-after-edit",

@@ -17,17 +17,25 @@
  * Shaped like AI SDK's ToolLoopAgent for future compatibility.
  */
 
-import { readUIMessageStream, type UIMessage } from "ai";
+import {
+  readUIMessageStream,
+  uiMessageChunkSchema,
+  type UIMessage,
+  type UIMessageChunk,
+} from "ai";
 import { parseJsonEventStream, type ParseResult } from "@ai-sdk/provider-utils";
+
+import { OrderedToolExecutionScheduler } from "@/lib/agent/tool-execution-scheduler";
+import { DEFAULT_MAX_PARALLEL_READ_ONLY_CALLS } from "@/lib/agent/tool-execution-policy";
+import { guardToolResult } from "@/lib/agent/tool-output-guard";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
+
 import type {
   RunSubagentOptions,
   RunSubagentResult,
   SubagentDefinition,
   SubagentPromptPayload,
 } from "./types";
-import { guardToolResult } from "@/lib/agent/tool-output-guard";
-import { uiMessageChunkSchema, type UIMessageChunk } from "ai";
 
 // ============================================================================
 // Internal helpers
@@ -150,34 +158,46 @@ export async function executeSubagentToolCallPartsForTest(
   options: RunSubagentOptions
 ): Promise<Map<string, unknown>> {
   const results = new Map<string, unknown>();
+  const scheduler = new OrderedToolExecutionScheduler(
+    options.maxParallelReadOnlyCalls ?? DEFAULT_MAX_PARALLEL_READ_ONLY_CALLS,
+    options.abortSignal
+  );
 
-  for (const part of toolCallParts) {
+  const scheduledCalls = toolCallParts.map((part) => {
     const toolName = extractToolName(part.type) as OrionToolName;
-    options.onToolStart?.(part.toolCallId);
+    return scheduler.schedule(toolName, async () => {
+      options.onToolStart?.(part.toolCallId);
 
-    // Hard block: sub-agents cannot spawn other sub-agents recursively
-    if (toolName === "delegate") {
-      results.set(
-        part.toolCallId,
-        "[BLOCKED] Sub-agents cannot call the `delegate` tool. Recursive sub-agent spawning is not supported."
-      );
-      options.onToolEnd?.(part.toolCallId);
-      continue;
-    }
+      // Hard block: sub-agents cannot spawn other sub-agents recursively
+      if (toolName === "delegate") {
+        results.set(
+          part.toolCallId,
+          "[BLOCKED] Sub-agents cannot call the `delegate` tool. Recursive sub-agent spawning is not supported."
+        );
+        options.onToolEnd?.(part.toolCallId);
+        return;
+      }
 
-    try {
-      const rawResult = await options.executeToolCall(toolName, part.input);
-      results.set(part.toolCallId, guardToolResult(rawResult));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      results.set(
-        part.toolCallId,
-        `[ERROR] Tool "${toolName}" threw an exception: ${message}`
-      );
-    } finally {
-      options.onToolEnd?.(part.toolCallId);
-    }
-  }
+      try {
+        const rawResult = await options.executeToolCall(
+          toolName,
+          part.input,
+          options.abortSignal
+        );
+        results.set(part.toolCallId, guardToolResult(rawResult));
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        results.set(
+          part.toolCallId,
+          `[ERROR] Tool "${toolName}" threw an exception: ${message}`
+        );
+      } finally {
+        options.onToolEnd?.(part.toolCallId);
+      }
+    });
+  });
+
+  await Promise.allSettled(scheduledCalls);
 
   return results;
 }
