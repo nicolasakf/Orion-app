@@ -90,7 +90,7 @@ import {
 import { MarkdownEditorViewModeProvider } from "@/contexts/markdown-editor-view-mode-context";
 import { NotebookViewModeProvider } from "@/contexts/notebook-view-mode-context";
 import { TerminalPanel } from "@/components/terminal/terminal-panel";
-import { useIsMobile } from "@/hooks/use-platform";
+import { useIsDesktopApp, useIsMobile, usePlatformOs } from "@/hooks/use-platform";
 import { usePersistentPanelLayout } from "@/hooks/use-persistent-panel-layout";
 import {
   MobileLayoutProvider,
@@ -591,6 +591,8 @@ export default function Page() {
   const cloudImportInProgressRef = useRef(false);
   const cloudImportWaitingForKernelRef = useRef(false);
   const isMobile = useIsMobile();
+  const isDesktopApp = useIsDesktopApp();
+  const platformOs = usePlatformOs();
   const [currentFile, setCurrentFile] = useState<ActiveFile>({
     name: "",
     path: "",
@@ -3108,7 +3110,14 @@ export default function Page() {
                             }`}
                         >
                           <div
-                            className="corner-squircle sticky top-0 z-10 mx-1 flex h-11 min-w-0 shrink-0 items-center gap-1.5 rounded-md border bg-background px-2 shadow-md"
+                            className={cn(
+                              "corner-squircle sticky top-0 z-10 flex h-11 min-w-0 shrink-0 items-center gap-1.5 rounded-md border bg-background px-2 shadow-md",
+                              isDesktopApp &&
+                                platformOs === "macos" &&
+                                leftSidebarCollapsed
+                                ? "ml-20 mr-1"
+                                : "mx-1",
+                            )}
                           >
                             <div className="flex min-w-0 flex-1 items-center gap-1.5">
                               <ToolbarButton

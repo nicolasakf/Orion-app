@@ -703,7 +703,7 @@ export function BusinessShell({
                         align="start"
                         side="bottom"
                         sideOffset={8}
-                        className="h-[min(72vh,640px)] w-[min(92vw,520px)] max-h-[calc(100vh-6rem)] overflow-hidden p-0"
+                        className="h-[min(72vh,640px)] w-fit max-w-[min(92vw,520px)] max-h-[calc(100vh-6rem)] overflow-hidden p-0"
                       >
                         <LeftSidebar
                           currentFile={currentFile}
