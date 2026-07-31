@@ -6,12 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+[Unreleased]: https://github.com/nicolasakf/Orion-app/compare/v0.17.0...HEAD
+
+## [0.17.0] - 2026-07-31
+
 ### Added
 
+- Notebook: filter `orion-ui` tables with type-aware operators, filter-from-cell actions, and default filtered and sorted views
+- Chat: run independent read-only agent tool calls concurrently, with ordered write barriers and configurable concurrency
 - Chat: answer Orion product questions from official documentation with the new `orion-docs` built-in skill
 - Ask mode: load skills and list available kernels while remaining read-only
+- Chat: generate and edit AI titles with configurable title length and model selection controls
 
-[Unreleased]: https://github.com/nicolasakf/Orion-app/compare/v0.16.0...HEAD
+### Fixed
+
+- Chat: prevent duplicate message snapshots, stabilize queued turns, and keep long message text within the panel
+- UI: refine collapsed sidebar layouts across desktop and Business View
+- Publishing: recover a partial PyPI release without republishing npm
+
+[0.17.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.17.0
 
 ## [0.16.0] - 2026-07-24
 
