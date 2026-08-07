@@ -4,6 +4,7 @@ import type { UIMessage } from "ai";
 import {
   buildAssistantActivityMessageBlocks,
   buildAssistantRenderBlocks,
+  attachPersistedToolTimings,
   finalizeCompletedToolTimings,
   getActivityDurationMs,
   isActivityGroupWaitingForFinalResponse,
@@ -428,5 +429,69 @@ describe("getActivityDurationMs", () => {
     );
 
     expect(duration).toBe(4_200);
+  });
+
+  it("uses persisted tool timestamps after reload", () => {
+    const persistedPart = {
+      ...toolPart("bash", "call-4", "output-available"),
+      output: { stdout: "done" },
+      orionTiming: { startedAt: 1_000, endedAt: 8_000 },
+    } as unknown as Part;
+
+    const duration = getActivityDurationMs(
+      [{ part: persistedPart, partIndex: 0 }],
+      new Map(),
+      { isActivityComplete: true }
+    );
+
+    expect(duration).toBe(7_000);
+  });
+
+  it("preserves the full tool span across a reloaded activity group", () => {
+    const firstPart = {
+      ...toolPart("read_file", "call-5", "output-available"),
+      output: { text: "first" },
+      orionTiming: { startedAt: 1_000, endedAt: 3_000 },
+    } as unknown as Part;
+    const secondPart = {
+      ...toolPart("bash", "call-6", "output-available"),
+      output: { stdout: "second" },
+      orionTiming: { startedAt: 5_000, endedAt: 9_000 },
+    } as unknown as Part;
+
+    const duration = getActivityDurationMs(
+      [
+        { part: firstPart, partIndex: 0 },
+        { part: secondPart, partIndex: 1 },
+      ],
+      new Map(),
+      { isActivityComplete: true }
+    );
+
+    expect(duration).toBe(8_000);
+  });
+
+  it("adds completed tool timestamps to messages before persistence", () => {
+    const messages = [
+      {
+        id: "msg-1",
+        role: "assistant" as const,
+        parts: [
+          {
+            ...toolPart("bash", "call-7", "output-available"),
+            output: { stdout: "done" },
+          } as unknown as Part,
+        ],
+      },
+    ] satisfies UIMessage[];
+
+    const persisted = attachPersistedToolTimings(
+      messages,
+      new Map([["call-7", { startedAt: 2_000, endedAt: 6_500 }]])
+    );
+
+    expect(persisted[0]?.parts[0]).toMatchObject({
+      orionTiming: { startedAt: 2_000, endedAt: 6_500 },
+    });
   });
 });

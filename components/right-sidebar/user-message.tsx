@@ -1,8 +1,8 @@
 "use client";
 
 import { type UIMessage } from "ai";
-import { useState, useRef, useEffect } from "react";
-import { Bot, Brain, Command, Copy, Redo2, Undo2 } from "lucide-react";
+import { useState, useRef, useEffect, useCallback } from "react";
+import { Bot, Brain, ChevronDown, ChevronUp, Command, Copy, Pencil, Redo2, Undo2 } from "lucide-react";
 import {
   CheckmarkedButton,
   useCheckmarkedFeedback,
@@ -24,6 +24,7 @@ import {
 } from "@/lib/chat/chat-references";
 import { CHAT_REFERENCE_TYPE_ICONS } from "@/lib/chat/chat-reference-icons";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import { cn } from "@/lib/utils";
 
 const USER_MESSAGE_CHIP_CLASS =
   "border-primary-foreground/20 bg-primary-foreground/10";
@@ -47,8 +48,7 @@ function getSlashCommandIcon(category: ChatSlashCommandCategory) {
 
 interface UserMessageProps {
   message: UIMessage;
-  onClick?: () => void;
-  isClickable?: boolean;
+  onEdit?: () => void;
   checkpointId?: string;
   checkpointAction?: "restore" | "redo";
   onRestoreCheckpoint?: (checkpointId: string, action: "restore" | "redo") => void;
@@ -56,8 +56,7 @@ interface UserMessageProps {
 
 export function UserMessage({
   message,
-  onClick,
-  isClickable = false,
+  onEdit,
   checkpointId,
   checkpointAction,
   onRestoreCheckpoint,
@@ -67,6 +66,7 @@ export function UserMessage({
   const { checked: isCopied, showCheckmark } = useCheckmarkedFeedback();
   const contentRef = useRef<HTMLDivElement>(null);
   const [hasOverflow, setHasOverflow] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const textContent = getTextContent(message);
   const references = parseChatMessageReferences(message.metadata);
@@ -75,13 +75,33 @@ export function UserMessage({
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
-    const check = () =>
-      setHasOverflow(el.scrollHeight > el.clientHeight);
+    const check = () => {
+      if (!isExpanded) {
+        setHasOverflow(el.scrollHeight > el.clientHeight);
+      }
+    };
     check();
     const ro = new ResizeObserver(check);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [textContent, references.length, slashCommands.length]);
+  }, [isExpanded, textContent, references.length, slashCommands.length]);
+
+  useEffect(() => {
+    setIsExpanded(false);
+  }, [message.id]);
+
+  /** Expands a truncated message when the user clicks its text. */
+  const handleMessageClick = useCallback(() => {
+    if (hasOverflow && !isExpanded) {
+      setIsExpanded(true);
+    }
+  }, [hasOverflow, isExpanded]);
+
+  /** Toggles the full-message view without also handling the bubble click. */
+  const handleExpansionButtonClick = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsExpanded((current) => !current);
+  }, []);
 
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent triggering the message click
@@ -99,20 +119,27 @@ export function UserMessage({
       onRestoreCheckpoint?.(checkpointId, checkpointAction);
     }
   };
+
+  /** Opens this message in the composer without triggering bubble expansion. */
+  const handleEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onEdit?.();
+  };
   const canRestoreCheckpoint = Boolean(checkpointId && checkpointAction && onRestoreCheckpoint);
   const CheckpointIcon = checkpointAction === "redo" ? Redo2 : Undo2;
 
   return (
-    <div
-      className={`flex max-w-full min-w-0 flex-col items-end ${isClickable ? "cursor-pointer" : ""
-        }`}
-    >
-      {/* Message content — max height with gradient fade when truncated */}
+    <div className="group flex max-w-full min-w-0 flex-col items-end">
+      {/* Message content — click a truncated bubble to reveal its full text. */}
       <div
         ref={contentRef}
-        className={`corner-squircle relative max-h-[8rem] max-w-full min-w-0 overflow-hidden px-3 py-1 bg-primary text-primary-foreground rounded-l-lg rounded-tr-lg ${isClickable ? "hover:text-background/70 transition-colors" : ""
-          }`}
-        onClick={onClick}
+        className={cn(
+          "corner-squircle relative max-w-full min-w-0 overflow-hidden rounded-l-lg rounded-tr-lg bg-primary px-3 py-1 text-primary-foreground",
+          isExpanded ? "max-h-none" : "max-h-[8rem]",
+          hasOverflow && "pb-7",
+          hasOverflow && !isExpanded && "cursor-pointer",
+        )}
+        onClick={handleMessageClick}
       >
         {slashCommands.length > 0 && (
           <div className="mb-1 flex flex-wrap gap-1">
@@ -152,12 +179,23 @@ export function UserMessage({
         <p className="whitespace-pre-wrap [overflow-wrap:anywhere]" style={{ fontSize: chatFontSize }}>
           {textContent}
         </p>
-        {/* Gradient overlay to indicate more text below when content overflows */}
-        {hasOverflow && (
+        {/* Gradient overlay to indicate more text below when content overflows. */}
+        {hasOverflow && !isExpanded && (
           <div
             className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-primary to-transparent"
             aria-hidden
           />
+        )}
+        {hasOverflow && (
+          <button
+            type="button"
+            className="absolute bottom-1 left-2 z-10 inline-flex items-center gap-1 px-1 text-xs font-medium text-primary-foreground/90 opacity-0 transition-[color,opacity] hover:text-primary-foreground focus-visible:opacity-100 group-hover:opacity-100"
+            onClick={handleExpansionButtonClick}
+            aria-expanded={isExpanded}
+          >
+            {isExpanded ? "Show less" : "Show more"}
+            {isExpanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+          </button>
         )}
       </div>
 
@@ -179,6 +217,25 @@ export function UserMessage({
               </TooltipTrigger>
               <TooltipContent>
                 <p>{checkpointAction === "redo" ? "Redo Changes" : "Undo Changes"}</p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+
+          {onEdit && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleEdit}
+                  aria-label="Edit message"
+                  className="h-6 w-6 shrink-0 text-muted-foreground hover:bg-transparent hover:text-foreground [&_svg]:size-3"
+                >
+                  <Pencil />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Edit message</p>
               </TooltipContent>
             </Tooltip>
           )}

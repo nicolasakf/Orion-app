@@ -58,6 +58,8 @@ export interface ChatBodyProps {
   /** True while the assistant turn is still in progress (streaming, tools, follow-up gap). */
   isAgentTurnActive?: boolean;
   onUserMessageClick: (message: UIMessage, index: number) => void;
+  /** Whether user-message edit controls are available in this chat view. */
+  canEditUserMessages?: boolean;
   editingState: EditingState | null;
   showKernelPrompt?: boolean;
   onOpenKernelDropdown?: () => void;
@@ -105,6 +107,7 @@ interface ChatMessageRowProps {
   /** Prevents forks while any request for the current chat remains active. */
   isForkingDisabled?: boolean;
   onUserMessageClick: (message: UIMessage, index: number) => void;
+  canEditUserMessages?: boolean;
   pendingApprovalIds?: Set<string>;
   onApprove?: (toolCallId: string) => void;
   onReject?: (toolCallId: string) => void;
@@ -798,6 +801,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   isAgentTurnActive = false,
   isForkingDisabled = false,
   onUserMessageClick,
+  canEditUserMessages = true,
   pendingApprovalIds,
   onApprove,
   onReject,
@@ -900,8 +904,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
       {message.role === "user" ? (
         <UserMessage
           message={message}
-          onClick={handleUserClick}
-          isClickable={true}
+          onEdit={canEditUserMessages ? handleUserClick : undefined}
           checkpointId={actionableCheckpointId}
           checkpointAction={checkpointAction}
           onRestoreCheckpoint={onRestoreCheckpoint}
@@ -1020,6 +1023,7 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
     return false;
   }
   if (prev.onRestoreCheckpoint !== next.onRestoreCheckpoint) return false;
+  if (prev.canEditUserMessages !== next.canEditUserMessages) return false;
   if (prev.onForkFromAssistantMessage !== next.onForkFromAssistantMessage) return false;
 
   return true;
@@ -1136,6 +1140,7 @@ export function ChatBody({
   isLoading,
   isAgentTurnActive = false,
   onUserMessageClick,
+  canEditUserMessages = true,
   editingState,
   showKernelPrompt,
   onOpenKernelDropdown,
@@ -1347,6 +1352,7 @@ export function ChatBody({
                     }
                     isForkingDisabled={isAgentTurnActive || isLoading}
                     onUserMessageClick={onUserMessageClick}
+                    canEditUserMessages={canEditUserMessages}
                     pendingApprovalIds={pendingApprovalIds}
                     onApprove={onApprove}
                     onReject={onReject}

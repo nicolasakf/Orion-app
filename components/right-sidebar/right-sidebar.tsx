@@ -138,7 +138,11 @@ import { BUSINESS_PROMPT_CATEGORIES } from "./business-prompt-library";
 import { ChatSurface } from "./chat-surface";
 import { createCostSummaryMessageId } from "./cost-summary-card";
 import { ChatTextbox, type ReferenceTab } from "./chat-textbox";
-import { finalizeCompletedToolTimings, type ToolTiming } from "./assistant-activity-grouping";
+import {
+  attachPersistedToolTimings,
+  finalizeCompletedToolTimings,
+  type ToolTiming,
+} from "./assistant-activity-grouping";
 import {
   getCompletedToolContinuationKey,
   shouldContinueAfterToolCalls,
@@ -1819,6 +1823,9 @@ export function RightSidebar({
     window.setTimeout(() => {
       textareaRef.current?.focus();
     }, 0);
+    window.setTimeout(() => {
+      textareaRef.current?.focus();
+    }, 120);
   }, []);
 
   /**
@@ -2499,7 +2506,10 @@ export function RightSidebar({
         checkpointUserMessageIndex >= 0
           ? normalizedFinalMessages[checkpointUserMessageIndex]?.id
           : undefined;
-      const persistedMessages = stripInspectedRasterData(normalizedFinalMessages);
+      const persistedMessages = attachPersistedToolTimings(
+        stripInspectedRasterData(normalizedFinalMessages),
+        toolTimingsRef.current
+      );
       const newChatMessages: ChatMessage[] = persistedMessages.map((m, messageIndex) => {
         const messageForStorage = stripSessionOnlyFileParts(m);
         const existing = chatForPersist?.messages.find((msg) => msg.id === m.id);
@@ -5117,6 +5127,7 @@ export function RightSidebar({
               groupConsecutiveAssistantActivity
               toolTimings={toolTimings}
               onUserMessageClick={() => { }}
+              canEditUserMessages={false}
               editingState={null}
             />
 

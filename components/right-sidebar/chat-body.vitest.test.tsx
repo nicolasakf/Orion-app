@@ -341,6 +341,69 @@ describe("ChatBody assistant message actions", () => {
     expect(messageText.parentElement).toHaveClass("max-w-full", "min-w-0");
   });
 
+  it("expands an overflowing user message without entering edit mode", async () => {
+    vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(240);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(128);
+    const onUserMessageClick = vi.fn();
+    const message: UIMessage = {
+      id: "user-message-overflow",
+      role: "user",
+      parts: [{ type: "text", text: "A long message that needs to be expanded." }],
+    };
+
+    renderMessageChatBody([message], { onUserMessageClick });
+
+    const showMoreButton = await screen.findByRole("button", { name: /show more/i });
+    expect(showMoreButton).toHaveAttribute("aria-expanded", "false");
+    expect(showMoreButton).toHaveClass(
+      "opacity-0",
+      "group-hover:opacity-100",
+    );
+    expect(showMoreButton).not.toHaveClass("bg-primary-foreground/10");
+
+    fireEvent.click(screen.getByText("A long message that needs to be expanded."));
+
+    expect(onUserMessageClick).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /show less/i })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /show less/i }));
+
+    expect(screen.getByRole("button", { name: /show more/i })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+
+  it("places the edit action beside the checkpoint restore action", () => {
+    const message: UIMessage = {
+      id: "user-message-checkpoint",
+      role: "user",
+      parts: [{ type: "text", text: "Restore and edit this." }],
+    };
+    const onUserMessageClick = vi.fn();
+
+    renderMessageChatBody([message], {
+      onUserMessageClick,
+      checkpointRequestByMessageId: new Map([[message.id, "checkpoint-1"]]),
+      checkpointStatuses: new Map([["checkpoint-1", "completed"]]),
+      onRestoreCheckpoint: vi.fn(),
+    });
+
+    const editButton = screen.getByRole("button", { name: "Edit message" });
+    expect(
+      [...(editButton.parentElement?.querySelectorAll("button") ?? [])].map((button) =>
+        button.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Undo Changes", "Edit message", "Copy message"]);
+
+    fireEvent.click(editButton);
+
+    expect(onUserMessageClick).toHaveBeenCalledWith(message, 0);
+  });
+
   it("keeps copy available but suppresses forks while editing a user message", () => {
     const message: UIMessage = {
       id: "assistant-after-edit",

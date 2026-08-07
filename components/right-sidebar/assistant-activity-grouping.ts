@@ -5,6 +5,12 @@ export interface ToolTiming {
   endedAt?: number;
 }
 
+/** Durable timestamps written onto completed tool parts with the saved chat. */
+export interface PersistedToolTiming {
+  startedAt: number;
+  endedAt: number;
+}
+
 export type AssistantPartWithIndex = {
   part: UIMessage["parts"][number];
   partIndex: number;
@@ -309,7 +315,31 @@ export function isTerminalToolState(state: string): boolean {
   return state === "output-available" || state === "output-error" || state === "output-denied";
 }
 
-/** Read a duration persisted on a terminal tool output, used after reloads. */
+/** Read durable Orion timing metadata attached to a terminal tool part. */
+function getPersistedToolTiming(
+  part: UIMessage["parts"][number]
+): PersistedToolTiming | undefined {
+  if (!isToolUIPart(part)) return undefined;
+  const timing = (part as { orionTiming?: unknown }).orionTiming;
+  if (typeof timing !== "object" || timing === null || Array.isArray(timing)) return undefined;
+
+  const { startedAt, endedAt } = timing as Record<string, unknown>;
+  if (
+    typeof startedAt !== "number" ||
+    !Number.isFinite(startedAt) ||
+    typeof endedAt !== "number" ||
+    !Number.isFinite(endedAt)
+  ) {
+    return undefined;
+  }
+
+  return {
+    startedAt: Math.max(0, startedAt),
+    endedAt: Math.max(startedAt, endedAt),
+  };
+}
+
+/** Read a legacy duration persisted on a terminal tool output, used after reloads. */
 function getPersistedToolDurationMs(part: UIMessage["parts"][number]): number | undefined {
   if (!isToolUIPart(part)) return undefined;
   const output = "output" in part ? part.output : undefined;
@@ -318,6 +348,49 @@ function getPersistedToolDurationMs(part: UIMessage["parts"][number]): number | 
   return typeof durationMs === "number" && Number.isFinite(durationMs)
     ? Math.max(0, durationMs)
     : undefined;
+}
+
+/**
+ * Adds durable start/end timestamps to completed tool parts before the chat is saved.
+ * The UI message protocol ignores this Orion-specific field when converting messages
+ * back to model messages, while chat storage preserves it in the message JSON.
+ */
+export function attachPersistedToolTimings<T extends UIMessage>(
+  messages: T[],
+  timings: Map<string, ToolTiming>
+): T[] {
+  return messages.map((message) => {
+    let messageChanged = false;
+    const parts = message.parts.map((part) => {
+      if (!isToolUIPart(part) || !isTerminalToolState(String(part.state))) return part;
+      const timing = timings.get(part.toolCallId);
+      if (
+        timing?.startedAt === undefined ||
+        timing.endedAt === undefined ||
+        !Number.isFinite(timing.startedAt) ||
+        !Number.isFinite(timing.endedAt)
+      ) {
+        return part;
+      }
+
+      const nextTiming: PersistedToolTiming = {
+        startedAt: Math.max(0, timing.startedAt),
+        endedAt: Math.max(timing.startedAt, timing.endedAt),
+      };
+      const existingTiming = getPersistedToolTiming(part);
+      if (
+        existingTiming?.startedAt === nextTiming.startedAt &&
+        existingTiming.endedAt === nextTiming.endedAt
+      ) {
+        return part;
+      }
+
+      messageChanged = true;
+      return { ...part, orionTiming: nextTiming } as unknown as typeof part;
+    });
+
+    return messageChanged ? ({ ...message, parts } as T) : message;
+  });
 }
 
 /**
@@ -365,7 +438,18 @@ export function getActivityDurationMs(
   for (const item of items) {
     if (!isToolUIPart(item.part)) continue;
     const timing = toolTimings?.get(item.part.toolCallId);
-    if (!timing?.startedAt) {
+    const persistedTiming = getPersistedToolTiming(item.part);
+    const resolvedStart = timing?.startedAt ?? persistedTiming?.startedAt;
+    const resolvedEnd =
+      timing?.endedAt ??
+      persistedTiming?.endedAt ??
+      (resolvedStart !== undefined &&
+      options?.isActivityComplete &&
+      isTerminalToolState(String(item.part.state))
+        ? resolvedStart
+        : undefined);
+
+    if (resolvedStart === undefined) {
       const partDurationMs = getPersistedToolDurationMs(item.part);
       if (
         partDurationMs !== undefined &&
@@ -380,15 +464,10 @@ export function getActivityDurationMs(
       continue;
     }
 
-    const resolvedEnd =
-      timing.endedAt ??
-      (options?.isActivityComplete && isTerminalToolState(String(item.part.state))
-        ? timing.startedAt
-        : undefined);
     if (resolvedEnd === undefined) continue;
 
     startedAt =
-      startedAt === undefined ? timing.startedAt : Math.min(startedAt, timing.startedAt);
+      startedAt === undefined ? resolvedStart : Math.min(startedAt, resolvedStart);
     endedAt = endedAt === undefined ? resolvedEnd : Math.max(endedAt, resolvedEnd);
   }
 
