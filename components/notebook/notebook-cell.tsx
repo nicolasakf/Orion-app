@@ -126,6 +126,8 @@ import { getRelativeTime } from "@/lib/utils";
 
 interface NotebookCellProps {
   cell: NotebookCellType;
+  /** Complete notebook so Orion UI output references can resolve stable cell ids. */
+  notebook?: NotebookType;
   notebookMetadata?: Record<string, unknown>;
   notebookPath?: string;
   cellIndex: number;
@@ -886,6 +888,7 @@ function MarkdownFormattingToolbar({
  */
 function NotebookCellComponent({
   cell,
+  notebook,
   notebookMetadata,
   notebookPath,
   cellIndex,
@@ -2108,6 +2111,8 @@ function NotebookCellComponent({
     return (
       <div
         className="relative isolate notebook-cell"
+        data-orion-cell-index={cellIndex}
+        data-orion-output-count={cell.outputs?.length ?? 0}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
@@ -2153,6 +2158,8 @@ function NotebookCellComponent({
     return (
       <div
         className="relative isolate notebook-cell"
+        data-orion-cell-index={cellIndex}
+        data-orion-output-count={cell.outputs?.length ?? 0}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
@@ -2172,6 +2179,8 @@ function NotebookCellComponent({
     <div
       ref={cellContainerRef}
       className="relative isolate notebook-cell"
+      data-orion-cell-index={cellIndex}
+      data-orion-output-count={cell.outputs?.length ?? 0}
       tabIndex={-1}
       onMouseDownCapture={(event) =>
         onCellMouseDownCapture?.(cellIndex, event)
@@ -2564,6 +2573,7 @@ function NotebookCellComponent({
                               >
                                 <OutputRenderer
                                   output={output}
+                                  notebook={notebook}
                                   notebookMetadata={notebookMetadata}
                                   cellIndex={cellIndex}
                                   outputIndex={idx}
@@ -2628,6 +2638,7 @@ function NotebookCellComponent({
 // Export memoized version of the component
 export const NotebookCell = memo(NotebookCellComponent, (prev, next) => {
   const sameCellRef = prev.cell === next.cell;
+  const sameNotebook = prev.notebook === next.notebook;
   const sameNotebookMetadata = prev.notebookMetadata === next.notebookMetadata;
   const sameNotebookPath = prev.notebookPath === next.notebookPath;
   const sameIndex = prev.cellIndex === next.cellIndex;
@@ -2647,6 +2658,7 @@ export const NotebookCell = memo(NotebookCellComponent, (prev, next) => {
     prev.presentationHideAllCellInputs === next.presentationHideAllCellInputs;
   return (
     sameCellRef &&
+    sameNotebook &&
     sameNotebookMetadata &&
     sameNotebookPath &&
     sameIndex &&

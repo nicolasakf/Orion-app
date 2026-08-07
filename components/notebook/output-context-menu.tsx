@@ -72,13 +72,34 @@ export function OutputContextMenu({
   isCollapsed,
   presentationMenu,
 }: OutputContextMenuProps) {
+  const keepComposerFocusOnCloseRef = React.useRef(false);
   const showPresentationSubmenu =
     !businessMode && presentationMenu && presentationMenu.options.length > 1;
+
+  /**
+   * Mentions the output and stops the menu from restoring focus to its trigger
+   * after the composer has received focus.
+   */
+  const handleMentionOutputSelect = React.useCallback(() => {
+    keepComposerFocusOnCloseRef.current = true;
+    onMentionOutput?.(cellIndex, outputIndex);
+  }, [cellIndex, onMentionOutput, outputIndex]);
+
+  /** Preserves the composer focus requested by the output-mention action. */
+  const handleCloseAutoFocus = React.useCallback((event: Event) => {
+    if (!keepComposerFocusOnCloseRef.current) return;
+
+    keepComposerFocusOnCloseRef.current = false;
+    event.preventDefault();
+  }, []);
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="w-48">
+      <ContextMenuContent
+        className="w-48"
+        onCloseAutoFocus={handleCloseAutoFocus}
+      >
         {showPresentationSubmenu && (
           <>
             <ContextMenuSub>
@@ -141,9 +162,7 @@ export function OutputContextMenu({
         ) : null}
 
         {onMentionOutput ? (
-          <ContextMenuItem
-            onClick={() => onMentionOutput(cellIndex, outputIndex)}
-          >
+          <ContextMenuItem onSelect={handleMentionOutputSelect}>
             <AtSign className="mr-2 h-4 w-4" />
             {businessMode ? "Mention in chat" : "Mention output in chat"}
           </ContextMenuItem>

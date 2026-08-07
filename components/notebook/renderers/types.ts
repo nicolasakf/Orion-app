@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import type ansiToHtml from "ansi-to-html";
 import type { NotebookOutputType } from "@/lib/types";
 import type {
@@ -47,6 +49,11 @@ export interface NotebookOutputActionHandlers {
     outputIndex: number,
     metadata: OrionTableOutputMetadata,
   ) => void;
+  /** Renders an Orion UI output reference addressed by stable Orion cell id. */
+  renderOrionUiOutputReference?: (
+    cellId: string | undefined,
+    outputIndex: number,
+  ) => ReactNode;
   isInAppView?: boolean;
   /** When true, App View toggle labels are shortened for Business View. */
   businessMode?: boolean;

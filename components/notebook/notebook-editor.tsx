@@ -4566,6 +4566,7 @@ export function NotebookEditor({
                           >
                             <NotebookCell
                               cell={cell}
+                              notebook={notebook}
                               notebookMetadata={notebook.metadata}
                               notebookPath={filepath}
                               cellIndex={index}

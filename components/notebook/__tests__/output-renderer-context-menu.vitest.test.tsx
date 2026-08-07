@@ -1,9 +1,15 @@
 import * as React from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OutputRenderer } from "@/components/notebook/output-renderer";
-import { OutputType } from "@/lib/types";
+import { CellType, OutputType, type NotebookType } from "@/lib/types";
 
 vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "light" }),
@@ -15,6 +21,81 @@ afterEach(() => {
 });
 
 describe("OutputRenderer context menu", () => {
+  it("renders an Orion UI output reference from its stable cell id", () => {
+    const notebook: NotebookType = {
+      cells: [
+        {
+          cell_type: CellType.CODE,
+          source: [],
+          metadata: { orion: { id: "referenced-chart" } },
+          outputs: [
+            {
+              output_type: OutputType.DISPLAY_DATA,
+              data: { "text/plain": ["Referenced chart output"] },
+              metadata: {},
+            },
+          ],
+        },
+      ],
+      metadata: {},
+      nbformat: 4,
+      nbformat_minor: 5,
+    };
+
+    render(
+      <OutputRenderer
+        notebook={notebook}
+        output={{
+          output_type: OutputType.EXECUTE_RESULT,
+          data: {
+            "application/vnd.orion.ui+json": {
+              version: 1,
+              root: {
+                type: "Output",
+                props: { cellId: "referenced-chart", outputIndex: 0 },
+                children: [],
+              },
+              state: {},
+              bindings: {},
+            },
+          },
+          metadata: {},
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Referenced chart output")).toBeInTheDocument();
+    expect(screen.queryByText(/could not be found/)).not.toBeInTheDocument();
+  });
+
+  it("keeps a non-fatal placeholder for a missing Orion UI output reference", () => {
+    render(
+      <OutputRenderer
+        notebook={{ cells: [], metadata: {}, nbformat: 4, nbformat_minor: 5 }}
+        output={{
+          output_type: OutputType.EXECUTE_RESULT,
+          data: {
+            "application/vnd.orion.ui+json": {
+              version: 1,
+              root: {
+                type: "Output",
+                props: { cellId: "missing-output", outputIndex: 0 },
+                children: [],
+              },
+              state: {},
+              bindings: {},
+            },
+          },
+          metadata: {},
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("Output 0 from 'missing-output' could not be found."),
+    ).toBeInTheDocument();
+  });
+
   it.each([
     {
       name: "plain-text",
@@ -53,6 +134,38 @@ describe("OutputRenderer context menu", () => {
     fireEvent.click(removeItem);
 
     expect(onToggleOutputAppView).toHaveBeenCalledWith(2, 1);
+  });
+
+  it("keeps focus in the composer after mentioning an output", async () => {
+    const onMentionOutput = vi.fn(() => {
+      window.setTimeout(() => {
+        document.querySelector<HTMLTextAreaElement>("#composer")?.focus();
+      }, 0);
+    });
+
+    render(
+      <>
+        <textarea id="composer" aria-label="Chat composer" />
+        <OutputRenderer
+          output={{
+            output_type: OutputType.DISPLAY_DATA,
+            data: { "text/plain": ["plain output"] },
+            metadata: {},
+          }}
+          cellIndex={2}
+          outputIndex={1}
+          onMentionOutput={onMentionOutput}
+        />
+      </>,
+    );
+
+    const composer = screen.getByRole("textbox", { name: "Chat composer" });
+    const output = screen.getByText("plain output");
+    fireEvent.contextMenu(output);
+    fireEvent.click(await screen.findByText("Mention output in chat"));
+
+    await waitFor(() => expect(composer).toHaveFocus());
+    expect(onMentionOutput).toHaveBeenCalledWith(2, 1);
   });
 
   it("hides the Presentation submenu in business mode", async () => {

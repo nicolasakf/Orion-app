@@ -1,6 +1,6 @@
 "use client";
 
-import type { NotebookOutputType } from "@/lib/types";
+import type { NotebookOutputType, NotebookType } from "@/lib/types";
 import ansiToHtml from "ansi-to-html";
 import { useTheme } from "next-themes";
 import { useMemo, useState, useRef, useCallback, useEffect } from "react";
@@ -27,6 +27,14 @@ import type {
   OrionTableOutputMetadata,
   OrionTableRequest,
 } from "@/components/notebook/orion-ui-table/types";
+import { getCellId } from "@/components/notebook/notebook-commands";
+
+/** Identifies an output stored on a notebook cell. */
+export interface OrionUiOutputReferenceTarget {
+  cellIndex: number;
+  outputIndex: number;
+  output: NotebookOutputType;
+}
 
 const COLLAPSED_HEIGHT_DEFAULT = 192; // px — matches Tailwind h-48
 const COLLAPSED_HEIGHT_MIN = 64; // px
@@ -271,6 +279,8 @@ function CollapsibleOutputWrapper({
 
 interface OutputRendererProps {
   output: NotebookOutputType;
+  /** Full notebook used by Orion UI's stable cell-id output references. */
+  notebook?: NotebookType;
   notebookMetadata?: Record<string, unknown>;
   cellIndex?: number;
   outputIndex?: number;
@@ -309,10 +319,13 @@ interface OutputRendererProps {
    * so the final error lines are visible (matches auto-collapse for long tracebacks).
    */
   scrollCollapsedToEnd?: boolean;
+  /** Output references already traversed while rendering an Orion UI tree. */
+  outputReferenceTrail?: readonly string[];
 }
 
 export function OutputRenderer({
   output,
+  notebook,
   notebookMetadata,
   cellIndex = 0,
   outputIndex = 0,
@@ -332,6 +345,7 @@ export function OutputRenderer({
   isCollapsed,
   onToggleCollapse,
   scrollCollapsedToEnd,
+  outputReferenceTrail = [],
 }: OutputRendererProps) {
   const { theme } = useTheme();
   const [isOutputCollapsible, setIsOutputCollapsible] = useState(false);
@@ -380,6 +394,75 @@ export function OutputRenderer({
    * Placeholder sanitizer hook; trusted outputs currently pass through unchanged.
    */
   const sanitize = useCallback((html: string) => html, []);
+
+  /** Resolves ui.output() references from Orion ids to their saved notebook outputs. */
+  const resolveOrionUiOutputReference = useCallback(
+    (
+      referencedCellId: string | undefined,
+      referencedOutputIndex: number,
+    ): OrionUiOutputReferenceTarget | null => {
+      if (!notebook || !referencedCellId) return null;
+
+      const referencedCellIndex = notebook.cells.findIndex(
+        (cell) => getCellId(cell) === referencedCellId,
+      );
+      const referencedOutput =
+        referencedCellIndex >= 0
+          ? notebook.cells[referencedCellIndex]?.outputs?.[referencedOutputIndex]
+          : undefined;
+
+      return referencedOutput
+        ? {
+          cellIndex: referencedCellIndex,
+          outputIndex: referencedOutputIndex,
+          output: referencedOutput,
+        }
+        : null;
+    },
+    [notebook],
+  );
+
+  /** Renders a referenced output with the same MIME pipeline as its source cell. */
+  const renderOrionUiOutputReference = useCallback(
+    (referencedCellId: string | undefined, referencedOutputIndex: number) => {
+      const reference = resolveOrionUiOutputReference(
+        referencedCellId,
+        referencedOutputIndex,
+      );
+      if (!reference || !referencedCellId) return undefined;
+
+      const referenceKey = `${referencedCellId}:${referencedOutputIndex}`;
+      if (outputReferenceTrail.includes(referenceKey)) return undefined;
+
+      return (
+        <OutputRenderer
+          key={referenceKey}
+          output={reference.output}
+          notebook={notebook}
+          notebookMetadata={notebook?.metadata ?? notebookMetadata}
+          cellIndex={reference.cellIndex}
+          outputIndex={reference.outputIndex}
+          onGoToSource={onGoToSource}
+          onOrionUiStateChange={onOrionUiStateChange}
+          onOrionUiAction={onOrionUiAction}
+          onOrionUiUnmount={onOrionUiUnmount}
+          onOrionUiTableRequest={onOrionUiTableRequest}
+          outputReferenceTrail={[...outputReferenceTrail, referenceKey]}
+        />
+      );
+    },
+    [
+      notebook,
+      notebookMetadata,
+      onGoToSource,
+      onOrionUiAction,
+      onOrionUiStateChange,
+      onOrionUiTableRequest,
+      onOrionUiUnmount,
+      outputReferenceTrail,
+      resolveOrionUiOutputReference,
+    ],
+  );
 
   const trusted = output.metadata?.trusted !== false;
 
@@ -511,6 +594,7 @@ export function OutputRenderer({
       onOrionUiUnmount,
       onOrionUiTableRequest,
       onOrionUiTableMetadataChange,
+      renderOrionUiOutputReference,
       isInAppView: !!isInAppView,
       businessMode,
       onOpenFullScreen: openFullScreen,
@@ -530,6 +614,7 @@ export function OutputRenderer({
       onOrionUiUnmount,
       onOrionUiTableRequest,
       onOrionUiTableMetadataChange,
+      renderOrionUiOutputReference,
       isInAppView,
       businessMode,
       openFullScreen,

@@ -1091,9 +1091,36 @@ describe("OrionUiOutputRenderer", () => {
     expect(screen.getByText("4 rows, 2 columns")).toBeInTheDocument();
     expect(screen.getByText("2 / page")).toBeInTheDocument();
     expect(screen.getByText("Page")).toBeInTheDocument();
-    expect(screen.getByText("No selection")).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId("orion-table-selection-summary")).getByText("0"),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "First page" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Next page" })).toBeEnabled();
+  });
+
+  it("summarizes selected cells using the footer operation dropdown", () => {
+    renderOrionUiOutput({ value: tablePayload() });
+
+    fireEvent.mouseDown(screen.getByText("95"));
+    fireEvent.mouseDown(screen.getByText("87"), { ctrlKey: true });
+
+    const summary = screen.getByTestId("orion-table-selection-summary");
+    const operation = within(summary).getByRole("combobox", {
+      name: "Selection summary operation",
+    });
+    expect(within(summary).getByText("2")).toBeInTheDocument();
+
+    fireEvent.click(operation);
+    fireEvent.click(screen.getByRole("option", { name: "Sum" }));
+    expect(within(summary).getByText("182.00")).toBeInTheDocument();
+
+    fireEvent.click(operation);
+    fireEvent.click(screen.getByRole("option", { name: "Mean" }));
+    expect(within(summary).getByText("91.00")).toBeInTheDocument();
+
+    fireEvent.click(operation);
+    fireEvent.click(screen.getByRole("option", { name: "Median" }));
+    expect(within(summary).getByText("91.00")).toBeInTheDocument();
   });
 
   it("lets paginated table pages grow to show every loaded row", () => {
@@ -1500,6 +1527,33 @@ describe("OrionUiOutputRenderer", () => {
         screen.getByRole("button", { name: "Copy entire table" }).querySelector("svg"),
       ).toHaveClass("animate-in", "zoom-in-50", "text-green-500"),
     );
+  });
+
+  it("cycles table column widths and fits a column's contents from its resize handle", () => {
+    const longTitle = "Customer account display name";
+    const longContent = "The longest customer account name in this loaded table window";
+    const value = tablePayload();
+    value.root.props.initialWindow.columns[1]!.label = longTitle;
+    value.root.props.initialWindow.rows[0]!.name = longContent;
+    renderOrionUiOutput({ value });
+
+    const nameCell = screen.getByText(longContent).closest("td");
+    expect(nameCell).not.toBeNull();
+    expect(nameCell).toHaveStyle({ width: "150px" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Fit columns to titles" }));
+    const titleWidth = nameCell!.style.width;
+    expect(titleWidth).not.toBe("150px");
+
+    fireEvent.click(screen.getByRole("button", { name: "Fit columns to contents" }));
+    const contentWidth = nameCell!.style.width;
+    expect(contentWidth).not.toBe(titleWidth);
+
+    fireEvent.click(screen.getByRole("button", { name: "Reset column widths" }));
+    expect(nameCell).toHaveStyle({ width: "150px" });
+
+    fireEvent.doubleClick(screen.getByTestId("orion-table-column-resize-name"));
+    expect(Number.parseInt(nameCell!.style.width, 10)).toBeGreaterThan(150);
   });
 
   it("opens URL-valued table cells externally", () => {

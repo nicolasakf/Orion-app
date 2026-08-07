@@ -11,6 +11,7 @@ import { TooltipPortal } from "@radix-ui/react-tooltip";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   BarChart3,
+  ChevronsLeftRight,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -155,10 +156,14 @@ interface FilterDraft {
   value: OrionTableFilterValue;
 }
 
+type ColumnWidthFitMode = "title" | "contents" | "reset";
+type SelectionAggregateOperation = "count" | "sum" | "mean" | "median";
+
 const DEFAULT_ROW_HEIGHT = 36;
 const DEFAULT_FONT_SIZE = 13;
 const MIN_COLUMN_WIDTH = 64;
 const DEFAULT_COLUMN_WIDTH = 150;
+const COLUMN_WIDTH_FIT_PADDING = 20;
 const SEARCH_COLLAPSE_WIDTH = 560;
 const FOOTER_COMPACT_WIDTH = 620;
 const TableOverlayContainerContext = React.createContext<HTMLElement | null>(null);
@@ -190,6 +195,13 @@ const FILTER_OPERATION_LABELS: Record<OrionTableFilterOperation, string> = {
   blank: "Blank",
   notBlank: "Not blank",
   regex: "Regex",
+};
+
+const SELECTION_AGGREGATE_LABELS: Record<SelectionAggregateOperation, string> = {
+  count: "Count",
+  sum: "Sum",
+  mean: "Mean",
+  median: "Median",
 };
 
 const emptyMetadata: OrionTableOutputMetadata = {
@@ -272,6 +284,56 @@ function finiteNumberProp(
 function formatCell(value: OrionTableRow[string]): string {
   if (value === null || value === undefined) return "";
   return String(value);
+}
+
+/** Measure text using the table's rendered font, with a browser-safe fallback. */
+function measureTableTextWidth(
+  text: string,
+  fontSize: number,
+  fontFamily: "sans" | "mono",
+): number {
+  if (typeof CanvasRenderingContext2D !== "undefined") {
+    const context = document.createElement("canvas").getContext("2d");
+    if (context) {
+      context.font = `${fontSize}px ${
+        fontFamily === "mono"
+          ? "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace"
+          : "ui-sans-serif, system-ui, sans-serif"
+      }`;
+      return context.measureText(text).width;
+    }
+  }
+
+  return text.length * fontSize * (fontFamily === "mono" ? 0.6 : 0.55);
+}
+
+/** Return the width required for a title or the loaded cell values in one column. */
+function fittedColumnWidth(
+  column: OrionTableColumn,
+  rows: OrionTableRow[],
+  fontSize: number,
+  mode: ColumnWidthFitMode,
+): number {
+  const values = mode === "title"
+    ? [column.label]
+    : rows.map((row) => formatCell(row[column.key]));
+  const widestText = values.reduce(
+    (widest, value) =>
+      Math.max(
+        widest,
+        measureTableTextWidth(value, fontSize, mode === "title" ? "sans" : "mono"),
+      ),
+    0,
+  );
+
+  return Math.max(MIN_COLUMN_WIDTH, Math.ceil(widestText + COLUMN_WIDTH_FIT_PADDING));
+}
+
+/** Describe the next action in the all-columns width-fitting cycle. */
+function columnWidthFitActionLabel(mode: ColumnWidthFitMode): string {
+  if (mode === "title") return "Fit columns to titles";
+  if (mode === "contents") return "Fit columns to contents";
+  return "Reset column widths";
 }
 
 /** Return a safe external href when a table-cell value is a supported link. */
@@ -433,6 +495,74 @@ function rowNumber(row: OrionTableRow, fallback: number): number {
   return typeof value === "number" ? value : fallback;
 }
 
+/** Synchronize selected values with rows currently materialized by the table. */
+function syncSelectedCellValues(
+  current: Map<string, OrionTableRow[string]>,
+  selectedCells: Set<string>,
+  rows: OrionTableRow[],
+  offset: number,
+): Map<string, OrionTableRow[string]> {
+  const next = new Map<string, OrionTableRow[string]>();
+  for (const key of selectedCells) {
+    if (current.has(key)) {
+      next.set(key, current.get(key) ?? null);
+    }
+  }
+
+  rows.forEach((row, rowIndex) => {
+    const currentRowNumber = rowNumber(row, offset + rowIndex);
+    Object.keys(row).forEach((columnKey) => {
+      const key = cellKey(currentRowNumber, columnKey);
+      if (selectedCells.has(key)) {
+        next.set(key, row[columnKey] ?? null);
+      }
+    });
+  });
+
+  return next;
+}
+
+/** Return the selected numeric values, excluding text, booleans, and blank cells. */
+function selectedNumericValues(
+  selectedCells: Set<string>,
+  selectedCellValues: Map<string, OrionTableRow[string]>,
+): number[] {
+  return Array.from(selectedCells).flatMap((key) => {
+    const value = selectedCellValues.get(key);
+    return typeof value === "number" && Number.isFinite(value) ? [value] : [];
+  });
+}
+
+/** Format the selected-cell aggregate shown in the table footer. */
+function selectionAggregateResult(
+  operation: SelectionAggregateOperation,
+  selectedCells: Set<string>,
+  selectedCellValues: Map<string, OrionTableRow[string]>,
+): string {
+  if (operation === "count") return selectedCells.size.toLocaleString();
+
+  const values = selectedNumericValues(selectedCells, selectedCellValues);
+  if (values.length === 0) return "—";
+
+  const sum = values.reduce((total, value) => total + value, 0);
+  const result = operation === "sum"
+    ? sum
+    : operation === "mean"
+      ? sum / values.length
+      : (() => {
+          const ordered = [...values].sort((left, right) => left - right);
+          const middle = Math.floor(ordered.length / 2);
+          return ordered.length % 2 === 0
+            ? (ordered[middle - 1]! + ordered[middle]!) / 2
+            : ordered[middle]!;
+        })();
+
+  return result.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 /** Create default display settings from the initial backend window. */
 function defaultDisplaySettings(
   initialWindow: OrionTableWindow,
@@ -569,6 +699,9 @@ function OrionUiTableInner({
   const [display, setDisplay] = useState<DisplaySettings>(() =>
     defaultDisplaySettings(initialWindow, mode, pageSize),
   );
+  const [columnWidthFitMode, setColumnWidthFitMode] =
+    useState<ColumnWidthFitMode>("title");
+  const originalColumnWidthsRef = useRef<Record<string, number> | null>(null);
   const [offset, setOffset] = useState(initialWindow.offset);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -578,6 +711,11 @@ function OrionUiTableInner({
     value: "",
   });
   const [selectedCells, setSelectedCells] = useState<Set<string>>(new Set());
+  const [selectedCellValues, setSelectedCellValues] = useState<
+    Map<string, OrionTableRow[string]>
+  >(new Map());
+  const [selectionAggregateOperation, setSelectionAggregateOperation] =
+    useState<SelectionAggregateOperation>("count");
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [selectedColumns, setSelectedColumns] = useState<Set<string>>(new Set());
   const [selectionAnchor, setSelectionAnchor] = useState<SelectionAnchor | null>(null);
@@ -624,11 +762,20 @@ function OrionUiTableInner({
   });
 
   useEffect(() => {
+    setSelectedCellValues((current) =>
+      syncSelectedCellValues(current, selectedCells, windowData.rows, offset),
+    );
+  }, [offset, selectedCells, windowData.rows]);
+
+  useEffect(() => {
     setWindowData(initialWindow);
     setOffset(initialWindow.offset);
     setDisplay(defaultDisplaySettings(initialWindow, mode, pageSize));
+    setColumnWidthFitMode("title");
+    originalColumnWidthsRef.current = null;
     setTableState(defaultTableState(defaultState));
     setSelectedCells(new Set());
+    setSelectedCellValues(new Map());
     setSelectedRows(new Set());
     setSelectedColumns(new Set());
     setSelectionAnchor(null);
@@ -729,6 +876,7 @@ function OrionUiTableInner({
         return nextState;
       });
       setSelectedCells(new Set());
+      setSelectedCellValues(new Map());
       setSelectedRows(new Set());
       setSelectedColumns(new Set());
       if (!preserveSelectionAnchor) {
@@ -754,6 +902,49 @@ function OrionUiTableInner({
     },
     [activeViewId, fetchWindow, tableState, updateSavedView],
   );
+
+  /** Cycle all visible columns through title-fit, content-fit, and their original widths. */
+  const cycleColumnWidths = useCallback(() => {
+    const originalColumnWidths = columnWidthFitMode === "reset"
+      ? originalColumnWidthsRef.current ?? {}
+      : null;
+    if (columnWidthFitMode === "title") {
+      originalColumnWidthsRef.current = { ...display.columnWidths };
+    }
+    if (columnWidthFitMode === "reset") {
+      originalColumnWidthsRef.current = null;
+    }
+    updateDisplay((current) => {
+      if (columnWidthFitMode === "reset") {
+        return { ...current, columnWidths: originalColumnWidths ?? {} };
+      }
+
+      return {
+        ...current,
+        columnWidths: {
+          ...current.columnWidths,
+          ...Object.fromEntries(
+            visibleColumns.map((column) => [
+              column.key,
+              fittedColumnWidth(
+                column,
+                windowData.rows,
+                current.fontSize,
+                columnWidthFitMode,
+              ),
+            ]),
+          ),
+        },
+      };
+    });
+    setColumnWidthFitMode((current) =>
+      current === "title"
+        ? "contents"
+        : current === "contents"
+          ? "reset"
+          : "title",
+    );
+  }, [columnWidthFitMode, display.columnWidths, updateDisplay, visibleColumns, windowData.rows]);
 
   /** Toggles a column's visibility without changing backend state. */
   const setColumnVisible = useCallback(
@@ -1181,6 +1372,8 @@ function OrionUiTableInner({
   /** Applies one saved metadata view and refreshes the backend window. */
   const applyView = useCallback(
     (view: OrionTableSavedView | null) => {
+      setColumnWidthFitMode("title");
+      originalColumnWidthsRef.current = null;
       if (!view) {
         const nextDisplay = defaultDisplaySettings(initialWindow, mode, pageSize);
         const nextState = defaultTableState(defaultState);
@@ -1218,12 +1411,15 @@ function OrionUiTableInner({
 
   /** Resets the active view in place, or resets to Default when no view is active. */
   const resetTable = useCallback(() => {
+    setColumnWidthFitMode("title");
+    originalColumnWidthsRef.current = null;
     const nextDisplay = defaultDisplaySettings(initialWindow, mode, pageSize);
     const nextState = defaultTableState(defaultState);
 
     setDisplay(nextDisplay);
     setTableState(nextState);
     setSelectedCells(new Set());
+    setSelectedCellValues(new Map());
     setSelectedRows(new Set());
     setSelectedColumns(new Set());
     setSelectionAnchor(null);
@@ -1323,6 +1519,7 @@ function OrionUiTableInner({
         if (anchor) {
           setSelectedRows(new Set([anchor.rowNumber]));
           setSelectedCells(new Set());
+          setSelectedCellValues(new Map());
           setSelectedColumns(new Set());
         }
         return;
@@ -1333,6 +1530,7 @@ function OrionUiTableInner({
         if (selectedColumn) {
           setSelectedColumns(new Set([selectedColumn]));
           setSelectedCells(new Set());
+          setSelectedCellValues(new Map());
           setSelectedRows(new Set());
         }
         return;
@@ -1370,6 +1568,7 @@ function OrionUiTableInner({
           if (fullscreenOpen) setFullscreenOpen(false);
           else {
             setSelectedCells(new Set());
+            setSelectedCellValues(new Map());
             setSelectedRows(new Set());
             setSelectedColumns(new Set());
             setSelectionAnchor(null);
@@ -1527,12 +1726,14 @@ function OrionUiTableInner({
       onColumnStats={showColumnStats}
       onClearColumnFilter={clearColumnFilter}
       onColumnFilterOpenChange={setColumnFilterOpen}
-      onColumnResize={(columnKey, width) =>
+      onColumnResize={(columnKey, width) => {
+        setColumnWidthFitMode("title");
+        originalColumnWidthsRef.current = null;
         updateDisplay((current) => ({
           ...current,
           columnWidths: { ...current.columnWidths, [columnKey]: width },
-        }))
-      }
+        }));
+      }}
       onFilterDraftChange={setFilterDraft}
       sort={tableState.sort}
       filters={tableState.filters}
@@ -1554,7 +1755,9 @@ function OrionUiTableInner({
       onCopy={copyTableToClipboard}
       onDeleteView={deleteView}
       onExport={exportCsv}
+      columnWidthFitMode={columnWidthFitMode}
       onReset={resetTable}
+      onCycleColumnWidths={cycleColumnWidths}
       onSaveView={() => setSaveViewOpen(true)}
       onSearch={(nextSearch) =>
         applyState((current) => ({ ...current, search: nextSearch }))
@@ -1573,8 +1776,8 @@ function OrionUiTableInner({
       pageSize={display.pageSize}
       pending={pending}
       selectedCells={selectedCells}
-      selectedColumns={selectedColumns}
-      selectedRows={selectedRows}
+      selectedCellValues={selectedCellValues}
+      selectionAggregateOperation={selectionAggregateOperation}
       totalColumns={windowData.totalColumns}
       totalRows={windowData.totalRows}
       onPageChange={(page) =>
@@ -1583,6 +1786,7 @@ function OrionUiTableInner({
       onPageSizeChange={(nextPageSize) =>
         updateDisplay((current) => ({ ...current, pageSize: nextPageSize }))
       }
+      onSelectionAggregateOperationChange={setSelectionAggregateOperation}
     />
   );
 
@@ -1683,6 +1887,7 @@ function OrionUiTableInner({
 
 interface TableToolbarProps {
   activeViewId: string | null;
+  columnWidthFitMode: ColumnWidthFitMode;
   display: DisplaySettings;
   isFullscreen: boolean;
   search: string;
@@ -1691,6 +1896,7 @@ interface TableToolbarProps {
   windowData: OrionTableWindow;
   onApplyView: (view: OrionTableSavedView | null) => void;
   onCopy: () => Promise<boolean>;
+  onCycleColumnWidths: () => void;
   onDeleteView: (viewId: string) => void;
   onExport: () => Promise<void>;
   onFullscreen: () => void;
@@ -1744,30 +1950,6 @@ function paginationPageOptions(currentPage: number, pageCount: number): number[]
   return Array.from(pages).sort((left, right) => left - right);
 }
 
-/** Formats the current selection summary for the footer. */
-function selectionSummary(
-  selectedCells: Set<string>,
-  selectedColumns: Set<string>,
-  selectedRows: Set<number>,
-): string {
-  if (selectedCells.size > 0) {
-    return `${selectedCells.size.toLocaleString()} ${
-      selectedCells.size === 1 ? "cell" : "cells"
-    } selected`;
-  }
-  if (selectedRows.size > 0) {
-    return `${selectedRows.size.toLocaleString()} ${
-      selectedRows.size === 1 ? "row" : "rows"
-    } selected`;
-  }
-  if (selectedColumns.size > 0) {
-    return `${selectedColumns.size.toLocaleString()} ${
-      selectedColumns.size === 1 ? "column" : "columns"
-    } selected`;
-  }
-  return "No selection";
-}
-
 /** Pagination footer styled like a compact spreadsheet status bar. */
 function TableFooter({
   currentPage,
@@ -1775,24 +1957,28 @@ function TableFooter({
   pageSize,
   pending,
   selectedCells,
-  selectedColumns,
-  selectedRows,
+  selectedCellValues,
+  selectionAggregateOperation,
   totalColumns,
   totalRows,
   onPageChange,
   onPageSizeChange,
+  onSelectionAggregateOperationChange,
 }: {
   currentPage: number;
   pageCount: number;
   pageSize: number;
   pending: boolean;
   selectedCells: Set<string>;
-  selectedColumns: Set<string>;
-  selectedRows: Set<number>;
+  selectedCellValues: Map<string, OrionTableRow[string]>;
+  selectionAggregateOperation: SelectionAggregateOperation;
   totalColumns: number;
   totalRows: number;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
+  onSelectionAggregateOperationChange: (
+    operation: SelectionAggregateOperation,
+  ) => void;
 }): React.JSX.Element {
   const overlayContainer = useTableOverlayContainer();
   const [footerRef, footerWidth] = useElementWidth<HTMLDivElement>();
@@ -1800,7 +1986,11 @@ function TableFooter({
   const pageSizeOptions = Array.from(
     new Set([...FOOTER_PAGE_SIZE_OPTIONS, pageSize]),
   ).sort((left, right) => left - right);
-  const selection = selectionSummary(selectedCells, selectedColumns, selectedRows);
+  const selectionResult = selectionAggregateResult(
+    selectionAggregateOperation,
+    selectedCells,
+    selectedCellValues,
+  );
   const compact = footerWidth > 0 && footerWidth < FOOTER_COMPACT_WIDTH;
   const isFirstPage = currentPage <= 1;
   const isLastPage = currentPage >= pageCount;
@@ -1915,8 +2105,33 @@ function TableFooter({
         </div>
       </div>
 
-      <div className="min-w-0 truncate whitespace-nowrap text-right italic text-muted-foreground">
-        {selection}
+      <div
+        data-testid="orion-table-selection-summary"
+        className="flex min-w-0 items-center justify-end gap-1 whitespace-nowrap text-muted-foreground"
+      >
+        <Select
+          value={selectionAggregateOperation}
+          onValueChange={(value: SelectionAggregateOperation) =>
+            onSelectionAggregateOperationChange(value)
+          }
+        >
+          <SelectTrigger
+            aria-label="Selection summary operation"
+            className="h-6 w-fit justify-start gap-1 border-0 bg-transparent px-2 text-xs shadow-none transition-colors hover:text-foreground"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent container={overlayContainer}>
+            {(Object.keys(SELECTION_AGGREGATE_LABELS) as SelectionAggregateOperation[]).map(
+              (operation) => (
+                <SelectItem key={operation} value={operation}>
+                  {SELECTION_AGGREGATE_LABELS[operation]}
+                </SelectItem>
+              ),
+            )}
+          </SelectContent>
+        </Select>
+        <span aria-live="polite">{selectionResult}</span>
       </div>
     </div>
   );
@@ -1925,6 +2140,7 @@ function TableFooter({
 /** Render the search bar, saved views, and table command buttons. */
 function TableToolbar({
   activeViewId,
+  columnWidthFitMode,
   display,
   isFullscreen,
   search,
@@ -1933,6 +2149,7 @@ function TableToolbar({
   windowData,
   onApplyView,
   onCopy,
+  onCycleColumnWidths,
   onDeleteView,
   onExport,
   onFullscreen,
@@ -1968,6 +2185,12 @@ function TableToolbar({
       </ToolbarIcon>
       <ToolbarIcon label="Reset table" onClick={onReset}>
         <RotateCcw className="h-4 w-4" />
+      </ToolbarIcon>
+      <ToolbarIcon
+        label={columnWidthFitActionLabel(columnWidthFitMode)}
+        onClick={onCycleColumnWidths}
+      >
+        <ChevronsLeftRight className="h-4 w-4" />
       </ToolbarIcon>
       <ColumnMenu
         columns={windowData.columns}
@@ -2452,7 +2675,7 @@ function TableBody({
               <th
                 key={column.key}
                 className={cn(
-                  "relative px-1 py-2 text-left font-medium text-muted-foreground",
+                  "group/column relative px-1 py-2 text-left font-medium text-muted-foreground",
                 )}
                 style={{ width, maxWidth: width }}
               >
@@ -2525,7 +2748,21 @@ function TableBody({
                   </div>
                 </ColumnDescriptionTooltip>
                 <div
-                  className="absolute right-0 top-0 h-full w-1 cursor-col-resize hover:bg-primary/50"
+                  data-testid={`orion-table-column-resize-${column.key}`}
+                  className="group/resize absolute -right-1 top-1/2 z-10 flex h-7 w-2 -translate-y-1/2 cursor-col-resize items-center justify-center rounded-full opacity-0 transition-[background-color,opacity] group-hover/column:opacity-100 hover:bg-primary/10"
+                  onDoubleClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onColumnResize(
+                      column.key,
+                      fittedColumnWidth(
+                        column,
+                        windowData.rows,
+                        display.fontSize,
+                        "contents",
+                      ),
+                    );
+                  }}
                   onMouseDown={(event) => {
                     event.preventDefault();
                     const startX = event.clientX;
@@ -2546,7 +2783,9 @@ function TableBody({
                     document.addEventListener("mousemove", handleMouseMove);
                     document.addEventListener("mouseup", handleMouseUp);
                   }}
-                />
+                >
+                  <span className="h-3 w-px rounded-full bg-border transition-colors group-hover/resize:bg-primary group-active/resize:bg-primary" />
+                </div>
               </th>
             );
           })}
@@ -2617,7 +2856,7 @@ function TableBody({
                         title={formatCell(row[column.key])}
                         onMouseDown={(event) => onCellClick(row, column.key, event)}
                       >
-                        <div className="max-w-[24rem] truncate">
+                        <div className="truncate">
                           {externalHref ? (
                             <a
                               href={externalHref}

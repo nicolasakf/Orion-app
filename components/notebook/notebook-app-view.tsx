@@ -768,6 +768,7 @@ export function NotebookAppView({
                   ) : (
                     <OutputRenderer
                       output={item.output}
+                      notebook={notebook}
                       notebookMetadata={notebook.metadata}
                       cellIndex={item.cellIndex}
                       outputIndex={item.outputIndex}

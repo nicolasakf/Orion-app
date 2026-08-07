@@ -94,6 +94,7 @@ export function OrionUiOutputRenderer({
         metadata,
       );
     },
+    renderOutputReference: actions.renderOrionUiOutputReference,
   };
 
   return (
