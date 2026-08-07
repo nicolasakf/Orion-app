@@ -819,6 +819,38 @@ disable-model-invocation: true
     assert(String(results.get("call-1")).includes("[BLOCKED]"), "delegate should be blocked");
   });
 
+  await runTest("subagent memory updates are blocked", async () => {
+    let executed = false;
+    const results = await executeSubagentToolCallPartsForTest(
+      [
+        {
+          type: "tool-update_memory",
+          toolCallId: "call-memory",
+          state: "input-available",
+          input: { content: "# Context", reason: "User asked" },
+        },
+      ],
+      {
+        subagentType: "analyst",
+        availableSubagents: [subagentDefinition()],
+        description: "test",
+        modelId: "claude-sonnet-4-5",
+        providerId: "anthropic",
+        subagentDevLogInstance: 1,
+        executeToolCall: async () => {
+          executed = true;
+          return "unexpected";
+        },
+        createTmpNotebookCopy: async () => ".agents/subagents/tmp/analyst/run.ipynb",
+      },
+    );
+    assert(!executed, "update_memory should not reach the tool executor");
+    assert(
+      String(results.get("call-memory")).includes("[BLOCKED]"),
+      "update_memory should be blocked",
+    );
+  });
+
   await runTest("subagent tool execution reports timing lifecycle callbacks", async () => {
     const events: string[] = [];
     const results = await executeSubagentToolCallPartsForTest(

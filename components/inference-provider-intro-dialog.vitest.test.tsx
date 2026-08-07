@@ -194,6 +194,7 @@ describe("InferenceProviderIntroDialog", () => {
 
     const savedDocument = setUserSettingsDocumentMock.mock.calls.at(-1)?.[0];
     expect(savedDocument.settings.providers.inferenceProviderChosen).toBe(true);
+    expect(savedDocument.settings.onboarding.businessProfileStepCompleted).toBe(true);
 
     await waitFor(() => {
       expect(screen.getByTestId("settings-tab")).toHaveTextContent("providers");

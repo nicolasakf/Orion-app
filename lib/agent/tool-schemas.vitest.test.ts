@@ -30,6 +30,15 @@ describe("Ask mode tool schemas", () => {
   });
 });
 
+describe("durable memory tool schema", () => {
+  it("is kernel-free, available to write-capable modes, and omitted from Ask mode", () => {
+    expect(orionTools.update_memory).toBeDefined();
+    expect(NO_DEPENDENCY_TOOLS.has("update_memory")).toBe(true);
+    expect(EDIT_MODE_TOOLS.update_memory).toBe(orionTools.update_memory);
+    expect("update_memory" in ASK_MODE_TOOLS).toBe(false);
+  });
+});
+
 describe("page reload tool schema", () => {
   it("is available without Jupyter or kernel readiness", () => {
     expect(orionTools.reload_page).toBeDefined();

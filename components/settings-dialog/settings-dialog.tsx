@@ -21,6 +21,7 @@ import { AgentTab } from "@/components/settings-dialog/agent-tab";
 import { AppearanceTab } from "@/components/settings-dialog/appearance-tab";
 import { ModelsTab } from "@/components/settings-dialog/models-tab";
 import { NotebookTab } from "@/components/settings-dialog/notebook-tab";
+import { PersonalContextTab } from "@/components/settings-dialog/personal-context-tab";
 import { ProvidersTab } from "@/components/settings-dialog/providers-tab";
 import { SettingsFileTab } from "@/components/settings-dialog/settings-file-tab";
 import { SettingsSidebar } from "@/components/settings-dialog/settings-sidebar";
@@ -128,6 +129,8 @@ export function SettingsDialog({
         );
       case "appearance":
         return <AppearanceTab />;
+      case "personal-context":
+        return <PersonalContextTab />;
       case "notebook":
         return <NotebookTab />;
       case "agent":

@@ -184,6 +184,16 @@ function normalizeBuiltInToolNames(
   ) {
     return defaults;
   }
+
+  // Render inspection is a safe companion to read_cell_output and must remain
+  // available in every built-in mode after upgrading persisted tool lists.
+  if (
+    normalized.includes("read_cell_output") &&
+    !normalized.includes("inspect_plotly_output")
+  ) {
+    const readOutputIndex = normalized.indexOf("read_cell_output");
+    normalized.splice(readOutputIndex + 1, 0, "inspect_plotly_output");
+  }
   return normalized;
 }
 

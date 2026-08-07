@@ -51,7 +51,10 @@ describe("compactSettingsForPersistence", () => {
 
     const compacted = compactUserSettingsDocument(document);
     expect(compacted.settings).toEqual({
-      onboarding: { signInStepCompleted: false },
+      onboarding: {
+        signInStepCompleted: false,
+        businessProfileStepCompleted: false,
+      },
       appearance: { theme: "dark" },
       providers: { inferenceProviderChosen: false },
     });

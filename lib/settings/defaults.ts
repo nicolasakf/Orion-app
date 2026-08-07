@@ -19,6 +19,7 @@ export const DEFAULT_SELECTED_CHAT_MODEL_ID = "gpt-5.6-terra";
 export const DEFAULT_SETTINGS: SettingsData = {
   onboarding: {
     signInStepCompleted: false,
+    businessProfileStepCompleted: false,
   },
   appearance: {
     theme: "system",

@@ -137,6 +137,8 @@ Charts:
 - Use Plotly, Altair, Vega-Lite, or existing notebook chart libraries for charts.
 - **Plotly theme (required):** Call `ui.theme.plotly()` once per kernel session (for example in a setup cell) before creating Plotly figures. It registers the Orion template and sets it as Plotly's default, so all later figures in that session inherit Orion styling automatically. Skip this only when the user explicitly asks for a different Plotly theme or custom styling.
 - **Plotly mode bar:** Hide the Plotly toolbar with `config={"displayModeBar": False}` (for example in `fig.show(config=...)`) unless the user explicitly asks for zoom, pan, download, or other mode-bar controls. Use `True` only when requested.
+- **Responsive Plotly layout:** Do not set a fixed Plotly `layout.width`; Orion owns the rendered notebook width. When a chart has many or long legend entries, choose an explicit legend placement appropriate for the chart instead of relying on an implicit horizontal legend.
+- **Plotly visual verification (required after chart changes):** After executing a cell that creates or changes Plotly output, call `inspect_plotly_output` for every changed Plotly output. Review both the rendered image and collision/overflow diagnostics. Repair visual problems, re-execute, and reinspect until the chart is clean. If a layout constraint is genuinely unavoidable, explain it explicitly instead of silently accepting it.
 - Do not build a custom charting system with Orion UI primitives.
 
 Example:
@@ -226,6 +228,7 @@ cd python/orion-ui && python -m pip install -e .
 - The UI uses Orion components for controls and existing plotting libraries for charts.
 - Plotly work calls `ui.theme.plotly()` once per kernel session unless the user explicitly requested different styling.
 - Plotly charts set `displayModeBar=False` unless the user explicitly asked for the Plotly toolbar.
+- Plotly charts do not set fixed layout widths, and every changed Plotly output is inspected after execution and reinspected after layout repairs.
 - App View metadata references the rendered `orion_ui` output instead of recreating controls directly in metadata.
 - `ui.table()` supports pandas DataFrames in v1. The `source` argument is required so saved views can record readable pandas expressions.
 - Use `column_descriptions={...}` on `ui.table()` when column headers need info-icon tooltip descriptions.

@@ -17,6 +17,8 @@
 import { tool } from "ai";
 import { z } from "zod";
 
+import { MAX_PERSONAL_CONTEXT_CHARS } from "@/lib/onboarding/personal-context";
+
 import { EditOrionMetadataParamsSchema } from "./tools/edit-orion-metadata-schema";
 import type { ExecutionToolResult } from "./visual-evidence";
 
@@ -349,6 +351,24 @@ export const orionTools = {
     },
   }),
 
+  inspect_plotly_output: tool({
+    description:
+      "Inspect one Plotly JSON output exactly as it is currently rendered in Orion. Returns the live chart image, real output/SVG/plot dimensions, and title, legend, modebar, axis-title, annotation, collision, and overflow diagnostics. Use this after creating or changing a Plotly chart, then repair and reinspect any visual problems.",
+    inputSchema: z.object({
+      cellIndex: z
+        .number()
+        .int()
+        .min(0)
+        .describe("Zero-based cell index in the currently rendered notebook."),
+      outputIndex: z
+        .number()
+        .int()
+        .min(0)
+        .describe("Zero-based Plotly output index within the cell."),
+    }),
+    toModelOutput: executionResultToModelOutput,
+  }),
+
   execute_code: tool({
     description:
       "Execute arbitrary Python code directly in the kernel without modifying the notebook. Useful for quick computations, inspecting variables, installing packages, or running shell commands with '!'.",
@@ -485,6 +505,27 @@ export const orionTools = {
     }),
   }),
 
+  update_memory: tool({
+    description:
+      "Replace the user's durable Orion memory at ~/.orion/ORION.md. This is the only tool an agent may use to update that file. Use it only when the user explicitly asks Orion to remember durable information or approves a proposed memory update. Preserve useful existing context, remove duplicates, and provide the complete replacement Markdown file.",
+    inputSchema: z.object({
+      content: z
+        .string()
+        .min(1)
+        .max(MAX_PERSONAL_CONTEXT_CHARS)
+        .describe(
+          "Complete replacement Markdown for ORION.md. Include useful existing context that should be preserved; do not include passwords, tokens, API keys, or other credentials."
+        ),
+      reason: z
+        .string()
+        .min(1)
+        .max(500)
+        .describe(
+          "Short explanation of the user's explicit request or approval that authorizes this memory update."
+        ),
+    }),
+  }),
+
   reload_page: tool({
     description:
       "Reload the Orion browser page. Use this after changing Orion settings files or other app configuration that the running UI will not fully pick up until refresh. This tool schedules the reload after returning its tool result.",
@@ -572,7 +613,9 @@ export function isOrionToolName(value: unknown): value is OrionToolName {
  */
 export const NO_DEPENDENCY_TOOLS: ReadonlySet<OrionToolName> = new Set<OrionToolName>([
   "load_skill",
+  "update_memory",
   "reload_page",
+  "inspect_plotly_output",
   "web_fetch",
   "web_search",
   // delegate spawns a client-side sub-agent and does not need a Jupyter server or
@@ -616,6 +659,7 @@ export const ASK_MODE_TOOLS: Pick<
   | "read_notebook"
   | "read_cell"
   | "read_cell_output"
+  | "inspect_plotly_output"
   | "bash"
   | "await_command"
   | "web_fetch"
@@ -627,6 +671,7 @@ export const ASK_MODE_TOOLS: Pick<
   read_notebook: orionTools.read_notebook,
   read_cell: orionTools.read_cell,
   read_cell_output: orionTools.read_cell_output,
+  inspect_plotly_output: orionTools.inspect_plotly_output,
   bash: orionTools.bash,
   await_command: orionTools.await_command,
   web_fetch: orionTools.web_fetch,

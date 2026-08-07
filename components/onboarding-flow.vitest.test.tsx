@@ -88,4 +88,46 @@ describe("OnboardingFlow", () => {
       expect(screen.queryByText("Sign in to Orion")).not.toBeInTheDocument();
     });
   });
+
+  it("shows the interview after provider setup for an eligible Business user", async () => {
+    const document = createDefaultUserSettingsDocument();
+    document.settings.onboarding.signInStepCompleted = true;
+    document.settings.appearance.experienceMode = "business";
+    document.settings.appearance.experienceModeChosen = true;
+    document.settings.providers.inferenceProviderChosen = true;
+    document.settings.onboarding.businessProfileStepCompleted = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith("/api/settings") && (!init || init.method === "GET")) {
+          return Response.json({ status: "loaded", document });
+        }
+        if (url.endsWith("/api/credentials")) {
+          return Response.json({ credentials: {} });
+        }
+        if (url.endsWith("/api/onboarding/interview")) {
+          return Response.json({
+            transcript: {
+              version: 1,
+              messages: [],
+              updatedAt: new Date(0).toISOString(),
+            },
+          });
+        }
+        return Response.json({}, { status: 404 });
+      }),
+    );
+
+    render(
+      <SettingsProvider>
+        <OnboardingFlow />
+      </SettingsProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Help Orion understand your work")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Skip for now" })).toBeInTheDocument();
+    });
+  });
 });

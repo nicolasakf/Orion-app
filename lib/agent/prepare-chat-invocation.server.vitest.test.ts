@@ -9,6 +9,38 @@ import { getDefaultInteractionModeConfig } from "@/lib/agent/interaction-modes";
 import { prepareChatInvocation } from "./prepare-chat-invocation.server";
 
 describe("prepareChatInvocation", () => {
+  it("does not advertise update_memory to sub-agents", () => {
+    const prepared = prepareChatInvocation({
+      messages: [{ role: "user", content: "Analyze the notebook." }],
+      modelId: "gpt-test",
+      providerId: "openai",
+      credential: { type: "byok", apiKey: "test-key" },
+      requestId: "request-subagent-memory",
+      interactionMode: getDefaultInteractionModeConfig("Agent"),
+      origin: "subagent",
+      subagentPrompt: {
+        name: "analyst",
+        label: "Analyst",
+        originalNotebookPath: ".agents/subagents/analyst.agent.ipynb",
+        tmpNotebookPath: ".agents/subagents/tmp/analyst/run.ipynb",
+        systemPrompt: "Analyze carefully.",
+      },
+      agentRules: [],
+      missingForcedSkillNames: [],
+      communicationStyle: "default",
+      businessExperienceMode: false,
+      automaticContinuationAttempt: 0,
+      automaticContinuationReason: "",
+      canForceToolChoice: true,
+      hasDelegatedForcedSubagent: false,
+    });
+
+    expect(Object.keys(prepared.tools)).not.toContain("update_memory");
+    expect(prepared.agentSystemPrompt).toContain(
+      "Durable memory updates are reserved for the parent agent",
+    );
+  });
+
   it("uses the real mode prompt, normalized messages, and mode tool set without inference", () => {
     const prepared = prepareChatInvocation({
       messages: [{ role: "user", content: "Explain this notebook." }],

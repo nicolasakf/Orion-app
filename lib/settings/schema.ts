@@ -256,7 +256,9 @@ const SettingsDataSchema = z.object({
   onboarding: z.object({
     /** False until a new user signs in or explicitly skips the optional account step. */
     signInStepCompleted: z.boolean().default(true),
-  }).default({ signInStepCompleted: true }),
+    /** False until an eligible Business user saves or skips the personal-context interview. */
+    businessProfileStepCompleted: z.boolean().default(true),
+  }).default({ signInStepCompleted: true, businessProfileStepCompleted: true }),
   appearance: z.object({
     theme: ThemeSettingSchema,
     /** Primary product shell: full notebook IDE or simplified business workspace. */

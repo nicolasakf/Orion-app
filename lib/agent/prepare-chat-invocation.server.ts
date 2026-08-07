@@ -47,6 +47,7 @@ export interface PrepareChatInvocationInput {
     options?: { model?: string; disableModelInvocation?: boolean };
   }>;
   agentRules: AgentRule[];
+  personalContext?: string;
   missingForcedSkillNames: string[];
   forcedSubagentName?: string;
   serverInfo?: JupyterServerInfo | null;
@@ -88,6 +89,7 @@ export function prepareChatInvocation(
     rootDirectory: input.rootDirectory,
     workspaceDirectory: input.workspaceDirectory,
     agentRules: input.agentRules,
+    personalContext: input.personalContext,
     serverInfo: input.serverInfo,
     jupyterServerIsLocal: input.jupyterServerIsLocal,
     clientPlatformOs: input.clientPlatformOs,
@@ -114,6 +116,7 @@ export function prepareChatInvocation(
       agentRules: input.agentRules,
       forcedSkillNames: input.missingForcedSkillNames,
       rootDirectory: input.rootDirectory,
+      personalContext: input.personalContext,
     });
   } else if (effectiveMode === "Research") {
     agentSystemPrompt = buildResearchModeSystemPrompt({
@@ -182,7 +185,15 @@ export function prepareChatInvocation(
     modelSettings: input.modelSettings,
     credentials: input.credential,
   });
-  const tools = getToolsForInteractionMode(input.interactionMode);
+  const toolMode = input.origin === "subagent"
+    ? {
+        ...input.interactionMode,
+        toolNames: input.interactionMode.toolNames.filter(
+          (toolName) => toolName !== "update_memory",
+        ),
+      }
+    : input.interactionMode;
+  const tools = getToolsForInteractionMode(toolMode);
   const requestedToolChoice: PreparedChatInvocation["toolChoice"] =
     enableSubagents && input.forcedSubagentName && !input.hasDelegatedForcedSubagent
       ? { type: "tool", toolName: "delegate" }

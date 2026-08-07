@@ -168,11 +168,13 @@ export async function executeSubagentToolCallPartsForTest(
     return scheduler.schedule(toolName, async () => {
       options.onToolStart?.(part.toolCallId);
 
-      // Hard block: sub-agents cannot spawn other sub-agents recursively
-      if (toolName === "delegate") {
+      // Hard block tools that are reserved for the parent agent.
+      if (toolName === "delegate" || toolName === "update_memory") {
         results.set(
           part.toolCallId,
-          "[BLOCKED] Sub-agents cannot call the `delegate` tool. Recursive sub-agent spawning is not supported."
+          toolName === "delegate"
+            ? "[BLOCKED] Sub-agents cannot call the `delegate` tool. Recursive sub-agent spawning is not supported."
+            : "[BLOCKED] Sub-agents cannot call `update_memory`. Durable memory updates are reserved for the parent agent."
         );
         options.onToolEnd?.(part.toolCallId);
         return;

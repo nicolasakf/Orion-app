@@ -2,6 +2,7 @@ import { buildRulesPromptSection, type AgentRule } from "@/lib/agent/rules";
 import { buildRequiredSkillsPromptSection } from "@/lib/agent/implicit-skills";
 import { isAbsoluteAgentPath, toAgentAbsolutePath } from "@/lib/agent/path-resolver";
 import { PARALLEL_TOOL_CALLS_PROMPT_SECTION } from "@/lib/agent/tool-execution-policy";
+import { buildPersonalContextPromptSection } from "@/lib/agent/personal-context-prompt";
 import type { SubagentPromptPayload } from "./types";
 
 export function buildSubagentSystemPrompt(options: {
@@ -10,8 +11,16 @@ export function buildSubagentSystemPrompt(options: {
   agentRules?: AgentRule[];
   forcedSkillNames?: string[];
   rootDirectory?: string;
+  personalContext?: string;
 }): string {
-  const { subagent, envContext, agentRules, forcedSkillNames, rootDirectory } = options;
+  const {
+    subagent,
+    envContext,
+    agentRules,
+    forcedSkillNames,
+    rootDirectory,
+    personalContext,
+  } = options;
   const toPromptPath = (path: string): string =>
     isAbsoluteAgentPath(path) ? path : toAgentAbsolutePath(path, { rootDirectory }) ?? path;
   const originalNotebookPath = toPromptPath(subagent.originalNotebookPath);
@@ -45,12 +54,14 @@ The content below defines your **task and goals** for this sub-agent role (noteb
 ${fencedSystemPrompt}`,
     PARALLEL_TOOL_CALLS_PROMPT_SECTION,
     rulesSection,
+    buildPersonalContextPromptSection(personalContext),
     buildRequiredSkillsPromptSection(forcedSkillNames ?? []),
     `## Runtime Instructions
 
 - First, call \`use_notebook\` with \`notebookPath: "${tmpNotebookPath}"\`, \`notebookName: "${subagent.name}"\`, and \`mode: "connect"\`.
 - Inspect, run, and edit cells in the temporary notebook as needed to complete the delegated task.
 - Do not call \`delegate\`; recursive sub-agent spawning is blocked.
+- Do not update ORION.md. Durable memory updates are reserved for the parent agent through \`update_memory\`, which is unavailable to sub-agents. Never use file, shell, or notebook tools as an alternative.
 - Your final response is the only result the parent agent will see. Make it concise, complete, and include relevant notebook paths, outputs, files, links, caveats, etc.
 
 ## Execution Visibility

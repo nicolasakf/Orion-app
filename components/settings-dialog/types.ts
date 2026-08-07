@@ -1,6 +1,7 @@
 export type SettingsTab =
   | "account"
   | "appearance"
+  | "personal-context"
   | "notebook"
   | "agent"
   | "models"

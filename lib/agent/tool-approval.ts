@@ -12,6 +12,7 @@ export const DANGEROUS_TOOLS: Set<OrionToolName> = new Set([
   "edit_orion_metadata",
   "restart_notebook",
   "edit_file",
+  "update_memory",
 ]);
 
 /** Returns true if the given tool requires user approval before execution. */

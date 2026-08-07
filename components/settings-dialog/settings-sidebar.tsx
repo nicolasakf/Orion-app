@@ -16,6 +16,7 @@ import {
   Loader2,
   RefreshCw,
   Sparkles,
+  UserRoundSearch,
 } from "lucide-react";
 import {
   Sidebar,
@@ -43,6 +44,7 @@ import { useOrionUpdate } from "@/components/update-provider";
 const SETTINGS_NAV_BASE: { id: SettingsTab; title: string; icon: React.ElementType }[] = [
   { id: "account", title: "Account", icon: User },
   { id: "appearance", title: "Appearance", icon: Palette },
+  { id: "personal-context", title: "Personal context", icon: UserRoundSearch },
   { id: "notebook", title: "Notebook", icon: BookOpen },
   { id: "agent", title: "Agent", icon: Bot },
   { id: "models", title: "Models", icon: Box },
@@ -73,7 +75,7 @@ export function SettingsSidebar({
   const { onOpenChange } = useOpenSettings();
   const { state: updateState, updateAvailable, checkForUpdates, performUpdate } =
     useOrionUpdate();
-  const isAdvancedTabActive = !["account", "appearance"].includes(activeTab);
+  const isAdvancedTabActive = !["account", "appearance", "personal-context"].includes(activeTab);
   const [advancedOpen, setAdvancedOpen] = React.useState(isAdvancedTabActive);
 
   React.useEffect(() => {
@@ -84,13 +86,22 @@ export function SettingsSidebar({
 
   const visibleSettingsNav = SETTINGS_NAV_BASE.filter((item) => {
     if (item.id === "account" && !showAccountTab) return false;
-    if (businessMode && item.id !== "account" && item.id !== "appearance") {
+    if (
+      businessMode &&
+      item.id !== "account" &&
+      item.id !== "appearance" &&
+      item.id !== "personal-context"
+    ) {
       return false;
     }
     return true;
   });
   const advancedSettingsNav = SETTINGS_NAV_BASE.filter((item) => {
-    if (item.id === "account" || item.id === "appearance") return false;
+    if (
+      item.id === "account" ||
+      item.id === "appearance" ||
+      item.id === "personal-context"
+    ) return false;
     return true;
   });
 

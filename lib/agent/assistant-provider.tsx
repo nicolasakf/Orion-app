@@ -18,6 +18,8 @@ import React, {
   useMemo,
   useRef,
 } from "react";
+import { z } from "zod";
+
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { JupyterServerInfo } from "@/lib/kernel/kernel-service";
 import type { NotebookType } from "@/lib/types";
@@ -52,9 +54,17 @@ import {
   type SubagentDefinition,
 } from "@/lib/agent/subagents";
 import { detectClientPlatformOs, isJupyterServerHostLocal } from "@/lib/utils";
+import { inspectPlotlyOutput } from "@/lib/notebook/plotly-output-inspection";
 import { guardExecutionToolResult, isExecutionToolResult } from "./visual-evidence";
 import { throwIfToolExecutionAborted } from "./tool-execution-scheduler";
 import { resolveAgentPath } from "./path-resolver";
+import { isProtectedMemoryWriteAttempt } from "./memory-write-guard";
+
+const UpdateMemoryResponseSchema = z.object({
+  exists: z.literal(true),
+  updatedAt: z.string().optional(),
+  blockedForModel: z.boolean(),
+});
 
 /** Request-scoped metadata and cancellation passed to local tool execution. */
 export interface ToolExecutionContext extends EditCheckpointContext {
@@ -735,6 +745,10 @@ export function AssistantProvider({
     ): Promise<unknown> => {
       throwIfToolExecutionAborted(executionContext?.abortSignal);
 
+      if (isProtectedMemoryWriteAttempt(toolName, params)) {
+        return "[BLOCKED] ORION.md can only be changed with the `update_memory` tool.";
+      }
+
       // Handle kernel-free tools before checking for the Jupyter tool set
       if (toolName === "load_skill") {
         const { name } = (sanitizeToolParams(params) ?? {}) as { name?: string };
@@ -754,6 +768,93 @@ export function AssistantProvider({
           window.location.reload();
         }, 750);
         return "Reloading the Orion page to apply the latest settings.";
+      }
+
+      if (toolName === "update_memory") {
+        const requestId = typeof crypto !== "undefined" ? crypto.randomUUID() : `tool-${Date.now()}`;
+        const startMs = Date.now();
+        const sanitizedParams = sanitizeToolParams(params);
+        const input = z.object({
+          content: z.string().min(1),
+          reason: z.string().min(1).max(500),
+        }).safeParse(sanitizedParams);
+
+        if (!input.success) {
+          return "[ERROR] update_memory requires non-empty `content` and `reason` arguments.";
+        }
+
+        const logParams = {
+          reason: input.data.reason,
+          contentCharacters: input.data.content.length,
+        };
+        logToolDispatch({ requestId, toolName, params: logParams }, chatIdRef.current);
+        try {
+          const response = await fetch("/api/onboarding/profile", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content: input.data.content }),
+            signal: executionContext?.abortSignal,
+          });
+          const rawData: unknown = await response.json().catch(() => ({}));
+          throwIfToolExecutionAborted(executionContext?.abortSignal);
+          if (!response.ok) {
+            const message = z.object({ message: z.string() }).safeParse(rawData);
+            throw new Error(
+              message.success
+                ? message.data.message
+                : `Request failed with status ${response.status}`,
+            );
+          }
+
+          const data = UpdateMemoryResponseSchema.parse(rawData);
+          const result = {
+            updated: true,
+            path: "~/.orion/ORION.md",
+            reason: input.data.reason,
+            updatedAt: data.updatedAt,
+          };
+          logToolResult(
+            {
+              requestId,
+              toolName,
+              params: logParams,
+              result,
+              durationMs: Date.now() - startMs,
+            },
+            chatIdRef.current,
+          );
+          return result;
+        } catch (error) {
+          if (error instanceof DOMException && error.name === "AbortError") {
+            throw error;
+          }
+          const message = error instanceof Error ? error.message : String(error);
+          logToolError(
+            { requestId, toolName, params: logParams, error: message, durationMs: Date.now() - startMs },
+            chatIdRef.current,
+          );
+          return guardToolResult({ error: `Memory update failed: ${message}` });
+        }
+      }
+
+      if (toolName === "inspect_plotly_output") {
+        const sanitizedParams = (sanitizeToolParams(params) ?? {}) as {
+          cellIndex?: number;
+          outputIndex?: number;
+        };
+        if (
+          !Number.isInteger(sanitizedParams.cellIndex) ||
+          !Number.isInteger(sanitizedParams.outputIndex)
+        ) {
+          return {
+            text: "[ERROR] inspect_plotly_output requires integer cellIndex and outputIndex arguments.",
+            visuals: [],
+          };
+        }
+        return inspectPlotlyOutput(
+          sanitizedParams.cellIndex as number,
+          sanitizedParams.outputIndex as number,
+        );
       }
 
       if (toolName === "web_fetch" || toolName === "web_search") {

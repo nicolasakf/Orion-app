@@ -1,6 +1,7 @@
 "use client";
 
 import { ExperienceModeIntroDialog } from "@/components/experience-mode-intro-dialog";
+import { BusinessProfileIntroDialog } from "@/components/business-profile-intro-dialog";
 import { InferenceProviderIntroDialog } from "@/components/inference-provider-intro-dialog";
 import { SignInIntroDialog } from "@/components/sign-in-intro-dialog";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -18,15 +19,20 @@ export function OnboardingFlow() {
       ? "experience"
       : !effectiveSettings.providers.inferenceProviderChosen
         ? "provider"
-        : null;
+        : effectiveSettings.appearance.experienceMode === "business" &&
+            !effectiveSettings.onboarding.businessProfileStepCompleted
+          ? "interview"
+          : null;
   if (step === null) return null;
 
   return (
     <Dialog open>
       <DialogContent
         className={
-          step === "experience"
-            ? "w-[calc(100%-2rem)] max-w-2xl"
+          step === "interview"
+            ? "flex h-[min(48rem,calc(100vh-2rem))] w-[calc(100%-2rem)] max-w-2xl flex-col"
+            : step === "experience"
+              ? "w-[calc(100%-2rem)] max-w-2xl"
             : "w-[calc(100%-2rem)] max-w-sm"
         }
         hideCloseButton
@@ -37,6 +43,7 @@ export function OnboardingFlow() {
         {step === "sign-in" ? <SignInIntroDialog embedded /> : null}
         {step === "experience" ? <ExperienceModeIntroDialog embedded /> : null}
         {step === "provider" ? <InferenceProviderIntroDialog embedded /> : null}
+        {step === "interview" ? <BusinessProfileIntroDialog embedded /> : null}
       </DialogContent>
     </Dialog>
   );

@@ -89,13 +89,20 @@ function backfillSignInStepCompletedForExistingUsers(
 ): void {
   const onboarding = asObject(settings.onboarding);
   if (!onboarding) {
-    settings.onboarding = { signInStepCompleted: true };
+    settings.onboarding = {
+      signInStepCompleted: true,
+      businessProfileStepCompleted: true,
+    };
     return;
   }
   if ("signInStepCompleted" in onboarding) {
+    if (!("businessProfileStepCompleted" in onboarding)) {
+      onboarding.businessProfileStepCompleted = true;
+    }
     return;
   }
   onboarding.signInStepCompleted = true;
+  onboarding.businessProfileStepCompleted = true;
 }
 
 /** Existing on-disk settings predate the inference-provider onboarding dialog. */

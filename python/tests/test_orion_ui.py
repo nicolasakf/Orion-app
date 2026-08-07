@@ -234,6 +234,10 @@ class OrionUiTests(unittest.TestCase):
         self.assertEqual(cells["height"], 28)
         self.assertEqual(header["font"]["weight"], 600)
         self.assertEqual(cells["font"]["size"], 12)
+        self.assertNotIn("margin", template["layout"])
+        self.assertNotIn("legend", template["layout"])
+        self.assertIs(template["layout"]["xaxis"]["automargin"], True)
+        self.assertIs(template["layout"]["yaxis"]["automargin"], True)
 
     @unittest.skipIf(pd is None, "pandas is required for ui.table tests")
     def test_table_payload_contains_bounded_initial_window(self):

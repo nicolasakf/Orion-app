@@ -79,6 +79,7 @@ import {
   buildChatApiErrorPayload,
   serializeChatApiErrorPayload,
 } from "@/lib/chat/chat-api-errors";
+import { loadPersonalContextForModel } from "@/lib/onboarding/personal-context.server";
 
 /** Standard request duration limit in seconds */
 export const maxDuration = 300;
@@ -1001,6 +1002,7 @@ async function handleChatRequest(
   });
 
   try {
+    const personalContext = await loadPersonalContextForModel();
     const {
       model,
       messages: processedMessages,
@@ -1025,6 +1027,7 @@ async function handleChatRequest(
       availableSkills,
       availableSubagents,
       agentRules,
+      personalContext,
       missingForcedSkillNames,
       forcedSubagentName,
       serverInfo,

@@ -9,6 +9,11 @@ import {
   type JSX,
 } from "react";
 import { OutputContextMenu } from "@/components/notebook/output-context-menu";
+import {
+  loadPlotly,
+  type PlotlyGraphNode,
+  type PlotlyLike,
+} from "@/lib/notebook/plotly-runtime";
 import type { NotebookMimeRendererProps } from "./types";
 
 const DEFAULT_PLOT_HEIGHT = 360;
@@ -385,44 +390,6 @@ type PlotlyEventName =
   | "plotly_legendclick"
   | "plotly_legenddoubleclick";
 
-interface PlotlyGraphNode extends HTMLDivElement {
-  on?: (eventName: PlotlyEventName, handler: () => void) => void;
-  removeListener?: (eventName: PlotlyEventName, handler: () => void) => void;
-}
-
-interface PlotlyLike {
-  react: (
-    root: HTMLDivElement,
-    data: unknown[],
-    layout: Record<string, unknown>,
-    config: Record<string, unknown>,
-  ) => Promise<unknown>;
-  addFrames: (root: HTMLDivElement, frames: unknown[]) => Promise<unknown>;
-  redraw: (root: HTMLDivElement) => Promise<unknown>;
-  purge: (root: HTMLDivElement) => void;
-  Plots: {
-    resize: (root: HTMLDivElement) => void;
-  };
-}
-
-let plotlyLoader: Promise<PlotlyLike> | null = null;
-
-/**
- * Lazily load plotly.js on the client to avoid SSR/runtime mismatch.
- */
-async function loadPlotly(): Promise<PlotlyLike> {
-  if (!plotlyLoader) {
-    plotlyLoader = import(
-      // @ts-expect-error plotly dist bundle does not ship typed entrypoints
-      "plotly.js/dist/plotly"
-    ).then((mod) => {
-      const maybePlotly = (mod as unknown as { default?: PlotlyLike }).default;
-      return maybePlotly ?? (mod as unknown as PlotlyLike);
-    });
-  }
-  return plotlyLoader;
-}
-
 /**
  * Parse the Plotly MIME payload into a normalized figure object.
  */
@@ -515,12 +482,15 @@ export function PlotlyJsonOutputRenderer({
   const plotNodeRef = useRef<HTMLDivElement>(null);
   const plotlyRef = useRef<PlotlyLike | null>(null);
   const resizeRafRef = useRef<number | null>(null);
+  const forceResizeRef = useRef(false);
+  const lastAppliedWidthRef = useRef<number | null>(null);
   const removePlotlyListenersRef = useRef<(() => void) | null>(null);
   const removeHoverLabelStylingRef = useRef<(() => void) | null>(null);
   const renderEpochRef = useRef(0);
   const hasRenderedRef = useRef(false);
   const figure = useMemo(() => parsePlotlyFigure(value), [value]);
   const [renderError, setRenderError] = useState<string | null>(null);
+  const [hasMeasurableWidth, setHasMeasurableWidth] = useState(false);
   const figureLayout = figure.layout as Record<string, unknown> | undefined;
   const frameHeight = useMemo(() => {
     if (isFullScreen) {
@@ -548,7 +518,7 @@ export function PlotlyJsonOutputRenderer({
   /**
    * Execute a guarded resize pass for the current plot node.
    */
-  const resizePlot = useCallback(() => {
+  const resizePlot = useCallback((force = false) => {
     const host = containerRef.current;
     const node = plotNodeRef.current;
     const plotly = plotlyRef.current;
@@ -564,24 +534,33 @@ export function PlotlyJsonOutputRenderer({
       return;
     }
 
-    try {
-      plotly.Plots.resize(node);
-    } catch {
+    const measuredWidth = Math.round(hostRect.width);
+    if (!force && measuredWidth === lastAppliedWidthRef.current) return;
+
+    lastAppliedWidthRef.current = measuredWidth;
+    void plotly.relayout(node, {
+      width: measuredWidth,
+      autosize: false,
+    }).catch(() => {
       // Ignore transient resize errors while chart is remounting.
-    }
+    });
   }, []);
 
   /**
    * Schedule a single resize on the next animation frame.
    */
-  const queueResize = useCallback(() => {
+  const queueResize = useCallback((force = false) => {
     if (typeof window === "undefined" || resizeRafRef.current !== null) {
+      forceResizeRef.current ||= force;
       return;
     }
 
+    forceResizeRef.current ||= force;
     resizeRafRef.current = window.requestAnimationFrame(() => {
       resizeRafRef.current = null;
-      resizePlot();
+      const shouldForce = forceResizeRef.current;
+      forceResizeRef.current = false;
+      resizePlot(shouldForce);
     });
   }, [resizePlot]);
 
@@ -590,12 +569,17 @@ export function PlotlyJsonOutputRenderer({
     const renderEpoch = ++renderEpochRef.current;
 
     const render = async () => {
+      if (!hasMeasurableWidth) return;
       const node = plotNodeRef.current;
-      if (!node) {
+      const host = containerRef.current;
+      if (!node || !host) {
         return;
       }
 
       try {
+        if (typeof document !== "undefined" && document.fonts?.ready) {
+          await document.fonts.ready;
+        }
         const plotly = await loadPlotly();
         if (isCancelled || renderEpoch !== renderEpochRef.current) {
           return;
@@ -618,6 +602,8 @@ export function PlotlyJsonOutputRenderer({
             : undefined;
         const colorTheme = theme === "dark" ? "dark" : "light";
         const shellStyles = resolveEditorToolbarShellStyles(colorTheme);
+        const measuredWidth = Math.round(host.getBoundingClientRect().width);
+        if (measuredWidth < MIN_RESIZE_WIDTH) return;
 
         const layout: Record<string, unknown> = {
           paper_bgcolor: "transparent",
@@ -630,10 +616,9 @@ export function PlotlyJsonOutputRenderer({
           },
           hoverlabel: buildOrionHoverLabel(figureHoverLabel, shellStyles),
         };
-        layout.height = resolvePlotHeight(layout.height);
-        if (layout.width === undefined || layout.width === null) {
-          layout.autosize = true;
-        }
+        layout.height = frameHeight;
+        layout.width = measuredWidth;
+        layout.autosize = false;
 
         const config = {
           displayModeBar: true,
@@ -664,13 +649,14 @@ export function PlotlyJsonOutputRenderer({
         }
 
         hasRenderedRef.current = true;
+        lastAppliedWidthRef.current = measuredWidth;
         removeHoverLabelStylingRef.current = attachPlotlyHoverLabelStyling(
           node,
           colorTheme,
         );
         const graphNode = node as PlotlyGraphNode;
         const handlePlotInteraction = () => {
-          queueResize();
+          queueResize(true);
         };
         if (typeof graphNode.on === "function") {
           const resizeEvents: PlotlyEventName[] = [
@@ -714,7 +700,7 @@ export function PlotlyJsonOutputRenderer({
       removeHoverLabelStylingRef.current?.();
       removeHoverLabelStylingRef.current = null;
     };
-  }, [figure, queueResize, theme]);
+  }, [figure, frameHeight, hasMeasurableWidth, queueResize, theme]);
 
   useEffect(() => {
     const host = containerRef.current;
@@ -722,9 +708,15 @@ export function PlotlyJsonOutputRenderer({
       return;
     }
 
-    const resizeObserver = new ResizeObserver(() => {
+    const markMeasuredAndResize = () => {
+      const width = host.getBoundingClientRect().width;
+      if (width >= MIN_RESIZE_WIDTH) {
+        setHasMeasurableWidth(true);
+      }
       queueResize();
-    });
+    };
+    markMeasuredAndResize();
+    const resizeObserver = new ResizeObserver(markMeasuredAndResize);
     resizeObserver.observe(host);
 
     const intersectionObserver = new IntersectionObserver((entries) => {
@@ -749,6 +741,7 @@ export function PlotlyJsonOutputRenderer({
   }, [queueResize]);
 
   useEffect(() => {
+    const node = plotNodeRef.current;
     return () => {
       if (resizeRafRef.current !== null && typeof window !== "undefined") {
         window.cancelAnimationFrame(resizeRafRef.current);
@@ -760,7 +753,6 @@ export function PlotlyJsonOutputRenderer({
       removeHoverLabelStylingRef.current = null;
       hasRenderedRef.current = false;
 
-      const node = plotNodeRef.current;
       if (!node) {
         return;
       }
@@ -788,19 +780,19 @@ export function PlotlyJsonOutputRenderer({
       className={
         isFullScreen
           ? frameWidth !== null
-            ? "w-fit max-w-[95vw]"
-            : "w-[95vw] max-w-[95vw]"
-          : "w-full"
+            ? "w-fit max-w-[95vw] overflow-hidden"
+            : "w-[95vw] max-w-[95vw] overflow-hidden"
+          : "w-full overflow-hidden"
       }
       style={{
-        minHeight: `${frameHeight}px`,
+        height: `${frameHeight}px`,
         ...(frameWidth !== null ? { width: frameWidth } : {}),
       }}
     >
       <div
         ref={plotNodeRef}
         className="orion-plotly-output w-full"
-        style={{ minHeight: `${frameHeight}px` }}
+        style={{ height: `${frameHeight}px` }}
       />
     </div>
   );

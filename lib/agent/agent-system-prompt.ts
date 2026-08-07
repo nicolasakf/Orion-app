@@ -15,6 +15,10 @@ import { filterModelInvocableSkills } from "@/lib/skills/discovery";
 import { buildRequiredSkillsPromptSection } from "@/lib/agent/implicit-skills";
 import { buildRulesPromptSection, type AgentRule } from "@/lib/agent/rules";
 import { PARALLEL_TOOL_CALLS_PROMPT_SECTION } from "@/lib/agent/tool-execution-policy";
+import {
+  buildPersonalContextPromptSection,
+  MEMORY_UPDATE_POLICY_PROMPT_SECTION,
+} from "@/lib/agent/personal-context-prompt";
 import type { AgentCommunicationStyle } from "@/lib/settings/schema";
 import { isAbsoluteAgentPath, toAgentAbsolutePath } from "./path-resolver";
 export { buildSubagentSystemPrompt } from "@/lib/agent/subagents";
@@ -385,6 +389,8 @@ export function buildAgentSystemPrompt(options?: {
   }>;
   /** AGENTS.md / CLAUDE.md rule files loaded for this workspace. */
   agentRules?: AgentRule[];
+  /** User-maintained background loaded from `~/.orion/ORION.md`. */
+  personalContext?: string;
   /** Skill selected by user for this turn — enforce loading this skill before answering */
   forcedSkillName?: string;
   forcedSkillNames?: string[];
@@ -414,6 +420,7 @@ export function buildAgentSystemPrompt(options?: {
     availableSkills,
     availableSubagents,
     agentRules,
+    personalContext,
     forcedSkillName,
     forcedSkillNames,
     forcedSubagentName,
@@ -434,6 +441,7 @@ export function buildAgentSystemPrompt(options?: {
   const sections: string[] = [
     ORION_AGENT_SYSTEM_PROMPT,
     PARALLEL_TOOL_CALLS_PROMPT_SECTION,
+    MEMORY_UPDATE_POLICY_PROMPT_SECTION,
   ];
 
   const styleSection = buildCommunicationStyleSection({
@@ -444,6 +452,9 @@ export function buildAgentSystemPrompt(options?: {
 
   const rulesSection = buildRulesPromptSection(agentRules);
   if (rulesSection) sections.push(rulesSection);
+
+  const personalContextSection = buildPersonalContextPromptSection(personalContext);
+  if (personalContextSection) sections.push(personalContextSection);
 
   const customModeSection = buildCustomInteractionModeSection(customSystemPrompt);
   if (customModeSection) sections.push(customModeSection);
@@ -510,6 +521,8 @@ interface ModeModePromptOptions {
   clientPlatformOs?: PlatformOS;
   /** AGENTS.md / CLAUDE.md rule files loaded for this workspace. */
   agentRules?: AgentRule[];
+  /** User-maintained background loaded from `~/.orion/ORION.md`. */
+  personalContext?: string;
   /** Skills available in this session — injected as an Available Skills section. */
   availableSkills?: Array<{ name: string; description: string; disableModelInvocation?: boolean }>;
   /** Sub-agents available in this session — injected when delegation is enabled. */
@@ -542,6 +555,7 @@ export function buildAskModeSystemPrompt(options?: ModeModePromptOptions): strin
   const sections: string[] = [
     ORION_AGENT_SYSTEM_PROMPT_ASK,
     PARALLEL_TOOL_CALLS_PROMPT_SECTION,
+    MEMORY_UPDATE_POLICY_PROMPT_SECTION,
   ];
 
   const styleSection = buildCommunicationStyleSection({
@@ -552,6 +566,11 @@ export function buildAskModeSystemPrompt(options?: ModeModePromptOptions): strin
 
   const rulesSection = buildRulesPromptSection(options?.agentRules);
   if (rulesSection) sections.push(rulesSection);
+
+  const personalContextSection = buildPersonalContextPromptSection(
+    options?.personalContext,
+  );
+  if (personalContextSection) sections.push(personalContextSection);
 
   const customModeSection = buildCustomInteractionModeSection(options?.customSystemPrompt);
   if (customModeSection) sections.push(customModeSection);
@@ -606,6 +625,8 @@ export function buildEditModeSystemPrompt(options?: {
     options?: { disableModelInvocation?: boolean };
   }>;
   agentRules?: AgentRule[];
+  /** User-maintained background loaded from `~/.orion/ORION.md`. */
+  personalContext?: string;
   forcedSkillName?: string;
   forcedSkillNames?: string[];
   forcedSubagentName?: string;
@@ -626,6 +647,7 @@ export function buildEditModeSystemPrompt(options?: {
   const sections: string[] = [
     ORION_AGENT_SYSTEM_PROMPT_EDIT,
     PARALLEL_TOOL_CALLS_PROMPT_SECTION,
+    MEMORY_UPDATE_POLICY_PROMPT_SECTION,
   ];
 
   const styleSection = buildCommunicationStyleSection({
@@ -636,6 +658,11 @@ export function buildEditModeSystemPrompt(options?: {
 
   const rulesSection = buildRulesPromptSection(options?.agentRules);
   if (rulesSection) sections.push(rulesSection);
+
+  const personalContextSection = buildPersonalContextPromptSection(
+    options?.personalContext,
+  );
+  if (personalContextSection) sections.push(personalContextSection);
 
   const customModeSection = buildCustomInteractionModeSection(options?.customSystemPrompt);
   if (customModeSection) sections.push(customModeSection);

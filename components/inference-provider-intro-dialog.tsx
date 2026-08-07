@@ -66,16 +66,26 @@ export function InferenceProviderIntroDialog({
     !effectiveSettings.providers.inferenceProviderChosen;
 
   /** Records that the user selected an inference-provider setup path. */
-  const completeOnboarding = React.useCallback(async (pinnedModelIds?: string[]) => {
+  const completeOnboarding = React.useCallback(async (options?: {
+    pinnedModelIds?: string[];
+    continueToBusinessInterview?: boolean;
+  }) => {
     await setUserSettings((current) => ({
       ...current,
       chat:
-        pinnedModelIds && current.chat.pinnedModelIds.length === 0
+        options?.pinnedModelIds && current.chat.pinnedModelIds.length === 0
           ? {
               ...current.chat,
-              pinnedModelIds,
+              pinnedModelIds: options.pinnedModelIds,
             }
           : current.chat,
+      onboarding: {
+        ...current.onboarding,
+        businessProfileStepCompleted:
+          options?.continueToBusinessInterview === true
+            ? false
+            : true,
+      },
       providers: {
         ...current.providers,
         inferenceProviderChosen: true,
@@ -127,7 +137,11 @@ export function InferenceProviderIntroDialog({
     setIsCompleting(true);
     try {
       await reloadUserSettings();
-      await completeOnboarding(CHATGPT_DEFAULT_PINNED_MODEL_IDS);
+      await completeOnboarding({
+        pinnedModelIds: CHATGPT_DEFAULT_PINNED_MODEL_IDS,
+        continueToBusinessInterview:
+          effectiveSettings.appearance.experienceMode === "business",
+      });
     } catch (error) {
       setSaveErrorMessage(
         error instanceof Error
@@ -137,7 +151,7 @@ export function InferenceProviderIntroDialog({
     } finally {
       setIsCompleting(false);
     }
-  }, [completeOnboarding, reloadUserSettings]);
+  }, [completeOnboarding, effectiveSettings.appearance.experienceMode, reloadUserSettings]);
 
   React.useEffect(() => {
     if (browserFlow.phase !== "awaiting" || !browserFlow.flowId) return;

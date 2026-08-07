@@ -13,7 +13,7 @@ export interface AgentVisualOutput {
   visualId: string;
   mimeType: InspectableRasterMimeType;
   data?: string;
-  source: "execute_cell" | "execute_code";
+  source: "execute_cell" | "execute_code" | "inspect_plotly_output";
   cellIndex?: number;
   outputIndex: number;
   byteLength: number;

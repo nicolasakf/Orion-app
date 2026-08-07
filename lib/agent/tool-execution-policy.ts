@@ -10,6 +10,7 @@ export const PARALLEL_READ_ONLY_TOOLS: ReadonlySet<OrionToolName> =
     "read_notebook",
     "read_cell",
     "read_cell_output",
+    "inspect_plotly_output",
     "list_kernels",
     "web_search",
     "web_fetch",

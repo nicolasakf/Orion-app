@@ -25,6 +25,16 @@ export function getProviderCredentialsFilePath(): string {
   return path.join(getOrionDataDirectory(), "credentials.json");
 }
 
+/** Returns the absolute path to the user-maintained Orion context file. */
+export function getPersonalContextFilePath(): string {
+  return path.join(getOrionDataDirectory(), "ORION.md");
+}
+
+/** Returns the absolute path to the persisted personal-context interview transcript. */
+export function getPersonalContextInterviewFilePath(): string {
+  return path.join(getOrionDataDirectory(), "personal-context-interview.json");
+}
+
 /** Returns the absolute path to timestamped user settings backups. */
 export function getUserSettingsBackupDirectory(): string {
   return path.join(getOrionDataDirectory(), "settings-backup");

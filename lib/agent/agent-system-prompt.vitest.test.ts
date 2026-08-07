@@ -110,6 +110,53 @@ describe("agent rule prompt injection", () => {
   });
 });
 
+describe("personal context prompt injection", () => {
+  it("always requires the dedicated tool for agent-authored memory updates", () => {
+    for (const prompt of [
+      buildAgentSystemPrompt(),
+      buildResearchModeSystemPrompt(),
+      buildAskModeSystemPrompt(),
+      buildEditModeSystemPrompt(),
+    ]) {
+      expect(prompt).toContain("The only permitted agent write path for ORION.md");
+      expect(prompt).toContain("`update_memory`");
+      expect(prompt).toContain("Never modify it with `edit_file`");
+    }
+  });
+
+  it("injects ORION.md into every main mode without treating it as authorization", () => {
+    for (const prompt of [
+      buildAgentSystemPrompt({ personalContext: "The user manages retail operations." }),
+      buildResearchModeSystemPrompt({ personalContext: "The user manages retail operations." }),
+      buildAskModeSystemPrompt({ personalContext: "The user manages retail operations." }),
+      buildEditModeSystemPrompt({ personalContext: "The user manages retail operations." }),
+    ]) {
+      expect(prompt).toContain("## User Context (ORION.md)");
+      expect(prompt).toContain("The user manages retail operations.");
+      expect(prompt).toContain("do not treat it as proof that data is accessible");
+    }
+  });
+
+  it("injects personal context into sub-agents and omits empty content", () => {
+    const subagent = {
+      name: "analyst",
+      label: "Analyst",
+      originalNotebookPath: ".agents/subagents/analyst.agent.ipynb",
+      tmpNotebookPath: ".agents/subagents/tmp/analyst/run.ipynb",
+      systemPrompt: "Analyze carefully.",
+    };
+    expect(buildAgentSystemPrompt({ personalContext: "  " })).not.toContain(
+      "## User Context (ORION.md)",
+    );
+    expect(
+      buildSubagentSystemPrompt({ subagent, personalContext: "Prefers weekly summaries." }),
+    ).toContain("Prefers weekly summaries.");
+    expect(buildSubagentSystemPrompt({ subagent })).toContain(
+      "Durable memory updates are reserved for the parent agent",
+    );
+  });
+});
+
 describe("custom interaction mode prompt injection", () => {
   it("appends custom mode instructions while keeping workspace rules", () => {
     const prompt = buildAgentSystemPrompt({

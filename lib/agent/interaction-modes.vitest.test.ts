@@ -66,7 +66,7 @@ describe("interaction mode defaults", () => {
     );
   });
 
-  it("preserves legacy Ask membership saved in the settings tool order", () => {
+  it("adds Plotly inspection beside output reading in persisted Ask tool order", () => {
     const customizedToolNames = [
       "read_notebook",
       "read_cell",
@@ -84,9 +84,17 @@ describe("interaction mode defaults", () => {
       },
     ]);
 
-    expect(modes.find((mode) => mode.id === "Ask")?.toolNames).toEqual(
-      customizedToolNames
-    );
+    expect(modes.find((mode) => mode.id === "Ask")?.toolNames).toEqual([
+      "read_notebook",
+      "read_cell",
+      "read_cell_output",
+      "inspect_plotly_output",
+      "bash",
+      "await_command",
+      "read_file",
+      "web_fetch",
+      "web_search",
+    ]);
   });
 
   it("preserves a customized Ask tool set", () => {

@@ -47,7 +47,10 @@ describe("user file settings storage", () => {
     expect(JSON.parse(raw)).toEqual({
       version: 1,
       settings: {
-        onboarding: { signInStepCompleted: false },
+        onboarding: {
+          signInStepCompleted: false,
+          businessProfileStepCompleted: false,
+        },
         providers: { inferenceProviderChosen: false },
       },
     });
@@ -72,7 +75,10 @@ describe("user file settings storage", () => {
     const persisted = JSON.parse(raw) as typeof saved;
 
     expect(saved.settings).toEqual({
-      onboarding: { signInStepCompleted: false },
+      onboarding: {
+        signInStepCompleted: false,
+        businessProfileStepCompleted: false,
+      },
       appearance: { theme: "dark" },
       agent: {
         context: {
@@ -117,7 +123,10 @@ describe("user file settings storage", () => {
     expect(JSON.parse(backedUp)).toEqual({
       version: 1,
       settings: {
-        onboarding: { signInStepCompleted: false },
+        onboarding: {
+          signInStepCompleted: false,
+          businessProfileStepCompleted: false,
+        },
         appearance: { theme: "dark" },
         providers: { inferenceProviderChosen: false },
       },

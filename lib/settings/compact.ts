@@ -66,6 +66,8 @@ export function compactUserSettingsDocument(
       onboarding: {
         ...compactedSettings.onboarding,
         signInStepCompleted: document.settings.onboarding.signInStepCompleted,
+        businessProfileStepCompleted:
+          document.settings.onboarding.businessProfileStepCompleted,
       },
       providers: {
         ...compactedSettings.providers,

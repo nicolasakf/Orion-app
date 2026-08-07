@@ -56,8 +56,8 @@ def plotly(name: str = "orion", set_default: bool = True) -> Dict[str, Any]:
                 "#f59e0b",
                 "#0891b2",
             ],
-            "margin": {"l": 48, "r": 24, "t": 48, "b": 44},
             "xaxis": {
+                "automargin": True,
                 "gridcolor": "rgba(113,113,122,0.18)",
                 "griddash": "dash",
                 "zerolinecolor": "rgba(113,113,122,0.24)",
@@ -65,17 +65,11 @@ def plotly(name: str = "orion", set_default: bool = True) -> Dict[str, Any]:
                 "ticks": "outside",
             },
             "yaxis": {
+                "automargin": True,
                 "gridcolor": "rgba(113,113,122,0.18)",
                 "zerolinecolor": "rgba(113,113,122,0.24)",
                 "linecolor": "rgba(113,113,122,0.35)",
                 "ticks": "outside",
-            },
-            "legend": {
-                "orientation": "h",
-                "yanchor": "bottom",
-                "y": 1.02,
-                "xanchor": "right",
-                "x": 1,
             },
             # Plotly has no squircle geometry; percentage rounding is the closest match
             # to Orion's corner-squircle UI and scales with bar width.

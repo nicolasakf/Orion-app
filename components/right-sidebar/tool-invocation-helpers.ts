@@ -131,10 +131,12 @@ export const TOOL_META: Record<OrionToolName, ToolMeta> = {
   await_command: { labelPending: "Awaiting command", labelDone: "Awaited command", icon: Hourglass },
   read_file: { labelPending: "Reading file", labelDone: "Read file", icon: FileText },
   edit_file: { labelPending: "Editing file", labelDone: "Edited file", icon: PenLine },
+  update_memory: { labelPending: "Updating memory", labelDone: "Updated memory", icon: Brain },
   reload_page: { labelPending: "Reloading page", labelDone: "Reloaded page", icon: RefreshCw },
   web_fetch: { labelPending: "Fetching web page", labelDone: "Fetched web page", icon: Globe },
   web_search: { labelPending: "Searching web", labelDone: "Searched web", icon: Search },
   read_cell_output: { labelPending: "Reading output", labelDone: "Read output", icon: Eye },
+  inspect_plotly_output: { labelPending: "Inspecting Plotly output", labelDone: "Inspected Plotly output", icon: Eye },
   load_skill: { labelPending: "Loading skill", labelDone: "Loaded skill", icon: Brain },
   delegate: { labelPending: "Running sub-agent", labelDone: "Sub-agent finished", icon: Bot },
 };
@@ -262,6 +264,7 @@ const TOOLS_WITH_EXPANDED_ARGS_PREVIEW = new Set<OrionToolName>([
   "execute_code",
   "read_cell",
   "read_cell_output",
+  "inspect_plotly_output",
   "execute_cell",
   "insert_cell",
   "overwrite_cell_source",
@@ -407,6 +410,11 @@ export function buildExpandedArgsPreview(
         .join(", ");
       const more = reads.length > 3 ? ` … +${reads.length - 3}` : "";
       return { short: `${reads.length} outputs: ${preview}${more}` };
+    }
+    case "inspect_plotly_output": {
+      const cellIndex = argNum(args.cellIndex);
+      const outputIndex = argNum(args.outputIndex);
+      return { short: `Cell ${cellIndex ?? "?"}, output ${outputIndex ?? "?"}` };
     }
     case "execute_cell": {
       const indices = Array.isArray(args.cellIndices) ? (args.cellIndices as number[]) : [];
@@ -576,6 +584,14 @@ export function getApprovalPreview(
 
     case "edit_file":
       return buildEditFileApprovalPreview(args);
+
+    case "update_memory": {
+      const reason = argStr(args.reason).trim();
+      const content = argStr(args.content);
+      return {
+        short: reason || `Replace ORION.md (${content.length} characters)`,
+      };
+    }
 
     default:
       return null;

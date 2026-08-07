@@ -35,6 +35,7 @@ describe("UserSettingsDocumentSchema", () => {
     expect(() => UserSettingsDocumentSchema.parse(doc)).not.toThrow();
     expect(doc.settings.agent.context.compactionAutoThreshold).toBe(0.92);
     expect(doc.settings.onboarding.signInStepCompleted).toBe(false);
+    expect(doc.settings.onboarding.businessProfileStepCompleted).toBe(false);
     expect(doc.settings.appearance.experienceMode).toBe("business");
     expect(doc.settings.appearance.experienceModeChosen).toBe(false);
     expect(doc.settings.providers.inferenceProviderChosen).toBe(false);
@@ -86,6 +87,7 @@ describe("settings migrations", () => {
     );
     expect(migrated.settings.appearance.experienceMode).toBe("business");
     expect(migrated.settings.onboarding.signInStepCompleted).toBe(true);
+    expect(migrated.settings.onboarding.businessProfileStepCompleted).toBe(true);
     expect(migrated.settings.appearance.experienceModeChosen).toBe(true);
     expect(migrated.settings.providers.inferenceProviderChosen).toBe(true);
     expect(migrated.settings.agent.context.compactionAutoThreshold).toBe(0.92);
