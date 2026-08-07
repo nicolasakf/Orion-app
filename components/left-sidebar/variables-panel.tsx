@@ -1,7 +1,13 @@
 "use client";
 
-import React, { useState, useCallback, useEffect } from "react";
-import { Boxes, RefreshCw } from "lucide-react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
+import {
+  ArrowDownAZ,
+  Boxes,
+  ListOrdered,
+  RefreshCw,
+  Search,
+} from "lucide-react";
 
 import { useKernelVariables } from "@/hooks/use-kernel-variables";
 import { VariableDetailDialog } from "./variable-detail-dialog";
@@ -17,11 +23,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { VariableSummary } from "@/lib/agent/kernel-sidecar";
-import {
-  cn,
-  scheduleAfterMinDuration,
-  MIN_REFRESH_SPIN_MS,
-} from "@/lib/utils";
+import { cn, scheduleAfterMinDuration, MIN_REFRESH_SPIN_MS } from "@/lib/utils";
 
 // ============================================================================
 // Helpers
@@ -30,6 +32,8 @@ import {
 /** Accordion header actions: match kernels tab button sizing. */
 const SIDEBAR_ACCORDION_TOOLBAR_BTN =
   "text-muted-foreground hover:text-foreground hover:bg-transparent h-5 w-5 px-0 p-0 min-w-0 shrink-0 [&_svg]:size-3.5";
+
+type VariableSortMode = "kernel" | "name";
 
 /** Extracts the short class name from a fully-qualified type string. */
 function shortType(fullType: string): string {
@@ -62,10 +66,13 @@ export function VariablesAccordionItem({
   kernelService,
   onOpenKernelsTab,
 }: VariablesAccordionItemProps) {
-  const { variables, loading, refresh, inspect } = useKernelVariables(kernelService);
+  const { variables, loading, refresh, inspect } =
+    useKernelVariables(kernelService);
 
   /** Notebook file backing the active kernel (basename), synced when sessions / active path change. */
-  const [connectedNotebookName, setConnectedNotebookName] = useState<string | null>(null);
+  const [connectedNotebookName, setConnectedNotebookName] = useState<
+    string | null
+  >(null);
 
   useEffect(() => {
     if (!kernelService) {
@@ -81,9 +88,28 @@ export function VariablesAccordionItem({
   }, [kernelService]);
 
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [selectedSummary, setSelectedSummary] = useState<VariableSummary | null>(null);
+  const [selectedSummary, setSelectedSummary] =
+    useState<VariableSummary | null>(null);
   const [inspecting, setInspecting] = useState(false);
   const [isRefreshingVariables, setIsRefreshingVariables] = useState(false);
+  const [variableQuery, setVariableQuery] = useState("");
+  const [sortMode, setSortMode] = useState<VariableSortMode>("kernel");
+
+  /** Filters the kernel's variable list, with an optional alphabetic name sort. */
+  const displayedVariables = useMemo(() => {
+    const query = variableQuery.trim().toLocaleLowerCase();
+    const matchingVariables = query
+      ? variables.filter((variable) =>
+          variable.name.toLocaleLowerCase().includes(query),
+        )
+      : variables;
+
+    if (sortMode === "kernel") return matchingVariables;
+
+    return [...matchingVariables].sort((left, right) =>
+      left.name.localeCompare(right.name, undefined, { sensitivity: "base" }),
+    );
+  }, [sortMode, variableQuery, variables]);
 
   const handleVariableClick = useCallback(
     async (name: string) => {
@@ -97,7 +123,7 @@ export function VariablesAccordionItem({
         setInspecting(false);
       }
     },
-    [inspect]
+    [inspect],
   );
 
   const handleRefreshVariables = useCallback(
@@ -110,11 +136,11 @@ export function VariablesAccordionItem({
         await refresh();
       } finally {
         scheduleAfterMinDuration(start, MIN_REFRESH_SPIN_MS, () =>
-          setIsRefreshingVariables(false)
+          setIsRefreshingVariables(false),
         );
       }
     },
-    [kernelService, refresh]
+    [kernelService, refresh],
   );
 
   return (
@@ -123,6 +149,32 @@ export function VariablesAccordionItem({
         triggerClassName="py-2 px-2 hover:no-underline"
         toolbar={
           <div className="flex items-center gap-1">
+            <ToolbarButton
+              onClick={(event) => {
+                event.stopPropagation();
+                setSortMode((current) =>
+                  current === "kernel" ? "name" : "kernel",
+                );
+              }}
+              toolTipLabel={
+                sortMode === "kernel"
+                  ? "Sort variables by name"
+                  : "Use kernel variable order"
+              }
+              className={cn(
+                SIDEBAR_ACCORDION_TOOLBAR_BTN,
+                sortMode === "name" && "text-foreground",
+              )}
+              aria-label={
+                sortMode === "kernel"
+                  ? "Sort variables by name"
+                  : "Use kernel variable order"
+              }
+              aria-pressed={sortMode === "name"}
+              disabled={!kernelService}
+            >
+              {sortMode === "kernel" ? <ListOrdered /> : <ArrowDownAZ />}
+            </ToolbarButton>
             <ToolbarButton
               onClick={handleRefreshVariables}
               toolTipLabel="Refresh variables"
@@ -172,65 +224,90 @@ export function VariablesAccordionItem({
               </button>
             )}
             {loading && variables.length === 0 ? (
-              <div className="p-4 text-center text-sm text-muted-foreground">Loading…</div>
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                Loading…
+              </div>
             ) : variables.length === 0 ? (
-              <div className="p-4 text-center text-sm text-muted-foreground">No variables</div>
+              <div className="p-4 text-center text-sm text-muted-foreground">
+                No variables
+              </div>
             ) : (
-              <ul className="list-none p-0 m-0 py-1 px-2">
-                {variables.map((v) => {
-                  const hint = shapeHint(v.shape, v.length);
-                  const reprBody = v.repr?.trim() || null;
-                  return (
-                    <li key={v.name}>
-                      <HoverCard openDelay={0} closeDelay={0}>
-                        <HoverCardTrigger asChild>
-                          <button
-                            type="button"
-                            className="corner-squircle w-full text-left px-3 py-1.5 flex items-baseline justify-between gap-2 hover:bg-accent rounded-md text-xs"
-                            onClick={() => handleVariableClick(v.name)}
-                          >
-                            <span className="font-mono text-[11px] truncate shrink-0 max-w-[75%]">
-                              {v.name}
-                            </span>
-                            <span className="flex items-baseline gap-1.5 min-w-0 justify-end">
-                              {hint && (
-                                <span className="text-xs text-muted-foreground/70 font-mono shrink-0">
-                                  {hint}
+              <>
+                <div className="px-2 pt-1.5">
+                  <div className="relative">
+                    <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <input
+                      type="search"
+                      value={variableQuery}
+                      onChange={(event) => setVariableQuery(event.target.value)}
+                      placeholder="Filter variables"
+                      aria-label="Filter variables by name"
+                      className="corner-squircle h-8 w-full rounded-md border border-input bg-background py-1 pl-7 pr-2 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                    />
+                  </div>
+                </div>
+                {displayedVariables.length === 0 ? (
+                  <div className="p-4 text-center text-sm text-muted-foreground">
+                    No matching variables
+                  </div>
+                ) : (
+                  <ul className="list-none p-0 m-0 py-1 px-2">
+                    {displayedVariables.map((v) => {
+                      const hint = shapeHint(v.shape, v.length);
+                      const reprBody = v.repr?.trim() || null;
+                      return (
+                        <li key={v.name}>
+                          <HoverCard openDelay={0} closeDelay={0}>
+                            <HoverCardTrigger asChild>
+                              <button
+                                type="button"
+                                className="corner-squircle w-full text-left px-3 py-1.5 flex items-baseline justify-between gap-2 hover:bg-accent rounded-md text-xs"
+                                onClick={() => handleVariableClick(v.name)}
+                              >
+                                <span className="font-mono text-[11px] truncate shrink-0 max-w-[75%]">
+                                  {v.name}
                                 </span>
+                                <span className="flex items-baseline gap-1.5 min-w-0 justify-end">
+                                  {hint && (
+                                    <span className="text-xs text-muted-foreground/70 font-mono shrink-0">
+                                      {hint}
+                                    </span>
+                                  )}
+                                  <span className="text-xs text-muted-foreground truncate">
+                                    {shortType(v.type)}
+                                  </span>
+                                </span>
+                              </button>
+                            </HoverCardTrigger>
+                            <HoverCardContent
+                              side="right"
+                              align="start"
+                              sideOffset={8}
+                              className={cn(
+                                "corner-squircle w-fit max-w-52 max-h-[min(40vh,20rem)] overflow-y-auto overscroll-contain",
+                                "border-border/50 px-2.5 py-2 shadow-sm text-inherit",
                               )}
-                              <span className="text-xs text-muted-foreground truncate">
-                                {shortType(v.type)}
-                              </span>
-                            </span>
-                          </button>
-                        </HoverCardTrigger>
-                        <HoverCardContent
-                          side="right"
-                          align="start"
-                          sideOffset={8}
-                          className={cn(
-                            "corner-squircle w-fit max-w-52 max-h-[min(40vh,20rem)] overflow-y-auto overscroll-contain",
-                            "border-border/50 px-2.5 py-2 shadow-sm text-inherit"
-                          )}
-                        >
-                          {/* Slash-command-style title + detail (chat-textbox popover helper) */}
-                          {reprBody ? (
-                            <p className="font-mono text-xs text-foreground leading-snug whitespace-pre-wrap break-all">
-                              {reprBody}
-                            </p>
-                          ) : (
-                            <p className="text-xs text-muted-foreground leading-snug">
-                              {hint
-                                ? `${shortType(v.type)} ${hint}`
-                                : shortType(v.type)}
-                            </p>
-                          )}
-                        </HoverCardContent>
-                      </HoverCard>
-                    </li>
-                  );
-                })}
-              </ul>
+                            >
+                              {/* Slash-command-style title + detail (chat-textbox popover helper) */}
+                              {reprBody ? (
+                                <p className="font-mono text-xs text-foreground leading-snug whitespace-pre-wrap break-all">
+                                  {reprBody}
+                                </p>
+                              ) : (
+                                <p className="text-xs text-muted-foreground leading-snug">
+                                  {hint
+                                    ? `${shortType(v.type)} ${hint}`
+                                    : shortType(v.type)}
+                                </p>
+                              )}
+                            </HoverCardContent>
+                          </HoverCard>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </>
             )}
           </>
         )}
