@@ -162,7 +162,6 @@ jobs:
           ORION_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           ORION_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           ORION_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          ORION_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           ORION_REQUIRE_MAC_NOTARIZATION: "1"
         run: npx electron-builder --mac dmg zip --publish never -c.mac.forceCodeSigning=true
 
@@ -290,7 +289,6 @@ jobs:
           ORION_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           ORION_APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           ORION_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          ORION_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           ORION_REQUIRE_MAC_NOTARIZATION: "1"
         run: npx electron-builder --mac dmg zip --publish never -c.mac.forceCodeSigning=true
 

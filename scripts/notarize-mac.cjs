@@ -35,12 +35,10 @@ module.exports = async function notarizeMac(context) {
   const appleApiKey = process.env.ORION_APPLE_API_KEY ?? process.env.APPLE_API_KEY;
   const appleApiKeyId = process.env.ORION_APPLE_API_KEY_ID ?? process.env.APPLE_API_KEY_ID;
   const appleApiIssuer = process.env.ORION_APPLE_API_ISSUER ?? process.env.APPLE_API_ISSUER;
-  const teamId = process.env.ORION_APPLE_TEAM_ID ?? process.env.APPLE_TEAM_ID;
   const credentials = {
     ORION_APPLE_API_KEY: appleApiKey,
     ORION_APPLE_API_KEY_ID: appleApiKeyId,
     ORION_APPLE_API_ISSUER: appleApiIssuer,
-    ORION_APPLE_TEAM_ID: teamId,
   };
   const missing = Object.entries(credentials)
     .filter(([, value]) => !value)
@@ -63,6 +61,5 @@ module.exports = async function notarizeMac(context) {
     appleApiKey: resolvedAppleApiKey,
     appleApiKeyId,
     appleApiIssuer,
-    teamId,
   });
 };
