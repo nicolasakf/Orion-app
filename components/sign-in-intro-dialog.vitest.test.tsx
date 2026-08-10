@@ -1,5 +1,5 @@
 import * as React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next-themes", () => ({
@@ -7,10 +7,7 @@ vi.mock("next-themes", () => ({
 }));
 
 import { SignInIntroDialog } from "@/components/sign-in-intro-dialog";
-import {
-  SettingsProvider,
-  useSettingsContext,
-} from "@/components/settings/settings-provider";
+import { SettingsProvider } from "@/components/settings/settings-provider";
 import { createDefaultUserSettingsDocument } from "@/lib/settings/defaults";
 
 const setUserSettingsDocumentMock = vi.fn();
@@ -23,15 +20,6 @@ vi.mock("@/lib/settings/user-storage", async (importOriginal) => {
       setUserSettingsDocumentMock(...args),
   };
 });
-
-function SettingsProbe() {
-  const { effectiveSettings } = useSettingsContext();
-  return (
-    <span data-testid="sign-in-completed">
-      {String(effectiveSettings.onboarding.signInStepCompleted)}
-    </span>
-  );
-}
 
 beforeEach(() => {
   setUserSettingsDocumentMock.mockReset();
@@ -58,11 +46,10 @@ afterEach(() => {
 });
 
 describe("SignInIntroDialog", () => {
-  it("lets a user skip sign-in and advances the onboarding state", async () => {
+  it("does not offer a way to skip the required sign-in step", async () => {
     render(
       <SettingsProvider>
         <SignInIntroDialog />
-        <SettingsProbe />
       </SettingsProvider>,
     );
 
@@ -70,11 +57,7 @@ describe("SignInIntroDialog", () => {
       expect(screen.getByText("Sign in to Orion")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
-
-    await waitFor(() => {
-      expect(setUserSettingsDocumentMock).toHaveBeenCalled();
-      expect(screen.getByTestId("sign-in-completed")).toHaveTextContent("true");
-    });
+    expect(screen.queryByRole("button", { name: "Skip for now" })).not.toBeInTheDocument();
+    expect(setUserSettingsDocumentMock).not.toHaveBeenCalled();
   });
 });

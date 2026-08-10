@@ -11,13 +11,13 @@ interface SignInIntroDialogProps {
   embedded?: boolean;
 }
 
-/** Optional first onboarding step for an Orion Cloud account. */
+/** Required first onboarding step that connects an Orion Cloud account. */
 export function SignInIntroDialog({ embedded = false }: SignInIntroDialogProps) {
   const { effectiveSettings, isHydrated, setUserSettings } = useOrionSettings();
   const shouldShowIntro =
     isHydrated && !effectiveSettings.onboarding.signInStepCompleted;
 
-  /** Records that the user finished or bypassed the account sign-in step. */
+  /** Records that the user completed the required account sign-in step. */
   const completeSignInStep = React.useCallback(async () => {
     try {
       await setUserSettings((current) => ({
@@ -39,9 +39,8 @@ export function SignInIntroDialog({ embedded = false }: SignInIntroDialogProps) 
       open={embedded || shouldShowIntro}
       onOpenChange={() => undefined}
       onAuthenticated={completeSignInStep}
-      onSkip={completeSignInStep}
       title="Sign in to Orion"
-      description="Sign in to sync your Orion Cloud work. You can skip this for now."
+      description="Sign in to continue setting up Orion and sync your Orion Cloud work."
       hideCloseButton
       preventDismiss
       embedded={embedded}

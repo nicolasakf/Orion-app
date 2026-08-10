@@ -254,7 +254,7 @@ export type ProviderCredential = ProviderCredentialSummary;
 
 const SettingsDataSchema = z.object({
   onboarding: z.object({
-    /** False until a new user signs in or explicitly skips the optional account step. */
+    /** False until a new user completes the required account sign-in step. */
     signInStepCompleted: z.boolean().default(true),
     /** False until an eligible Business user saves or skips the personal-context interview. */
     businessProfileStepCompleted: z.boolean().default(true),

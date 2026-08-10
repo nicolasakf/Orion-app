@@ -83,7 +83,7 @@ function backfillExperienceModeChosenForExistingUsers(
   appearance.experienceModeChosen = true;
 }
 
-/** Existing on-disk settings predate the optional account sign-in onboarding step. */
+/** Existing on-disk settings predate the required account sign-in onboarding step. */
 function backfillSignInStepCompletedForExistingUsers(
   settings: Record<string, unknown>
 ): void {

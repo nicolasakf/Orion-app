@@ -1,5 +1,5 @@
 import * as React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("next-themes", () => ({
@@ -70,7 +70,7 @@ describe("OnboardingFlow", () => {
     ).toBeInTheDocument();
   });
 
-  it("replaces the sign-in dialog with workspace selection after skipping", async () => {
+  it("keeps the user on required sign-in until they authenticate", async () => {
     render(
       <SettingsProvider>
         <OnboardingFlow />
@@ -81,12 +81,8 @@ describe("OnboardingFlow", () => {
       expect(screen.getByText("Sign in to Orion")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Skip for now" }));
-
-    await waitFor(() => {
-      expect(screen.getByText("Welcome to Orion")).toBeInTheDocument();
-      expect(screen.queryByText("Sign in to Orion")).not.toBeInTheDocument();
-    });
+    expect(screen.queryByRole("button", { name: "Skip for now" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Welcome to Orion")).not.toBeInTheDocument();
   });
 
   it("shows the interview after provider setup for an eligible Business user", async () => {
