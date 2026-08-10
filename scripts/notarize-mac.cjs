@@ -4,8 +4,7 @@ const { tmpdir } = require("os");
 const { notarize } = require("@electron/notarize");
 
 /** Resolves App Store Connect API key input from either a file path or secret contents. */
-function resolveAppleApiKey() {
-  const value = process.env.APPLE_API_KEY;
+function resolveAppleApiKey(value, keyId) {
   if (!value) {
     return null;
   }
@@ -20,7 +19,7 @@ function resolveAppleApiKey() {
     throw new Error("APPLE_API_KEY must be a .p8 file path, .p8 private key contents, or base64-encoded .p8 contents.");
   }
 
-  const keyPath = path.join(tmpdir(), `AuthKey_${process.env.APPLE_API_KEY_ID}.p8`);
+  const keyPath = path.join(tmpdir(), `AuthKey_${keyId}.p8`);
   writeFileSync(keyPath, decoded, { mode: 0o600 });
   return keyPath;
 }
@@ -31,8 +30,21 @@ module.exports = async function notarizeMac(context) {
     return;
   }
 
-  const required = ["APPLE_API_KEY", "APPLE_API_KEY_ID", "APPLE_API_ISSUER", "APPLE_TEAM_ID"];
-  const missing = required.filter((key) => !process.env[key]);
+  // Electron Builder also recognizes APPLE_* variables and attempts its own
+  // notarization before this hook can decode a base64 GitHub secret.
+  const appleApiKey = process.env.ORION_APPLE_API_KEY ?? process.env.APPLE_API_KEY;
+  const appleApiKeyId = process.env.ORION_APPLE_API_KEY_ID ?? process.env.APPLE_API_KEY_ID;
+  const appleApiIssuer = process.env.ORION_APPLE_API_ISSUER ?? process.env.APPLE_API_ISSUER;
+  const teamId = process.env.ORION_APPLE_TEAM_ID ?? process.env.APPLE_TEAM_ID;
+  const credentials = {
+    ORION_APPLE_API_KEY: appleApiKey,
+    ORION_APPLE_API_KEY_ID: appleApiKeyId,
+    ORION_APPLE_API_ISSUER: appleApiIssuer,
+    ORION_APPLE_TEAM_ID: teamId,
+  };
+  const missing = Object.entries(credentials)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
   const mustNotarize = process.env.ORION_REQUIRE_MAC_NOTARIZATION === "1";
   if (missing.length > 0) {
     const message = `Skipping macOS notarization; missing ${missing.join(", ")}.`;
@@ -44,13 +56,13 @@ module.exports = async function notarizeMac(context) {
   }
 
   const appPath = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
-  const appleApiKey = resolveAppleApiKey();
+  const resolvedAppleApiKey = resolveAppleApiKey(appleApiKey, appleApiKeyId);
   await notarize({
     appBundleId: context.packager.appInfo.appId,
     appPath,
-    appleApiKey,
-    appleApiKeyId: process.env.APPLE_API_KEY_ID,
-    appleApiIssuer: process.env.APPLE_API_ISSUER,
-    teamId: process.env.APPLE_TEAM_ID,
+    appleApiKey: resolvedAppleApiKey,
+    appleApiKeyId,
+    appleApiIssuer,
+    teamId,
   });
 };
