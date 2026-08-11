@@ -6,7 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-[Unreleased]: https://github.com/nicolasakf/Orion-app/compare/v0.17.0...HEAD
+## [0.18.0] - 2026-08-10
+
+### Added
+
+- Agent: resumable Business onboarding interview for personal context, with guarded profile editing and approved memory updates in main-agent prompts
+- Agent: live Plotly output diagnostics, responsive rendering, and verification guidance
+- Notebook: stable cell-based output references, selection aggregates, and column fit controls in `orion-ui` tables
+- Sidebar: filter and sort kernel variables
+- Chat: persist completed tool activity durations across reloads, separate message expansion from editing, and restore composer focus after actions
+- Onboarding: require Orion Cloud sign-in during setup
+
+### Fixed
+
+- Agent: guard alternate `ORION.md` writes
+- Release: require signed, notarized macOS desktop builds
+
+[0.18.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.18.0
 
 ## [0.17.0] - 2026-07-31
 
