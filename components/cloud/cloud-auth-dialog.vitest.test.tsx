@@ -78,6 +78,9 @@ describe("CloudAuthDialog", () => {
           "https://app.orion-agent.ai/cloud/oauth/callback",
         ),
         skipBrowserRedirect: true,
+        queryParams: {
+          prompt: "select_account",
+        },
       },
     });
     const redirectTo = mocks.signInWithOAuth.mock.calls[0][0].options.redirectTo;

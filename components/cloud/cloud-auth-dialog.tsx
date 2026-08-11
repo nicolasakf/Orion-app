@@ -226,6 +226,11 @@ export function CloudAuthDialog({
         options: {
           redirectTo,
           skipBrowserRedirect: true,
+          // Keep the existing Google browser session, but let the user choose
+          // which signed-in Google account to use for this Orion Cloud session.
+          queryParams: {
+            prompt: "select_account",
+          },
         },
       });
       if (error) throw error;
