@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-08-11
+
+### Fixed
+
+- Cloud: prompt Google account selection during OAuth sign-in so users can pick which signed-in account to use
+
+[0.18.1]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.18.1
+
 ## [0.18.0] - 2026-08-10
 
 ### Added
