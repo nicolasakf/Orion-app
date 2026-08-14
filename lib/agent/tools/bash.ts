@@ -16,6 +16,7 @@ import {
   DEFAULT_FOREGROUND_BUDGET_MS,
   formatTerminalResult,
   NEXT_STEP_AWAIT_BACKGROUND,
+  NEXT_STEP_REQUIRED_AWAIT_BEFORE_REUSE,
   NEXT_STEP_REQUIRED_AWAIT_AFTER_BASH_TIMEOUT,
   parseCommandProgress,
   sleep,
@@ -33,6 +34,16 @@ const OUTPUT_PREVIEW_TAIL_CHARS = 6_000;
 const NON_ASCII_OPTION_TOKEN_RE = /(?:^|\s)(-{1,2}[^\s]*[^\x00-\x7F][^\s]*)/u;
 
 export type TerminalShell = "posix" | "powershell";
+
+/** Encode arbitrary Unicode command text for safe single-line terminal transport. */
+function encodeUtf8Base64(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
+}
 
 /**
  * Find a command-line option token that contains non-ASCII characters.
@@ -70,28 +81,34 @@ export function buildShellWrappedCommand(options: {
   shell: TerminalShell;
 }): string {
   const { command, startMarker, endMarkerPrefix, shell } = options;
+  const encodedCommand = encodeUtf8Base64(command);
   if (shell === "powershell") {
-    return buildPowerShellWrappedCommand(command, startMarker, endMarkerPrefix);
+    return buildPowerShellWrappedCommand(
+      encodedCommand,
+      startMarker,
+      endMarkerPrefix
+    );
   }
-  return buildPosixWrappedCommand(command, startMarker, endMarkerPrefix);
+  return buildPosixWrappedCommand(encodedCommand, startMarker, endMarkerPrefix);
 }
 
 /**
- * Build a POSIX shell wrapper that captures the command exit code.
+ * Build a single-line POSIX wrapper that evaluates the command in the current shell.
  */
 function buildPosixWrappedCommand(
-  command: string,
+  encodedCommand: string,
   startMarker: string,
   endMarkerPrefix: string
 ): string {
   return [
-    "(set +e",
-    `echo '${startMarker}'`,
-    command,
+    `command printf '\\n%s\\n' '${startMarker}'`,
+    `__orion_payload='${encodedCommand}'`,
+    `__orion_cmd=$(command printf '%s' "$__orion_payload" | command base64 -d)`,
+    `eval "$__orion_cmd"`,
     "__orion_rc=$?",
-    `echo '${endMarkerPrefix}:'"$__orion_rc"`,
-    ")",
-  ].join("\n");
+    `command printf '\\n%s:%s\\n' '${endMarkerPrefix}' "$__orion_rc"`,
+    "unset __orion_payload __orion_cmd __orion_rc",
+  ].join("; ");
 }
 
 /**
@@ -103,17 +120,17 @@ function buildPosixWrappedCommand(
  * line avoids the `>>` prompt trap while preserving marker parsing.
  */
 function buildPowerShellWrappedCommand(
-  command: string,
+  encodedCommand: string,
   startMarker: string,
   endMarkerPrefix: string
 ): string {
-  const inlineCommand = command.replace(/[\r\n]+/g, "; ").trim();
   return [
+    `[Console]::Out.Write("\`r\`n${startMarker}\`r\`n");`,
     "$__orion_rc = 0;",
     "$global:LASTEXITCODE = $null;",
-    `Write-Output '${startMarker}'`,
-    "; try {",
-    inlineCommand,
+    "try {",
+    `$__orion_source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encodedCommand}'))`,
+    "; . ([ScriptBlock]::Create($__orion_source))",
     "; $__orion_success = $?",
     "; $__orion_last_exit = $global:LASTEXITCODE",
     "; if ($__orion_last_exit -is [int]) {",
@@ -122,10 +139,11 @@ function buildPowerShellWrappedCommand(
     "$__orion_rc = 1",
     "}",
     "} catch {",
-    "Write-Error $_",
+    "[Console]::Error.WriteLine($_)",
     "; $__orion_rc = 1",
     "};",
-    `Write-Output "${endMarkerPrefix}:$__orion_rc"`,
+    `[Console]::Out.Write("\`r\`n${endMarkerPrefix}:$__orion_rc\`r\`n")`,
+    "; Remove-Variable __orion_source, __orion_success, __orion_last_exit, __orion_rc -ErrorAction SilentlyContinue",
   ].join(" ");
 }
 
@@ -158,9 +176,10 @@ export class BashTool extends BaseTool {
    * @param params.terminalName - Exact terminalName to reuse, or empty string to create a fresh chat-scoped terminal.
    * @param params.cwd - Working directory used only when a fresh chat terminal is created.
    * @param params.background - When true, return running status immediately after dispatch.
+   * @param abortSignal - Optional signal that cancels foreground polling without closing the terminal.
    * @returns Structured status envelope with terminal name, elapsed time, and output.
    */
-  async execute(params: BashParams): Promise<string> {
+  async execute(params: BashParams, abortSignal?: AbortSignal): Promise<string> {
     const { command, description, terminalName, cwd, background } = params;
     const startedAtMs = Date.now();
 
@@ -191,6 +210,19 @@ export class BashTool extends BaseTool {
       return "[ERROR: Unable to resolve a terminal for this command.]";
     }
 
+    const isReusingTerminal = terminalName.trim().length > 0;
+    if (isReusingTerminal && this.pool?.getPendingCommand(resolvedTerminalName)) {
+      return this.buildResult({
+        status: "error",
+        terminalName: resolvedTerminalName,
+        elapsedMs: Date.now() - startedAtMs,
+        output: "",
+        message:
+          "This terminal already has a tracked command. The new command was not dispatched.",
+        nextStep: NEXT_STEP_REQUIRED_AWAIT_BEFORE_REUSE,
+      });
+    }
+
     const markerId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const startMarker = `ORION_CMD_START_${markerId}`;
     const endMarkerPrefix = `ORION_CMD_END_${markerId}`;
@@ -198,13 +230,6 @@ export class BashTool extends BaseTool {
 
     try {
       this.kernelService.readTerminalBuffer(resolvedTerminalName);
-      this.pool?.clearPendingCommand(resolvedTerminalName);
-      this.pool?.setPendingCommand(resolvedTerminalName, {
-        startMarker,
-        endMarkerPrefix,
-        startedAtMs,
-        buffer: "",
-      });
       const wrappedCommand = buildShellWrappedCommand({
         command,
         startMarker,
@@ -215,9 +240,14 @@ export class BashTool extends BaseTool {
         resolvedTerminalName,
         `${wrappedCommand}\r`
       );
+      this.pool?.setPendingCommand(resolvedTerminalName, {
+        startMarker,
+        endMarkerPrefix,
+        startedAtMs,
+        buffer: "",
+      });
       this.pool?.touchActivity(resolvedTerminalName);
     } catch (error) {
-      this.pool?.clearPendingCommand(resolvedTerminalName);
       const message = error instanceof Error ? error.message : String(error);
       const isUnknownTerminal = /^Terminal ".+" not found$/.test(message);
       return this.buildResult({
@@ -245,7 +275,10 @@ export class BashTool extends BaseTool {
     const deadline = Date.now() + DEFAULT_FOREGROUND_BUDGET_MS;
     while (Date.now() < deadline) {
       const remaining = deadline - Date.now();
-      await sleep(Math.max(0, Math.min(TERMINAL_POLL_INTERVAL_MS, remaining)));
+      await sleep(
+        Math.max(0, Math.min(TERMINAL_POLL_INTERVAL_MS, remaining)),
+        abortSignal
+      );
       try {
         const chunk = this.kernelService.readTerminalBuffer(resolvedTerminalName);
         if (chunk) {
@@ -255,6 +288,9 @@ export class BashTool extends BaseTool {
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (/^Terminal ".+" not found$/.test(message)) {
+          this.pool?.clearPendingCommand(resolvedTerminalName);
+        }
         return this.buildResult({
           status: "error",
           terminalName: resolvedTerminalName,

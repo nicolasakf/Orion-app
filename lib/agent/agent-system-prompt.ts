@@ -183,6 +183,8 @@ export function buildAgentEnvironmentContextPrompt(options: {
   /** Absolute host path to the Jupyter contents root, when known for local sessions. */
   rootDirectory?: string;
   workspaceDirectory?: string;
+  /** Path of the notebook currently connected to the agent's notebook tools. */
+  connectedNotebookPath?: string | null;
   notebookPath?: string;
   activeFilePath?: string;
 }): string {
@@ -192,6 +194,7 @@ export function buildAgentEnvironmentContextPrompt(options: {
     clientPlatformOs,
     rootDirectory,
     workspaceDirectory,
+    connectedNotebookPath,
     notebookPath,
     activeFilePath,
   } = options;
@@ -204,6 +207,9 @@ export function buildAgentEnvironmentContextPrompt(options: {
     return toAgentAbsolutePath(path, { rootDirectory }) ?? path;
   };
   const workspacePromptPath = toPromptPath(workspaceDirectory);
+  const connectedNotebookPromptPath = toPromptPath(
+    connectedNotebookPath ?? undefined,
+  );
   const notebookPromptPath = toPromptPath(notebookPath);
   const filePromptPath = toPromptPath(filePath);
 
@@ -237,16 +243,34 @@ Workspace directory relative to the Jupyter root: \`${workspaceDirectory}\`
 - Use \`bash\` for shell commands. For a fresh terminal in this workspace, pass \`terminalName: ""\` and \`cwd: "${workspaceDirectory}"\`; follow the \`bash\` / \`await_command\` tool descriptions for terminal reuse and long-running commands.`);
   }
 
+  if (connectedNotebookPromptPath) {
+    sections.push(`## Connected Notebook
+
+The notebook currently connected to the agent's notebook tools is: \`${connectedNotebookPromptPath}\`.
+- Cell-level notebook tools operate on this notebook unless a tool call explicitly selects a different notebook ID.`);
+  } else {
+    sections.push(`## Connected Notebook
+
+No notebook is currently connected to the agent's notebook tools.
+- Call \`use_notebook\` before using cell-level notebook tools.`);
+  }
+
   if (notebookPath) {
     const notebookDisplayPath = notebookPromptPath ?? notebookPath;
     const directory = notebookDisplayPath.includes("/")
       ? notebookDisplayPath.substring(0, notebookDisplayPath.lastIndexOf("/"))
       : workspacePromptPath ?? workspaceDirectory ?? "";
 
+    const isOpenNotebookConnected =
+      connectedNotebookPromptPath === notebookDisplayPath;
+    const connectionInstruction = isOpenNotebookConnected
+      ? "- This notebook is already connected to the agent's notebook tools; do not call `use_notebook` again unless the connection changes."
+      : `- To work on this notebook, call \`use_notebook\` with notebookName=<notebook-filename>, notebookPath="${notebookDisplayPath}", and mode="connect".`;
+
     sections.push(`## Open Notebook
 
 The user currently has a notebook open in the editor at path: \`${notebookDisplayPath}\`
-- To work on this notebook, call \`use_notebook\` with notebookName=<notebook-filename>, notebookPath="${notebookDisplayPath}", and mode="connect".
+${connectionInstruction}
 - If the user asks to create a **new** notebook, call \`use_notebook\` with a new notebookName, a new notebookPath (e.g. \`${directory}/<descriptive_name>.ipynb\`), and mode="create". Do NOT connect to the existing notebook when the user wants a new one.
 - Official notebook reads see Orion's unsaved editor buffer, and official notebook mutations save the active dirty editor before writing; shell commands read only the saved disk copy.
 - Determine whether to connect or create based on the user's request.`);
@@ -357,6 +381,7 @@ The user explicitly selected the \`${forcedSubagentName}\` sub-agent for this tu
  * @param options.activeFilePath - Open non-notebook file path (used when no notebook is open; embedded as Open File)
  * @param options.rootDirectory - Absolute Jupyter contents root path, when available for local sessions
  * @param options.workspaceDirectory - Workspace directory relative to Jupyter root
+ * @param options.connectedNotebookPath - Notebook currently connected to notebook tools, if any
  * @param options.availableSkills - Skills to advertise in the system prompt
  * @param options.availableSubagents - Notebook-defined subagents to advertise in the system prompt
  * @param options.agentRules - AGENTS.md / CLAUDE.md rule files loaded for this workspace
@@ -378,6 +403,8 @@ export function buildAgentSystemPrompt(options?: {
   /** Absolute host path to the Jupyter contents root, when available for local sessions. */
   rootDirectory?: string;
   workspaceDirectory?: string;
+  /** Notebook currently connected to the agent's notebook tools, if any. */
+  connectedNotebookPath?: string | null;
   /** Skills available in this session — injected as an Available Skills section */
   availableSkills?: Array<{ name: string; description: string; disableModelInvocation?: boolean }>;
   /** Subagents available in this session — injected as an Available Subagents section */
@@ -417,6 +444,7 @@ export function buildAgentSystemPrompt(options?: {
     notebookPath,
     rootDirectory,
     workspaceDirectory,
+    connectedNotebookPath,
     availableSkills,
     availableSubagents,
     agentRules,
@@ -490,6 +518,7 @@ export function buildAgentSystemPrompt(options?: {
     clientPlatformOs,
     rootDirectory,
     workspaceDirectory,
+    connectedNotebookPath,
     notebookPath,
     activeFilePath,
   });
@@ -516,6 +545,7 @@ interface ModeModePromptOptions {
   activeFilePath?: string;
   rootDirectory?: string;
   workspaceDirectory?: string;
+  connectedNotebookPath?: string | null;
   serverInfo?: JupyterServerInfo | null;
   jupyterServerIsLocal?: boolean;
   clientPlatformOs?: PlatformOS;
@@ -600,6 +630,7 @@ export function buildAskModeSystemPrompt(options?: ModeModePromptOptions): strin
     clientPlatformOs: options?.clientPlatformOs,
     rootDirectory: options?.rootDirectory,
     workspaceDirectory: options?.workspaceDirectory,
+    connectedNotebookPath: options?.connectedNotebookPath,
     notebookPath: options?.notebookPath,
     activeFilePath: options?.notebookPath ? undefined : options?.activeFilePath,
   });
@@ -617,6 +648,7 @@ export function buildEditModeSystemPrompt(options?: {
   activeFilePath?: string;
   rootDirectory?: string;
   workspaceDirectory?: string;
+  connectedNotebookPath?: string | null;
   availableSkills?: Array<{ name: string; description: string; disableModelInvocation?: boolean }>;
   availableSubagents?: Array<{
     name: string;
@@ -699,6 +731,7 @@ export function buildEditModeSystemPrompt(options?: {
     clientPlatformOs: options?.clientPlatformOs,
     rootDirectory: options?.rootDirectory,
     workspaceDirectory: options?.workspaceDirectory,
+    connectedNotebookPath: options?.connectedNotebookPath,
     notebookPath: options?.notebookPath,
     activeFilePath,
   });

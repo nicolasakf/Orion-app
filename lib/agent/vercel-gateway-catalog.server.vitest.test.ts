@@ -19,6 +19,9 @@ describe("Vercel Gateway model catalog", () => {
         context_window: 1_000_000,
         max_tokens: 64_000,
         tags: ["vision", "tool-use", "reasoning"],
+        reasoning_options: [
+          { type: "effort", values: ["minimal", "low", "medium", "high"] },
+        ],
         pricing: {
           input: "0.000002",
           output: "0.000012",
@@ -51,6 +54,38 @@ describe("Vercel Gateway model catalog", () => {
       long_context_cached_price_per_1m: 0.4,
       long_context_cache_write_price_per_1m: 4,
       context_window_source: "vercel_gateway",
+      reasoning_options: [
+        { type: "effort", values: ["minimal", "low", "medium", "high"] },
+      ],
     }]);
+  });
+
+  it("keeps Vercel models whose optional reasoning metadata is malformed", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      data: [
+        {
+          id: "openai/gpt-valid",
+          type: "language",
+          reasoning_options: [{ type: "effort", values: ["low", "high"] }],
+        },
+        {
+          id: "openai/gpt-malformed",
+          type: "language",
+          reasoning_options: [{ type: "effort", values: ["turbo"] }],
+        },
+      ],
+    }), { status: 200 })));
+
+    const { fetchVercelGatewayCatalog } = await import("./vercel-gateway-catalog.server");
+    const models = await fetchVercelGatewayCatalog();
+
+    expect(models.map((model) => model.model_id)).toEqual([
+      "openai/gpt-valid",
+      "openai/gpt-malformed",
+    ]);
+    expect(models[0]?.reasoning_options).toEqual([
+      { type: "effort", values: ["low", "high"] },
+    ]);
+    expect(models[1]?.reasoning_options).toBeUndefined();
   });
 });

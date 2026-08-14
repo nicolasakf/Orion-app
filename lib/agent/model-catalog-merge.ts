@@ -8,10 +8,16 @@ export function mergeModelCatalog(
 
   for (const source of sources) {
     for (const row of source ?? []) {
-      rows.set(`${row.provider_id}/${row.model_id}`, {
-        ...rows.get(`${row.provider_id}/${row.model_id}`),
+      const key = `${row.provider_id}/${row.model_id}`;
+      const previous = rows.get(key);
+      const merged = {
+        ...previous,
         ...row,
-      });
+      };
+      if (row.reasoning_options === undefined && previous?.reasoning_options !== undefined) {
+        merged.reasoning_options = previous.reasoning_options;
+      }
+      rows.set(key, merged);
     }
   }
 

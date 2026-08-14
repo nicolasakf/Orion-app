@@ -21,6 +21,67 @@ const MIN_RESIZE_WIDTH = 160;
 const MIN_RESIZE_HEIGHT = 120;
 const FALLBACK_SANS_FONT_FAMILY = "Saira, ui-sans-serif, system-ui, sans-serif";
 const ORION_PLOTLY_HOVER_CORNER_RATIO = 0.15;
+const plotlyNotifierHosts = new Set<HTMLElement>();
+let activePlotlyNotifierHost: HTMLElement | null = null;
+let plotlyNotifierObserver: MutationObserver | null = null;
+
+/** Moves Plotly's body-level notifier into the output that owns the interaction. */
+function containPlotlyNotifiers(): void {
+  const activeHost =
+    activePlotlyNotifierHost?.isConnected === true
+      ? activePlotlyNotifierHost
+      : Array.from(plotlyNotifierHosts).find((host) => host.isConnected) ?? null;
+  if (!activeHost) return;
+
+  Array.from(document.body.children).forEach((child) => {
+    if (!(child instanceof HTMLElement)) return;
+    if (!child.classList.contains("plotly-notifier")) return;
+
+    child.style.position = "absolute";
+    child.style.top = "0.5rem";
+    child.style.right = "0.5rem";
+    child.style.zIndex = "30";
+    child.style.maxWidth = "min(250px, calc(100% - 1rem))";
+    activeHost.appendChild(child);
+  });
+}
+
+/**
+ * Registers a Plotly output as a destination for global notifier elements.
+ * Plotly always appends snapshot and interaction notices to document.body, so
+ * the shared observer reparents them before the browser paints the mutation.
+ */
+function registerPlotlyNotifierHost(host: HTMLElement): () => void {
+  plotlyNotifierHosts.add(host);
+  activePlotlyNotifierHost = host;
+
+  if (!plotlyNotifierObserver) {
+    plotlyNotifierObserver = new MutationObserver(containPlotlyNotifiers);
+    plotlyNotifierObserver.observe(document.body, { childList: true });
+  }
+
+  /** Marks this chart as the owner of the next Plotly notification. */
+  const activateHost = () => {
+    activePlotlyNotifierHost = host;
+  };
+  host.addEventListener("pointerdown", activateHost, true);
+  host.addEventListener("focusin", activateHost, true);
+  host.addEventListener("click", activateHost, true);
+
+  return () => {
+    host.removeEventListener("pointerdown", activateHost, true);
+    host.removeEventListener("focusin", activateHost, true);
+    host.removeEventListener("click", activateHost, true);
+    plotlyNotifierHosts.delete(host);
+    if (activePlotlyNotifierHost === host) {
+      activePlotlyNotifierHost = null;
+    }
+    if (plotlyNotifierHosts.size === 0) {
+      plotlyNotifierObserver?.disconnect();
+      plotlyNotifierObserver = null;
+    }
+  };
+}
 
 /**
  * Resolve the app sans-serif stack so Plotly matches Orion's Next.js Saira bundle.
@@ -708,6 +769,8 @@ export function PlotlyJsonOutputRenderer({
       return;
     }
 
+    const unregisterNotifierHost = registerPlotlyNotifierHost(host);
+
     const markMeasuredAndResize = () => {
       const width = host.getBoundingClientRect().width;
       if (width >= MIN_RESIZE_WIDTH) {
@@ -734,6 +797,7 @@ export function PlotlyJsonOutputRenderer({
     window.addEventListener("resize", handleWindowResize);
 
     return () => {
+      unregisterNotifierHost();
       resizeObserver.disconnect();
       intersectionObserver.disconnect();
       window.removeEventListener("resize", handleWindowResize);
@@ -780,9 +844,9 @@ export function PlotlyJsonOutputRenderer({
       className={
         isFullScreen
           ? frameWidth !== null
-            ? "w-fit max-w-[95vw] overflow-hidden"
-            : "w-[95vw] max-w-[95vw] overflow-hidden"
-          : "w-full overflow-hidden"
+            ? "relative isolate w-fit max-w-[95vw] overflow-hidden"
+            : "relative isolate w-[95vw] max-w-[95vw] overflow-hidden"
+          : "relative isolate w-full overflow-hidden"
       }
       style={{
         height: `${frameHeight}px`,

@@ -182,7 +182,8 @@ export function createJupyterTools(
         kernelService,
         sc,
         notebookManager,
-        getJupyterRootDirectory
+        getJupyterRootDirectory,
+        snapshotProvider,
       ),
       restartNotebook: new RestartNotebookTool(
         kernelService,

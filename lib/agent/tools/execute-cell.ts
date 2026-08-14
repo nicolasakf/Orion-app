@@ -24,6 +24,7 @@ import {
   runCells,
   type CellExecutionResult,
 } from "@/lib/notebook/cell-executor";
+import { mergeVersionedCellOutputs } from "@/lib/notebook/versioned-output";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { CellExecutionStatus, OutputType } from "@/lib/types";
 import type { KernelSidecar } from "../kernel-sidecar";
@@ -223,9 +224,15 @@ export class ExecuteCellTool extends BaseTool {
         if (stream) {
           log.push(`[COMPLETED in ${(result.duration / 1000).toFixed(1)}s]`);
         }
+        const previousOutputs = notebook.cells[resolvedIndex]?.outputs ?? [];
+        const mergedOutputs = mergeVersionedCellOutputs(
+          previousOutputs,
+          result.outputs,
+          result.success,
+        );
         const executionResult: AgentCellExecutionResult = {
           ...result,
-          kernelOutputs: result.outputs,
+          kernelOutputs: mergedOutputs,
           agentLog: log,
         };
         results.set(resolvedIndex, executionResult);
@@ -234,6 +241,7 @@ export class ExecuteCellTool extends BaseTool {
           notebookPath: path,
           cellIndex: resolvedIndex,
           executionInfo: this.buildExecutionInfo(executionResult),
+          outputs: mergedOutputs,
         });
       },
     });
@@ -249,7 +257,7 @@ export class ExecuteCellTool extends BaseTool {
       }
       const { agentLog } = executionResult;
 
-      executionResult.kernelOutputs.forEach((output, outputIndex) => {
+      executionResult.outputs.forEach((output, outputIndex) => {
         const data = output.data ?? {};
         for (const mimeType of ["image/png", "image/jpeg"] as const) {
           const value = data[mimeType];

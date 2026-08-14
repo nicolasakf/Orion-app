@@ -3,8 +3,16 @@
 import type { NotebookOutputType, NotebookType } from "@/lib/types";
 import ansiToHtml from "ansi-to-html";
 import { useTheme } from "next-themes";
-import { useMemo, useState, useRef, useCallback, useEffect } from "react";
+import {
+  useMemo,
+  useState,
+  useRef,
+  useCallback,
+  useEffect,
+  type MouseEvent as ReactMouseEvent,
+} from "react";
 import { OutputContextMenu } from "./output-context-menu";
+import { OutputFrame } from "./output-frame";
 import { OutputFullScreenDialog } from "./output-full-screen-dialog";
 import { cn } from "@/lib/utils";
 import { retainShallowEqualState } from "@/lib/retain-shallow-equal-state";
@@ -353,6 +361,18 @@ export function OutputRenderer({
   const openFullScreen = useCallback(() => setIsFullScreenOpen(true), []);
   const mimeRegistry = useMemo(() => getDefaultMimeRegistry(), []);
 
+  /** Mentions an output when it is Option-clicked, before its renderer handles the click. */
+  const handleOptionClickMention = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (!event.altKey || !onMentionOutput) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      onMentionOutput(cellIndex, outputIndex);
+    },
+    [cellIndex, onMentionOutput, outputIndex],
+  );
+
   // Create theme-aware ANSI converter
   const ansiConverter = useMemo(() => {
     if (theme === "light") {
@@ -442,6 +462,7 @@ export function OutputRenderer({
           notebookMetadata={notebook?.metadata ?? notebookMetadata}
           cellIndex={reference.cellIndex}
           outputIndex={reference.outputIndex}
+          onMentionOutput={onMentionOutput}
           onGoToSource={onGoToSource}
           onOrionUiStateChange={onOrionUiStateChange}
           onOrionUiAction={onOrionUiAction}
@@ -455,12 +476,45 @@ export function OutputRenderer({
       notebook,
       notebookMetadata,
       onGoToSource,
+      onMentionOutput,
       onOrionUiAction,
       onOrionUiStateChange,
       onOrionUiTableRequest,
       onOrionUiUnmount,
       outputReferenceTrail,
       resolveOrionUiOutputReference,
+    ],
+  );
+
+  /** Renders an embedded snapshot without duplicating outer output actions. */
+  const renderNestedOutput = useCallback(
+    (nestedOutput: NotebookOutputType, renderKey: string) => (
+      <OutputRenderer
+        key={renderKey}
+        output={nestedOutput}
+        notebook={notebook}
+        notebookMetadata={notebookMetadata}
+        cellIndex={cellIndex}
+        outputIndex={outputIndex}
+        onOrionUiStateChange={onOrionUiStateChange}
+        onOrionUiAction={onOrionUiAction}
+        onOrionUiUnmount={onOrionUiUnmount}
+        onOrionUiTableRequest={onOrionUiTableRequest}
+        onOrionUiTableMetadataChange={onOrionUiTableMetadataChange}
+        outputReferenceTrail={outputReferenceTrail}
+      />
+    ),
+    [
+      cellIndex,
+      notebook,
+      notebookMetadata,
+      onOrionUiAction,
+      onOrionUiStateChange,
+      onOrionUiTableMetadataChange,
+      onOrionUiTableRequest,
+      onOrionUiUnmount,
+      outputIndex,
+      outputReferenceTrail,
     ],
   );
 
@@ -595,6 +649,7 @@ export function OutputRenderer({
       onOrionUiTableRequest,
       onOrionUiTableMetadataChange,
       renderOrionUiOutputReference,
+      renderNestedOutput,
       isInAppView: !!isInAppView,
       businessMode,
       onOpenFullScreen: openFullScreen,
@@ -615,6 +670,7 @@ export function OutputRenderer({
       onOrionUiTableRequest,
       onOrionUiTableMetadataChange,
       renderOrionUiOutputReference,
+      renderNestedOutput,
       isInAppView,
       businessMode,
       openFullScreen,
@@ -695,11 +751,17 @@ export function OutputRenderer({
           open={isFullScreenOpen}
           onOpenChange={setIsFullScreenOpen}
         >
-          {renderMimeBody({ fullScreen: true })}
+          <OutputFrame
+            onClickCapture={
+              onMentionOutput ? handleOptionClickMention : undefined
+            }
+          >
+            {renderMimeBody({ fullScreen: true })}
+          </OutputFrame>
         </OutputFullScreenDialog>
       </>
     ),
-    [isFullScreenOpen, renderMimeBody],
+    [handleOptionClickMention, isFullScreenOpen, onMentionOutput, renderMimeBody],
   );
 
   // Check if output is hidden
@@ -722,16 +784,32 @@ export function OutputRenderer({
       </div>
     );
 
-    if (!onGoToSource) return hiddenPlaceholder;
+    if (!onGoToSource) {
+      return (
+        <OutputFrame
+          onClickCapture={
+            onMentionOutput ? handleOptionClickMention : undefined
+          }
+        >
+          {hiddenPlaceholder}
+        </OutputFrame>
+      );
+    }
 
     return (
-      <OutputContextMenu
-        cellIndex={cellIndex}
-        outputIndex={outputIndex}
-        onGoToSource={onGoToSource}
+      <OutputFrame
+        onClickCapture={
+          onMentionOutput ? handleOptionClickMention : undefined
+        }
       >
-        {hiddenPlaceholder}
-      </OutputContextMenu>
+        <OutputContextMenu
+          cellIndex={cellIndex}
+          outputIndex={outputIndex}
+          onGoToSource={onGoToSource}
+        >
+          {hiddenPlaceholder}
+        </OutputContextMenu>
+      </OutputFrame>
     );
   }
 
@@ -748,20 +826,36 @@ export function OutputRenderer({
         ? "No renderable output (empty data bundle)."
         : `Orion cannot render this output yet. Unsupported MIME type${unsupportedMimes.length > 1 ? "s" : ""}: ${unsupportedMimes.join(", ")}`;
 
-    return wrapWithContextMenu(
-      <div className="text-sm text-muted-foreground p-3">
-        {fallbackMessage}
-      </div>,
+    return (
+      <OutputFrame
+        onClickCapture={
+          onMentionOutput ? handleOptionClickMention : undefined
+        }
+      >
+        {wrapWithContextMenu(
+          <div className="text-sm text-muted-foreground p-3">
+            {fallbackMessage}
+          </div>,
+        )}
+      </OutputFrame>
     );
   }
 
   const Renderer = MIME_RENDERERS[effectiveResolved.mimeType];
   if (!Renderer) {
-    return wrapWithContextMenu(
-      <div className="text-sm text-muted-foreground p-3">
-        Orion does not have a renderer for MIME type{" "}
-        <code>{effectiveResolved.mimeType}</code> yet.
-      </div>,
+    return (
+      <OutputFrame
+        onClickCapture={
+          onMentionOutput ? handleOptionClickMention : undefined
+        }
+      >
+        {wrapWithContextMenu(
+          <div className="text-sm text-muted-foreground p-3">
+            Orion does not have a renderer for MIME type{" "}
+            <code>{effectiveResolved.mimeType}</code> yet.
+          </div>,
+        )}
+      </OutputFrame>
     );
   }
 
@@ -774,5 +868,13 @@ export function OutputRenderer({
     );
   }
 
-  return wrapWithFullScreenDialog(content);
+  return wrapWithFullScreenDialog(
+    <OutputFrame
+      onClickCapture={
+        onMentionOutput ? handleOptionClickMention : undefined
+      }
+    >
+      {content}
+    </OutputFrame>,
+  );
 }

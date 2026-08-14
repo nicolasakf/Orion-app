@@ -8,12 +8,13 @@ import html
 import json
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Union
 
 from . import _runtime, _table as _table_runtime, theme
 
 ORION_UI_MIME_TYPE = "application/vnd.orion.ui+json"
+ORION_VERSIONED_OUTPUT_MIME_TYPE = "application/vnd.orion.versioned-output+json"
 StateValue = Union[str, int, float, bool]
 JsonValue = Union[None, str, int, float, bool, List["JsonValue"], Dict[str, "JsonValue"]]
 
@@ -206,6 +207,149 @@ class Component:
     def __repr__(self) -> str:
         """Return a concise plain-text representation for terminal contexts."""
         return f"OrionUI({self.type}, id={self.output_id!r})"
+
+
+def _get_ipython_shell() -> Any:
+    """Return the active IPython shell without making IPython a package dependency."""
+    try:
+        from IPython import get_ipython
+    except ImportError:
+        return None
+    return get_ipython()
+
+
+def _fallback_mimebundle(value: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Format a value outside IPython using its standard rich-repr hooks."""
+    mimebundle = getattr(value, "_repr_mimebundle_", None)
+    if callable(mimebundle):
+        result = mimebundle()
+        if isinstance(result, tuple) and len(result) == 2:
+            data, metadata = result
+            if isinstance(data, Mapping) and isinstance(metadata, Mapping):
+                return dict(data), dict(metadata)
+        if isinstance(result, Mapping):
+            return dict(result), {}
+
+    repr_hooks = (
+        ("text/html", "_repr_html_"),
+        ("image/svg+xml", "_repr_svg_"),
+        ("image/png", "_repr_png_"),
+        ("image/jpeg", "_repr_jpeg_"),
+        ("text/markdown", "_repr_markdown_"),
+        ("text/latex", "_repr_latex_"),
+        ("application/json", "_repr_json_"),
+    )
+    data: Dict[str, Any] = {}
+    for mime_type, hook_name in repr_hooks:
+        hook = getattr(value, hook_name, None)
+        if callable(hook):
+            rendered = hook()
+            if rendered is not None:
+                data[mime_type] = rendered
+    data.setdefault("text/plain", repr(value))
+    return data, {}
+
+
+def _close_inline_matplotlib_figure(value: Any) -> None:
+    """Close a captured inline figure so IPython does not display it twice."""
+    try:
+        import matplotlib
+        import matplotlib.pyplot as plt
+        from matplotlib.figure import Figure
+    except ImportError:
+        return
+
+    figure = value if isinstance(value, Figure) else getattr(value, "figure", None)
+    if isinstance(figure, Figure) and "inline" in matplotlib.get_backend().lower():
+        plt.close(figure)
+
+
+def _fallback_matplotlib_mimebundle(value: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Render a Matplotlib Figure or Axes as PNG when IPython has no figure formatter."""
+    try:
+        from IPython.core.pylabtools import print_figure
+        from matplotlib.figure import Figure
+    except ImportError:
+        return {}, {}
+
+    figure = value if isinstance(value, Figure) else getattr(value, "figure", None)
+    if not isinstance(figure, Figure):
+        return {}, {}
+    png = print_figure(figure, fmt="png", base64=True)
+    if not png:
+        return {}, {}
+    return {"image/png": png, "text/plain": repr(figure)}, {}
+
+
+def _format_version_value(value: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Format a versioned value and promote Matplotlib-like axes to their figure."""
+    shell = _get_ipython_shell()
+
+    def format_candidate(candidate: Any) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        if shell is not None and hasattr(shell, "display_formatter"):
+            data, metadata = shell.display_formatter.format(candidate)
+            return dict(data), dict(metadata)
+        return _fallback_mimebundle(candidate)
+
+    data, metadata = format_candidate(value)
+    figure = getattr(value, "figure", None)
+    has_rich_output = any(mime_type != "text/plain" for mime_type in data)
+    if figure is not None and figure is not value and not has_rich_output:
+        figure_data, figure_metadata = format_candidate(figure)
+        if any(mime_type != "text/plain" for mime_type in figure_data):
+            _close_inline_matplotlib_figure(value)
+            return figure_data, figure_metadata
+    if not has_rich_output:
+        fallback_data, fallback_metadata = _fallback_matplotlib_mimebundle(value)
+        if fallback_data:
+            _close_inline_matplotlib_figure(value)
+            return fallback_data, fallback_metadata
+    _close_inline_matplotlib_figure(value)
+    return data, metadata
+
+
+@dataclass(frozen=True)
+class VersionedOutput:
+    """Display wrapper whose previous rich MIME representations Orion retains."""
+
+    value: Any
+    key: Optional[str] = None
+    max_versions: int = 10
+
+    def __post_init__(self) -> None:
+        """Validate stable identity and retention options."""
+        if self.key is not None and (not isinstance(self.key, str) or not self.key):
+            raise ValueError("ui.version key must be a non-empty string or None.")
+        if isinstance(self.max_versions, bool) or not isinstance(self.max_versions, int):
+            raise TypeError("ui.version max_versions must be an integer.")
+        if self.max_versions < 1:
+            raise ValueError("ui.version max_versions must be at least 1.")
+
+    def _repr_mimebundle_(self, include: Any = None, exclude: Any = None) -> Dict[str, Any]:
+        """Return the current rich output plus Orion's version-history envelope."""
+        data, metadata = _format_version_value(self.value)
+        if ORION_VERSIONED_OUTPUT_MIME_TYPE in data:
+            raise ValueError("ui.version cannot wrap another versioned output.")
+
+        current: Dict[str, Any] = {
+            "id": f"orion-version-{uuid.uuid4().hex}",
+            "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "metadata": metadata,
+        }
+        payload: Dict[str, Any] = {
+            "version": 1,
+            "maxVersions": self.max_versions,
+            "current": current,
+            "history": [],
+        }
+        if self.key is not None:
+            payload["key"] = self.key
+
+        return {**data, ORION_VERSIONED_OUTPUT_MIME_TYPE: payload}
+
+    def __repr__(self) -> str:
+        """Return a concise terminal representation without formatting the value."""
+        return f"VersionedOutput(key={self.key!r}, max_versions={self.max_versions})"
 
 
 def _component(component_type: str, children: Sequence[Any] = (), **props: Any) -> Component:
@@ -2002,6 +2146,34 @@ def output(
     )
 
 
+def version(
+    value: Any,
+    *,
+    key: Optional[str] = None,
+    max_versions: int = 10,
+) -> VersionedOutput:
+    """Retain prior rich representations of a notebook output in Orion.
+
+    Parameters
+    ----------
+    value
+        Any object supported by the active IPython rich display formatter.
+    key : str or None, optional
+        Stable identity used when versioned outputs are reordered within a cell.
+        Keys must be unique among versioned outputs in that cell. Default is
+        ``None``, which matches outputs by their versioned-output position.
+    max_versions : int, optional
+        Maximum number of versions retained in the notebook, including the
+        current version. Default is ``10``.
+
+    Returns
+    -------
+    VersionedOutput
+        A display wrapper rendered by Orion with selectable history.
+    """
+    return VersionedOutput(value=value, key=key, max_versions=max_versions)
+
+
 def get(key: str, default: Optional[StateValue] = None) -> Optional[StateValue]:
     """Return an Orion UI control value from Python runtime state.
 
@@ -2141,6 +2313,8 @@ def _render_static_html(component: Component) -> str:
 __all__ = [
     "Component",
     "ORION_UI_MIME_TYPE",
+    "ORION_VERSIONED_OUTPUT_MIME_TYPE",
+    "VersionedOutput",
     "accordion",
     "alert",
     "avatar",
@@ -2181,4 +2355,5 @@ __all__ = [
     "toggle",
     "toggle_group",
     "tooltip",
+    "version",
 ]

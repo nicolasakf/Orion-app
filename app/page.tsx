@@ -131,6 +131,12 @@ import {
   clearPendingPublishedNotebookImport,
   readPendingPublishedNotebookImport,
 } from "@/lib/cloud/published-import";
+import {
+  ACTIVE_DOCUMENT_DELETED_EVENT,
+  ACTIVE_DOCUMENT_RENAMED_EVENT,
+  type ActiveDocumentDeletedEventDetail,
+  type ActiveDocumentRenamedEventDetail,
+} from "@/hooks/use-active-document-sync";
 
 type ActiveFile = {
   name: string;
@@ -454,9 +460,6 @@ function MobileLayout({
             workspaceDirectory={workspaceDirectory ?? undefined}
             rootDirectory={jupyterRootDirectory}
             openDocumentSnapshots={openDocumentSnapshots}
-            onAgentNotebookChange={() => {
-              window.dispatchEvent(new CustomEvent("agentNotebookModified"));
-            }}
           >
             <div className="flex flex-col h-full overflow-hidden">
               <div className="flex-1 min-h-0 overflow-hidden">
@@ -1698,12 +1701,12 @@ export default function Page() {
         if (!prev.path) return prev;
         if (payload.itemType === "file") {
           if (prev.path === payload.oldPath) {
-            return { name: payload.newName, path: payload.newPath };
+            return { ...prev, name: payload.newName, path: payload.newPath };
           }
           return prev;
         }
         if (prev.path === payload.oldPath) {
-          return { name: payload.newName, path: payload.newPath };
+          return { ...prev, name: payload.newName, path: payload.newPath };
         }
         const prefix = `${payload.oldPath}/`;
         if (prev.path.startsWith(prefix)) {
@@ -1719,12 +1722,12 @@ export default function Page() {
         const next = prev.map((f) => {
           if (payload.itemType === "file") {
             if (f.path === payload.oldPath) {
-              return { name: payload.newName, path: payload.newPath };
+              return { ...f, name: payload.newName, path: payload.newPath };
             }
             return f;
           }
           if (f.path === payload.oldPath) {
-            return { name: payload.newName, path: payload.newPath };
+            return { ...f, name: payload.newName, path: payload.newPath };
           }
           const prefix = `${payload.oldPath}/`;
           if (f.path.startsWith(prefix)) {
@@ -1775,6 +1778,31 @@ export default function Page() {
     },
     [kernelService, saveRecentFilesToStorage, setUserSettings],
   );
+
+  useEffect(() => {
+    const handleActiveDocumentRenamed = (event: Event): void => {
+      const detail = (event as CustomEvent<ActiveDocumentRenamedEventDetail>)
+        .detail;
+      if (!detail?.oldPath || !detail.newPath) return;
+      handleWorkspacePathRenamed({
+        oldPath: detail.oldPath,
+        newPath: detail.newPath,
+        newName: deriveFileNameFromPath(detail.newPath),
+        itemType: "file",
+      });
+    };
+
+    window.addEventListener(
+      ACTIVE_DOCUMENT_RENAMED_EVENT,
+      handleActiveDocumentRenamed,
+    );
+    return () => {
+      window.removeEventListener(
+        ACTIVE_DOCUMENT_RENAMED_EVENT,
+        handleActiveDocumentRenamed,
+      );
+    };
+  }, [handleWorkspacePathRenamed]);
 
   /**
    * Closes the editor and clears recent entries when a deleted tree item
@@ -1840,6 +1868,26 @@ export default function Page() {
     },
     [kernelService, saveRecentFilesToStorage, setUserSettings],
   );
+
+  useEffect(() => {
+    const handleActiveDocumentDeleted = (event: Event): void => {
+      const detail = (event as CustomEvent<ActiveDocumentDeletedEventDetail>)
+        .detail;
+      if (!detail?.path) return;
+      handleWorkspacePathDeleted({ path: detail.path, itemType: "file" });
+    };
+
+    window.addEventListener(
+      ACTIVE_DOCUMENT_DELETED_EVENT,
+      handleActiveDocumentDeleted,
+    );
+    return () => {
+      window.removeEventListener(
+        ACTIVE_DOCUMENT_DELETED_EVENT,
+        handleActiveDocumentDeleted,
+      );
+    };
+  }, [handleWorkspacePathDeleted]);
 
   /**
    * Attempts to auto-connect to CLI-managed and stored Jupyter connections.
@@ -3021,9 +3069,6 @@ export default function Page() {
                   onNotebookSaveHandlerChange={handleNotebookSaveHandlerChange}
                   onFileLoadError={handleEditorFileLoadError}
                   onFileOpenCancel={handleEditorFileOpenCancel}
-                  onAgentNotebookChange={() => {
-                    window.dispatchEvent(new CustomEvent("agentNotebookModified"));
-                  }}
                 />
               ) : (
               <ResizablePanelGroup
@@ -3353,9 +3398,6 @@ export default function Page() {
                     workspaceDirectory={workspaceDirectory ?? undefined}
                     rootDirectory={jupyterRootDirectory}
                     openDocumentSnapshots={openDocumentSnapshots}
-                    onAgentNotebookChange={() => {
-                      window.dispatchEvent(new CustomEvent("agentNotebookModified"));
-                    }}
                   >
                     <div
                       ref={rightSidebarRevealRef}

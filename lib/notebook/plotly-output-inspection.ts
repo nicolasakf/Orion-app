@@ -1,6 +1,19 @@
 import type { ExecutionToolResult } from "@/lib/agent/visual-evidence";
 import { loadPlotly } from "@/lib/notebook/plotly-runtime";
 
+/** Preferred density for model-facing Plotly snapshots. */
+const PLOTLY_INSPECTION_EXPORT_SCALE = 2;
+/** Prevents high-density exports from exceeding a useful model-input resolution. */
+const PLOTLY_INSPECTION_MAX_DIMENSION_PX = 1600;
+
+/** Returns a high-density export scale capped at the model-facing dimension limit. */
+export function getPlotlyInspectionExportScale(width: number, height: number): number {
+  return Math.min(
+    PLOTLY_INSPECTION_EXPORT_SCALE,
+    PLOTLY_INSPECTION_MAX_DIMENSION_PX / Math.max(width, height),
+  );
+}
+
 const COLLISION_TOLERANCE_PX = 2;
 const RENDER_TIMEOUT_MS = 3000;
 
@@ -241,11 +254,15 @@ export async function inspectPlotlyOutput(
   let imageError: string | undefined;
   try {
     const plotly = await loadPlotly();
+    const exportScale = getPlotlyInspectionExportScale(
+      outputDomRect.width,
+      outputDomRect.height,
+    );
     const dataUrl = await plotly.toImage(plotNode, {
       format: "png",
       width: Math.round(outputDomRect.width),
       height: Math.round(outputDomRect.height),
-      scale: 1,
+      scale: exportScale,
     });
     const commaIndex = dataUrl.indexOf(",");
     if (commaIndex < 0) throw new Error("Plotly returned an invalid PNG data URL");

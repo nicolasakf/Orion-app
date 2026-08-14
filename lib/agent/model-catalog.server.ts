@@ -31,6 +31,8 @@ export async function getMergedModelCatalog(): Promise<ModelCatalogEntry[]> {
           ...modelsDevFallback,
           provider_id: "vercel",
           model_id: model.model_id,
+          reasoning_options:
+            model.reasoning_options ?? modelsDevFallback.reasoning_options,
           client_avail: model.client_avail,
           pinned_by_default: model.pinned_by_default,
           source: "models_dev",

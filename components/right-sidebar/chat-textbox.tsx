@@ -43,6 +43,10 @@ import {
   formatModelSelectionKey,
 } from "@/lib/agent/model-selection-key";
 import { PINNED_MODELS_CHANGED_EVENT } from "@/lib/chat/model-selector-events";
+import {
+  SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+  type ScrollToNotebookCellEventDetail,
+} from "@/lib/notebook/notebook-execution-events";
 
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -1091,6 +1095,31 @@ export function ChatTextbox({
     [onReferencesChange, references, textareaRef]
   );
 
+  /** Reveals the cell or output targeted by a notebook reference chip. */
+  const navigateToNotebookReference = React.useCallback(
+    (reference: ResolvedChatReference) => {
+      const { locator } = reference;
+      const detail: ScrollToNotebookCellEventDetail | null =
+        locator.type === "output"
+          ? {
+              cellIndex: locator.cellIndex,
+              outputIndex: locator.outputIndex,
+            }
+          : locator.type === "cell"
+            ? { cellIndex: locator.cellIndices[0] ?? -1 }
+            : null;
+
+      if (!detail || detail.cellIndex < 0) return;
+      window.dispatchEvent(
+        new CustomEvent<ScrollToNotebookCellEventDetail>(
+          SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+          { detail },
+        ),
+      );
+    },
+    [],
+  );
+
   const removeAttachment = React.useCallback(
     (attachmentId: string) => {
       onAttachmentsChange?.(attachments.filter((attachment) => attachment.id !== attachmentId));
@@ -1657,14 +1686,31 @@ export function ChatTextbox({
                   <div className="flex flex-wrap items-center gap-1 px-3 pt-2 pb-0">
                     {references.map((reference) => {
                       const Icon = CHAT_REFERENCE_TYPE_ICONS[reference.type];
+                      const isNotebookReference =
+                        reference.locator.type === "cell" ||
+                        reference.locator.type === "output";
                       return (
                         <span
                           key={reference.id}
                           className="corner-squircle inline-flex h-5 max-w-[70%] items-center gap-1 rounded-md border border-border/60 bg-muted px-1.5 text-inherit font-medium leading-none text-muted-foreground"
                           title={`${getReferenceTypeLabel(reference.type)}: ${reference.label}`}
                         >
-                          <Icon className="h-2.5 w-2.5 shrink-0 opacity-70" />
-                          <span className="truncate">{reference.label}</span>
+                          {isNotebookReference ? (
+                            <button
+                              type="button"
+                              className="flex min-w-0 items-center gap-1 text-left hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                              onClick={() => navigateToNotebookReference(reference)}
+                              aria-label={`Go to ${reference.label}`}
+                            >
+                              <Icon className="h-2.5 w-2.5 shrink-0 opacity-70" />
+                              <span className="truncate">{reference.label}</span>
+                            </button>
+                          ) : (
+                            <>
+                              <Icon className="h-2.5 w-2.5 shrink-0 opacity-70" />
+                              <span className="truncate">{reference.label}</span>
+                            </>
+                          )}
                           <button
                             type="button"
                             onMouseDown={(e) => {
@@ -2463,8 +2509,8 @@ export function ChatTextbox({
                 </PopoverContent>
               </Popover>
 
-              {/* Model intelligence selector (only for providers with configurable settings) */}
-              {!readOnly && selectedModelProvider && (selectedModelProvider === "openai" || selectedModelProvider === "anthropic") && (
+              {/* Model intelligence selector, hidden when the catalog has no usable levels. */}
+              {!readOnly && selectedModelProvider && (
                 <ModelSettingsPopover
                   provider={selectedModelProvider}
                   model={selectedLlm}
@@ -2476,6 +2522,11 @@ export function ChatTextbox({
 
             {/* Bottom right - context usage + send */}
             <div className="flex items-center gap-1">
+              {isOverContextBudget && (
+                <span className="mr-1 text-[11px] text-muted-foreground" role="status">
+                  Compacting context and retrying…
+                </span>
+              )}
               {!readOnly && (
                 <Button
                   type="button"

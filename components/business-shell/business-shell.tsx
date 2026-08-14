@@ -299,7 +299,6 @@ interface BusinessShellProps {
   ) => void;
   onFileLoadError: (path: string, error?: unknown) => boolean | void;
   onFileOpenCancel: (path: string) => void;
-  onAgentNotebookChange: () => void;
 }
 
 /** Chat-first shell for business users, reusing Orion's agent and notebook engine. */
@@ -352,7 +351,6 @@ export function BusinessShell({
   onNotebookSaveHandlerChange,
   onFileLoadError,
   onFileOpenCancel,
-  onAgentNotebookChange,
 }: BusinessShellProps) {
   const { effectiveSettings, setUserSettings } = useOrionSettings();
   const { setNotebookViewMode } = useNotebookViewMode();
@@ -1007,7 +1005,6 @@ export function BusinessShell({
             workspaceDirectory={workspaceDirectory ?? undefined}
             rootDirectory={jupyterRootDirectory}
             openDocumentSnapshots={openDocumentSnapshots}
-            onAgentNotebookChange={onAgentNotebookChange}
           >
             <RightSidebar
               activeNotebookPath={currentFile.path}

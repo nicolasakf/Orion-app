@@ -1,6 +1,7 @@
 import type { NotebookType } from "@/lib/types";
-import type { ModelCatalogSource } from "@/lib/agent/model-catalog";
+import type { ModelCatalogSource, ReasoningOption } from "@/lib/agent/model-catalog";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
+import type { ReasoningEffort } from "@/lib/agent/reasoning-effort";
 import type { ResolvedChatReference } from "@/lib/chat/chat-references";
 import type { FileUIPart } from "ai";
 
@@ -35,6 +36,8 @@ export interface LLM {
   supportsForcedToolChoice?: boolean;
   /** True when the model exposes reasoning-specific behavior. */
   supportsReasoning?: boolean;
+  /** Validated per-model controls reported by the selected catalog source. */
+  reasoningOptions?: ReasoningOption[];
   /** Token threshold where long-context pricing begins. */
   longContextThreshold?: number;
   /** Input price per million tokens after the long-context threshold. */
@@ -58,41 +61,14 @@ export interface EditingState {
 }
 
 // ============================================================================
-// Per-model settings (provider-specific)
+// Per-model settings
 // ============================================================================
 
-export interface OpenAIModelSettings {
-  reasoningEffort?: "low" | "medium" | "high" | "xhigh";
+export interface ModelSettings extends Record<string, unknown> {
+  reasoningEffort?: ReasoningEffort;
 }
 
-export interface AnthropicModelSettings {
-  extendedThinking?: boolean;
-  thinkingBudgetTokens?: number;
-}
-
-/** Placeholder for future Google-specific settings */
-export interface GoogleModelSettings {
-  // reserved
-}
-
-/** Placeholder for future xAI-specific settings */
-export interface XAIModelSettings {
-  // reserved
-}
-
-/** Placeholder for future local-provider settings */
-export interface LocalModelSettings {
-  // reserved
-}
-
-export type ModelSettings =
-  | OpenAIModelSettings
-  | AnthropicModelSettings
-  | GoogleModelSettings
-  | XAIModelSettings
-  | LocalModelSettings;
-
-/** Map of modelId → provider-specific settings */
+/** Map of model-selection key to normalized settings. */
 export type ModelSettingsMap = Record<string, ModelSettings>;
 
 /** A user message waiting to send until the agent finishes its current run. */

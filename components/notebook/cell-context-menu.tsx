@@ -5,6 +5,7 @@ import { TooltipPortal } from "@radix-ui/react-tooltip";
 import {
   ArrowDown,
   ArrowUp,
+  AtSign,
   Braces,
   Copy,
   Eye,
@@ -64,6 +65,8 @@ interface CellContextMenuProps {
   onClearOutputs: () => void;
   onToggleAppView: () => void;
   onMarkdownAction?: (action: string) => void;
+  /** Attaches this markdown cell as a chat mention and focuses the composer. */
+  onMentionCell?: () => void;
 }
 
 const markdownContextMenuActions: MarkdownContextMenuAction[] = [
@@ -76,8 +79,8 @@ const markdownContextMenuActions: MarkdownContextMenuAction[] = [
 ];
 
 /**
- * Context menu for cell visualization controls
- * Appears when right-clicking on a cell header
+ * Context menu for cell visualization controls.
+ * Appears when right-clicking a cell header or markdown cell body.
  */
 export function CellContextMenu({
   children,
@@ -101,11 +104,32 @@ export function CellContextMenu({
   onClearOutputs,
   onToggleAppView,
   onMarkdownAction,
+  onMentionCell,
 }: CellContextMenuProps) {
+  const keepComposerFocusOnCloseRef = React.useRef(false);
+  const showMarkdownMention = cellType === CellType.MARKDOWN && !!onMentionCell;
+
+  /**
+   * Mentions the markdown cell and stops the menu from restoring focus to its
+   * trigger after the composer has received focus.
+   */
+  const handleMentionCellSelect = React.useCallback(() => {
+    keepComposerFocusOnCloseRef.current = true;
+    onMentionCell?.();
+  }, [onMentionCell]);
+
+  /** Preserves the composer focus requested by the cell-mention action. */
+  const handleCloseAutoFocus = React.useCallback((event: Event) => {
+    if (!keepComposerFocusOnCloseRef.current) return;
+
+    keepComposerFocusOnCloseRef.current = false;
+    event.preventDefault();
+  }, []);
+
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="w-56">
+      <ContextMenuContent className="w-56" onCloseAutoFocus={handleCloseAutoFocus}>
         {cellType === CellType.MARKDOWN && onMarkdownAction && (
           <>
             <TooltipProvider delayDuration={300}>
@@ -137,6 +161,13 @@ export function CellContextMenu({
             </TooltipProvider>
             <ContextMenuSeparator />
           </>
+        )}
+
+        {showMarkdownMention && (
+          <ContextMenuItem onSelect={handleMentionCellSelect}>
+            <AtSign className="mr-2 h-4 w-4" />
+            Mention cell in chat
+          </ContextMenuItem>
         )}
 
         {/* Whole Cell Controls */}

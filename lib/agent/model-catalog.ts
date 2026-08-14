@@ -7,6 +7,22 @@ export type ModelCatalogSource =
   | "user"
   | "local";
 
+export type CatalogReasoningEffort =
+  | "none"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max"
+  | "default"
+  | null;
+
+export type ReasoningOption =
+  | { type: "toggle" }
+  | { type: "effort"; values: CatalogReasoningEffort[] }
+  | { type: "budget_tokens"; min?: number; max?: number };
+
 export interface ModelCatalogEntry {
   model_id: string;
   label: string;
@@ -29,6 +45,8 @@ export interface ModelCatalogEntry {
   supports_tool_calling?: boolean;
   supports_forced_tool_choice?: boolean;
   supports_reasoning?: boolean;
+  /** Optional per-model reasoning controls reported by the live catalog. */
+  reasoning_options?: ReasoningOption[];
   long_context_threshold: number | null;
   long_context_input_price_per_1m: number | null;
   long_context_output_price_per_1m: number | null;

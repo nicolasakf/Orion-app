@@ -31,6 +31,8 @@ export interface ProviderMessageInput {
 }
 
 export interface ProviderOptionsInput {
+  providerId?: ProviderId;
+  modelId?: string;
   modelSettings?: Record<string, unknown>;
 }
 

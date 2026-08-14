@@ -1,5 +1,6 @@
 import { DEFAULT_SELECTED_CHAT_MODEL_ID } from "@/lib/settings/defaults";
 import { findModelBySelectionKey } from "@/lib/agent/model-selection-key";
+import { isReasoningEffort } from "@/lib/agent/reasoning-effort";
 
 import type { ModelSettingsMap } from "./types";
 
@@ -46,18 +47,19 @@ export function saveSelectedModelToSession(modelId: string): void {
   }
 }
 
+/** Migrates session-stored settings into Orion's normalized effort shape. */
 function parseModelSettingsMap(value: unknown): ModelSettingsMap {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
 
   const result: ModelSettingsMap = {};
   for (const [modelId, settings] of Object.entries(value)) {
-    if (
-      typeof modelId === "string" &&
-      settings &&
-      typeof settings === "object" &&
-      !Array.isArray(settings)
-    ) {
-      result[modelId] = settings;
+    if (typeof modelId !== "string" || !settings || typeof settings !== "object") continue;
+    if (Array.isArray(settings)) continue;
+
+    const savedEffort = (settings as Record<string, unknown>).reasoningEffort;
+    const migratedEffort = savedEffort === "extra-high" ? "xhigh" : savedEffort;
+    if (isReasoningEffort(migratedEffort)) {
+      result[modelId] = { reasoningEffort: migratedEffort };
     }
   }
 

@@ -64,6 +64,7 @@ import {
 } from "@/components/notebook/orion-ui-table/types";
 import { NotebookAppView } from "@/components/notebook/notebook-app-view";
 import { NotebookPublishDialog } from "@/components/notebook/notebook-publish-dialog";
+import { DocumentSyncAlert } from "@/components/editors/document-sync-alert";
 import type {
   NotebookType,
   NotebookCellType,
@@ -76,9 +77,16 @@ import { cn } from "@/lib/utils";
 import { useOrionSetting } from "@/hooks/use-orion-settings";
 import type { KernelStatus, KernelInfo } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
+import {
+  dispatchActiveDocumentDeleted,
+  dispatchActiveDocumentRenamed,
+  useActiveDocumentSync,
+  type ActiveDocumentSyncController,
+} from "@/hooks/use-active-document-sync";
 import { runCells as runCellsBatch } from "@/lib/notebook/cell-executor";
 import type { CellExecutionResult } from "@/lib/notebook/cell-executor";
 import { CellExecutionQueue } from "@/lib/notebook/cell-execution-queue";
+import { mergeVersionedCellOutputs } from "@/lib/notebook/versioned-output";
 import {
   RUN_ALL_CELLS_EVENT_NAME,
   SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
@@ -476,6 +484,9 @@ export function NotebookEditor({
   const notebookRootRef = useRef<HTMLDivElement | null>(null);
   const queuedAgentExecutionCellsRef = useRef<Set<number>>(new Set());
   const activeAgentExecutionCellsRef = useRef<Set<number>>(new Set());
+  const previousExecutionOutputsRef = useRef<
+    Map<number, NotebookOutputType[]>
+  >(new Map());
   const pendingAgentNotebookReloadRef = useRef(false);
   const agentExecutionFilepathRef = useRef(filepath);
   const mouseSelectionScrollSnapshotRef =
@@ -650,6 +661,8 @@ export function NotebookEditor({
   // Track whether there are unsaved changes so we can notify the parent once per transition
   const isUnsavedRef = useRef(false);
   const dirtyVersionRef = useRef(0);
+  const documentSyncRef = useRef<ActiveDocumentSyncController | null>(null);
+  const preserveDirtyRenameToRef = useRef<string | null>(null);
 
   /** Marks the notebook as having unsaved changes and notifies the parent (once per transition). */
   const markDirty = useCallback(() => {
@@ -831,8 +844,10 @@ export function NotebookEditor({
   const deletedCellHistoryRef = useRef<DeletedCellSnapshot[][]>([]);
   const activeNotebookView = controlledActiveNotebookView ?? "notebook";
   const previousActiveNotebookViewRef = useRef(activeNotebookView);
-  /** Cell index to scroll to after switching from app view to notebook view. */
-  const pendingScrollToCellIndexRef = useRef<number | null>(null);
+  /** Notebook target to reveal after switching from App View to Notebook View. */
+  const pendingScrollToCellRef = useRef<ScrollToNotebookCellEventDetail | null>(
+    null,
+  );
   // For 'D' twice to delete
   const lastDKeyPressTimeRef = useRef<number>(0);
 
@@ -856,9 +871,18 @@ export function NotebookEditor({
       // the prior notebook before this path can receive its own queued events.
       queuedAgentExecutionCellsRef.current.clear();
       activeAgentExecutionCellsRef.current.clear();
+      previousExecutionOutputsRef.current.clear();
       pendingAgentNotebookReloadRef.current = false;
       agentExecutionFilepathRef.current = filepath;
       updateExecutionRunningState();
+    }
+
+    if (
+      preserveDirtyRenameToRef.current === filepath &&
+      isUnsavedRef.current
+    ) {
+      preserveDirtyRenameToRef.current = null;
+      return;
     }
 
     // Load the notebook from the filepath when the component mounts or filepath changes
@@ -889,6 +913,8 @@ export function NotebookEditor({
         const parsedNotebook = parseNotebook(JSON.stringify(model.content));
 
         const withIds = ensureUniqueCellIds(parsedNotebook, createCellId);
+
+        documentSyncRef.current?.recordLoadedModel(model);
 
         setNotebook(withIds);
         // Clear modified/pending cells when loading a new notebook.
@@ -1095,7 +1121,11 @@ export function NotebookEditor({
    * Helper function to update execution info in cell metadata
    */
   const updateExecutionInfo = useCallback(
-    (cellIndex: number, executionInfo: CellExecutionInfo) => {
+    (
+      cellIndex: number,
+      executionInfo: CellExecutionInfo,
+      shouldMarkDirty = true,
+    ) => {
       setNotebook((prevNotebook) => {
         if (!prevNotebook) return null;
         if (cellIndex < 0 || cellIndex >= prevNotebook.cells.length)
@@ -1119,9 +1149,11 @@ export function NotebookEditor({
         return { ...prevNotebook, cells: newCells };
       });
 
-      const cellId = cellIdForIndex(cellIndex);
-      if (cellId) modifiedCellsRef.current.add(cellId);
-      markDirty();
+      if (shouldMarkDirty) {
+        const cellId = cellIdForIndex(cellIndex);
+        if (cellId) modifiedCellsRef.current.add(cellId);
+        markDirty();
+      }
     },
     [cellIdForIndex, markDirty],
   );
@@ -1130,7 +1162,11 @@ export function NotebookEditor({
    * Updates only the execution status while preserving prior timing metadata.
    */
   const setCellExecutionStatus = useCallback(
-    (cellIndex: number, status: CellExecutionStatus) => {
+    (
+      cellIndex: number,
+      status: CellExecutionStatus,
+      shouldMarkDirty = true,
+    ) => {
       const currentNotebook = notebookRef.current;
       if (
         !currentNotebook ||
@@ -1143,17 +1179,21 @@ export function NotebookEditor({
       const previousInfo =
         currentNotebook.cells[cellIndex]?.metadata?.orion?.cellState
           ?.executionInfo;
-      updateExecutionInfo(cellIndex, {
-        ...previousInfo,
-        status,
-      });
+      updateExecutionInfo(
+        cellIndex,
+        {
+          ...previousInfo,
+          status,
+        },
+        shouldMarkDirty,
+      );
     },
     [updateExecutionInfo],
   );
 
   /** Marks code cells as queued when a run request is waiting to execute. */
   const markCellsQueued = useCallback(
-    (indices: number[]) => {
+    (indices: number[], shouldMarkDirty = true) => {
       const currentNotebook = notebookRef.current;
       if (!currentNotebook) return;
 
@@ -1165,7 +1205,11 @@ export function NotebookEditor({
           cell.metadata?.orion?.cellState?.executionInfo?.status;
         if (currentStatus === CellExecutionStatus.RUNNING) continue;
 
-        setCellExecutionStatus(idx, CellExecutionStatus.QUEUED);
+        setCellExecutionStatus(
+          idx,
+          CellExecutionStatus.QUEUED,
+          shouldMarkDirty,
+        );
       }
     },
     [setCellExecutionStatus],
@@ -1303,12 +1347,18 @@ export function NotebookEditor({
         const notebookToSave = applyPendingChanges(currentNotebook);
 
         const contentsManager = parentKernelService.getContentsManager();
-        await contentsManager.save(filepath, {
-          type: "notebook",
-          format: "json",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          content: notebookToSave as any,
-        });
+        const writeNotebook = () =>
+          contentsManager.save(filepath, {
+            type: "notebook",
+            format: "json",
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            content: notebookToSave as any,
+          });
+        if (documentSyncRef.current) {
+          await documentSyncRef.current.runLocalWrite(writeNotebook);
+        } else {
+          await writeNotebook();
+        }
 
         if (getSubagentMetadata(notebookToSave.metadata)) {
           window.dispatchEvent(
@@ -1471,12 +1521,18 @@ export function NotebookEditor({
     capturePendingCellSources();
     const notebookToPublish = applyPendingChanges(notebook);
     const contentsManager = parentKernelService.getContentsManager();
-    await contentsManager.save(filepath, {
-      type: "notebook",
-      format: "json",
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      content: notebookToPublish as any,
-    });
+    const writeNotebook = () =>
+      contentsManager.save(filepath, {
+        type: "notebook",
+        format: "json",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        content: notebookToPublish as any,
+      });
+    if (documentSyncRef.current) {
+      await documentSyncRef.current.runLocalWrite(writeNotebook);
+    } else {
+      await writeNotebook();
+    }
 
     if (getSubagentMetadata(notebookToPublish.metadata)) {
       window.dispatchEvent(
@@ -1645,12 +1701,18 @@ export function NotebookEditor({
 
         const notebookToExport = applyPendingChanges(notebook);
         const contentsManager = parentKernelService.getContentsManager();
-        await contentsManager.save(filepath, {
-          type: "notebook",
-          format: "json",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          content: notebookToExport as any,
-        });
+        const writeNotebook = () =>
+          contentsManager.save(filepath, {
+            type: "notebook",
+            format: "json",
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            content: notebookToExport as any,
+          });
+        if (documentSyncRef.current) {
+          await documentSyncRef.current.runLocalWrite(writeNotebook);
+        } else {
+          await writeNotebook();
+        }
 
         if (getSubagentMetadata(notebookToExport.metadata)) {
           window.dispatchEvent(
@@ -1756,53 +1818,121 @@ export function NotebookEditor({
       return;
     }
 
+    if (activeAgentExecutionCellsRef.current.size > 0) {
+      pendingAgentNotebookReloadRef.current = true;
+      return;
+    }
+
     try {
+      const dirtyVersionBeforeReload = dirtyVersionRef.current;
+      const previousSelection: CellSelectionState = {
+        selectedCellIds: new Set(selectedCellIds),
+        selectionAnchorCellId,
+        cellCursorId,
+      };
+      const scrollContainer = notebookRootRef.current?.querySelector<HTMLElement>(
+        ".notebook-editor-scroll",
+      );
+      const scrollTop = scrollContainer?.scrollTop ?? null;
       const contentsManager = parentKernelService.getContentsManager();
       const model = await contentsManager.get(filepath, { content: true });
       const parsedNotebook = parseNotebook(JSON.stringify(model.content));
 
       const withIds = ensureUniqueCellIds(parsedNotebook, createCellId);
 
+      if (dirtyVersionRef.current !== dirtyVersionBeforeReload) {
+        throw new Error("Notebook changed in the editor while the disk version was loading.");
+      }
+
+      documentSyncRef.current?.recordLoadedModel(model);
+
       setNotebook(withIds);
       modifiedCellsRef.current = new Set();
       pendingCellChangesRef.current = new Map();
       cellComponentRefs.current = new Map();
       cellRefs.current = new Map();
-      applySelectionState(singleCellSelection(getCellId(withIds.cells[0])));
+      const availableIds = new Set(
+        withIds.cells.map((cell) => getCellId(cell)).filter((id): id is string => id !== null),
+      );
+      const preservedIds = new Set(
+        Array.from(previousSelection.selectedCellIds).filter((id) => availableIds.has(id)),
+      );
+      const preservedCursor =
+        previousSelection.cellCursorId && availableIds.has(previousSelection.cellCursorId)
+          ? previousSelection.cellCursorId
+          : (preservedIds.values().next().value ?? null);
+      const preservedAnchor =
+        previousSelection.selectionAnchorCellId &&
+        availableIds.has(previousSelection.selectionAnchorCellId)
+          ? previousSelection.selectionAnchorCellId
+          : preservedCursor;
+      applySelectionState(
+        preservedCursor
+          ? {
+              selectedCellIds: preservedIds.size > 0 ? preservedIds : new Set([preservedCursor]),
+              selectionAnchorCellId: preservedAnchor,
+              cellCursorId: preservedCursor,
+            }
+          : singleCellSelection(getCellId(withIds.cells[0])),
+      );
       markClean();
+      if (scrollContainer && scrollTop !== null) {
+        window.requestAnimationFrame(() => {
+          scrollContainer.scrollTop = scrollTop;
+        });
+      }
     } catch (err) {
       console.error(
         "Failed to reload notebook after agent modification:",
         err,
       );
+      throw err;
     }
-  }, [applySelectionState, parentKernelService, filepath, markClean]);
+  }, [
+    applySelectionState,
+    cellCursorId,
+    filepath,
+    markClean,
+    parentKernelService,
+    selectedCellIds,
+    selectionAnchorCellId,
+  ]);
 
-  /**
-   * Listen for agentNotebookModified events dispatched when the Orion agent
-   * modifies the notebook via Jupyter's ContentsManager. Re-reads from
-   * ContentsManager to sync the editor with the agent's changes.
-   */
-  useEffect(() => {
-    const handleAgentModified = () => {
-      if (activeAgentExecutionCellsRef.current.size > 0) {
-        pendingAgentNotebookReloadRef.current = true;
+  const documentSync = useActiveDocumentSync({
+    path: filepath,
+    contentsManager: parentKernelService?.getContentsManager() ?? null,
+    isDirty: () => isUnsavedRef.current,
+    onReload: reloadNotebookAfterAgentModification,
+    onDeleted: (source) => {
+      if (isUnsavedRef.current) return;
+      if (source === "contents-manager") {
+        dispatchActiveDocumentDeleted({ path: filepath });
         return;
       }
-      void reloadNotebookAfterAgentModification();
-    };
+      const error = Object.assign(new Error(`Notebook '${filepath}' no longer exists.`), {
+        response: { status: 404 },
+      });
+      onFileLoadError?.(filepath, error);
+    },
+    onRenamed: (newPath) => {
+      if (isUnsavedRef.current) {
+        preserveDirtyRenameToRef.current = newPath;
+      }
+      dispatchActiveDocumentRenamed({ oldPath: filepath, newPath });
+    },
+  });
+  documentSyncRef.current = documentSync;
 
-    window.addEventListener(
-      "agentNotebookModified",
-      handleAgentModified as EventListener,
-    );
-    return () => {
-      window.removeEventListener(
-        "agentNotebookModified",
-        handleAgentModified as EventListener,
-      );
-    };
-  }, [reloadNotebookAfterAgentModification]);
+  /** Discards the notebook buffer only after explicit user confirmation. */
+  const reloadDiskVersion = useCallback(async (): Promise<void> => {
+    if (
+      isUnsavedRef.current &&
+      !window.confirm("Discard your unsaved notebook changes and reload the version on disk?")
+    ) {
+      return;
+    }
+    await documentSync.reloadDiskVersion();
+  }, [documentSync]);
 
   /** Applies live notebook output updates emitted by agent execute_cell. */
   useEffect(() => {
@@ -1812,7 +1942,7 @@ export function NotebookEditor({
       if (!detail || detail.notebookPath !== filepath) return;
 
       if (detail.type === "queued") {
-        markCellsQueued(detail.cellIndices);
+        markCellsQueued(detail.cellIndices, false);
         detail.cellIndices.forEach((cellIndex) =>
           queuedAgentExecutionCellsRef.current.add(cellIndex),
         );
@@ -1836,10 +1966,14 @@ export function NotebookEditor({
           newCells[detail.cellIndex] = targetCell;
           return { ...prev, cells: newCells };
         });
-        updateExecutionInfo(detail.cellIndex, {
-          status: CellExecutionStatus.RUNNING,
-          startTime: detail.startTime,
-        });
+        updateExecutionInfo(
+          detail.cellIndex,
+          {
+            status: CellExecutionStatus.RUNNING,
+            startTime: detail.startTime,
+          },
+          false,
+        );
         updateExecutionRunningState();
         return;
       }
@@ -1876,7 +2010,18 @@ export function NotebookEditor({
       }
 
       if (detail.type === "complete") {
-        updateExecutionInfo(detail.cellIndex, detail.executionInfo);
+        setNotebook((prev) => {
+          if (!prev || detail.cellIndex < 0 || detail.cellIndex >= prev.cells.length) {
+            return prev;
+          }
+          const newCells = prev.cells.slice();
+          newCells[detail.cellIndex] = {
+            ...newCells[detail.cellIndex],
+            outputs: detail.outputs,
+          } as NotebookCellType;
+          return { ...prev, cells: newCells };
+        });
+        updateExecutionInfo(detail.cellIndex, detail.executionInfo, false);
         queuedAgentExecutionCellsRef.current.delete(detail.cellIndex);
         activeAgentExecutionCellsRef.current.delete(detail.cellIndex);
         updateExecutionRunningState();
@@ -1988,9 +2133,9 @@ export function NotebookEditor({
     [scrollToCellId],
   );
 
-  /** Selects and scrolls to a cell by index (e.g. go-to-error from the toolbar). */
+  /** Selects and scrolls to a cell or output by index (e.g. from a chat reference chip). */
   const scrollToCellIndexFromEvent = useCallback(
-    (cellIndex: number) => {
+    (cellIndex: number, outputIndex?: number) => {
       const currentNotebook = notebookRef.current;
       if (
         cellIndex < 0 ||
@@ -2001,6 +2146,20 @@ export function NotebookEditor({
       }
 
       selectCellByIndex(cellIndex);
+      if (outputIndex !== undefined) {
+        const scrollToOutputAfterLayout = () => {
+          scrollToCell(cellIndex, outputIndex);
+        };
+        window.setTimeout(() => {
+          scrollToOutputAfterLayout();
+          window.requestAnimationFrame(() => {
+            scrollToOutputAfterLayout();
+            window.requestAnimationFrame(scrollToOutputAfterLayout);
+          });
+        }, 0);
+        return;
+      }
+
       const cellId = getCellIdByIndex(currentNotebook, cellIndex);
       if (cellId) {
         scrollToCellIdAfterLayout(cellId);
@@ -2023,7 +2182,7 @@ export function NotebookEditor({
         return;
       }
 
-      pendingScrollToCellIndexRef.current = cellIndex;
+      pendingScrollToCellRef.current = { cellIndex };
       onActiveNotebookViewChange?.("notebook");
     },
     [onActiveNotebookViewChange],
@@ -2334,6 +2493,10 @@ export function NotebookEditor({
             if (!currentNotebook) return;
 
             const cellId = getCellIdByIndex(currentNotebook, idx);
+            previousExecutionOutputsRef.current.set(
+              idx,
+              currentNotebook.cells[idx]?.outputs ?? [],
+            );
 
             setNotebook((prev) => {
               if (!prev || idx < 0 || idx >= prev.cells.length) return prev;
@@ -2389,6 +2552,23 @@ export function NotebookEditor({
           },
 
           onCellComplete: (idx, result: CellExecutionResult) => {
+            const previousOutputs =
+              previousExecutionOutputsRef.current.get(idx) ?? [];
+            const mergedOutputs = mergeVersionedCellOutputs(
+              previousOutputs,
+              result.outputs,
+              result.success,
+            );
+            previousExecutionOutputsRef.current.delete(idx);
+            setNotebook((prev) => {
+              if (!prev || idx < 0 || idx >= prev.cells.length) return prev;
+              const newCells = prev.cells.slice();
+              newCells[idx] = {
+                ...newCells[idx],
+                outputs: mergedOutputs,
+              } as NotebookCellType;
+              return { ...prev, cells: newCells };
+            });
             updateExecutionInfo(idx, {
               status: result.success
                 ? CellExecutionStatus.SUCCESS
@@ -2853,8 +3033,8 @@ export function NotebookEditor({
   // Scroll to a cell when the toolbar go-to-error popover is clicked.
   useEffect(() => {
     const handleScrollToCell = (e: Event) => {
-      const { cellIndex } = (e as CustomEvent<ScrollToNotebookCellEventDetail>)
-        .detail;
+      const { cellIndex, outputIndex } =
+        (e as CustomEvent<ScrollToNotebookCellEventDetail>).detail;
       const currentNotebook = notebookRef.current;
       if (
         cellIndex < 0 ||
@@ -2865,12 +3045,12 @@ export function NotebookEditor({
       }
 
       if (activeNotebookView !== "notebook") {
-        pendingScrollToCellIndexRef.current = cellIndex;
+        pendingScrollToCellRef.current = { cellIndex, outputIndex };
         onActiveNotebookViewChange?.("notebook");
         return;
       }
 
-      scrollToCellIndexFromEvent(cellIndex);
+      scrollToCellIndexFromEvent(cellIndex, outputIndex);
     };
 
     window.addEventListener(
@@ -2894,11 +3074,11 @@ export function NotebookEditor({
   useEffect(() => {
     if (activeNotebookView !== "notebook") return;
 
-    const cellIndex = pendingScrollToCellIndexRef.current;
-    if (cellIndex === null) return;
+    const target = pendingScrollToCellRef.current;
+    if (target === null) return;
 
-    pendingScrollToCellIndexRef.current = null;
-    scrollToCellIndexFromEvent(cellIndex);
+    pendingScrollToCellRef.current = null;
+    scrollToCellIndexFromEvent(target.cellIndex, target.outputIndex);
   }, [activeNotebookView, scrollToCellIndexFromEvent]);
 
   // Clear pending runs when the user interrupts the kernel.
@@ -4283,6 +4463,11 @@ export function NotebookEditor({
           }
         `}</style>
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-sidebar">
+          <DocumentSyncAlert
+            state={documentSync.state}
+            onSaveEditorVersion={() => saveOpenNotebookIfDirty(filepath)}
+            onReloadDiskVersion={reloadDiskVersion}
+          />
           {loading ? (
             <div
               className={cn(

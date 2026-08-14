@@ -84,9 +84,13 @@ export class ModelGateway {
   }
 
   /** Return provider-specific AI SDK providerOptions. */
-  getProviderOptions(providerId: ProviderId, modelSettings?: Record<string, unknown>): Record<string, any> {
+  getProviderOptions(
+    providerId: ProviderId,
+    modelSettings?: Record<string, unknown>,
+    modelId?: string
+  ): Record<string, any> {
     const adapter = getProviderAdapter(providerId);
-    return adapter?.providerOptions({ modelSettings }) ?? {};
+    return adapter?.providerOptions({ providerId, modelId, modelSettings }) ?? {};
   }
 
   /**
@@ -124,7 +128,7 @@ export class ModelGateway {
     return {
       model,
       messages: prepared,
-      providerOptions: adapter.providerOptions({ modelSettings }),
+      providerOptions: adapter.providerOptions({ providerId, modelId, modelSettings }),
     };
   }
 

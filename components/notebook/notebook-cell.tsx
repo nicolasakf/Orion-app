@@ -1759,6 +1759,11 @@ function NotebookCellComponent({
     [cellIndex, onCellAction],
   );
 
+  /** Attaches this cell as a chat mention from the cell context menu. */
+  const handleMentionCellFromMenu = useCallback(() => {
+    onMentionCell?.(cellIndex);
+  }, [cellIndex, onMentionCell]);
+
   /**
    * Update cell state in metadata
    */
@@ -2232,6 +2237,7 @@ function NotebookCellComponent({
             onClearOutputs={handleClearOutputs}
             onToggleAppView={handleToggleAppView}
             onMarkdownAction={handleMarkdownContextMenuAction}
+            onMentionCell={onMentionCell ? handleMentionCellFromMenu : undefined}
           >
             <div
               className="sticky top-0 z-30 flex h-7 min-h-7 items-center bg-muted px-1.5 py-0.5 shadow-sm"
@@ -2407,6 +2413,7 @@ function NotebookCellComponent({
                 onClearOutputs={handleClearOutputs}
                 onToggleAppView={handleToggleAppView}
                 onMarkdownAction={handleMarkdownContextMenuAction}
+                onMentionCell={onMentionCell ? handleMentionCellFromMenu : undefined}
               >
                 {cell.cell_type === CellType.MARKDOWN &&
                   !inputHiddenForDisplay && (

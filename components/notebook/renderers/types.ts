@@ -54,6 +54,11 @@ export interface NotebookOutputActionHandlers {
     cellId: string | undefined,
     outputIndex: number,
   ) => ReactNode;
+  /** Renders a synthetic nested output through the shared MIME pipeline. */
+  renderNestedOutput?: (
+    output: NotebookOutputType,
+    renderKey: string,
+  ) => ReactNode;
   isInAppView?: boolean;
   /** When true, App View toggle labels are shortened for Business View. */
   businessMode?: boolean;

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AgentRule } from "@/lib/agent/rules";
 import { DEFAULT_INTERACTION_MODE_CONFIGS } from "@/lib/agent/interaction-modes";
+import { SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME } from "@/lib/notebook/notebook-execution-events";
 
 import { ChatTextbox } from "./chat-textbox";
 import type { ChatDraftAttachment, LLM } from "./types";
@@ -27,6 +28,9 @@ const models: LLM[] = [
     label: "GPT Test",
     provider: "openai",
     supportsImageInput: true,
+    reasoningOptions: [
+      { type: "effort", values: ["low", "medium", "high", "xhigh"] },
+    ],
   },
 ];
 
@@ -217,6 +221,41 @@ describe("ChatTextbox attachments", () => {
   });
 });
 
+describe("ChatTextbox notebook reference chips", () => {
+  it("scrolls to the referenced notebook output when its chip is clicked", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    renderTextbox({
+      references: [
+        {
+          id: "output:example",
+          type: "output",
+          label: "Output #2",
+          locator: {
+            type: "output",
+            notebookPath: "analysis.ipynb",
+            cellIndex: 3,
+            outputIndex: 2,
+          },
+          status: "resolved",
+          preview: "Output preview",
+          resolvedAt: "2026-08-14T00:00:00.000Z",
+        },
+      ],
+    });
+
+    dispatchSpy.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Go to Output #2" }));
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+        detail: { cellIndex: 3, outputIndex: 2 },
+      }),
+    );
+    dispatchSpy.mockRestore();
+  });
+});
+
 describe("ChatTextbox generation state", () => {
   it("returns to compose mode when loading clears after stop", () => {
     const onStop = vi.fn();
@@ -268,7 +307,7 @@ describe("ChatTextbox model intelligence settings", () => {
     expect(onModelSettingsChange).toHaveBeenCalledWith({ reasoningEffort: "xhigh" });
   });
 
-  it("limits mini OpenAI models to the supported three-level selector", () => {
+  it("uses the exact model's catalog levels instead of name heuristics", () => {
     renderTextbox({
       selectedModelProvider: "openai",
       selectedModel: "gpt-mini-test",
@@ -277,12 +316,63 @@ describe("ChatTextbox model intelligence settings", () => {
           ...models[0],
           value: "gpt-mini-test",
           apiModelId: "gpt-5-mini",
+          reasoningOptions: [
+            { type: "effort", values: ["low", "medium", "high"] },
+          ],
         },
       ],
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Intelligence level: Medium" }));
 
+    expect(screen.getByRole("button", { name: "High" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Extra High" })).not.toBeInTheDocument();
+  });
+
+  it("hides Intelligence for budget-only and unverified Vercel models", () => {
+    const { rerender } = renderTextbox({
+      selectedModelProvider: "google",
+      selectedModel: "gemini-budget",
+      models: [{
+        value: "gemini-budget",
+        label: "Gemini Budget",
+        provider: "google",
+        reasoningOptions: [{ type: "budget_tokens", min: 0, max: 24_576 }],
+      }],
+    });
+
+    expect(screen.queryByRole("button", { name: /Intelligence level:/ })).not.toBeInTheDocument();
+
+    rerender(<ChatTextbox {...createTextboxProps({
+      selectedModelProvider: "vercel",
+      selectedModel: "moonshotai/kimi-test",
+      models: [{
+        value: "moonshotai/kimi-test",
+        label: "Kimi Test",
+        provider: "vercel",
+        reasoningOptions: [{ type: "effort", values: ["low", "high"] }],
+      }],
+    })} />);
+
+    expect(screen.queryByRole("button", { name: /Intelligence level:/ })).not.toBeInTheDocument();
+  });
+
+  it("shows catalog-driven levels for a verified Vercel model", () => {
+    renderTextbox({
+      selectedModelProvider: "vercel",
+      selectedModel: "google/gemini-test",
+      models: [{
+        value: "google/gemini-test",
+        label: "Gemini Test",
+        provider: "vercel",
+        reasoningOptions: [
+          { type: "effort", values: ["minimal", "low", "medium", "high", "xhigh"] },
+        ],
+      }],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Intelligence level: Medium" }));
+    expect(screen.getByRole("button", { name: "Minimal" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "High" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Extra High" })).not.toBeInTheDocument();
   });

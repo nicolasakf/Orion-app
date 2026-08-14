@@ -216,6 +216,54 @@ function savedTableView(overrides: Partial<OrionTableOutputMetadata["views"][num
 }
 
 describe("OrionUiOutputRenderer", () => {
+  it("renders default alerts with the Orion amber alert-card treatment", () => {
+    renderOrionUiOutput({
+      value: {
+        version: 1,
+        id: "ui-alert",
+        root: {
+          type: "Alert",
+          props: {
+            title: "Heads up",
+            description: "This uses the standard Orion alert treatment.",
+          },
+          children: [],
+        },
+        state: {},
+        bindings: {},
+      },
+    });
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveClass("border-amber-500/50", "bg-amber-500/5");
+    expect(alert.querySelector("svg")).toBeInTheDocument();
+    expect(screen.getByText("Heads up")).toBeInTheDocument();
+  });
+
+  it("keeps destructive alerts on the destructive treatment", () => {
+    renderOrionUiOutput({
+      value: {
+        version: 1,
+        id: "ui-destructive-alert",
+        root: {
+          type: "Alert",
+          props: {
+            description: "Something went wrong.",
+            variant: "destructive",
+          },
+          children: [],
+        },
+        state: {},
+        bindings: {},
+      },
+    });
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveClass("text-destructive");
+    expect(alert).not.toHaveClass("bg-amber-500/5");
+    expect(alert.querySelector("svg")).not.toBeInTheDocument();
+  });
+
   it("shows active default filter and sort controls in blue", () => {
     const { container } = renderOrionUiOutput({
       value: tablePayload({

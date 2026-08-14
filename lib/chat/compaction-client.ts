@@ -9,6 +9,7 @@ import type { ProviderId } from "@/lib/agent/model-gateway-types";
 export interface CompactionApiResult {
   summaryText: string;
   tokensUsed: number;
+  coversThrough: string;
 }
 
 /**
@@ -48,6 +49,14 @@ export async function callCompactionApi(
     );
   }
 
-  const data = (await response.json()) as { summary: string; tokensUsed: number };
-  return { summaryText: data.summary, tokensUsed: data.tokensUsed ?? 0 };
+  const data = (await response.json()) as {
+    summary: string;
+    tokensUsed: number;
+    coversThrough?: string;
+  };
+  return {
+    summaryText: data.summary,
+    tokensUsed: data.tokensUsed ?? 0,
+    coversThrough: data.coversThrough ?? messages.at(-1)?.id ?? "",
+  };
 }

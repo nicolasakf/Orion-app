@@ -6,6 +6,12 @@ import type { ModelMessage } from "@ai-sdk/provider-utils";
 
 import { extractTokenBreakdown } from "@/lib/agent/cost-calculator";
 import type { CredentialMode, ProviderId } from "@/lib/agent/model-gateway-types";
+import {
+  getReasoningProviderFamily,
+  isAdapterReasoningEffort,
+  isReasoningEffort,
+  type ReasoningEffort,
+} from "@/lib/agent/reasoning-effort";
 
 import type { ProviderAdapter, ProviderCapabilities, ProviderMessageInput } from "./types";
 import {
@@ -35,6 +41,21 @@ function requireByok(credential: CredentialMode, providerId: ProviderId): string
 
 function prepared(input: ProviderMessageInput, supportsSystemMessages = true): ModelMessage[] {
   return injectSystemPrompt(input.messages, input.agentSystemPrompt, supportsSystemMessages);
+}
+
+/** Reads a normalized named effort while accepting Orion's legacy xhigh label. */
+function modelReasoningEffort(
+  providerId: ProviderId,
+  modelId: string,
+  modelSettings: Record<string, unknown> | undefined
+): ReasoningEffort | undefined {
+  const value = modelSettings?.reasoningEffort === "extra-high"
+    ? "xhigh"
+    : modelSettings?.reasoningEffort;
+  return isReasoningEffort(value) &&
+    isAdapterReasoningEffort(providerId, modelId, value)
+    ? value
+    : undefined;
 }
 
 function openAICompatibleAdapter(input: {
@@ -69,16 +90,12 @@ function openAICompatibleAdapter(input: {
       }).chat(credential.type === "local_endpoint" ? credential.modelId : modelId);
     },
     prepareMessages: prepared,
-    providerOptions({ modelSettings }) {
+    providerOptions({ modelId, modelSettings }) {
       const openai: Record<string, any> = {
         stream_options: { include_usage: true },
       };
-      if (modelSettings?.reasoningEffort) {
-        // Normalize settings persisted before Orion adopted OpenAI's `xhigh` wire value.
-        openai.reasoningEffort = modelSettings.reasoningEffort === "extra-high"
-          ? "xhigh"
-          : modelSettings.reasoningEffort;
-      }
+      const effort = modelReasoningEffort(input.id, modelId ?? "", modelSettings);
+      if (effort) openai.reasoningEffort = effort;
       return {
         openai: {
           ...openai,
@@ -300,16 +317,9 @@ const anthropicAdapter: ProviderAdapter = {
   prepareMessages(input) {
     return addAnthropicCacheBreakpoints(prepared(input));
   },
-  providerOptions({ modelSettings }) {
-    const extended = modelSettings?.extendedThinking ?? true;
-    const budget = typeof modelSettings?.thinkingBudgetTokens === "number"
-      ? modelSettings.thinkingBudgetTokens
-      : 10000;
-    return {
-      anthropic: {
-        thinking: extended ? { type: "enabled", budgetTokens: budget } : { type: "disabled" },
-      },
-    };
+  providerOptions({ modelId, modelSettings }) {
+    const effort = modelReasoningEffort("anthropic", modelId ?? "", modelSettings);
+    return effort ? { anthropic: { effort } } : {};
   },
   normalizeUsage({ usage, providerMetadata }) {
     return extractTokenBreakdown(usage, providerMetadata, "anthropic");
@@ -328,8 +338,11 @@ const googleAdapter: ProviderAdapter = {
     return createGoogleGenerativeAI({ apiKey: requireByok(credential, "google") })(modelId);
   },
   prepareMessages: prepared,
-  providerOptions() {
-    return {};
+  providerOptions({ modelId, modelSettings }) {
+    const effort = modelReasoningEffort("google", modelId ?? "", modelSettings);
+    return effort
+      ? { google: { thinkingConfig: { thinkingLevel: effort } } }
+      : {};
   },
   normalizeUsage({ usage, providerMetadata }) {
     return extractTokenBreakdown(usage, providerMetadata, "google");
@@ -391,7 +404,17 @@ const vercelAdapter: ProviderAdapter = {
     return createGateway({ apiKey: requireByok(credential, "vercel") }).languageModel(modelId);
   },
   prepareMessages: prepared,
-  providerOptions() {
+  providerOptions({ modelId, modelSettings }) {
+    const effort = modelReasoningEffort("vercel", modelId ?? "", modelSettings);
+    if (!effort || !modelId) return {};
+
+    const family = getReasoningProviderFamily("vercel", modelId);
+    if (family === "openai") return { openai: { reasoningEffort: effort } };
+    if (family === "anthropic") return { anthropic: { effort } };
+    if (family === "google") {
+      return { google: { thinkingConfig: { thinkingLevel: effort } } };
+    }
+    if (family === "xai") return { xai: { reasoningEffort: effort } };
     return {};
   },
   normalizeUsage({ usage, providerMetadata }) {

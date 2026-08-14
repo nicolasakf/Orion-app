@@ -26,46 +26,208 @@ export type ChatApiErrorPayload = {
   actionLabel?: string;
 };
 
-const ProviderErrorEnvelopeSchema = z.object({
-  error: z.object({
-    code: z.string().optional(),
-    type: z.string().optional(),
-    message: z.string().optional(),
-  }).optional(),
-});
+const ProviderErrorRecordSchema = z
+  .object({
+    code: z.union([z.string(), z.number()]).nullish(),
+    type: z.string().nullish(),
+    status: z.union([z.string(), z.number()]).nullish(),
+    statusCode: z.number().nullish(),
+    message: z.string().nullish(),
+    error: z.unknown().optional(),
+    cause: z.unknown().optional(),
+    data: z.unknown().optional(),
+    responseBody: z.string().optional(),
+  })
+  .passthrough();
+
+interface ProviderErrorFact {
+  code?: string;
+  type?: string;
+  status?: string;
+  message?: string;
+}
+
+export interface ContextLimitErrorMatch {
+  matchedRule: string;
+  fact: ProviderErrorFact;
+}
+
+export interface ProviderErrorDiagnostic {
+  code?: string;
+  type?: string;
+  status?: string;
+  matchedRule?: string;
+}
+
+const MAX_ERROR_TRAVERSAL_DEPTH = 6;
+const MAX_ERROR_TRAVERSAL_NODES = 48;
+const CONTEXT_LIMIT_CODES = new Set([
+  "context_length_exceeded",
+  "context_window_exceeded",
+  "input_too_long",
+  "prompt_too_long",
+]);
+const EXPLICIT_CONTEXT_LIMIT_PATTERNS: Array<{ id: string; pattern: RegExp }> = [
+  { id: "prompt-too-long", pattern: /\bprompt is too long\b/iu },
+  {
+    id: "context-length-exceeded",
+    pattern: /\bcontext(?:[ _-]?)(?:length|window)(?: is)? exceeded\b/iu,
+  },
+  {
+    id: "input-exceeds-context-window",
+    pattern: /\binput exceeds (?:the )?context window\b/iu,
+  },
+  {
+    id: "input-token-count-exceeds-maximum",
+    pattern:
+      /\binput token count\b[\s\S]*\bexceeds\b[\s\S]*\bmaximum(?: number of)? tokens?\b/iu,
+  },
+  {
+    id: "input-exceeds-token-limit",
+    pattern:
+      /\binput(?: length| tokens?)?\b[\s\S]*\bexceeds\b[\s\S]*\b(?:context window|input token limit|maximum number of tokens allowed)\b/iu,
+  },
+  {
+    id: "maximum-context-requested",
+    pattern:
+      /\bmaximum context (?:length|window)\b[\s\S]*\b(?:exceeded|requested|supports? up to)\b/iu,
+  },
+  { id: "request-too-large-for-model", pattern: /\brequest too large for (?:the )?model\b/iu },
+  {
+    id: "too-many-input-tokens",
+    pattern: /\btoo many tokens in (?:the )?(?:prompt|context|input)\b/iu,
+  },
+];
+
+/** Parses a possible JSON string without treating plain provider messages as JSON. */
+function parsePossibleJson(value: string): unknown | undefined {
+  const trimmed = value.trim();
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) return undefined;
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Collects normalized provider error facts from SDK errors and raw SSE envelopes. */
+function collectProviderErrorFacts(error: unknown): ProviderErrorFact[] {
+  const queue: Array<{ value: unknown; depth: number }> = [{ value: error, depth: 0 }];
+  const seen = new Set<unknown>();
+  const facts: ProviderErrorFact[] = [];
+
+  if (APICallError.isInstance(error)) {
+    queue.push({ value: error.data, depth: 1 });
+    if (error.responseBody) queue.push({ value: error.responseBody, depth: 1 });
+  }
+
+  while (queue.length > 0 && seen.size < MAX_ERROR_TRAVERSAL_NODES) {
+    const current = queue.shift();
+    if (!current || current.depth > MAX_ERROR_TRAVERSAL_DEPTH) continue;
+    const { value, depth } = current;
+    if (value == null || seen.has(value)) continue;
+    seen.add(value);
+
+    if (typeof value === "string") {
+      const parsedJson = parsePossibleJson(value);
+      if (parsedJson !== undefined) queue.push({ value: parsedJson, depth: depth + 1 });
+      else if (value.trim()) facts.push({ message: value.trim() });
+      continue;
+    }
+
+    const parsed = ProviderErrorRecordSchema.safeParse(value);
+    if (!parsed.success) continue;
+    const record = parsed.data;
+    const status = record.statusCode ?? record.status;
+    const fact: ProviderErrorFact = {
+      code: record.code == null ? undefined : String(record.code).toLowerCase(),
+      type: record.type?.toLowerCase(),
+      status: status == null ? undefined : String(status).toUpperCase(),
+      message: record.message?.trim(),
+    };
+    if (fact.code || fact.type || fact.status || fact.message) facts.push(fact);
+
+    for (const nested of [record.error, record.cause, record.data, record.responseBody]) {
+      if (nested !== undefined) queue.push({ value: nested, depth: depth + 1 });
+    }
+  }
+
+  return facts;
+}
+
+/** Resolves the native provider family for gateway and OAuth model selections. */
+function resolveProviderFamily(providerId: string, modelId?: string): string {
+  if (providerId === "chatgpt-oauth") return "openai";
+  if (providerId === "vercel" && modelId?.includes("/")) {
+    return modelId.slice(0, modelId.indexOf("/")).toLowerCase();
+  }
+  return providerId.toLowerCase();
+}
 
 /** Detects provider context-limit failures at the server boundary. */
-function isContextBudgetExceeded(error: unknown): boolean {
-  const candidates: unknown[] = [];
-  if (APICallError.isInstance(error)) {
-    candidates.push(error.data);
-    if (typeof error.responseBody === "string") {
-      try {
-        candidates.push(JSON.parse(error.responseBody));
-      } catch {
-        // A plain provider message is handled by the final fallback below.
-      }
+export function classifyContextLimitError(
+  error: unknown,
+  providerId: string,
+  modelId?: string
+): ContextLimitErrorMatch | null {
+  const providerFamily = resolveProviderFamily(providerId, modelId);
+  const facts = collectProviderErrorFacts(error);
+
+  for (const fact of facts) {
+    if (fact.code && CONTEXT_LIMIT_CODES.has(fact.code)) {
+      return { matchedRule: `${providerFamily}:code:${fact.code}`, fact };
+    }
+    if (fact.type && CONTEXT_LIMIT_CODES.has(fact.type)) {
+      return { matchedRule: `${providerFamily}:type:${fact.type}`, fact };
     }
   }
-  for (const candidate of candidates) {
-    const parsed = ProviderErrorEnvelopeSchema.safeParse(candidate);
-    const providerError = parsed.success ? parsed.data.error : undefined;
-    if (
-      providerError?.code === "context_length_exceeded" ||
-      providerError?.type === "context_length_exceeded" ||
-      providerError?.code === "max_tokens_exceeded"
-    ) {
-      return true;
+
+  for (const fact of facts) {
+    if (!fact.message) continue;
+    const matchedPattern = EXPLICIT_CONTEXT_LIMIT_PATTERNS.find(({ pattern }) =>
+      pattern.test(fact.message ?? "")
+    );
+    if (!matchedPattern) continue;
+
+    const isInvalidRequest =
+      fact.type === "invalid_request_error" || fact.code === "invalid_request";
+    const matchesProviderEnvelope =
+      ((providerFamily === "anthropic" || providerFamily === "groq") &&
+        fact.type === "invalid_request_error") ||
+      (providerFamily === "google" &&
+        (isInvalidRequest ||
+          fact.status === "INVALID_ARGUMENT" ||
+          fact.status === "400")) ||
+      (["cerebras", "ollama", "lmstudio", "mlx", "custom"].includes(
+        providerFamily
+      ) &&
+        (isInvalidRequest || fact.status === "400" || fact.type === undefined));
+
+    if (matchesProviderEnvelope) {
+      return {
+        matchedRule: `${providerFamily}:message:${matchedPattern.id}`,
+        fact,
+      };
     }
   }
-  const message = error instanceof Error ? error.message.toLowerCase() : "";
-  return [
-    "prompt is too long",
-    "context_length",
-    "context window",
-    "maximum context",
-    "too many tokens",
-  ].some((fragment) => message.includes(fragment));
+
+  return null;
+}
+
+/** Returns safe structured fields for error logs without serializing prompts or response bodies. */
+export function getProviderErrorDiagnostic(
+  error: unknown,
+  providerId: string,
+  modelId?: string
+): ProviderErrorDiagnostic {
+  const match = classifyContextLimitError(error, providerId, modelId);
+  const fact = match?.fact ?? collectProviderErrorFacts(error)[0] ?? {};
+  return {
+    code: fact.code,
+    type: fact.type,
+    status: fact.status,
+    matchedRule: match?.matchedRule,
+  };
 }
 
 /** Parses OpenAI / ChatGPT usage-limit metadata from an API error payload. */
@@ -147,9 +309,10 @@ function readApiErrorStatusCode(error: unknown): number | undefined {
  */
 export function buildChatApiErrorPayload(
   error: unknown,
-  providerId: string
+  providerId: string,
+  modelId?: string
 ): ChatApiErrorPayload {
-  if (isContextBudgetExceeded(error)) {
+  if (classifyContextLimitError(error, providerId, modelId)) {
     return {
       code: "context_budget_exceeded",
       title: "Context Budget Exceeded",

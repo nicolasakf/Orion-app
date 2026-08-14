@@ -56,6 +56,10 @@ import {
   shouldDispatchAutoFix,
 } from "@/lib/chat/chat-composer-events";
 import { parseChatApiErrorMessage } from "@/lib/chat/chat-api-errors";
+import {
+  canStartContextRecovery,
+  runContextRecoveryAttempt,
+} from "@/lib/chat/context-recovery";
 import { compactConversation } from "@/lib/agent/context-manager";
 import { buildWirePayload, stripInspectedRasterData } from "@/lib/agent/context-optimizer";
 import { resolveModelDisplayLabel } from "@/lib/agent/model-display-label";
@@ -74,7 +78,7 @@ import {
 import { useAssistantChatOptional } from "@/lib/agent";
 import type { AgentRule } from "@/lib/agent/rules";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
-import { NO_DEPENDENCY_TOOLS, SERVER_ONLY_TOOLS } from "@/lib/agent/tool-schemas";
+import { getMissingToolRuntimeDependency } from "@/lib/agent/tool-runtime-readiness";
 import { isAbsoluteAgentPath, toAgentAbsolutePath } from "@/lib/agent/path-resolver";
 import {
   normalizeInteractionModeConfigs,
@@ -111,6 +115,7 @@ import {
 import type { KernelStatus, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import { useJupyterShellReady } from "@/hooks/use-jupyter-shell-ready";
 import { useKernelVariables } from "@/hooks/use-kernel-variables";
 import { useIsDesktopApp, usePlatformOs } from "@/hooks/use-platform";
 import { useOpenSettings } from "@/contexts/open-settings-context";
@@ -748,6 +753,7 @@ export function RightSidebar({
     setUserSettings,
   } = useOrionSettings();
   const { openWithTab } = useOpenSettings();
+  const { serverAvailable } = useJupyterShellReady(kernelService ?? null);
 
   // State management
   const [chats, setChats] = useState<Chat[]>([]);
@@ -810,6 +816,8 @@ export function RightSidebar({
   const compactionInFlightRef = useRef(false);
   /** Allows only one reactive context recovery attempt for the active user turn. */
   const reactiveContextRetryRef = useRef(false);
+  /** Exact UI message state submitted before wire optimization for safe recovery. */
+  const lastOutboundMessagesRef = useRef<UIMessage[] | null>(null);
   /** Latest effective context settings for stable transport callbacks. */
   const contextSettingsRef = useRef(effectiveSettings.agent.context);
   contextSettingsRef.current = effectiveSettings.agent.context;
@@ -858,6 +866,7 @@ export function RightSidebar({
             supportsToolCalling: m.supports_tool_calling,
             supportsForcedToolChoice: m.supports_forced_tool_choice === true,
             supportsReasoning: m.supports_reasoning,
+            reasoningOptions: m.reasoning_options,
             longContextThreshold: m.long_context_threshold ?? undefined,
             longContextInputPrice: m.long_context_input_price_per_1m ?? undefined,
             longContextOutputPrice: m.long_context_output_price_per_1m ?? undefined,
@@ -1678,6 +1687,9 @@ export function RightSidebar({
   const pendingServerToolCallsRef = useRef<
     Array<{ toolCallId: string; toolName: OrionToolName; args: Record<string, unknown> }>
   >([]);
+  const isToolServerReady = Boolean(
+    kernelService && assistant?.toolsReady && serverAvailable
+  );
   const toolExecutionSchedulerRef = useRef<OrderedToolExecutionScheduler | null>(
     null
   );
@@ -2225,6 +2237,8 @@ export function RightSidebar({
         modelSettings: modelSettingsMap[selectedModel],
         notebookPath,
         activeFilePath,
+        connectedNotebookPath:
+          assistant?.getCurrentConnectedNotebookPath() ?? undefined,
         workspaceDirectory: workspaceDirectory ?? undefined,
         availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
         availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
@@ -2250,6 +2264,7 @@ export function RightSidebar({
       assistant?.availableRules,
       assistant?.availableSkills,
       assistant?.availableSubagents,
+      assistant?.getCurrentConnectedNotebookPath,
       assistant?.jupyterServerIsLocal,
       assistant?.rootDirectory,
       assistant?.serverInfo,
@@ -2373,15 +2388,18 @@ export function RightSidebar({
     new DefaultChatTransport({
       api: "/api/chat",
       body: () => bodyRef.current,
-      prepareSendMessagesRequest: ({ messages, body }) => ({
-        body: {
-          ...body,
-          messages: buildWirePayload(messages, compactionSummaryRef.current, {
-            retentionTurns: contextSettingsRef.current.optimizerRetentionTurns,
-            researchActive: researchSessionRef.current.active,
-          }),
-        },
-      }),
+      prepareSendMessagesRequest: ({ messages, body }) => {
+        lastOutboundMessagesRef.current = messages.slice();
+        return {
+          body: {
+            ...body,
+            messages: buildWirePayload(messages, compactionSummaryRef.current, {
+              retentionTurns: contextSettingsRef.current.optimizerRetentionTurns,
+              researchActive: researchSessionRef.current.active,
+            }),
+          },
+        };
+      },
     })
   );
 
@@ -2457,7 +2475,6 @@ export function RightSidebar({
     status,
     error,
     addToolOutput,
-    regenerate,
   } = useChat({
     transport: transportRef.current,
     // Streaming can arrive at 50+ chunks/sec; throttle UI state commits so
@@ -2556,53 +2573,67 @@ export function RightSidebar({
       console.log(error);
       const apiError = parseChatApiErrorMessage(error?.message);
       const isContextError = apiError?.code === "context_budget_exceeded";
+      if (isContextError && reactiveContextRetryRef.current) {
+        toast.error(apiError.message);
+        return;
+      }
       if (
-        isContextError &&
-        !reactiveContextRetryRef.current &&
-        !compactionInFlightRef.current &&
-        effectiveChatIdRef.current
+        canStartContextRecovery({
+          isContextError,
+          alreadyAttempted: reactiveContextRetryRef.current,
+          compactionInFlight: compactionInFlightRef.current,
+          hasChatId: Boolean(effectiveChatIdRef.current),
+        })
       ) {
         if (!modelInfo?.provider) return;
+        const chatId = effectiveChatIdRef.current;
+        if (!chatId) return;
         reactiveContextRetryRef.current = true;
         compactionInFlightRef.current = true;
         setIsCompacting(true);
-        const chatId = effectiveChatIdRef.current;
-        const currentMessages = messagesRef.current;
+        const outboundSnapshot = lastOutboundMessagesRef.current?.slice();
+        const currentMessages = outboundSnapshot ?? messagesRef.current.slice();
         const prevSummary = compactionSummaryRef.current;
         void (async () => {
-          const before = await requestContextPreflight(currentMessages).catch(() => null);
-          const result = await compactConversation(currentMessages, {
-            chatId,
+          await runContextRecoveryAttempt({
+            messages: currentMessages,
             previousSummary: prevSummary,
-            model: apiModelId,
-            provider: modelInfo.provider,
-            retentionTurns: 2,
-          });
-          compactionSummaryRef.current = result.summary;
-          const after = await requestContextPreflight(currentMessages).catch(() => null);
-          const measuredSummary: CompactionSummary = {
-            ...result.summary,
-            tokensSaved:
-              before && after
-                ? Math.max(
-                  0,
-                  before.measurement.estimatedInputTokens -
-                    after.measurement.estimatedInputTokens
+            preflight: (candidateMessages) =>
+              requestContextPreflight(candidateMessages).catch(() => null),
+            compact: async () =>
+              (
+                await compactConversation(currentMessages, {
+                  chatId,
+                  previousSummary: prevSummary,
+                  model: apiModelId,
+                  provider: modelInfo.provider,
+                  retentionTurns: 1,
+                })
+              ).summary,
+            persistSummary: async (summary) => {
+              await chatStorage.updateCompactionSummary(chatId, summary);
+              setChats((prev) =>
+                prev.map((chat) =>
+                  chat.id === chatId ? { ...chat, compactionSummary: summary } : chat
                 )
-                : 0,
-          };
-          await chatStorage.updateCompactionSummary(chatId, measuredSummary);
-          compactionSummaryRef.current = measuredSummary;
-            setChats((prev) =>
-              prev.map((c) =>
-                c.id === chatId ? { ...c, compactionSummary: measuredSummary } : c
-              )
-            );
-            regenerate();
+              );
+            },
+            applySummary: (summary) => {
+              compactionSummaryRef.current = summary;
+            },
+            restoreMessages: (snapshot) => {
+              setMessages(snapshot);
+              messagesRef.current = snapshot;
+            },
+            resend: () => {
+              void sendMessage();
+            },
+          });
         })()
           .catch((err) => {
             console.error("Reactive compaction failed:", err);
-            toast.error("Failed to compact conversation after context error.");
+            const message = err instanceof Error ? err.message : String(err);
+            toast.error(`Context recovery stopped: ${message}`);
           })
           .finally(() => {
             compactionInFlightRef.current = false;
@@ -3088,17 +3119,8 @@ export function RightSidebar({
           kernelService,
           requestId: checkpointId,
           direction: action === "redo" ? "redo" : "undo",
+          saveOpenDocumentIfDirty: assistant?.saveOpenDocumentIfDirty,
         });
-
-        if (activeNotebookPath?.endsWith(".ipynb")) {
-          window.dispatchEvent(new CustomEvent("agentNotebookModified"));
-        } else if (activeNotebookPath) {
-          window.dispatchEvent(
-            new CustomEvent("orion:agent-file-modified", {
-              detail: { path: activeNotebookPath },
-            })
-          );
-        }
 
         await refreshCheckpointStatuses();
 
@@ -3121,7 +3143,7 @@ export function RightSidebar({
         );
       }
     },
-    [activeNotebookPath, kernelService, refreshCheckpointStatuses]
+    [assistant?.saveOpenDocumentIfDirty, kernelService, refreshCheckpointStatuses]
   );
 
   /** Returns message state safe for useChat by removing persistence-only fields. */
@@ -3146,18 +3168,6 @@ export function RightSidebar({
     [checkpointRequestByMessageId, checkpointStatuses]
   );
 
-  /** Notifies open editors that an edit-time checkpoint restore may have changed files. */
-  const dispatchEditWorkspaceRestored = useCallback(() => {
-    window.dispatchEvent(new CustomEvent("agentNotebookModified"));
-    if (activeNotebookPath) {
-      window.dispatchEvent(
-        new CustomEvent("orion:agent-file-modified", {
-          detail: { path: activeNotebookPath },
-        })
-      );
-    }
-  }, [activeNotebookPath]);
-
   /** Restores checkpointed workspace edits newest-to-oldest before an in-place resend. */
   const restoreWorkspaceForInPlaceEdit = useCallback(
     async (action: PendingInPlaceEditAction): Promise<void> => {
@@ -3173,12 +3183,12 @@ export function RightSidebar({
           kernelService,
           requestId: checkpointId,
           direction: "undo",
+          saveOpenDocumentIfDirty: assistant?.saveOpenDocumentIfDirty,
         });
         restoredCount += result.restoredCount;
         conflictCount += result.conflicts.length;
       }
 
-      dispatchEditWorkspaceRestored();
       await refreshCheckpointStatuses();
 
       if (conflictCount > 0) {
@@ -3193,7 +3203,7 @@ export function RightSidebar({
       );
     },
     [
-      dispatchEditWorkspaceRestored,
+      assistant?.saveOpenDocumentIfDirty,
       getInPlaceEditRestoreCheckpointIds,
       kernelService,
       refreshCheckpointStatuses,
@@ -3446,6 +3456,8 @@ export function RightSidebar({
                 workspaceDirectory: workspaceDirectory ?? undefined,
                 notebookPath,
                 activeFilePath,
+                getCurrentConnectedNotebookPath:
+                  assistant.getCurrentConnectedNotebookPath,
                 serverInfo: assistant.serverInfo ?? undefined,
                 jupyterServerIsLocal: assistant.jupyterServerIsLocal ?? undefined,
                 rootDirectory: assistant.rootDirectory ?? undefined,
@@ -3664,16 +3676,27 @@ export function RightSidebar({
           continue;
         }
 
-        // Dependency-free tools can run before Jupyter connects. Stop at the
-        // first unavailable dependency so later calls cannot overtake it; the
-        // normal gating and approval flow reruns when dependency readiness changes.
-        const requiresServer = !NO_DEPENDENCY_TOOLS.has(toolNameTyped);
-        const requiresKernel =
-          requiresServer && !SERVER_ONLY_TOOLS.has(toolNameTyped);
-        if (
-          (requiresServer && !assistant.toolsReady) ||
-          (requiresKernel && kernelStatus !== "connected")
-        ) {
+        // Stop at the first unavailable dependency so later calls cannot
+        // overtake it. A constructed tool set is not enough: server-only
+        // tools must also wait for a verified Jupyter server connection.
+        const missingDependency = getMissingToolRuntimeDependency(toolNameTyped, {
+          serverReady: isToolServerReady,
+          kernelStatus,
+        });
+        if (missingDependency) {
+          trackedToolCallsRef.current.set(inv.toolCallId, { status: "queued" });
+          const pendingToolCall = {
+            toolCallId: inv.toolCallId,
+            toolName: toolNameTyped,
+            args: inv.input,
+          };
+          const pendingCalls =
+            missingDependency === "server"
+              ? pendingServerToolCallsRef.current
+              : pendingKernelToolCallsRef.current;
+          if (!pendingCalls.some((call) => call.toolCallId === inv.toolCallId)) {
+            pendingCalls.push(pendingToolCall);
+          }
           setShowKernelPrompt(true);
           return;
         }
@@ -3681,39 +3704,6 @@ export function RightSidebar({
         // Mark immediately to prevent duplicate scheduling across rerenders.
         // Timing begins only after the scheduler grants an execution slot.
         trackedToolCallsRef.current.set(inv.toolCallId, { status: "queued" });
-
-        // Tool gating:
-        // Tier 1 — NO_DEPENDENCY_TOOLS (load_skill, reload_page, delegate): always pass through.
-        // Tier 2 — SERVER_ONLY_TOOLS: need a Jupyter server (toolsReady), but no kernel.
-        // Tier 3 — kernel tools (execute_cell, execute_code, restart_notebook): need kernelStatus === "connected".
-        //
-        // Do NOT call addToolOutput when blocking — leaving the tool call unresolved
-        // naturally pauses useChat without triggering another LLM request.
-        if (!NO_DEPENDENCY_TOOLS.has(toolNameTyped)) {
-          if (SERVER_ONLY_TOOLS.has(toolNameTyped)) {
-            // Tier 2: need server connection only
-            if (!assistant?.toolsReady) {
-              pendingServerToolCallsRef.current.push({
-                toolCallId: inv.toolCallId,
-                toolName: toolNameTyped,
-                args: inv.input,
-              });
-              setShowKernelPrompt(true);
-              continue;
-            }
-          } else {
-            // Tier 3: need a running kernel
-            if (kernelStatus !== "connected") {
-              pendingKernelToolCallsRef.current.push({
-                toolCallId: inv.toolCallId,
-                toolName: toolNameTyped,
-                args: inv.input,
-              });
-              setShowKernelPrompt(true);
-              continue;
-            }
-          }
-        }
 
         // Read-only modes block destructive bash commands before they execute.
         if (resolvedInteractionModeConfig.bashPolicy === "read_only" && toolNameTyped === "bash") {
@@ -3769,16 +3759,17 @@ export function RightSidebar({
     resolvedInteractionModeConfig.toolNames.length,
     assistant,
     kernelStatus,
+    isToolServerReady,
     enqueueToolExecution,
     isLoading,
     toolApprovalMode,
     addTimedToolOutput,
   ]);
 
-  // When the Jupyter server connects (toolsReady), flush server-only tool calls that were
+  // When the Jupyter server is verified, flush server-only tool calls that were
   // blocked due to no server connection. useChat resumes once all pending results are submitted.
   useEffect(() => {
-    if (!assistant?.toolsReady) return;
+    if (!isToolServerReady) return;
     if (pendingServerToolCallsRef.current.length === 0) return;
 
     const pending = pendingServerToolCallsRef.current.splice(0);
@@ -3791,13 +3782,13 @@ export function RightSidebar({
     for (const { toolCallId, toolName, args } of pending) {
       enqueueToolExecution(toolCallId, toolName, args);
     }
-  }, [assistant?.toolsReady, enqueueToolExecution]);
+  }, [isToolServerReady, enqueueToolExecution]);
 
   // When a kernel becomes available, flush any tool calls that were blocked
   // due to a missing kernel, then hide the prompt. useChat resumes automatically
   // once all pending tool results are submitted.
   useEffect(() => {
-    if (kernelStatus !== "connected" || !assistant?.toolsReady) return;
+    if (kernelStatus !== "connected" || !isToolServerReady) return;
     if (pendingKernelToolCallsRef.current.length === 0) return;
 
     const pending = pendingKernelToolCallsRef.current.splice(0);
@@ -3810,7 +3801,7 @@ export function RightSidebar({
     for (const { toolCallId, toolName, args } of pending) {
       enqueueToolExecution(toolCallId, toolName, args);
     }
-  }, [kernelStatus, assistant, enqueueToolExecution]);
+  }, [kernelStatus, isToolServerReady, enqueueToolExecution]);
 
   // Load chats from local storage on mount
   useEffect(() => {

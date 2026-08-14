@@ -3,6 +3,11 @@ import { ORION_UI_MIME_TYPE, parseOrionUiMimePayload } from "@/lib/notebook/app-
 import { extractTableFromHTML, isEmptyDataframeHtmlTable } from "@/lib/notebook/table-extractor";
 import { NotebookMimeRegistry } from "./registry";
 import { ERROR_MIME, PLOTLY_HTML_MIME, STREAM_MIME } from "./synthetic-mimes";
+import {
+  ORION_VERSIONED_OUTPUT_MIME_TYPE,
+  getVersionedOutputPayload,
+  withoutVersionedOutputMime,
+} from "@/lib/notebook/versioned-output";
 import type { MimeAgentResult, MimeModel, MimeOutputKind, MimeRendererFactory } from "./types";
 
 const RASTER_IMAGE_MIME_TYPES = [
@@ -295,6 +300,49 @@ function buildDefaultFactories(): MimeRendererFactory[] {
         return {
           kind: "text",
           text: `${payload.ename ?? ""}: ${payload.evalue ?? ""}${traceback ? `\n${traceback}` : ""}`,
+        };
+      },
+    },
+    {
+      id: "orion-versioned-output",
+      mimeTypes: [ORION_VERSIONED_OUTPUT_MIME_TYPE],
+      rank: 3,
+      safe: true,
+      kind: "html",
+      outputTypes: [OutputType.EXECUTE_RESULT, OutputType.DISPLAY_DATA],
+      summarize: (model) => {
+        const payload = getVersionedOutputPayload(model.output);
+        const currentData = withoutVersionedOutputMime(model.output.data);
+        const plain = currentData["text/plain"];
+        const versionCount = payload ? payload.history.length + 1 : 1;
+        return `[Versioned output — ${versionCount} version${versionCount === 1 ? "" : "s"}]${plain === undefined ? "" : `\n${toJoinedString(plain)}`}`;
+      },
+      toAgentResult: (model) => {
+        const payload = getVersionedOutputPayload(model.output);
+        const currentData = withoutVersionedOutputMime(model.output.data);
+        const plain = currentData["text/plain"];
+        const images = RASTER_IMAGE_MIME_TYPES.flatMap((mimeType) => {
+          const value = currentData[mimeType];
+          return value === undefined
+            ? []
+            : [{ mimeType, data: toJoinedString(value) }];
+        });
+        const versionCount = payload ? payload.history.length + 1 : 1;
+        return {
+          text: `[Versioned output — ${versionCount} version${versionCount === 1 ? "" : "s"}]${plain === undefined ? "" : `\n${toJoinedString(plain)}`}`,
+          ...(images.length > 0 ? { images } : {}),
+        };
+      },
+      textLength: () => 0,
+      toClipboard: (model) => {
+        const currentData = withoutVersionedOutputMime(model.output.data);
+        const plain = currentData["text/plain"];
+        return {
+          kind: "text",
+          text:
+            plain === undefined
+              ? "[Versioned output]"
+              : toJoinedString(plain),
         };
       },
     },

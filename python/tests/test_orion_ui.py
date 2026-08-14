@@ -17,6 +17,23 @@ class PlotlyTemplateRegistry(dict):
     """Dict-like stand-in for Plotly's template registry."""
 
 
+class DisplayFormatterStub:
+    """Small IPython display formatter stand-in for version wrapper tests."""
+
+    def __init__(self, formats):
+        self.formats = formats
+
+    def format(self, value):
+        return self.formats[id(value)]
+
+
+class ShellStub:
+    """IPython shell stand-in exposing a display formatter."""
+
+    def __init__(self, formats):
+        self.display_formatter = DisplayFormatterStub(formats)
+
+
 class OrionUiTests(unittest.TestCase):
     def setUp(self):
         _runtime._STATE.clear()
@@ -48,6 +65,89 @@ class OrionUiTests(unittest.TestCase):
         self.assertEqual(payload["root"]["type"], "Card")
         self.assertEqual(payload["state"]["temperature"], 0.7)
         self.assertEqual(payload["bindings"]["temperature"]["valueType"], "number")
+
+    def test_version_emits_current_rich_bundle_and_history_envelope(self):
+        value = object()
+        formats = {
+            id(value): (
+                {"text/html": "<strong>Current</strong>", "text/plain": "Current"},
+                {"text/html": {"isolated": True}},
+            )
+        }
+
+        with patch.object(ui, "_get_ipython_shell", return_value=ShellStub(formats)):
+            bundle = ui.version(value, key="chart", max_versions=4)._repr_mimebundle_()
+
+        self.assertEqual(bundle["text/html"], "<strong>Current</strong>")
+        payload = bundle[ui.ORION_VERSIONED_OUTPUT_MIME_TYPE]
+        self.assertEqual(payload["version"], 1)
+        self.assertEqual(payload["key"], "chart")
+        self.assertEqual(payload["maxVersions"], 4)
+        self.assertEqual(payload["history"], [])
+        self.assertTrue(payload["current"]["id"].startswith("orion-version-"))
+        self.assertTrue(payload["current"]["createdAt"].endswith("Z"))
+        self.assertEqual(
+            payload["current"]["metadata"],
+            {"text/html": {"isolated": True}},
+        )
+
+    def test_version_promotes_axes_like_values_to_their_rich_figure(self):
+        figure = object()
+
+        class AxesLike:
+            """Matplotlib-like value with an owning figure."""
+
+            def __init__(self, owner):
+                self.figure = owner
+
+        axes = AxesLike(figure)
+        formats = {
+            id(axes): ({"text/plain": "<Axes>"}, {}),
+            id(figure): (
+                {"image/png": "encoded-png", "text/plain": "<Figure>"},
+                {"image/png": {"width": 640}},
+            ),
+        }
+
+        with patch.object(ui, "_get_ipython_shell", return_value=ShellStub(formats)):
+            bundle = ui.version(axes)._repr_mimebundle_()
+
+        self.assertEqual(bundle["image/png"], "encoded-png")
+        payload = bundle[ui.ORION_VERSIONED_OUTPUT_MIME_TYPE]
+        self.assertEqual(
+            payload["current"]["metadata"],
+            {"image/png": {"width": 640}},
+        )
+
+    def test_version_uses_rich_repr_fallback_outside_ipython(self):
+        class HtmlValue:
+            """Value exposing a standard HTML rich representation."""
+
+            def _repr_html_(self):
+                return "<em>fallback</em>"
+
+            def __repr__(self):
+                return "HtmlValue()"
+
+        with patch.object(ui, "_get_ipython_shell", return_value=None):
+            bundle = ui.version(HtmlValue())._repr_mimebundle_()
+
+        self.assertEqual(bundle["text/html"], "<em>fallback</em>")
+        self.assertEqual(bundle["text/plain"], "HtmlValue()")
+
+    def test_version_validates_identity_and_retention(self):
+        with self.assertRaises(ValueError):
+            ui.version(object(), key="")
+        with self.assertRaises(TypeError):
+            ui.version(object(), max_versions=True)
+        with self.assertRaises(TypeError):
+            ui.version(object(), max_versions=2.5)
+        with self.assertRaises(ValueError):
+            ui.version(object(), max_versions=0)
+
+    def test_version_is_exported(self):
+        self.assertIn("version", ui.__all__)
+        self.assertIn("VersionedOutput", ui.__all__)
 
     def test_default_value_does_not_overwrite_existing_runtime_state_on_rerun(self):
         first = ui.select("model", ["option A", "option B", "option C"], default_value="option A")

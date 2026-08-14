@@ -32,6 +32,8 @@ export type AgentNotebookExecutionEventDetail =
       notebookPath: string;
       cellIndex: number;
       executionInfo: CellExecutionInfo;
+      /** Final outputs after Orion merges version history for persistence. */
+      outputs: NotebookOutputType[];
     };
 
 /** Dispatches an agent notebook execution event when running in the browser. */

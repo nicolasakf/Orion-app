@@ -56,7 +56,7 @@ export function guardExecutionToolResult(
 async function resizeRasterPreview(
   visual: AgentVisualOutput,
   maxBase64Chars: number
-): Promise<string | null> {
+): Promise<{ data: string; byteLength: number } | null> {
   if (!visual.data || typeof document === "undefined") return null;
 
   const image = new Image();
@@ -74,10 +74,17 @@ async function resizeRasterPreview(
     canvas.height = Math.max(1, Math.floor(image.naturalHeight * scale));
     const context = canvas.getContext("2d");
     if (!context) return null;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL(visual.mimeType, visual.mimeType === "image/jpeg" ? 0.82 : undefined);
     const encoded = dataUrl.slice(dataUrl.indexOf(",") + 1);
-    if (encoded.length <= maxBase64Chars) return encoded;
+    if (encoded.length <= maxBase64Chars) {
+      return {
+        data: encoded,
+        byteLength: Math.floor((encoded.length * 3) / 4),
+      };
+    }
     scale *= 0.7;
   }
   return null;
@@ -101,7 +108,7 @@ export async function prepareExecutionToolResultForModel(options: {
       if (!visual.data || visual.data.length <= options.imageMaxBase64Chars) return visual;
       const resized = await resizeRasterPreview(visual, options.imageMaxBase64Chars);
       return resized
-        ? { ...visual, data: resized }
+        ? { ...visual, ...resized }
         : {
             ...visual,
             data: undefined,

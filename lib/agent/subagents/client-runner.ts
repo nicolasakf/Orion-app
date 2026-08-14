@@ -129,6 +129,7 @@ async function fetchSubagentStep(
       rootDirectory: options.rootDirectory,
       notebookPath: options.notebookPath,
       activeFilePath: options.activeFilePath,
+      connectedNotebookPath: options.getCurrentConnectedNotebookPath?.() ?? null,
       agentRules: options.agentRules ?? [],
       serverInfo: options.serverInfo,
       jupyterServerIsLocal: options.jupyterServerIsLocal,

@@ -5,7 +5,11 @@ import path from "path";
 
 import { z } from "zod";
 
-import type { ModelCatalogEntry, ProviderCatalogMeta } from "@/lib/agent/model-catalog";
+import type {
+  ModelCatalogEntry,
+  ProviderCatalogMeta,
+} from "@/lib/agent/model-catalog";
+import { parseReasoningOptions } from "@/lib/agent/reasoning-options.server";
 import {
   ensureOrionCacheDirectory,
   getModelsDevCatalogCacheFilePath,
@@ -22,6 +26,7 @@ const ModelsDevModelSchema = z.object({
   name: z.string(),
   attachment: z.boolean().optional(),
   reasoning: z.boolean().optional(),
+  reasoning_options: z.unknown().optional(),
   tool_call: z.boolean().optional(),
   cost: z
     .object({
@@ -71,6 +76,7 @@ const ModelCatalogEntryCacheSchema = z.object({
   supports_tool_calling: z.boolean().optional(),
   supports_forced_tool_choice: z.boolean().optional(),
   supports_reasoning: z.boolean().optional(),
+  reasoning_options: z.unknown().optional(),
   long_context_threshold: z.number().nullable(),
   long_context_input_price_per_1m: z.number().nullable(),
   long_context_output_price_per_1m: z.number().nullable(),
@@ -121,6 +127,11 @@ let cache:
   | undefined;
 let refreshPromise: Promise<NormalizedModelsDevCatalog> | undefined;
 
+/** True when a catalog contains any successfully parsed reasoning enrichment. */
+function hasReasoningMetadata(catalog: NormalizedModelsDevCatalog): boolean {
+  return catalog.models.some((model) => model.reasoning_options !== undefined);
+}
+
 /** Converts raw models.dev JSON into Orion's compact catalog representation. */
 function normalizeModelsDevCatalog(
   parsed: z.infer<typeof ModelsDevCatalogSchema>
@@ -145,6 +156,7 @@ function normalizeModelsDevCatalog(
             model.modalities?.input?.includes("image") ?? model.attachment,
           supports_tool_calling: model.tool_call,
           supports_reasoning: model.reasoning,
+          reasoning_options: parseReasoningOptions(model.reasoning_options),
           long_context_threshold: null,
           long_context_input_price_per_1m: null,
           long_context_output_price_per_1m: null,
@@ -178,7 +190,10 @@ async function readCatalogCacheFile(): Promise<
     return {
       expires: fetchedAt + CATALOG_CACHE_TTL_MS,
       catalog: {
-        models: file.models,
+        models: file.models.map((model): ModelsDevModelCatalogEntry => ({
+          ...model,
+          reasoning_options: parseReasoningOptions(model.reasoning_options),
+        })),
         providers: file.providers,
       },
     };
@@ -236,7 +251,11 @@ async function fetchModelsDevCatalogData(): Promise<NormalizedModelsDevCatalog> 
   if (cache && cache.expires > Date.now()) return cache.catalog;
 
   const fileCache = await readCatalogCacheFile();
-  if (fileCache && fileCache.expires > Date.now()) {
+  if (
+    fileCache &&
+    fileCache.expires > Date.now() &&
+    hasReasoningMetadata(fileCache.catalog)
+  ) {
     cache = fileCache;
     return fileCache.catalog;
   }

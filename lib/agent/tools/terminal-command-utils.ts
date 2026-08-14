@@ -63,6 +63,10 @@ export const NEXT_STEP_AWAIT_BACKGROUND =
 export const NEXT_STEP_AWAIT_AFTER_PATTERN_MATCH =
   "REQUIRED: Call await_command again with this same terminalName (copy the exact value returned above) to wait for command completion. Do not call bash, resend the command, or invent a new terminalName.";
 
+/** When bash is asked to reuse a terminal that still has a tracked command. */
+export const NEXT_STEP_REQUIRED_AWAIT_BEFORE_REUSE =
+  "REQUIRED: This terminal already has a tracked command. Call await_command with this same terminalName until status is completed or error, then retry the new command. The new command was not dispatched.";
+
 /**
  * Parse buffered terminal output for a pending command.
  *
@@ -77,32 +81,34 @@ export function parseCommandProgress(
   pending: Pick<PendingTerminalCommand, "startMarker" | "endMarkerPrefix">
 ): CommandProgress {
   const clean = stripAnsi(rawBuffer);
-  const lines = clean.split(/\r?\n/);
-  const startIndex = lines.findIndex((line) => line.trim() === pending.startMarker);
-
-  const endRegex = new RegExp(`^${escapeRegex(pending.endMarkerPrefix)}:(-?\\d+)\\s*$`);
-  let endIndex = -1;
+  const endRegex = new RegExp(
+    `${escapeRegex(pending.endMarkerPrefix)}:(-?\\d+)`
+  );
+  const endMatch = endRegex.exec(clean);
   let exitCode: number | null = null;
+  let endOffset = -1;
 
-  for (let i = Math.max(0, startIndex + 1); i < lines.length; i += 1) {
-    const match = lines[i]?.trim().match(endRegex);
-    if (!match) continue;
-    endIndex = i;
-    exitCode = Number.parseInt(match[1]!, 10);
-    break;
+  if (endMatch?.index !== undefined) {
+    endOffset = endMatch.index;
+    exitCode = Number.parseInt(endMatch[1]!, 10);
   }
 
-  const completed = endIndex !== -1;
-  const outputLines = extractOutputLines(lines, startIndex, endIndex);
-  const output = stripKnownMarkerLines(outputLines).join("\n").trim();
+  const completed = endOffset !== -1;
+  const searchEnd = completed ? endOffset : clean.length;
+  const outputStart = findCommandOutputStart(
+    clean,
+    pending.startMarker,
+    searchEnd
+  );
+  const outputEnd = completed ? endOffset : clean.length;
+  const output = stripKnownMarkerTokens(clean.slice(outputStart, outputEnd)).trim();
 
   return { completed, exitCode, output };
 }
 
 /** Strip ANSI and known marker lines from arbitrary terminal output. */
 export function stripTerminalMarkerNoise(rawBuffer: string): string {
-  const lines = stripAnsi(rawBuffer).split(/\r?\n/);
-  return stripKnownMarkerLines(lines).join("\n").trim();
+  return stripKnownMarkerTokens(stripAnsi(rawBuffer)).trim();
 }
 
 /**
@@ -150,28 +156,68 @@ export function extractTerminalResultOutputForDisplay(formatted: string): string
 }
 
 /** Promisified setTimeout. */
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function extractOutputLines(lines: string[], startIndex: number, endIndex: number): string[] {
-  if (startIndex !== -1 && endIndex !== -1 && endIndex > startIndex) {
-    return lines.slice(startIndex + 1, endIndex);
+export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(createTerminalAbortError());
   }
-  if (startIndex !== -1) {
-    return lines.slice(startIndex + 1);
-  }
-  return lines;
-}
 
-function stripKnownMarkerLines(lines: string[]): string[] {
-  return lines.filter((line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return true;
-    if (/^ORION_CMD_START_[A-Za-z0-9_]+$/.test(trimmed)) return false;
-    if (/^ORION_CMD_END_[A-Za-z0-9_]+:-?\d+$/.test(trimmed)) return false;
-    return true;
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      signal?.removeEventListener("abort", handleAbort);
+      resolve();
+    }, ms);
+    const handleAbort = () => {
+      clearTimeout(timeoutId);
+      signal?.removeEventListener("abort", handleAbort);
+      reject(createTerminalAbortError());
+    };
+    signal?.addEventListener("abort", handleAbort, { once: true });
   });
+}
+
+/** Return whether an error represents cancellation of terminal polling. */
+export function isTerminalAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+/** Locate output after the last emitted standalone start marker before completion. */
+function findCommandOutputStart(
+  clean: string,
+  startMarker: string,
+  searchEnd: number
+): number {
+  const prefix = clean.slice(0, searchEnd);
+  const standaloneRegex = new RegExp(
+    `(?:^|\\n)[\\t ]*${escapeRegex(startMarker)}[\\t ]*(?:\\n|$)`,
+    "g"
+  );
+  let standaloneEnd = -1;
+  let standaloneMatch: RegExpExecArray | null;
+  while ((standaloneMatch = standaloneRegex.exec(prefix)) !== null) {
+    standaloneEnd = standaloneMatch.index + standaloneMatch[0].length;
+  }
+  if (standaloneEnd !== -1) {
+    return standaloneEnd;
+  }
+
+  const fallbackIndex = prefix.lastIndexOf(startMarker);
+  if (fallbackIndex === -1) return 0;
+  let outputStart = fallbackIndex + startMarker.length;
+  if (prefix[outputStart] === "\r") outputStart += 1;
+  if (prefix[outputStart] === "\n") outputStart += 1;
+  return outputStart;
+}
+
+/** Remove marker tokens without discarding real text attached to either side. */
+function stripKnownMarkerTokens(text: string): string {
+  return text
+    .replace(/ORION_CMD_START_\d+_[A-Za-z0-9]{6}/g, "")
+    .replace(/ORION_CMD_END_\d+_[A-Za-z0-9]{6}:-?\d+/g, "");
+}
+
+/** Build the standard cancellation error used by browser tool execution. */
+function createTerminalAbortError(): DOMException {
+  return new DOMException("Terminal wait was cancelled.", "AbortError");
 }
 
 function escapeRegex(text: string): string {

@@ -34,6 +34,10 @@ import type { MultimodalToolResult } from "../types";
 import { guardToolText } from "../../tool-output-guard";
 import { TerminalPool } from "@/lib/shell/terminal-pool";
 import type { OpenDocumentSnapshotProvider } from "../../open-document-snapshots";
+import {
+  ORION_VERSIONED_OUTPUT_MIME_TYPE,
+  getVersionedOutputPayload,
+} from "@/lib/notebook/versioned-output";
 
 // ============================================================================
 // Test Harness
@@ -658,10 +662,12 @@ await runTest("BashTool uses a PowerShell marker wrapper on Windows terminals", 
 
     assert(sent.length === 1, "bash tool should dispatch one terminal payload");
     const wrappedCommand = sent[0]?.text ?? "";
-    assertIncludes(wrappedCommand, "Write-Output 'ORION_CMD_START_", "should emit a PowerShell start marker");
-    assertIncludes(wrappedCommand, 'Write-Output "ORION_CMD_END_', "should emit a PowerShell end marker");
+    assertIncludes(wrappedCommand, '[Console]::Out.Write("`r`nORION_CMD_START_', "should emit a PowerShell start marker on a fresh line");
+    assertIncludes(wrappedCommand, '[Console]::Out.Write("`r`nORION_CMD_END_', "should emit a PowerShell end marker on a fresh line");
     assertIncludes(wrappedCommand, "$global:LASTEXITCODE = $null", "should clear stale native exit codes");
-    assertIncludes(wrappedCommand, "git status", "should include the requested command");
+    assertIncludes(wrappedCommand, "[Convert]::FromBase64String('Z2l0IHN0YXR1cw==')", "should transport the requested command as Base64");
+    assertIncludes(wrappedCommand, ". ([ScriptBlock]::Create($__orion_source))", "should run the decoded command in the current PowerShell scope");
+    assertNotIncludes(wrappedCommand, "git status", "should not expose raw command syntax to the terminal parser");
     assert(!/[\r\n]/.test(wrappedCommand.trimEnd()), "PowerShell wrapper should be a single terminal line");
     assertNotIncludes(wrappedCommand, "(set +e", "should not send POSIX grouping to PowerShell");
     assertNotIncludes(wrappedCommand, "__orion_rc=$?", "should not send POSIX exit capture to PowerShell");
@@ -949,6 +955,39 @@ await runTest("use_notebook connect on already-active notebook includes cell cou
   assertIncludes(result, "already the active notebook", "should warn about duplicate activation");
   assertIncludes(result, "DO NOT REACTIVATE AGAIN", "should tell the agent not to reactivate");
   assertIncludes(result, "Notebook has 3 cells.", "should still include cell count");
+});
+
+await runTest("use_notebook connect summarizes the unsaved editor buffer", async () => {
+  const notebookPath = "active.ipynb";
+  const { ks } = createNotebookCreationKernelService({
+    initialNotebooks: {
+      [notebookPath]: makeNotebook([makeMarkdownCell("# Disk")]),
+    },
+  });
+  const snapshots = createSnapshotProvider({
+    notebooks: {
+      [notebookPath]: makeNotebook([
+        makeMarkdownCell("# Unsaved"),
+        makeCodeCell("a = 1", [], null),
+        makeCodeCell("b = 2", [], null),
+        makeCodeCell("c = 3", [], null),
+      ]),
+    },
+  });
+  const mgr = new NotebookManager();
+  const registeredId = mgr.addNotebook("active", notebookPath, "k1");
+  mgr.setCurrentNotebook(registeredId);
+  const tool = new UseNotebookTool(ks, null, mgr, undefined, snapshots);
+
+  const result = await tool.execute({
+    notebookName: "active",
+    notebookPath,
+    mode: "connect",
+    kernelId: "",
+  });
+
+  assertIncludes(result, "Notebook has 4 cells.", "should summarize the live editor buffer");
+  assertNotIncludes(result, "Notebook has 1 cells.", "should not summarize stale disk content");
 });
 
 // ============================================================================
@@ -1435,6 +1474,81 @@ await runTest("execute_cell returns structured PNG output for immediate inspecti
   assert(structured.visuals.length === 1, "should expose one inspectable visual");
   assert(structured.visuals[0].mimeType === "image/png", "should preserve PNG MIME type");
   assert(structured.visuals[0].data === "cG5n", "should preserve the generated raster bytes");
+});
+
+await runTest("execute_cell persists merged versioned output history", async () => {
+  const previousOutput: NotebookOutputType = {
+    output_type: OutputType.EXECUTE_RESULT,
+    execution_count: 1,
+    data: {
+      "text/plain": ["old"],
+      [ORION_VERSIONED_OUTPUT_MIME_TYPE]: {
+        version: 1,
+        maxVersions: 10,
+        current: {
+          id: "v1",
+          createdAt: "2026-08-13T12:00:00.000Z",
+          metadata: {},
+        },
+        history: [],
+      },
+    },
+    metadata: {},
+  };
+  const notebook = makeNotebook([
+    makeCodeCell("1 + 1", [previousOutput], 1),
+  ]);
+  const { ks, store } = createStatefulKernelService({
+    "versioned.ipynb": notebook,
+  });
+  const mutableKernel = ks as unknown as {
+    execute: (
+      code: string,
+      onMessage: (message: {
+        header: { msg_type: string };
+        content: Record<string, unknown>;
+      }) => void,
+    ) => Promise<{ done: Promise<void> }>;
+  };
+  mutableKernel.execute = async (_code, onMessage) => {
+    onMessage({
+      header: { msg_type: "execute_result" },
+      content: {
+        execution_count: 2,
+        data: {
+          "text/plain": "new",
+          [ORION_VERSIONED_OUTPUT_MIME_TYPE]: {
+            version: 1,
+            maxVersions: 10,
+            current: {
+              id: "v2",
+              createdAt: "2026-08-14T12:00:00.000Z",
+              metadata: {},
+            },
+            history: [],
+          },
+        },
+        metadata: {},
+      },
+    });
+    return { done: Promise.resolve() };
+  };
+  const manager = new NotebookManager();
+  manager.addNotebook("main", "versioned.ipynb", "k1");
+  const tool = new ExecuteCellTool(ks, null, manager);
+
+  await tool.execute({
+    cellIndices: [0],
+    timeoutSeconds: 10,
+    stream: false,
+    progressInterval: 1000,
+  });
+
+  const savedOutput = store.get("versioned.ipynb")!.cells[0]!.outputs![0]!;
+  assert(
+    getVersionedOutputPayload(savedOutput)?.history[0]?.id === "v1",
+    "should save the previous current output in history",
+  );
 });
 
 // ============================================================================

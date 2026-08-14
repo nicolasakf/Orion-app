@@ -72,11 +72,11 @@ export function ModelSettingsPopover({
 
   if (levels.length === 0) return null;
 
-  const selectedValue = getSelectedIntelligenceLevel(provider, settings);
+  const selectedValue = getSelectedIntelligenceLevel(provider, model, settings);
   const selectedIndex = (() => {
     const exactIndex = levels.findIndex((level) => level.value === selectedValue);
     if (exactIndex >= 0) return exactIndex;
-    return levels.length - 1;
+    return 0;
   })();
   const selectedLevel = levels[selectedIndex] ?? levels[0];
   const activeBars = selectedIndex + 1;

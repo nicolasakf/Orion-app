@@ -1,5 +1,9 @@
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { NotebookCellType, NotebookType } from "@/lib/types";
+import type {
+  OpenDocumentKind,
+  OpenDocumentSaveResult,
+} from "@/lib/agent/open-document-snapshots";
 import {
   EditCheckpointSchema,
   hashCheckpointPayload,
@@ -57,6 +61,10 @@ export async function restoreEditCheckpoint(options: {
   kernelService: KernelService;
   requestId: string;
   direction?: CheckpointRestoreDirection;
+  saveOpenDocumentIfDirty?: (
+    path: string,
+    kind: OpenDocumentKind,
+  ) => Promise<OpenDocumentSaveResult>;
 }): Promise<CheckpointRestoreResult> {
   const direction = options.direction ?? "undo";
   const response = await fetch(`/api/checkpoints/${encodeURIComponent(options.requestId)}`);
@@ -73,6 +81,23 @@ export async function restoreEditCheckpoint(options: {
   };
 
   for (const target of checkpoint.targets) {
+    const editorKind: OpenDocumentKind =
+      target.kind === "text_file" ? "text" : "notebook";
+    const saveResult = await options.saveOpenDocumentIfDirty?.(
+      target.path,
+      editorKind,
+    );
+    if (saveResult?.status === "error") {
+      result.skippedCount += 1;
+      result.conflicts.push({
+        targetId: target.targetId ?? target.path,
+        path: target.path,
+        kind: target.kind,
+        reason: `Could not save the open editor before restoring: ${saveResult.message ?? "Unknown save error."}`,
+      });
+      continue;
+    }
+
     if (target.kind === "text_file") {
       await restoreTextFileTarget(contents, target, result, direction);
     } else {

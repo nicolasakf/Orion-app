@@ -18,6 +18,7 @@ import type { KernelService } from "@/lib/kernel/kernel-service";
 import type { KernelSidecar } from "../kernel-sidecar";
 import type { UseNotebookParams } from "./types";
 import { resolveAgentPath } from "../path-resolver";
+import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 
 export class UseNotebookTool extends BaseTool {
   private notebookManager: NotebookManager;
@@ -27,9 +28,10 @@ export class UseNotebookTool extends BaseTool {
     kernelService: KernelService,
     sidecar: KernelSidecar | null,
     notebookManager: NotebookManager,
-    getJupyterRootDirectory?: (() => string | undefined) | null
+    getJupyterRootDirectory?: (() => string | undefined) | null,
+    snapshotProvider?: OpenDocumentSnapshotProvider | null,
   ) {
-    super(kernelService, sidecar);
+    super(kernelService, sidecar, snapshotProvider);
     this.notebookManager = notebookManager;
     this.getJupyterRootDirectory = getJupyterRootDirectory ?? null;
   }

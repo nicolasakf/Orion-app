@@ -132,6 +132,39 @@ default_filters=[
 ]
 ```
 
+## Versioned outputs
+
+Wrap a rich notebook value with `ui.version()` to keep earlier successful
+renders inside the saved notebook output:
+
+```python
+t = 5
+filtered = df[df > t]
+
+ui.version(filtered.plot())
+```
+
+After the cell runs more than once, hover the output and use the version picker
+in its upper-right corner. Orion retains the latest 10 versions by default:
+
+```python
+ui.version(filtered.plot(), max_versions=5)
+```
+
+Unkeyed wrappers are matched by their order among the versioned outputs in the
+cell. Add a unique `key` when a cell contains several versioned outputs that
+may be reordered:
+
+```python
+ui.version(revenue_plot, key="revenue")
+ui.version(retention_plot, key="retention")
+```
+
+Failed reruns keep the last successful version history alongside the error.
+Clearing the output clears its history. Self-contained rich MIME outputs remain
+available after saving and reopening the notebook; live widgets and
+kernel-backed controls can still require an active kernel.
+
 `class_name` adds semantic CSS hooks for Orion UI in Notebook View and App View. Do not write CSS into notebook metadata; if a notebook needs custom styling, include it in the relevant cell source/output and scope selectors to rendered markdown/output areas. Orion also exposes JupyterLab-compatible rendered-content selectors such as `.jp-MarkdownOutput`, `.jp-RenderedHTMLCommon`, and `.jp-OutputArea-output` for cell-authored styles. Do not rely on arbitrary Tailwind classes generated at runtime.
 
 ## Requirements

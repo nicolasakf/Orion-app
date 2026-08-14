@@ -21,10 +21,15 @@ import {
   getReferenceTypeLabel,
   parseChatMessageReferences,
   type ChatSlashCommandCategory,
+  type ResolvedChatReference,
 } from "@/lib/chat/chat-references";
 import { CHAT_REFERENCE_TYPE_ICONS } from "@/lib/chat/chat-reference-icons";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import { cn } from "@/lib/utils";
+import {
+  SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+  type ScrollToNotebookCellEventDetail,
+} from "@/lib/notebook/notebook-execution-events";
 
 const USER_MESSAGE_CHIP_CLASS =
   "border-primary-foreground/20 bg-primary-foreground/10";
@@ -97,6 +102,32 @@ export function UserMessage({
     }
   }, [hasOverflow, isExpanded]);
 
+  /** Reveals the cell or output targeted by a notebook reference chip. */
+  const navigateToNotebookReference = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>, reference: ResolvedChatReference) => {
+      event.stopPropagation();
+      const { locator } = reference;
+      const detail: ScrollToNotebookCellEventDetail | null =
+        locator.type === "output"
+          ? {
+              cellIndex: locator.cellIndex,
+              outputIndex: locator.outputIndex,
+            }
+          : locator.type === "cell"
+            ? { cellIndex: locator.cellIndices[0] ?? -1 }
+            : null;
+
+      if (!detail || detail.cellIndex < 0) return;
+      window.dispatchEvent(
+        new CustomEvent<ScrollToNotebookCellEventDetail>(
+          SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+          { detail },
+        ),
+      );
+    },
+    [],
+  );
+
   /** Toggles the full-message view without also handling the bubble click. */
   const handleExpansionButtonClick = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -163,14 +194,33 @@ export function UserMessage({
           <div className="mb-1 flex flex-wrap gap-1">
             {references.map((reference) => {
               const Icon = CHAT_REFERENCE_TYPE_ICONS[reference.type];
+              const isNotebookReference =
+                reference.locator.type === "cell" ||
+                reference.locator.type === "output";
               return (
                 <span
                   key={reference.id}
                   className="inline-flex max-w-[14rem] items-center gap-1 rounded-md border border-primary-foreground/20 bg-primary-foreground/10 px-1.5 py-0.5 text-[0.75em] font-medium"
                   title={`${getReferenceTypeLabel(reference.type)}: ${reference.label}`}
                 >
-                  <Icon className="h-3 w-3 shrink-0 opacity-80" />
-                  <span className="truncate">{reference.label}</span>
+                  {isNotebookReference ? (
+                    <button
+                      type="button"
+                      className="flex min-w-0 items-center gap-1 text-left hover:text-primary-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-primary-foreground"
+                      onClick={(event) =>
+                        navigateToNotebookReference(event, reference)
+                      }
+                      aria-label={`Go to ${reference.label}`}
+                    >
+                      <Icon className="h-3 w-3 shrink-0 opacity-80" />
+                      <span className="truncate">{reference.label}</span>
+                    </button>
+                  ) : (
+                    <>
+                      <Icon className="h-3 w-3 shrink-0 opacity-80" />
+                      <span className="truncate">{reference.label}</span>
+                    </>
+                  )}
                 </span>
               );
             })}

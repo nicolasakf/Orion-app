@@ -13,11 +13,17 @@ import {
 } from "@/lib/settings/user-settings-file.client";
 import { isSkillDefinitionPath } from "@/lib/skills/paths";
 import {
-  ORION_AGENT_FILE_MODIFIED_EVENT,
   type OpenDocumentSaveResult,
   type TextDocumentSnapshot,
 } from "@/lib/agent/open-document-snapshots";
 import { isRuleFilePath } from "@/lib/agent/rules";
+import {
+  dispatchActiveDocumentDeleted,
+  dispatchActiveDocumentRenamed,
+  useActiveDocumentSync,
+  type ActiveDocumentSyncController,
+  type ActiveDocumentSyncState,
+} from "@/hooks/use-active-document-sync";
 
 interface UseTextFileModelOptions {
   filepath: string | null;
@@ -36,9 +42,11 @@ export interface TextFileModelState {
   setShowErrorDialog: (show: boolean) => void;
   setFileContent: (content: string) => void;
   markDirty: () => void;
+  documentSyncState: ActiveDocumentSyncState;
   getSnapshot: (path: string) => TextDocumentSnapshot | null;
   saveOpenDocumentIfDirty: (path: string) => Promise<OpenDocumentSaveResult>;
   saveFile: () => Promise<void>;
+  reloadDiskVersion: () => Promise<void>;
   handleRunInTerminal: (code: string) => void;
   handleMonacoMount: (_editor: unknown, monaco: Monaco) => void;
 }
@@ -61,6 +69,8 @@ export function useTextFileModel({
   const isDirtyRef = useRef(false);
   const dirtyVersionRef = useRef(0);
   const fileContentRef = useRef("");
+  const documentSyncRef = useRef<ActiveDocumentSyncController | null>(null);
+  const preserveDirtyRenameToRef = useRef<string | null>(null);
 
   const pathExtension = filepath
     ? extname(filepath).slice(1).toLowerCase()
@@ -93,7 +103,10 @@ export function useTextFileModel({
    * Loads the current file from Orion's backing store and updates editor state.
    */
   const loadFileFromSource = useCallback(
-    async (targetPath: string): Promise<boolean> => {
+    async (
+      targetPath: string,
+      expectedDirtyVersion?: number,
+    ): Promise<boolean> => {
       if (!filepath) {
         fileContentRef.current = "";
         setFileContentState("");
@@ -142,10 +155,19 @@ export function useTextFileModel({
             ? model.content
             : JSON.stringify(model.content, null, 2);
 
+        // Never replace edits made while an external reload was awaiting I/O.
+        if (
+          expectedDirtyVersion !== undefined &&
+          dirtyVersionRef.current !== expectedDirtyVersion
+        ) {
+          return false;
+        }
+
         fileContentRef.current = content;
         setFileContentState(content);
         isDirtyRef.current = false;
         onUnsavedChangesChange?.(false);
+        documentSyncRef.current?.recordLoadedModel(model);
         return true;
       } catch (error) {
         console.error("Error loading or processing file:", error);
@@ -174,8 +196,51 @@ export function useTextFileModel({
   );
 
   useEffect(() => {
+    if (
+      preserveDirtyRenameToRef.current === filepath &&
+      isDirtyRef.current
+    ) {
+      preserveDirtyRenameToRef.current = null;
+      return;
+    }
     void loadFileFromSource(filepath ?? "");
   }, [filepath, loadFileFromSource]);
+
+  const documentSync = useActiveDocumentSync({
+    path:
+      filepath && !isUserSettingsEditorPath(filepath)
+        ? filepath
+        : null,
+    contentsManager: kernelService?.getContentsManager() ?? null,
+    isDirty: () => isDirtyRef.current,
+    onReload: async () => {
+      const dirtyVersionBeforeReload = dirtyVersionRef.current;
+      const loaded = await loadFileFromSource(
+        filepath ?? "",
+        dirtyVersionBeforeReload,
+      );
+      if (!loaded) throw new Error(`Could not reload '${filepath ?? ""}'.`);
+    },
+    onDeleted: (source) => {
+      if (isDirtyRef.current || !filepath) return;
+      if (source === "contents-manager") {
+        dispatchActiveDocumentDeleted({ path: filepath });
+        return;
+      }
+      const error = Object.assign(new Error(`File '${filepath}' no longer exists.`), {
+        response: { status: 404 },
+      });
+      onFileLoadError?.(filepath, error);
+    },
+    onRenamed: (newPath) => {
+      if (!filepath) return;
+      if (isDirtyRef.current) {
+        preserveDirtyRenameToRef.current = newPath;
+      }
+      dispatchActiveDocumentRenamed({ oldPath: filepath, newPath });
+    },
+  });
+  documentSyncRef.current = documentSync;
 
   /**
    * Return the active in-memory text buffer for agent tools.
@@ -191,25 +256,6 @@ export function useTextFileModel({
     },
     [filepath],
   );
-
-  useEffect(() => {
-    const handleAgentFileModified = (event: Event) => {
-      const detail = (event as CustomEvent<{ path?: unknown }>).detail;
-      if (!filepath || detail?.path !== filepath) return;
-      void loadFileFromSource(filepath);
-    };
-
-    window.addEventListener(
-      ORION_AGENT_FILE_MODIFIED_EVENT,
-      handleAgentFileModified as EventListener,
-    );
-    return () => {
-      window.removeEventListener(
-        ORION_AGENT_FILE_MODIFIED_EVENT,
-        handleAgentFileModified as EventListener,
-      );
-    };
-  }, [filepath, loadFileFromSource]);
 
   /**
    * Persists the active dirty text buffer when it matches the requested path.
@@ -243,17 +289,21 @@ export function useTextFileModel({
 
         const contentsManager = kernelService!.getContentsManager();
         if (pathExtension === "ipynb" && openNotebookAsText) {
-          await contentsManager.save(filepath, {
-            type: "notebook",
-            format: "json",
-            content: JSON.parse(contentToSave) as unknown,
-          });
+          await documentSync.runLocalWrite(() =>
+            contentsManager.save(filepath, {
+              type: "notebook",
+              format: "json",
+              content: JSON.parse(contentToSave) as unknown,
+            }),
+          );
         } else {
-          await contentsManager.save(filepath, {
-            type: "file",
-            format: "text",
-            content: contentToSave,
-          });
+          await documentSync.runLocalWrite(() =>
+            contentsManager.save(filepath, {
+              type: "file",
+              format: "text",
+              content: contentToSave,
+            }),
+          );
         }
 
         if (dirtyVersionRef.current === dirtyVersionToSave) {
@@ -287,6 +337,7 @@ export function useTextFileModel({
       pathExtension,
       openNotebookAsText,
       markClean,
+      documentSync,
     ],
   );
 
@@ -295,6 +346,17 @@ export function useTextFileModel({
     if (!filepath) return;
     await saveOpenDocumentIfDirty(filepath);
   }, [filepath, saveOpenDocumentIfDirty]);
+
+  /** Discards the editor buffer only after explicit user confirmation. */
+  const reloadDiskVersion = useCallback(async (): Promise<void> => {
+    if (
+      isDirtyRef.current &&
+      !window.confirm("Discard your unsaved editor changes and reload the version on disk?")
+    ) {
+      return;
+    }
+    await documentSync.reloadDiskVersion();
+  }, [documentSync]);
 
   /**
    * Sends code to the terminal and starts a language REPL for Python/R files
@@ -340,9 +402,11 @@ export function useTextFileModel({
     setShowErrorDialog,
     setFileContent,
     markDirty,
+    documentSyncState: documentSync.state,
     getSnapshot,
     saveOpenDocumentIfDirty,
     saveFile,
+    reloadDiskVersion,
     handleRunInTerminal,
     handleMonacoMount,
   };

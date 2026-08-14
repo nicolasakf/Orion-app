@@ -21,6 +21,11 @@ const modelsDevPayload = {
         name: "GPT Test",
         attachment: true,
         reasoning: true,
+        reasoning_options: [
+          { type: "toggle" },
+          { type: "effort", values: ["none", "low", "medium", "high"] },
+          { type: "budget_tokens", min: 1024, max: 32000 },
+        ],
         tool_call: true,
         cost: {
           input: 1,
@@ -89,6 +94,11 @@ describe("models.dev catalog cache", () => {
       model_id: "gpt-test",
       provider_id: "openai",
       source: "models_dev",
+      reasoning_options: [
+        { type: "toggle" },
+        { type: "effort", values: ["none", "low", "medium", "high"] },
+        { type: "budget_tokens", min: 1024, max: 32000 },
+      ],
     });
     expect(providers).toEqual([
       {
@@ -102,8 +112,13 @@ describe("models.dev catalog cache", () => {
 
     const cacheFile = JSON.parse(
       await readFile(getModelsDevCatalogCacheFilePath(), "utf8")
-    ) as { models: unknown[]; providers: unknown[] };
+    ) as { models: Array<{ reasoning_options?: unknown }>; providers: unknown[] };
     expect(cacheFile.models).toHaveLength(1);
+    expect(cacheFile.models[0]?.reasoning_options).toEqual([
+      { type: "toggle" },
+      { type: "effort", values: ["none", "low", "medium", "high"] },
+      { type: "budget_tokens", min: 1024, max: 32000 },
+    ]);
     expect(cacheFile.providers).toHaveLength(1);
   });
 
@@ -175,5 +190,69 @@ describe("models.dev catalog cache", () => {
       { id: "stale-provider" },
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps every base model when one reasoning option is malformed", async () => {
+    type TestModel = Omit<
+      typeof modelsDevPayload.openai.models["gpt-test"],
+      "reasoning_options"
+    > & { reasoning_options?: unknown };
+    const payload = structuredClone(modelsDevPayload) as unknown as {
+      openai: Omit<typeof modelsDevPayload.openai, "models"> & {
+        models: Record<string, TestModel>;
+      };
+    };
+    payload.openai.models["gpt-bad-options"] = {
+      ...payload.openai.models["gpt-test"],
+      id: "gpt-bad-options",
+      name: "GPT Bad Options",
+      reasoning_options: [{ type: "effort", values: ["turbo"] }],
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify(payload),
+      { status: 200 }
+    )));
+
+    const { fetchModelsDevCatalog } = await importCatalogModule();
+    const models = await fetchModelsDevCatalog();
+
+    expect(models.map((model) => model.model_id)).toEqual([
+      "gpt-test",
+      "gpt-bad-options",
+    ]);
+    expect(models[1]?.reasoning_options).toBeUndefined();
+  });
+
+  it("loads a fresh version-1 cache without enrichment when refresh fails", async () => {
+    await mkdir(path.dirname(getModelsDevCatalogCacheFilePath()), { recursive: true });
+    await writeFile(getModelsDevCatalogCacheFilePath(), `${JSON.stringify({
+      version: 1,
+      fetchedAt: new Date().toISOString(),
+      models: Array.from({ length: 3 }, (_, index) => ({
+        model_id: `cached-${index}`,
+        label: `Cached ${index}`,
+        provider_id: "openai",
+        input_price_per_1m: null,
+        output_price_per_1m: null,
+        cached_price_per_1m: null,
+        context_window: null,
+        max_output_tokens: null,
+        long_context_threshold: null,
+        long_context_input_price_per_1m: null,
+        long_context_output_price_per_1m: null,
+        client_avail: true,
+        pinned_by_default: index === 0,
+        created_at: "2026-05-17T00:00:00.000Z",
+        source: "models_dev",
+      })),
+      providers: [],
+    })}\n`, "utf8");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("offline")));
+
+    const { fetchModelsDevCatalog } = await importCatalogModule();
+    const models = await fetchModelsDevCatalog();
+
+    expect(models).toHaveLength(3);
+    expect(models[0]).toMatchObject({ model_id: "cached-0", pinned_by_default: true });
   });
 });

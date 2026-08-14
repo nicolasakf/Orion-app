@@ -30,7 +30,6 @@ import type { OrionToolName } from "./tool-schemas";
 import { TerminalPool } from "@/lib/shell/terminal-pool";
 import { guardToolResult } from "./tool-output-guard";
 import {
-  ORION_AGENT_FILE_MODIFIED_EVENT,
   type OpenDocumentKind,
   type OpenDocumentSaveResult,
   type OpenDocumentSnapshotProvider,
@@ -180,8 +179,17 @@ export interface AssistantContextValue {
     executionContext?: ToolExecutionContext
   ) => Promise<unknown>;
 
+  /** Persists a matching dirty editor document before an out-of-band write. */
+  saveOpenDocumentIfDirty: (
+    path: string,
+    kind: OpenDocumentKind,
+  ) => Promise<OpenDocumentSaveResult>;
+
   /** Create a writable tmp copy of a subagent source notebook for one delegate run. */
   createTmpSubagentNotebookCopy: (subagent: SubagentDefinition, runId: string) => Promise<string>;
+
+  /** Returns the path of the notebook currently connected to notebook tools, if any. */
+  getCurrentConnectedNotebookPath: () => string | null;
 
   /**
    * Register the active notebook with the NotebookManager so cell tools can
@@ -209,7 +217,9 @@ export type AssistantChatContextValue = Pick<
   | "jupyterServerIsLocal"
   | "rootDirectory"
   | "executeToolCall"
+  | "saveOpenDocumentIfDirty"
   | "createTmpSubagentNotebookCopy"
+  | "getCurrentConnectedNotebookPath"
   | "setChatId"
 >;
 
@@ -224,8 +234,6 @@ interface AssistantProviderProps {
   children: React.ReactNode;
   kernelService: KernelService | null;
   notebook?: NotebookType | null;
-  /** Called after the agent modifies the notebook (insert/overwrite/delete cells) */
-  onAgentNotebookChange?: () => void;
   /** Current workspace directory (relative to Jupyter root) */
   workspaceDirectory?: string;
   /** Absolute path to the Jupyter contents root on the Jupyter host, when known. */
@@ -238,7 +246,6 @@ export function AssistantProvider({
   children,
   kernelService,
   notebook: initialNotebook,
-  onAgentNotebookChange: onAgentNotebookChangeProp,
   workspaceDirectory,
   rootDirectory,
   openDocumentSnapshots,
@@ -279,14 +286,9 @@ export function AssistantProvider({
   const rootDirectoryRef = useRef<string | undefined>(rootDirectory ?? undefined);
   // Expose the pool via context so TerminalPanel can subscribe to pool state
   const [terminalPool, setTerminalPool] = useState<TerminalPool | null>(null);
-  // Use a ref so the executeToolCall callback always has the latest value
-  const onAgentNotebookChangeRef = useRef(onAgentNotebookChangeProp);
   const openDocumentSnapshotsRef = useRef<OpenDocumentSnapshotProvider | undefined>(
     openDocumentSnapshots
   );
-  useEffect(() => {
-    onAgentNotebookChangeRef.current = onAgentNotebookChangeProp;
-  }, [onAgentNotebookChangeProp]);
 
   useEffect(() => {
     openDocumentSnapshotsRef.current = openDocumentSnapshots;
@@ -733,6 +735,18 @@ export function AssistantProvider({
     [],
   );
 
+  /** Exposes the active editor save guard to checkpoint restoration. */
+  const saveOpenDocumentIfDirty = useCallback(
+    async (
+      path: string,
+      kind: OpenDocumentKind,
+    ): Promise<OpenDocumentSaveResult> =>
+      (await openDocumentSnapshotsRef.current?.saveOpenDocumentIfDirty(path, kind)) ?? {
+        status: "not-open",
+      },
+    [],
+  );
+
   /**
    * Execute a named agent tool client-side using the JupyterToolSet.
    * Tool results are serialized to strings (JSON when needed).
@@ -901,16 +915,6 @@ export function AssistantProvider({
         return { error: "Tool set not initialized. Please connect a kernel first." };
       }
 
-      /** Tools that modify the notebook structure */
-      const MODIFYING_TOOLS: Set<OrionToolName> = new Set([
-        "use_notebook",
-        "insert_cell",
-        "delete_cell",
-        "overwrite_cell_source",
-        "edit_orion_metadata",
-        "execute_cell",
-      ]);
-
       const requestId = typeof crypto !== "undefined" ? crypto.randomUUID() : `tool-${Date.now()}`;
       const startMs = Date.now();
 
@@ -993,10 +997,16 @@ export function AssistantProvider({
             result = await toolSet.tools.executeCode.execute(sanitizedParams as any);
             break;
           case "bash":
-            result = await toolSet.tools.bash.execute(sanitizedParams as any);
+            result = await toolSet.tools.bash.execute(
+              sanitizedParams as any,
+              executionContext?.abortSignal
+            );
             break;
           case "await_command":
-            result = await toolSet.tools.awaitCommand.execute(sanitizedParams as any);
+            result = await toolSet.tools.awaitCommand.execute(
+              sanitizedParams as any,
+              executionContext?.abortSignal
+            );
             break;
           case "read_file":
             result = await toolSet.tools.readFile.execute(sanitizedParams as any);
@@ -1024,11 +1034,7 @@ export function AssistantProvider({
             return { error: `Unknown tool: ${toolName}` };
         }
 
-        const requiresPostExecutionSync =
-          MODIFYING_TOOLS.has(toolName) || toolName === "edit_file";
-        if (!requiresPostExecutionSync) {
-          throwIfToolExecutionAborted(executionContext?.abortSignal);
-        }
+        throwIfToolExecutionAborted(executionContext?.abortSignal);
 
         if (isExecutionToolResult(result)) {
           // Preserve raster bytes until RightSidebar applies the selected model's
@@ -1042,9 +1048,6 @@ export function AssistantProvider({
             result: finalResult.text,
             durationMs,
           }, chatIdRef.current);
-          if (MODIFYING_TOOLS.has(toolName)) {
-            onAgentNotebookChangeRef.current?.();
-          }
           throwIfToolExecutionAborted(executionContext?.abortSignal);
           return finalResult;
         }
@@ -1055,11 +1058,6 @@ export function AssistantProvider({
         const durationMs = Date.now() - startMs;
 
         logToolResult({ requestId, toolName, params, result: finalResult, durationMs }, chatIdRef.current);
-
-        // Notify page if the notebook was structurally modified
-        if (MODIFYING_TOOLS.has(toolName)) {
-          onAgentNotebookChangeRef.current?.();
-        }
 
         if (toolName === "edit_file") {
           const rawFilePath = (sanitizedParams as { filePath?: unknown } | undefined)?.filePath;
@@ -1072,17 +1070,6 @@ export function AssistantProvider({
           }
           if (filePath && isRuleFilePath(filePath)) {
             await refreshRules();
-          }
-          if (
-            filePath &&
-            typeof finalResult === "string" &&
-            !finalResult.startsWith("[ERROR]")
-          ) {
-            window.dispatchEvent(
-              new CustomEvent(ORION_AGENT_FILE_MODIFIED_EVENT, {
-                detail: { path: filePath },
-              })
-            );
           }
         }
 
@@ -1126,6 +1113,11 @@ export function AssistantProvider({
     []
   );
 
+  /** Returns the notebook currently selected by the agent's NotebookManager. */
+  const getCurrentConnectedNotebookPath = useCallback((): string | null => {
+    return toolSetRef.current?.notebookManager.getCurrentNotebookPath() ?? null;
+  }, []);
+
   // ============================================================================
   // Context Value
   // ============================================================================
@@ -1153,7 +1145,9 @@ export function AssistantProvider({
       listDirectoryEntries,
       refreshVariables,
       executeToolCall,
+      saveOpenDocumentIfDirty,
       createTmpSubagentNotebookCopy,
+      getCurrentConnectedNotebookPath,
       registerNotebook,
       refreshSkills,
       refreshSubagents,
@@ -1179,7 +1173,9 @@ export function AssistantProvider({
       listDirectoryEntries,
       refreshVariables,
       executeToolCall,
+      saveOpenDocumentIfDirty,
       createTmpSubagentNotebookCopy,
+      getCurrentConnectedNotebookPath,
       registerNotebook,
       refreshSkills,
       refreshSubagents,
@@ -1198,11 +1194,13 @@ export function AssistantProvider({
       jupyterServerIsLocal,
       rootDirectory: rootDirectory ?? null,
       executeToolCall,
+      saveOpenDocumentIfDirty,
       listVariables,
       listDirectoryEntries,
       refreshSkills,
       refreshSubagents,
       createTmpSubagentNotebookCopy,
+      getCurrentConnectedNotebookPath,
       setChatId,
     }),
     [
@@ -1215,11 +1213,13 @@ export function AssistantProvider({
       jupyterServerIsLocal,
       rootDirectory,
       executeToolCall,
+      saveOpenDocumentIfDirty,
       listVariables,
       listDirectoryEntries,
       refreshSkills,
       refreshSubagents,
       createTmpSubagentNotebookCopy,
+      getCurrentConnectedNotebookPath,
     ]
   );
 

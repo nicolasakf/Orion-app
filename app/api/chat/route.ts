@@ -12,6 +12,7 @@ import type { CredentialMode, ProviderId } from "@/lib/agent/model-gateway-types
 import { resolveProviderCredentialForModel } from "@/lib/credentials/provider-credential-store.server";
 import { getModelCatalogEntry, isKnownProvider } from "@/lib/agent/model-catalog";
 import { getMergedModelCatalogEntry } from "@/lib/agent/model-catalog.server";
+import { validateReasoningModelSettings } from "@/lib/agent/reasoning-effort";
 import { isProviderSupported, getProviderAdapter } from "@/lib/agent/providers/registry";
 import {
   decodeLocalModelCatalogId,
@@ -77,12 +78,107 @@ import {
 import { resolveImplicitForcedSkillNames } from "@/lib/agent/implicit-skills";
 import {
   buildChatApiErrorPayload,
+  classifyContextLimitError,
+  getProviderErrorDiagnostic,
   serializeChatApiErrorPayload,
 } from "@/lib/chat/chat-api-errors";
 import { loadPersonalContextForModel } from "@/lib/onboarding/personal-context.server";
+import { foldCompactionChunks } from "@/lib/agent/compaction-fold";
 
 /** Standard request duration limit in seconds */
 export const maxDuration = 300;
+
+const COMPACTION_TOOL_VALUE_MAX_CHARS = 12_000;
+
+interface CompactionTextMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** Serializes provider content without carrying binary payloads into compaction. */
+function serializeCompactionContent(value: unknown, maxChars?: number): string {
+  let serialized: string;
+  if (typeof value === "string") {
+    serialized = /^(?:data:image\/|data:application\/)/iu.test(value)
+      ? `[binary data omitted: ${value.length} chars]`
+      : value;
+  } else {
+    try {
+      serialized = JSON.stringify(value, (_key, nested) => {
+        if (
+          typeof nested === "string" &&
+          (nested.startsWith("data:image/") || nested.startsWith("data:application/"))
+        ) {
+          return `[binary data omitted: ${nested.length} chars]`;
+        }
+        return nested;
+      });
+    } catch {
+      serialized = String(value);
+    }
+  }
+
+  if (!maxChars || serialized.length <= maxChars) return serialized;
+  return `${serialized.slice(0, maxChars)}\n[tool payload truncated from ${serialized.length} chars]`;
+}
+
+/** Converts model content into text while preserving ordinary text in full. */
+function modelContentToCompactionText(content: ModelMessage["content"]): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return serializeCompactionContent(content);
+
+  return content
+    .map((part) => {
+      if (typeof part !== "object" || part === null) return String(part);
+      const record = part as unknown as Record<string, unknown>;
+      if (record.type === "text" && typeof record.text === "string") return record.text;
+      if (record.type === "file" || record.type === "image") {
+        const mediaType = typeof record.mediaType === "string" ? record.mediaType : "unknown type";
+        return `[${String(record.type)} payload (${mediaType}) omitted from compaction]`;
+      }
+      return serializeCompactionContent(record, COMPACTION_TOOL_VALUE_MAX_CHARS);
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/** Produces a text-only, ordered transcript suitable for chunked compaction. */
+function prepareCompactionTextMessages(messages: ModelMessage[]): CompactionTextMessage[] {
+  return messages.map((message) => ({
+    role: message.role === "assistant" ? "assistant" : "user",
+    content:
+      modelContentToCompactionText(message.content).trim() ||
+      `[Empty ${message.role} message]`,
+  }));
+}
+
+/** Finds a stable whitespace boundary near the middle of oversized text. */
+function findCompactionSplitIndex(text: string): number {
+  const midpoint = Math.floor(text.length / 2);
+  const minimum = Math.floor(text.length * 0.35);
+  const maximum = Math.ceil(text.length * 0.65);
+  const before = Math.max(text.lastIndexOf("\n", midpoint), text.lastIndexOf(" ", midpoint));
+  if (before >= minimum) return before + 1;
+  const newlineAfter = text.indexOf("\n", midpoint);
+  const spaceAfter = text.indexOf(" ", midpoint);
+  const candidates = [newlineAfter, spaceAfter].filter(
+    (candidate) => candidate >= midpoint && candidate <= maximum
+  );
+  return candidates.length > 0 ? Math.min(...candidates) + 1 : midpoint;
+}
+
+/** Splits one oversized text message without dropping any characters. */
+function splitCompactionTextMessage(
+  message: CompactionTextMessage
+): [CompactionTextMessage, CompactionTextMessage] | null {
+  if (message.content.length < 2) return null;
+  const splitAt = findCompactionSplitIndex(message.content);
+  if (splitAt <= 0 || splitAt >= message.content.length) return null;
+  return [
+    { ...message, content: message.content.slice(0, splitAt) },
+    { ...message, content: message.content.slice(splitAt) },
+  ];
+}
 
 function parseClientPlatformOs(raw: unknown): PlatformOS | undefined {
   if (raw === "macos" || raw === "windows" || raw === "linux" || raw === "unknown") {
@@ -171,6 +267,8 @@ async function handleChatRequest(
     notebookPath?: string;
     /** Active non-notebook file path. Mutually exclusive with notebookPath — only one may be set. */
     activeFilePath?: string;
+    /** Notebook currently connected to the agent's notebook tools. */
+    connectedNotebookPath?: string | null;
     /** Workspace directory relative to Jupyter root (injected into agent system prompt) */
     workspaceDirectory?: string;
     /** Absolute Jupyter root directory for local managed sessions. */
@@ -179,7 +277,7 @@ async function handleChatRequest(
     modelRequestId?: string;
     /** "user" (default) or "title_generation" */
     origin?: string;
-    /** Provider-specific model settings from the client popover */
+    /** Normalized model settings from the client popover. */
     modelSettings?: Record<string, unknown>;
     /** Skills available in this session — injected into the agent system prompt */
     availableSkills?: Array<{ name: string; description: string; disableModelInvocation?: boolean }>;
@@ -259,6 +357,7 @@ async function handleChatRequest(
     chatId,
     notebookPath,
     activeFilePath,
+    connectedNotebookPath,
     workspaceDirectory,
     rootDirectory,
     modelRequestId: clientModelRequestId,
@@ -765,7 +864,6 @@ async function handleChatRequest(
     });
 
     try {
-      // Build model messages from the body's messages array
       let compactionMessages: ModelMessage[] = [];
       if (rawMessagesForModel.length > 0) {
         const rawList = rawMessagesForModel;
@@ -785,51 +883,98 @@ async function handleChatRequest(
         compactionMessages = normalizeInlineDataUrlFileParts(compactionMessages);
       }
 
-      // Prepend previous summary context if provided
-      if (typeof previousSummaryText === "string" && previousSummaryText.trim()) {
-        compactionMessages = [
-          {
-            role: "user",
-            content: [{ type: "text", text: `Previous summary:\n${previousSummaryText}` }],
-          } as ModelMessage,
-          ...compactionMessages,
-        ];
+      const preparedMessages = prepareCompactionTextMessages(compactionMessages);
+      if (preparedMessages.length === 0) {
+        throw new Error("No conversation history was provided for compaction.");
       }
 
       const gateway = getModelGateway();
-      const {
-        model,
-        messages: processedCompactionMessages,
-        providerOptions,
-      } = gateway.processRequest({
-        messages: compactionMessages,
-        modelId,
-        providerId,
-        agentSystemPrompt: undefined,
-        requestId,
-        modelSettings: undefined,
-        credentials: resolvedCredential,
+      const runtimeProfile = await getRuntimeModelProfile(providerId, modelId);
+      const compactionBudget = calculateContextBudget({
+        contextWindow: runtimeProfile.contextWindow,
+        maxOutputTokens: 1000,
+        autoCompactThreshold: contextSettings.compactionAutoThreshold,
       });
 
-      const result = await generateBufferedText(
-        {
-          model,
-          messages: processedCompactionMessages,
-          system: compactionSystemPrompt as string,
-          providerOptions: sanitizeTitleGenerationProviderOptions(providerOptions),
-          maxOutputTokens: 1000,
+      /** Prepares one measured chunk using the selected provider's runtime adapter. */
+      const prepareChunkInvocation = (
+        chunk: CompactionTextMessage[],
+        runningSummary: string | undefined
+      ) => {
+        const messages: ModelMessage[] = [
+          ...(runningSummary?.trim()
+            ? ([
+                {
+                  role: "user",
+                  content: `Previous summary:\n${runningSummary.trim()}`,
+                },
+              ] as ModelMessage[])
+            : []),
+          ...(chunk as ModelMessage[]),
+        ];
+        return gateway.processRequest({
+          messages,
+          modelId,
+          providerId,
+          agentSystemPrompt: undefined,
+          requestId,
+          modelSettings: undefined,
+          credentials: resolvedCredential,
+        });
+      };
+
+      const folded = await foldCompactionChunks({
+        items: preparedMessages,
+        initialSummary:
+          typeof previousSummaryText === "string" && previousSummaryText.trim()
+            ? previousSummaryText.trim()
+            : undefined,
+        fits: async (chunk, runningSummary) => {
+          const invocation = prepareChunkInvocation(chunk, runningSummary);
+          const measurement = await measurePreparedPrompt({
+            messages: [
+              { role: "system", content: compactionSystemPrompt as string },
+              ...invocation.messages,
+            ],
+            tools: {},
+          });
+          return measurement.estimatedInputTokens < compactionBudget.thresholdTokens;
         },
-        resolvedCredential.type,
-      );
+        summarize: async (chunk, runningSummary) => {
+          const invocation = prepareChunkInvocation(chunk, runningSummary);
+          const result = await generateBufferedText(
+            {
+              model: invocation.model,
+              messages: invocation.messages,
+              system: compactionSystemPrompt as string,
+              providerOptions: sanitizeTitleGenerationProviderOptions(
+                invocation.providerOptions
+              ),
+              maxOutputTokens: 1000,
+            },
+            resolvedCredential.type
+          );
 
-      await logLocalModelUsage({
-        resolvedModelRequestId: modelRequest.requestId,
-        modelPricing: catalogModel,
-        usage: result.usage,
-        providerMetadata: result.providerMetadata,
-      }).catch((error) => {
-        console.error("Failed to log compaction usage:", error);
+          await logLocalModelUsage({
+            resolvedModelRequestId: modelRequest.requestId,
+            modelPricing: catalogModel,
+            usage: result.usage,
+            providerMetadata: result.providerMetadata,
+          }).catch((error) => {
+            console.error("Failed to log compaction usage:", error);
+          });
+
+          return {
+            summary: result.text.trim(),
+            tokensUsed:
+              (result.usage?.inputTokens ?? 0) + (result.usage?.outputTokens ?? 0),
+          };
+        },
+        isContextOverflow: (error) =>
+          classifyContextLimitError(error, providerId, modelId) !== null,
+        splitItem: splitCompactionTextMessage,
       });
+
       if (chatSession) {
         await updateChatSessionStatus(chatSession.sessionId, "completed").catch(
           (error) => {
@@ -838,11 +983,24 @@ async function handleChatRequest(
         );
       }
 
-      const summary = result.text.trim();
-      const tokensUsed = result.usage?.inputTokens ?? 0;
+      const coversThrough = rawMessagesForModel.findLast((message) => {
+        return (
+          typeof message === "object" &&
+          message !== null &&
+          typeof (message as { id?: unknown }).id === "string"
+        );
+      });
+      const coveredMessageId =
+        typeof coversThrough === "object" && coversThrough !== null
+          ? ((coversThrough as { id?: string }).id ?? "")
+          : "";
 
       return new Response(
-        JSON.stringify({ summary, tokensUsed }),
+        JSON.stringify({
+          summary: folded.summary,
+          tokensUsed: folded.tokensUsed,
+          coversThrough: coveredMessageId,
+        }),
         { status: 200, headers: { "Content-Type": "application/json" } }
       );
     } catch (error) {
@@ -853,7 +1011,10 @@ async function handleChatRequest(
           }
         );
       }
-      console.error("Compaction error:", error);
+      console.error(
+        "Compaction error:",
+        getProviderErrorDiagnostic(error, providerId, modelId)
+      );
       return new Response(
         JSON.stringify({ title: "Compaction Failed", message: "Failed to generate conversation summary." }),
         { status: 500, headers: { "Content-Type": "application/json" } }
@@ -888,6 +1049,13 @@ async function handleChatRequest(
     );
   }
   const catalogModel = await getPricingCatalogModel(providerId, modelId);
+  const reasoningCatalogEntry = await getMergedModelCatalogEntry(providerId, modelId);
+  const validatedModelSettings = validateReasoningModelSettings({
+    providerId,
+    modelId,
+    catalogEntry: reasoningCatalogEntry,
+    modelSettings,
+  });
   const canForceToolChoice = await supportsForcedToolChoice({
     providerId,
     modelId,
@@ -990,11 +1158,12 @@ async function handleChatRequest(
     agentMode: effectiveMode === "Research" || effectiveMode === "Agent",
     messageCount: messages.length,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    modelSettings: modelSettings ?? null,
+    modelSettings: validatedModelSettings ?? null,
     contextMeta: effectiveMode !== "Ask"
       ? {
         notebookPath: notebookPath ?? null,
         activeFilePath: activeFilePath ?? null,
+        connectedNotebookPath: connectedNotebookPath ?? null,
         workspaceDirectory: workspaceDirectory ?? null,
         rootDirectory: rootDirectory ?? null,
       }
@@ -1016,12 +1185,13 @@ async function handleChatRequest(
       providerId,
       credential: resolvedCredential,
       requestId,
-      modelSettings,
+      modelSettings: validatedModelSettings,
       interactionMode: effectiveInteractionModeConfig,
       origin,
       subagentPrompt,
       notebookPath,
       activeFilePath,
+      connectedNotebookPath,
       rootDirectory,
       workspaceDirectory,
       availableSkills,
@@ -1171,7 +1341,7 @@ async function handleChatRequest(
           costUsd,
         });
       },
-      onError: (error) => {
+      onError: ({ error }) => {
         if (chatSession) {
           void updateChatSessionStatus(chatSession.sessionId, "error").catch(
             (sessionError) => {
@@ -1184,17 +1354,20 @@ async function handleChatRequest(
           requestId,
           model: modelId,
           provider: providerId,
-          error,
+          error: getProviderErrorDiagnostic(error, providerId, modelId),
           phase: "stream",
         });
-        console.error("Error streaming text:", error);
+        console.error(
+          "Error streaming text:",
+          getProviderErrorDiagnostic(error, providerId, modelId)
+        );
       },
     });
 
     return result.toUIMessageStreamResponse({
       sendReasoning: true,
       onError: (error) =>
-        serializeChatApiErrorPayload(buildChatApiErrorPayload(error, providerId)),
+        serializeChatApiErrorPayload(buildChatApiErrorPayload(error, providerId, modelId)),
     });
   } catch (error: unknown) {
     if (chatSession) {
@@ -1205,16 +1378,17 @@ async function handleChatRequest(
       );
     }
     if (!options.preflight) {
+      const diagnostic = getProviderErrorDiagnostic(error, providerId, modelId);
       logChatError({
         fileId,
         requestId,
         model: modelId,
         provider: providerId,
-        error,
+        error: diagnostic,
         phase: error instanceof GatewayConfigError ? "gateway" : "unknown",
       });
+      console.error("Chat request error:", diagnostic);
     }
-    console.error(error);
     if (error instanceof GatewayConfigError) {
       return new Response(
         JSON.stringify({
@@ -1228,7 +1402,7 @@ async function handleChatRequest(
       );
     }
 
-    const payload = buildChatApiErrorPayload(error, providerId);
+    const payload = buildChatApiErrorPayload(error, providerId, modelId);
     const statusCode =
       error !== null &&
       typeof error === "object" &&

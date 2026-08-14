@@ -21,4 +21,6 @@ export const SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME =
 
 export interface ScrollToNotebookCellEventDetail {
   cellIndex: number;
+  /** Optional output to reveal within the target cell. */
+  outputIndex?: number;
 }

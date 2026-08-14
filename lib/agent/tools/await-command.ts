@@ -18,6 +18,7 @@ import {
   formatTerminalResult,
   NEXT_STEP_AWAIT_AFTER_PATTERN_MATCH,
   NEXT_STEP_REQUIRED_AWAIT_AFTER_AWAIT_TIMEOUT,
+  isTerminalAbortError,
   parseCommandProgress,
   sleep,
   stripTerminalMarkerNoise,
@@ -47,9 +48,13 @@ export class AwaitCommandTool extends BaseTool {
    *
    * @param params.terminalName - Exact terminalName from a prior bash or await_command result.
    * @param params.pattern - Optional regex pattern; empty string disables early pattern matching.
+   * @param abortSignal - Optional signal that cancels polling while preserving pending command state.
    * @returns Structured status text with completion/running/matched state.
    */
-  async execute(params: AwaitCommandParams): Promise<string> {
+  async execute(
+    params: AwaitCommandParams,
+    abortSignal?: AbortSignal
+  ): Promise<string> {
     const { terminalName, pattern } = params;
     const startedAtMs = Date.now();
 
@@ -80,7 +85,10 @@ export class AwaitCommandTool extends BaseTool {
     try {
       while (Date.now() < deadline) {
         const remaining = deadline - Date.now();
-        await sleep(Math.max(0, Math.min(TERMINAL_POLL_INTERVAL_MS, remaining)));
+        await sleep(
+          Math.max(0, Math.min(TERMINAL_POLL_INTERVAL_MS, remaining)),
+          abortSignal
+        );
 
         const output = this.kernelService.readTerminalBuffer(terminalName);
         if (output) {
@@ -183,7 +191,13 @@ export class AwaitCommandTool extends BaseTool {
         })
       );
     } catch (error) {
+      if (isTerminalAbortError(error)) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : String(error);
+      if (/^Terminal ".+" not found$/.test(message)) {
+        this.pool?.clearPendingCommand(terminalName);
+      }
       return this.truncateOutput(
         formatTerminalResult({
           status: "error",

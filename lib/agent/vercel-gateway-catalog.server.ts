@@ -3,6 +3,7 @@ import "server-only";
 import { z } from "zod";
 
 import type { ModelCatalogEntry } from "@/lib/agent/model-catalog";
+import { parseReasoningOptions } from "@/lib/agent/reasoning-options.server";
 
 const VERCEL_MODELS_URL = "https://ai-gateway.vercel.sh/v1/models";
 const CACHE_TTL_MS = 60 * 60 * 1000;
@@ -21,6 +22,7 @@ const VercelGatewayModelSchema = z.object({
   max_tokens: z.number().int().positive().optional(),
   type: z.string().optional(),
   tags: z.array(z.string()).optional(),
+  reasoning_options: z.unknown().optional(),
   pricing: z
     .object({
       input: z.string().optional(),
@@ -101,6 +103,7 @@ export async function fetchVercelGatewayCatalog(): Promise<ModelCatalogEntry[]> 
           model.tags?.includes("vision") || model.tags?.includes("file-input"),
         supports_tool_calling: model.tags?.includes("tool-use"),
         supports_reasoning: model.tags?.includes("reasoning"),
+        reasoning_options: parseReasoningOptions(model.reasoning_options),
         long_context_threshold: inputTier?.threshold ?? null,
         long_context_input_price_per_1m: inputTier?.pricePerMillion ?? null,
         long_context_output_price_per_1m: outputTier?.pricePerMillion ?? null,

@@ -37,6 +37,7 @@ export interface PrepareChatInvocationInput {
   subagentPrompt?: SubagentPromptPayload;
   notebookPath?: string;
   activeFilePath?: string;
+  connectedNotebookPath?: string | null;
   rootDirectory?: string;
   workspaceDirectory?: string;
   availableSkills?: Array<{ name: string; description: string; disableModelInvocation?: boolean }>;
@@ -86,6 +87,7 @@ export function prepareChatInvocation(
   const sharedPromptOptions = {
     notebookPath: input.notebookPath,
     activeFilePath: input.activeFilePath,
+    connectedNotebookPath: input.connectedNotebookPath,
     rootDirectory: input.rootDirectory,
     workspaceDirectory: input.workspaceDirectory,
     agentRules: input.agentRules,
@@ -107,6 +109,7 @@ export function prepareChatInvocation(
       clientPlatformOs: input.clientPlatformOs,
       rootDirectory: input.rootDirectory,
       workspaceDirectory: input.workspaceDirectory,
+      connectedNotebookPath: input.connectedNotebookPath,
       notebookPath: input.notebookPath,
       activeFilePath: input.activeFilePath,
     });

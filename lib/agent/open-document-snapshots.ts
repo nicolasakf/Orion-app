@@ -38,6 +38,3 @@ export interface OpenDocumentSnapshotProvider {
     kind: OpenDocumentKind,
   ) => Promise<OpenDocumentSaveResult>;
 }
-
-/** Browser event emitted after an agent writes a non-notebook file. */
-export const ORION_AGENT_FILE_MODIFIED_EVENT = "orion:agent-file-modified";

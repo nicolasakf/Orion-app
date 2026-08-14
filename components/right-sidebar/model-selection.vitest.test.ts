@@ -26,21 +26,19 @@ describe("model session persistence", () => {
     expect(loadSelectedModelFromSession()).toBe("openai/gpt-5.5");
   });
 
-  it("round-trips per-model intelligence settings through sessionStorage", () => {
-    saveModelSettingsMapToSession({
+  it("migrates named efforts and discards legacy Anthropic budgets", () => {
+    window.sessionStorage.setItem("orion:modelSettings", JSON.stringify({
       "openai:gpt-5.5": { reasoningEffort: "high" },
       "anthropic:claude-sonnet-4-5": {
         extendedThinking: true,
         thinkingBudgetTokens: 25000,
       },
-    });
+      "openai:gpt-legacy": { reasoningEffort: "extra-high" },
+    }));
 
     expect(loadModelSettingsMapFromSession()).toEqual({
       "openai:gpt-5.5": { reasoningEffort: "high" },
-      "anthropic:claude-sonnet-4-5": {
-        extendedThinking: true,
-        thinkingBudgetTokens: 25000,
-      },
+      "openai:gpt-legacy": { reasoningEffort: "xhigh" },
     });
   });
 

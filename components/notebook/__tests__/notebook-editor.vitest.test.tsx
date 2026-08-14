@@ -15,6 +15,11 @@ import type { KernelService } from "@/lib/kernel/kernel-service";
 import { dispatchAgentNotebookExecutionEvent } from "@/lib/notebook/agent-notebook-events";
 import { RUN_ALL_CELLS_EVENT_NAME } from "@/lib/notebook/notebook-execution-events";
 import {
+  ORION_VERSIONED_OUTPUT_MIME_TYPE,
+  getVersionedOutputPayload,
+} from "@/lib/notebook/versioned-output";
+import {
+  CellExecutionStatus,
   CellType,
   OutputType,
   type NotebookType,
@@ -274,6 +279,156 @@ describe("NotebookEditor App View source navigation", () => {
 });
 
 describe("NotebookEditor agent execution state", () => {
+  it("refreshes a clean open notebook after a matching ContentsManager save", async () => {
+    const path = "/workspace/report.ipynb";
+    let currentNotebook = {
+      ...makeNotebook(),
+      metadata: { title: "Before agent edit" },
+    };
+    let fileChangedHandler:
+      | ((sender: unknown, args: {
+          type: "save";
+          oldValue: null;
+          newValue: { path: string; last_modified: string; size: number };
+        }) => void)
+      | null = null;
+    const contentsManager = {
+      get: vi.fn().mockImplementation(async () => ({ content: currentNotebook })),
+      save: vi.fn().mockResolvedValue(undefined),
+      fileChanged: {
+        connect: vi.fn((handler) => {
+          fileChangedHandler = handler;
+        }),
+        disconnect: vi.fn(),
+      },
+    };
+
+    render(
+      <NotebookEditor
+        filepath={path}
+        kernelService={makeKernelService(contentsManager)}
+      />,
+    );
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.notebook?.metadata.title).toBe("Before agent edit");
+      expect(fileChangedHandler).toBeTypeOf("function");
+    });
+
+    currentNotebook = {
+      ...makeNotebook(),
+      metadata: { title: "After agent edit" },
+    };
+    act(() => {
+      fileChangedHandler?.(contentsManager, {
+        type: "save",
+        oldValue: null,
+        newValue: {
+          path,
+          last_modified: "2026-08-13T12:00:01.000Z",
+          size: 100,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.notebook?.metadata.title).toBe("After agent edit");
+    });
+  });
+
+  it("does not report a conflict when agent execution state precedes its disk save", async () => {
+    const path = "/workspace/report.ipynb";
+    let currentNotebook = {
+      ...makeNotebook(),
+      metadata: { title: "Before agent execution" },
+    };
+    let fileChangedHandler:
+      | ((sender: unknown, args: {
+          type: "save";
+          oldValue: null;
+          newValue: { path: string; last_modified: string; size: number };
+        }) => void)
+      | null = null;
+    const contentsManager = {
+      get: vi.fn().mockImplementation(async () => ({ content: currentNotebook })),
+      save: vi.fn().mockResolvedValue(undefined),
+      fileChanged: {
+        connect: vi.fn((handler) => {
+          fileChangedHandler = handler;
+        }),
+        disconnect: vi.fn(),
+      },
+    };
+    const onUnsavedChangesChange = vi.fn();
+    const view = render(
+      <NotebookEditor
+        filepath={path}
+        kernelService={makeKernelService(contentsManager)}
+        onUnsavedChangesChange={onUnsavedChangesChange}
+      />,
+    );
+    await waitFor(() => {
+      expect(fileChangedHandler).toBeTypeOf("function");
+    });
+
+    act(() => {
+      const startTime = new Date("2026-08-14T12:00:00.000Z");
+      dispatchAgentNotebookExecutionEvent({
+        type: "queued",
+        notebookPath: path,
+        cellIndices: [1],
+      });
+      dispatchAgentNotebookExecutionEvent({
+        type: "start",
+        notebookPath: path,
+        cellIndex: 1,
+        startTime,
+      });
+      dispatchAgentNotebookExecutionEvent({
+        type: "complete",
+        notebookPath: path,
+        cellIndex: 1,
+        outputs: [],
+        executionInfo: {
+          status: CellExecutionStatus.SUCCESS,
+          startTime,
+          endTime: new Date("2026-08-14T12:00:01.000Z"),
+          duration: 1_000,
+        },
+      });
+    });
+    expect(onUnsavedChangesChange).not.toHaveBeenCalledWith(true);
+
+    currentNotebook = {
+      ...makeNotebook(),
+      metadata: { title: "After agent execution" },
+    };
+    act(() => {
+      fileChangedHandler?.(contentsManager, {
+        type: "save",
+        oldValue: null,
+        newValue: {
+          path,
+          last_modified: "2026-08-14T12:00:01.000Z",
+          size: 100,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.notebook?.metadata.title).toBe("After agent execution");
+    });
+    expect(view.queryByText("This file changed on disk")).toBeNull();
+  });
+
   it("ignores a stale notebook load after the filepath changes", async () => {
     const firstPath = "/workspace/first.ipynb";
     const secondPath = "/workspace/second.ipynb";
@@ -400,6 +555,95 @@ describe("NotebookEditor agent execution state", () => {
 });
 
 describe("NotebookEditor execution queue cancellation", () => {
+  it("merges version history when a manually executed cell completes", async () => {
+    const notebook = makeNotebook();
+    notebook.cells[1]!.outputs = [
+      {
+        output_type: OutputType.EXECUTE_RESULT,
+        execution_count: 1,
+        data: {
+          "text/plain": ["old value"],
+          [ORION_VERSIONED_OUTPUT_MIME_TYPE]: {
+            version: 1,
+            maxVersions: 10,
+            current: {
+              id: "v1",
+              createdAt: "2026-08-13T12:00:00.000Z",
+              metadata: {},
+            },
+            history: [],
+          },
+        },
+        metadata: {},
+      },
+    ];
+    const contentsManager = {
+      get: vi.fn().mockResolvedValue({ content: notebook }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    const execute = vi.fn(async (_source: string, onMessage: (msg: unknown) => void) => {
+      onMessage({
+        header: { msg_type: "execute_result" },
+        content: {
+          execution_count: 2,
+          data: {
+            "text/plain": "new value",
+            [ORION_VERSIONED_OUTPUT_MIME_TYPE]: {
+              version: 1,
+              maxVersions: 10,
+              current: {
+                id: "v2",
+                createdAt: "2026-08-14T12:00:00.000Z",
+                metadata: {},
+              },
+              history: [],
+            },
+          },
+          metadata: {},
+        },
+      });
+      return { done: Promise.resolve() };
+    });
+    const kernelService = {
+      getContentsManager: () => contentsManager,
+      getAvailableKernels: vi.fn().mockResolvedValue([]),
+      getKernel: () => ({ name: "python", status: "idle" }),
+      getStatus: () => "idle",
+      execute,
+    } as unknown as KernelService;
+
+    render(
+      <NotebookEditor
+        filepath="/workspace/report.ipynb"
+        activeNotebookView="app"
+        kernelService={kernelService}
+      />,
+    );
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.notebook?.cells[1]?.outputs).toHaveLength(1);
+    });
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(RUN_ALL_CELLS_EVENT_NAME, {
+          detail: { stopOnError: true },
+        }),
+      );
+    });
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      const output = props?.notebook?.cells[1]?.outputs?.[0];
+      expect(getVersionedOutputPayload(output!)?.history[0]?.id).toBe("v1");
+    });
+  });
+
   it("does not continue an ignore-errors batch after the queue is cleared", async () => {
     const notebook: NotebookType = {
       ...makeNotebook(),

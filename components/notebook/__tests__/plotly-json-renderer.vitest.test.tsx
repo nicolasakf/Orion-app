@@ -1,5 +1,5 @@
 import * as React from "react";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlotlyJsonOutputRenderer } from "@/components/notebook/renderers/plotly-json";
@@ -100,6 +100,33 @@ afterEach(() => {
 });
 
 describe("PlotlyJsonOutputRenderer sizing", () => {
+  it("reparents Plotly snapshot notices into the active output frame", async () => {
+    const view = render(
+      <PlotlyJsonOutputRenderer
+        {...createProps({ data: [], layout: { height: 360 } })}
+      />,
+    );
+    const plotNode = view.container.querySelector<HTMLElement>(
+      ".orion-plotly-output",
+    )!;
+    const plotHost = plotNode.parentElement!;
+
+    await waitFor(() => expect(plotlyMocks.react).toHaveBeenCalledTimes(1));
+    fireEvent.pointerDown(plotNode);
+
+    const notifier = document.createElement("div");
+    notifier.className = "plotly-notifier";
+    document.body.appendChild(notifier);
+
+    await waitFor(() => expect(plotHost).toContainElement(notifier));
+    expect(notifier).toHaveStyle({
+      position: "absolute",
+      top: "0.5rem",
+      right: "0.5rem",
+    });
+    expect(document.body.querySelector(":scope > .plotly-notifier")).toBeNull();
+  });
+
   it("uses measured notebook width, ignores authored width, and relayouts on resize and interactions", async () => {
     const props = createProps({
       data: [{ type: "bar", x: ["A"], y: [1] }],

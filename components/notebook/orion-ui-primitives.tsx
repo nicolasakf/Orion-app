@@ -6,6 +6,7 @@ import {
   CalendarIcon,
   ChevronLeft,
   ChevronRight,
+  Info,
 } from "lucide-react";
 import type { DateRange } from "react-day-picker";
 
@@ -1492,9 +1493,14 @@ function renderAlert(
 
   return (
     <Alert
-      className={primitiveClass(node)}
+      className={primitiveClass(
+        node,
+        variant !== "destructive" &&
+          "border-amber-500/50 bg-amber-500/5 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200 [&>svg]:!text-amber-800 dark:[&>svg]:!text-amber-200",
+      )}
       variant={variant === "destructive" ? "destructive" : "default"}
     >
+      {variant !== "destructive" ? <Info className="h-4 w-4" /> : null}
       {title ? <AlertTitle>{title}</AlertTitle> : null}
       {description ? <AlertDescription>{description}</AlertDescription> : null}
       {node.children.length > 0 ? (

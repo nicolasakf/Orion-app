@@ -150,7 +150,6 @@ function renderBusinessShell(onPanelResizeDragging = vi.fn()) {
       onNotebookSaveHandlerChange={noop}
       onFileLoadError={noop}
       onFileOpenCancel={noop}
-      onAgentNotebookChange={noop}
     />,
   );
 }

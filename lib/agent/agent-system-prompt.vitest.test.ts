@@ -230,6 +230,26 @@ describe("Business View mode prompt", () => {
 });
 
 describe("agent path prompt contract", () => {
+  it("reports the connected notebook or explicitly reports that none is connected", () => {
+    const connectedPrompt = buildAgentSystemPrompt({
+      rootDirectory: "/Users/taylor",
+      connectedNotebookPath: "project/notebooks/connected.ipynb",
+      notebookPath: "project/notebooks/connected.ipynb",
+    });
+    const disconnectedPrompt = buildAskModeSystemPrompt();
+
+    expect(connectedPrompt).toContain("## Connected Notebook");
+    expect(connectedPrompt).toContain(
+      "`/Users/taylor/project/notebooks/connected.ipynb`",
+    );
+    expect(connectedPrompt).toContain(
+      "This notebook is already connected to the agent's notebook tools",
+    );
+    expect(disconnectedPrompt).toContain(
+      "No notebook is currently connected to the agent's notebook tools.",
+    );
+  });
+
   it("uses absolute host paths when a Jupyter root is known", () => {
     const prompt = buildAgentSystemPrompt({
       rootDirectory: "/Users/taylor",

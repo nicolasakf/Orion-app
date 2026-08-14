@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OutputRenderer } from "@/components/notebook/output-renderer";
 import { CellType, OutputType, type NotebookType } from "@/lib/types";
+import { ORION_VERSIONED_OUTPUT_MIME_TYPE } from "@/lib/notebook/versioned-output";
 
 vi.mock("next-themes", () => ({
   useTheme: () => ({ theme: "light" }),
@@ -21,6 +22,119 @@ afterEach(() => {
 });
 
 describe("OutputRenderer context menu", () => {
+  it("mentions an output when it is Option-clicked", () => {
+    const onMentionOutput = vi.fn();
+
+    render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: { "text/plain": ["mentionable output"] },
+          metadata: {},
+        }}
+        cellIndex={3}
+        outputIndex={2}
+        onMentionOutput={onMentionOutput}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("mentionable output"));
+    expect(onMentionOutput).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("mentionable output"), { altKey: true });
+    expect(onMentionOutput).toHaveBeenCalledWith(3, 2);
+  });
+
+  it("contains every MIME renderer inside a clipped paint boundary", () => {
+    render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: { "text/plain": ["bounded output"] },
+          metadata: {},
+        }}
+      />,
+    );
+
+    const frame = screen
+      .getByText("bounded output")
+      .closest<HTMLElement>("[data-orion-output-frame]");
+    expect(frame).toHaveClass(
+      "orion-output-frame",
+      "relative",
+      "isolate",
+      "overflow-hidden",
+    );
+    expect(frame).toHaveStyle({ contain: "paint" });
+  });
+
+  it("switches versioned output snapshots through a hover/focus picker", async () => {
+    render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: {
+            "text/plain": ["current chart"],
+            [ORION_VERSIONED_OUTPUT_MIME_TYPE]: {
+              version: 1,
+              maxVersions: 10,
+              current: {
+                id: "v2",
+                createdAt: "2026-08-14T12:00:00.000Z",
+                metadata: {},
+              },
+              history: [
+                {
+                  id: "v1",
+                  createdAt: "2026-08-13T12:00:00.000Z",
+                  data: { "text/plain": ["previous chart"] },
+                  metadata: {},
+                },
+              ],
+            },
+          },
+          metadata: {},
+        }}
+        isInAppView
+      />,
+    );
+
+    expect(screen.getByText("current chart")).toBeInTheDocument();
+    const trigger = screen.getByRole("button", {
+      name: "Select output version. Version 2 selected.",
+    });
+    expect(trigger.parentElement).toHaveClass("opacity-0");
+
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: /Version 1/ }),
+    );
+
+    expect(screen.getByText("previous chart")).toBeInTheDocument();
+    expect(screen.queryByText("current chart")).not.toBeInTheDocument();
+  });
+
+  it("shows a readable error for malformed version history", () => {
+    render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: {
+            [ORION_VERSIONED_OUTPUT_MIME_TYPE]: {
+              version: 1,
+              history: [],
+            },
+          },
+          metadata: {},
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("Versioned output could not be rendered"),
+    ).toBeInTheDocument();
+  });
+
   it("renders an Orion UI output reference from its stable cell id", () => {
     const notebook: NotebookType = {
       cells: [

@@ -106,6 +106,8 @@ export interface RunSubagentOptions {
   /** Same editor/Jupyter context as the parent agent (injected into the sub-agent system prompt). */
   notebookPath?: string;
   activeFilePath?: string;
+  /** Returns the notebook currently connected to the shared notebook tools. */
+  getCurrentConnectedNotebookPath?: () => string | null;
   serverInfo?: JupyterServerInfo | null;
   jupyterServerIsLocal?: boolean;
   clientPlatformOs?: PlatformOS;

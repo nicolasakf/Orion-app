@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   findRectCollision,
   findRectOverflow,
+  getPlotlyInspectionExportScale,
   inspectPlotlyOutput,
   isPlotAreaUndersized,
   type PlotlyInspectionRect,
@@ -79,6 +80,12 @@ afterEach(() => {
 });
 
 describe("Plotly rectangle diagnostics", () => {
+  it("exports at double density without exceeding 1,600 pixels", () => {
+    expect(getPlotlyInspectionExportScale(640, 400)).toBe(2);
+    expect(getPlotlyInspectionExportScale(1_000, 500)).toBe(1.6);
+    expect(getPlotlyInspectionExportScale(2_000, 1_000)).toBe(0.8);
+  });
+
   it("ignores missing rectangles, touching edges, and overlap within tolerance", () => {
     expect(findRectCollision("a", null, "b", container)).toBeNull();
     expect(findRectCollision("a", { x: 0, y: 0, width: 10, height: 10 }, "b", { x: 10, y: 0, width: 10, height: 10 })).toBeNull();
@@ -111,6 +118,7 @@ describe("inspectPlotlyOutput", () => {
   it("returns live diagnostics and a PNG visual", async () => {
     mountPlotlyOutput();
     const result = await inspectPlotlyOutput(2, 0);
+    const plotly = await loadPlotly();
     expect(result.text).toContain("Output: x=0, y=0, width=800, height=400");
     expect(result.text).toContain("Plot area: x=0, y=0, width=640, height=260");
     expect(result.text).toContain("Collisions: none detected");
@@ -120,6 +128,15 @@ describe("inspectPlotlyOutput", () => {
       cellIndex: 2,
       outputIndex: 0,
     });
+    expect(plotly.toImage).toHaveBeenCalledWith(
+      expect.any(HTMLElement),
+      expect.objectContaining({
+        format: "png",
+        width: 800,
+        height: 400,
+        scale: 2,
+      }),
+    );
   });
 
   it("distinguishes invalid cells, invalid outputs, hidden outputs, and non-Plotly outputs", async () => {

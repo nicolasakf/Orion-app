@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- Notebook: retain and revisit rich output history with `ui.version()`
+- Notebook: mention markdown cells in chat from the cell context menu
+
 ## [0.18.1] - 2026-08-11
 
 ### Fixed

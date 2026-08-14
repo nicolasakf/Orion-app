@@ -6,7 +6,7 @@
  */
 
 export const TOOL_OUTPUT_TEXT_CHAR_BUDGET = 10000 * 4;  // rule of thumb: 4 chars per token
-export const TOOL_OUTPUT_IMAGE_BASE64_CHAR_BUDGET = 100000;
+export const TOOL_OUTPUT_IMAGE_BASE64_CHAR_BUDGET = 1_000_000;
 export const TOOL_OUTPUT_MAX_OMITTED_RATIO = 1 / 3;
 
 const DEFAULT_TRUNCATION_MARKER = "...[truncated for context safety]";

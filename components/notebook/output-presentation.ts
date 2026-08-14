@@ -8,6 +8,7 @@ import type { NotebookMimeRegistry } from "@/lib/notebook/mime-registry";
 import type { MimeOutputKind } from "@/lib/notebook/mime-registry";
 import { getOutputMimeBundle } from "@/lib/notebook/mime-registry";
 import type { NotebookOutputType } from "@/lib/types";
+import { ORION_VERSIONED_OUTPUT_MIME_TYPE } from "@/lib/notebook/versioned-output";
 
 const MIME_LABEL_OVERRIDES: Record<string, string> = {
   "text/plain": "Plain text",
@@ -25,6 +26,7 @@ const MIME_LABEL_OVERRIDES: Record<string, string> = {
   "application/vdom.v1+json": "VDOM",
   "application/vnd.dataresource+json": "Data Resource",
   "application/vnd.orion.ui+json": "Orion UI",
+  [ORION_VERSIONED_OUTPUT_MIME_TYPE]: "Version history",
   "application/vnd.jupyter.widget-view+json": "Jupyter widget",
   "application/vnd.plotly.v1+json": "Plotly (interactive)",
   "application/vnd.vega.v2+json": "Vega v2",
@@ -84,6 +86,22 @@ export function getOutputPresentationMimes(
   trusted: boolean
 ): OutputPresentationOption[] {
   const bundle = getOutputMimeBundle(output);
+  if (bundle[ORION_VERSIONED_OUTPUT_MIME_TYPE] !== undefined) {
+    const resolved = registry.resolveForMimeType(
+      output,
+      ORION_VERSIONED_OUTPUT_MIME_TYPE,
+      trusted,
+    );
+    return resolved
+      ? [
+          {
+            mimeType: ORION_VERSIONED_OUTPUT_MIME_TYPE,
+            label: "Version history",
+            rank: resolved.factory.rank,
+          },
+        ]
+      : [];
+  }
   const mimes: OutputPresentationOption[] = [];
   for (const mimeType of Object.keys(bundle)) {
     if (mimeType === "text/html" && bundle[PLOTLY_HTML_MIME] !== undefined) {

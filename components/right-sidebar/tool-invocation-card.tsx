@@ -21,7 +21,14 @@ import {
   Shield,
   ShieldCheck,
   Play,
+  Maximize2,
 } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import {
   Popover,
@@ -30,6 +37,7 @@ import {
 } from "@/components/ui/popover";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
+import { isExecutionToolResult } from "@/lib/agent/visual-evidence";
 import { DANGEROUS_TOOLS } from "@/lib/agent/tool-approval";
 import {
   SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
@@ -162,6 +170,63 @@ function resultToText(result: unknown): string {
   if (result == null) return "";
   if (typeof result === "string") return result;
   return JSON.stringify(result, null, 2);
+}
+
+/** Returns the PNG payload passed to the model for a completed Plotly inspection. */
+function getPlotlyInspectionImage(result: unknown): { src: string; visualId: string } | null {
+  if (!isExecutionToolResult(result)) return null;
+
+  const visual = result.visuals.find(
+    (candidate) =>
+      candidate.source === "inspect_plotly_output" &&
+      candidate.mimeType === "image/png" &&
+      typeof candidate.data === "string" &&
+      candidate.data.length > 0
+  );
+  if (!visual?.data) return null;
+
+  return {
+    src: `data:${visual.mimeType};base64,${visual.data}`,
+    visualId: visual.visualId,
+  };
+}
+
+/** Displays the model-facing Plotly raster as a compact card preview and full-screen dialog. */
+function PlotlyInspectionPreview({ src, visualId }: { src: string; visualId: string }) {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          className="corner-squircle group relative mt-1 block max-w-full overflow-hidden rounded-md border border-border/50 bg-muted/20 text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          aria-label="Open rendered Plotly preview in full screen"
+        >
+          <img
+            src={src}
+            alt="Rendered Plotly preview"
+            className="block max-h-28 max-w-full object-contain"
+          />
+          <span className="absolute inset-0 flex items-center justify-center bg-background/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+            <Maximize2 className="h-4 w-4 text-foreground" aria-hidden="true" />
+          </span>
+        </button>
+      </DialogTrigger>
+      <DialogContent
+        aria-describedby={undefined}
+        className="h-[96vh] w-[96vw] max-w-none border-0 p-3"
+      >
+        <DialogTitle className="sr-only">Rendered Plotly inspection</DialogTitle>
+        <div className="flex h-full w-full items-center justify-center overflow-auto">
+          <img
+            src={src}
+            alt="Rendered Plotly preview in full screen"
+            className="max-h-[90vh] max-w-[90vw] object-contain"
+            data-visual-id={visualId}
+          />
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 /** Count down the visible wait budget while await_command is pending. */
@@ -304,6 +369,8 @@ export function ToolInvocationCard({
     ? getToolResultDisplaySegments(toolName, fullResultText)
     : null;
   const notebookCellSourceChanges = getNotebookCellSourceChanges(fullResultText);
+  const plotlyInspectionImage =
+    toolName === "inspect_plotly_output" ? getPlotlyInspectionImage(result) : null;
   /** Scroll/size observer: in dev the expanded pre shows the full raw result. */
   const expandedScrollKey = IS_TOOL_CARD_DEV_OVERLAY ? fullResultText : cardResultText;
   const canExpand = !isPending && !!fullResultText;
@@ -435,6 +502,10 @@ export function ToolInvocationCard({
       )}
 
       <NotebookCellSourceChangeRows changes={notebookCellSourceChanges} />
+
+      {plotlyInspectionImage && (
+        <PlotlyInspectionPreview {...plotlyInspectionImage} />
+      )}
 
       {/* Expanded result */}
       {isExpanded && fullResultText && (

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { resolveOrionEditorDefinition } from "@/components/editors/editor-definitions";
+import { DocumentSyncAlert } from "@/components/editors/document-sync-alert";
 import { useTextFileModel } from "@/components/editors/use-text-file-model";
 import { LARGE_FILE_WARNING_THRESHOLD_BYTES } from "@/lib/editor/large-file-warning";
 import { isUserSettingsEditorPath } from "@/lib/settings/user-settings-editor-path";
@@ -360,6 +361,13 @@ export function Editor({
   return (
     <>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-sidebar">
+        {isTextBackedEditor ? (
+          <DocumentSyncAlert
+            state={textFileModel.documentSyncState}
+            onSaveEditorVersion={textFileModel.saveFile}
+            onReloadDiskVersion={textFileModel.reloadDiskVersion}
+          />
+        ) : null}
         {editorContent}
       </div>
       <Dialog

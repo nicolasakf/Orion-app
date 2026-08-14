@@ -6,6 +6,7 @@ import type { UIMessage } from "ai";
 import { BUSINESS_PROMPT_CATEGORIES } from "@/components/right-sidebar/business-prompt-library";
 import { ChatBody } from "@/components/right-sidebar/chat-body";
 import { INSERT_CHAT_MESSAGE_EVENT } from "@/lib/chat/chat-composer-events";
+import { SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME } from "@/lib/notebook/notebook-execution-events";
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
@@ -87,6 +88,13 @@ function renderMessageChatBody(
 }
 
 describe("ChatBody empty prompt library", () => {
+  it("renders the runtime warning when a tool is blocked by a disconnected server", () => {
+    renderEmptyChatBody({ showKernelPrompt: true });
+
+    expect(screen.getByText("Runtime not connected")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect runtime" })).toBeInTheDocument();
+  });
+
   it("provides five questionnaire prompts in each business category", () => {
     expect(BUSINESS_PROMPT_CATEGORIES).toHaveLength(4);
 
@@ -324,6 +332,44 @@ describe("ChatBody assistant message actions", () => {
 
     expect(screen.queryByRole("button", { name: "Fork from here" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy message" })).toBeInTheDocument();
+  });
+
+  it("scrolls to a notebook cell when its sent-message reference chip is clicked", () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    const message: UIMessage = {
+      id: "user-message-cell-reference",
+      role: "user",
+      parts: [{ type: "text", text: "Please inspect this cell." }],
+      metadata: {
+        references: [
+          {
+            id: "cell:example",
+            type: "cell",
+            label: "Cell #4",
+            locator: {
+              type: "cell",
+              notebookPath: "analysis.ipynb",
+              cellIndices: [3],
+            },
+            status: "resolved",
+            preview: "Cell source",
+            resolvedAt: "2026-08-14T00:00:00.000Z",
+          },
+        ],
+      },
+    };
+
+    renderMessageChatBody([message]);
+    dispatchSpy.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Go to Cell #4" }));
+
+    expect(dispatchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
+        detail: { cellIndex: 3 },
+      }),
+    );
+    dispatchSpy.mockRestore();
   });
 
   it("keeps long unbroken user-message text within the chat panel", () => {
