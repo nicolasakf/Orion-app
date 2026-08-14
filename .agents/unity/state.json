@@ -4,13 +4,6 @@
     "claude": {
       "targetPath": "/Users/nicolasfonteyne/Github_nicolasakf/Orion-app/.claude/skills",
       "skills": {
-        "add-or-update-models": {
-          "files": {
-            "SKILL.md": "f057ac18e6ad93c2d92e222dca4cd3b7d5ae57e498f5bcc095a3ab4cabb9f6d1",
-            "examples.md": "2a8e706718d81095f813e84a447157677c96f31562ccfacb9a2a73471cc9ccff",
-            "reference.md": "73625adeb1564f4e94c78f7ee3a1529f60dd92bcfaa407257d8fcabaf24280e2"
-          }
-        },
         "create-github-issues": {
           "files": {
             "SKILL.md": "a0338743be4709ebbe1fcd8efbbbc8e607feddc21786ec57d2263047cd1c40eb",
@@ -68,13 +61,6 @@
     "cursor": {
       "targetPath": "/Users/nicolasfonteyne/Github_nicolasakf/Orion-app/.cursor/skills",
       "skills": {
-        "add-or-update-models": {
-          "files": {
-            "SKILL.md": "f057ac18e6ad93c2d92e222dca4cd3b7d5ae57e498f5bcc095a3ab4cabb9f6d1",
-            "examples.md": "2a8e706718d81095f813e84a447157677c96f31562ccfacb9a2a73471cc9ccff",
-            "reference.md": "73625adeb1564f4e94c78f7ee3a1529f60dd92bcfaa407257d8fcabaf24280e2"
-          }
-        },
         "create-github-issues": {
           "files": {
             "SKILL.md": "a0338743be4709ebbe1fcd8efbbbc8e607feddc21786ec57d2263047cd1c40eb",
