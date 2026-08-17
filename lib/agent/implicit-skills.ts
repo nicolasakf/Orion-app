@@ -26,5 +26,7 @@ export function buildRequiredSkillsPromptSection(requiredSkillNames: string[]): 
   return `## Required Skills
 
 The following skills must be loaded before other work: ${skillList}.
-${loadLines}`;
+${loadLines}
+
+Load them by these exact names. The user selected them for this turn, so they are loadable whether or not they also appear under Available Skills.`;
 }

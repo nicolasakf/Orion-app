@@ -226,19 +226,78 @@ function createNotebookCreationKernelService(options: {
   };
 }
 
+/** Add each ancestor directory of a Jupyter-relative file path. */
+function addAncestorDirectories(directories: Set<string>, filePath: string): void {
+  const segments = filePath.split("/").filter(Boolean);
+  let current = "";
+  for (const segment of segments.slice(0, -1)) {
+    current = current ? `${current}/${segment}` : segment;
+    directories.add(current);
+  }
+}
+
+/** Jupyter-relative parent directory of a file path, or "" for the root. */
+function parentDirectoryPath(filePath: string): string {
+  return filePath.includes("/") ? filePath.slice(0, filePath.lastIndexOf("/")) : "";
+}
+
 /** Stateful mock KernelService backed by text file contents. */
 function createTextKernelService(
   initial: Record<string, string> = {}
-): { ks: KernelService; store: Map<string, string> } {
+): { ks: KernelService; store: Map<string, string>; directories: Set<string> } {
   const store = new Map<string, string>(Object.entries(initial));
+  const directories = new Set<string>([""]);
+  for (const filePath of store.keys()) {
+    addAncestorDirectories(directories, filePath);
+  }
+  let untitledCounter = 0;
+
+  const basename = (path: string): string => path.split("/").filter(Boolean).pop() ?? "";
+  const joinPath = (parent: string, child: string): string => (parent ? `${parent}/${child}` : child);
+  const uniqueUntitledDirectory = (parent: string): string => {
+    untitledCounter += 1;
+    const suffix = untitledCounter === 1 ? "" : ` ${untitledCounter}`;
+    return joinPath(parent, `Untitled Folder${suffix}`);
+  };
+
   const ks = {
     getContentsManager: () => ({
       get: async (path: string) => {
+        if (directories.has(path)) {
+          return { content: null, type: "directory", name: basename(path), path };
+        }
         if (!store.has(path)) throw new Error(`Not found: ${path}`);
         return { content: store.get(path), type: "file", name: path };
       },
       save: async (path: string, model: { content: string }) => {
+        const parent = parentDirectoryPath(path);
+        if (!directories.has(parent)) {
+          throw new Error(`No such directory: ${parent || "/"}`);
+        }
         store.set(path, model.content);
+      },
+      newUntitled: async (args: { path?: string; type?: "directory" | "notebook" }) => {
+        const parent = args.path ?? "";
+        if (!directories.has(parent)) {
+          throw new Error(`Parent directory not found: ${parent}`);
+        }
+        if (args.type !== "directory") {
+          throw new Error(`Unsupported untitled type: ${args.type ?? "notebook"}`);
+        }
+        const path = uniqueUntitledDirectory(parent);
+        directories.add(path);
+        return { path, type: "directory", name: basename(path) };
+      },
+      rename: async (oldPath: string, newPath: string) => {
+        if (store.has(newPath) || directories.has(newPath)) {
+          throw new Error(`Target already exists: ${newPath}`);
+        }
+        if (!directories.has(oldPath)) {
+          throw new Error(`Not found: ${oldPath}`);
+        }
+        directories.delete(oldPath);
+        directories.add(newPath);
+        return { path: newPath, type: "directory", name: basename(newPath) };
       },
     }),
     getStatus: () => "idle" as const,
@@ -248,7 +307,7 @@ function createTextKernelService(
     testConnection: async () => true,
     shutdown: async () => {},
   } as unknown as KernelService;
-  return { ks, store };
+  return { ks, store, directories };
 }
 
 /** Create a snapshot provider from optional text and notebook snapshots. */
@@ -1051,6 +1110,61 @@ await runTest("read_file normalizes absolute paths before ContentsManager reads"
   assertIncludes(result, "disk_value = 1", "should read the normalized relative path");
 });
 
+await runTest("edit_file overwrite creates missing parent directories", async () => {
+  const { ks, store, directories } = createTextKernelService();
+  const tool = new EditFileTool(ks, null);
+  const result = await tool.execute({
+    filePath: ".tmp/path-resolution/nested/audit.txt",
+    mode: "overwrite",
+    content: "outside workspace inside root ok\n",
+    oldString: "",
+    newString: "",
+  });
+  assertIncludes(result, "Successfully wrote", "should confirm write");
+  assert(directories.has(".tmp"), "should create first parent directory");
+  assert(directories.has(".tmp/path-resolution"), "should create nested parent directory");
+  assert(directories.has(".tmp/path-resolution/nested"), "should create leaf parent directory");
+  assert(
+    store.get(".tmp/path-resolution/nested/audit.txt") === "outside workspace inside root ok\n",
+    "should write the file after creating parents"
+  );
+});
+
+await runTest("edit_file overwrite normalizes absolute paths before creating parent directories", async () => {
+  const { ks, store, directories } = createTextKernelService();
+  const tool = new EditFileTool(ks, null, createSnapshotProvider({}), null, () => "/Users/taylor");
+  const result = await tool.execute({
+    filePath: "/Users/taylor/project/.tmp/path-resolution/audit.txt",
+    mode: "overwrite",
+    content: "created via absolute path\n",
+    oldString: "",
+    newString: "",
+  });
+  assertIncludes(result, "Successfully wrote", "should confirm write");
+  assert(directories.has("project"), "should create first normalized parent directory");
+  assert(directories.has("project/.tmp"), "should create nested normalized parent directory");
+  assert(directories.has("project/.tmp/path-resolution"), "should create leaf normalized parent directory");
+  assert(
+    store.get("project/.tmp/path-resolution/audit.txt") === "created via absolute path\n",
+    "should write the normalized relative path"
+  );
+});
+
+await runTest("edit_file overwrite errors when a parent path exists as a file", async () => {
+  const { ks, store } = createTextKernelService({ "project": "not a directory\n" });
+  const tool = new EditFileTool(ks, null);
+  const result = await tool.execute({
+    filePath: "project/notes.txt",
+    mode: "overwrite",
+    content: "should not be written\n",
+    oldString: "",
+    newString: "",
+  });
+  assertIncludes(result, "[ERROR]", "should return an error");
+  assertIncludes(result, "exists but is not a directory", "should explain the conflicting parent");
+  assert(!store.has("project/notes.txt"), "should not write when a parent is a file");
+});
+
 await runTest("edit_file replace uses active editor buffer as base", async () => {
   const { ks, store } = createTextKernelService({ "script.py": "disk_value = 1\n" });
   const snapshots = createSnapshotProvider({
@@ -1106,13 +1220,12 @@ function makeReadNotebookTool(): { tool: ReadNotebookTool; notebookId: string } 
   return { tool: new ReadNotebookTool(ks, null, mgr), notebookId };
 }
 
-await runTest("brief format returns cell count and table", async () => {
+await runTest("returns cell count and detailed cell headers", async () => {
   const { tool, notebookId } = makeReadNotebookTool();
-  const result = await tool.execute({ notebookId, responseFormat: "brief", startIndex: 0, limit: 50, includeOrionMetadata: false });
+  const result = await tool.execute({ notebookId, startIndex: 0, limit: 50, includeOrionMetadata: false });
   assertIncludes(result, "3 cells", "should mention cell count");
-  assertIncludes(result, "Index", "should have Index column");
-  assertIncludes(result, "markdown", "should list markdown cell");
-  assertIncludes(result, "code", "should list code cells");
+  assertIncludes(result, "=====Cell 0 | type: markdown", "should include detailed cell header");
+  assertIncludes(result, "=====Cell 1 | type: code", "should include code cell header");
 });
 
 await runTest("read_notebook prefers active editor buffer over disk", async () => {
@@ -1127,32 +1240,26 @@ await runTest("read_notebook prefers active editor buffer over disk", async () =
     mgr,
     createSnapshotProvider({ notebooks: { "buffered.ipynb": bufferFixture } })
   );
-  const result = await tool.execute({ notebookId, responseFormat: "detailed", startIndex: 0, limit: 10, includeOrionMetadata: false });
+  const result = await tool.execute({ notebookId, startIndex: 0, limit: 10, includeOrionMetadata: false });
   assertIncludes(result, "# Buffer", "should read buffer notebook");
   assertIncludes(result, "source: editor buffer", "should identify buffer source");
   assertNotIncludes(result, "# Disk", "should not read stale disk notebook");
 });
 
-await runTest("brief format shows first line of source", async () => {
+await runTest("includes full source", async () => {
   const { tool, notebookId } = makeReadNotebookTool();
-  const result = await tool.execute({ notebookId, responseFormat: "brief", startIndex: 0, limit: 50, includeOrionMetadata: false });
-  assertIncludes(result, "Introduction", "should include first line of markdown source");
-});
-
-await runTest("detailed format includes full source", async () => {
-  const { tool, notebookId } = makeReadNotebookTool();
-  const result = await tool.execute({ notebookId, responseFormat: "detailed", startIndex: 0, limit: 50, includeOrionMetadata: false });
+  const result = await tool.execute({ notebookId, startIndex: 0, limit: 50, includeOrionMetadata: false });
   assertIncludes(result, "x = 1", "should include full cell source");
   assertIncludes(result, "y = 2", "should include second line of source");
 });
 
-await runTest("detailed format lists output type and mimes", async () => {
+await runTest("lists output type and mimes", async () => {
   const { tool, notebookId } = makeReadNotebookTool();
-  const result = await tool.execute({ notebookId, responseFormat: "detailed", startIndex: 0, limit: 50, includeOrionMetadata: false });
+  const result = await tool.execute({ notebookId, startIndex: 0, limit: 50, includeOrionMetadata: false });
   assertIncludes(result, "stream (stdout)", "should summarize stream output without body text");
 });
 
-await runTest("detailed format uses compact fallback when notebook payload is far too large", async () => {
+await runTest("uses compact fallback when notebook payload is far too large", async () => {
   const hugeFixture = makeNotebook([
     makeCodeCell("y".repeat(30000), [], 1),
   ]);
@@ -1160,45 +1267,45 @@ await runTest("detailed format uses compact fallback when notebook payload is fa
   const mgr = new NotebookManager();
   const notebookId = mgr.addNotebook("huge", "huge_read_nb.ipynb", "k1");
   const tool = new ReadNotebookTool(ks, null, mgr);
-  const result = await tool.execute({ notebookId, responseFormat: "detailed", startIndex: 0, limit: 10, includeOrionMetadata: false });
+  const result = await tool.execute({ notebookId, startIndex: 0, limit: 10, includeOrionMetadata: false });
   assertIncludes(result, "Content is too large to read safely", "should trigger compact fallback");
 });
 
 await runTest("pagination: startIndex skips cells", async () => {
   const { tool, notebookId } = makeReadNotebookTool();
-  const result = await tool.execute({ notebookId, responseFormat: "brief", startIndex: 2, limit: 50, includeOrionMetadata: false });
+  const result = await tool.execute({ notebookId, startIndex: 2, limit: 50, includeOrionMetadata: false });
   assertNotIncludes(result, "Introduction", "should not include cell 0");
   assertIncludes(result, "x + y", "should include cell 2");
 });
 
 await runTest("pagination: limit caps the result", async () => {
   const { tool, notebookId } = makeReadNotebookTool();
-  const result = await tool.execute({ notebookId, responseFormat: "brief", startIndex: 0, limit: 1, includeOrionMetadata: false });
-  assertIncludes(result, "markdown", "should include first cell");
+  const result = await tool.execute({ notebookId, startIndex: 0, limit: 1, includeOrionMetadata: false });
+  assertIncludes(result, "=====Cell 0 | type: markdown", "should include first cell");
   assertNotIncludes(result, "x = 1", "should not include cells past limit");
 });
 
 await runTest("empty string notebookId uses current notebook", async () => {
   const { tool } = makeReadNotebookTool();
-  const result = await tool.execute({ notebookId: "", responseFormat: "brief", startIndex: 0, limit: 50, includeOrionMetadata: false });
+  const result = await tool.execute({ notebookId: "", startIndex: 0, limit: 50, includeOrionMetadata: false });
   assertIncludes(result, "3 cells", "should use current notebook");
 });
 
 await runTest("unknown notebookId returns warning", async () => {
   const { tool } = makeReadNotebookTool();
-  const result = await tool.execute({ notebookId: "00000000-0000-0000-0000-000000000000", responseFormat: "brief", startIndex: 0, limit: 50, includeOrionMetadata: false });
+  const result = await tool.execute({ notebookId: "00000000-0000-0000-0000-000000000000", startIndex: 0, limit: 50, includeOrionMetadata: false });
   assertIncludes(result, "[WARNING]", "should warn about unknown notebook ID");
 });
 
 await runTest("out-of-range startIndex returns error", async () => {
   const { tool, notebookId } = makeReadNotebookTool();
-  const result = await tool.execute({ notebookId, responseFormat: "brief", startIndex: 99, limit: 50, includeOrionMetadata: false });
+  const result = await tool.execute({ notebookId, startIndex: 99, limit: 50, includeOrionMetadata: false });
   assertIncludes(result, "[ERROR]", "should return error for out-of-range start");
 });
 
 await runTest("includeOrionMetadata=false omits notebook and cell Orion metadata", async () => {
   const { tool, notebookId } = makeReadNotebookTool();
-  const result = await tool.execute({ notebookId, responseFormat: "brief", startIndex: 0, limit: 50, includeOrionMetadata: false });
+  const result = await tool.execute({ notebookId, startIndex: 0, limit: 50, includeOrionMetadata: false });
   assertNotIncludes(result, "Orion Metadata", "should omit metadata column/header");
   assertNotIncludes(result, "cell-intro", "should omit cell metadata values");
   assertNotIncludes(result, "gpt-5.2", "should omit notebook metadata values");
@@ -1206,10 +1313,10 @@ await runTest("includeOrionMetadata=false omits notebook and cell Orion metadata
 
 await runTest("includeOrionMetadata=true includes notebook and cell Orion metadata", async () => {
   const { tool, notebookId } = makeReadNotebookTool();
-  const result = await tool.execute({ notebookId, responseFormat: "brief", startIndex: 0, limit: 50, includeOrionMetadata: true });
+  const result = await tool.execute({ notebookId, startIndex: 0, limit: 50, includeOrionMetadata: true });
   assertIncludes(result, "Notebook Orion Metadata", "should include notebook metadata header");
   assertIncludes(result, "\"model\":\"gpt-5.2\"", "should include notebook metadata JSON");
-  assertIncludes(result, "Orion Metadata", "should include cell metadata column");
+  assertIncludes(result, "--- Orion Metadata ---", "should include cell metadata section");
   assertIncludes(result, "\"id\":\"cell-intro\"", "should include cell metadata JSON");
 });
 
@@ -1220,7 +1327,7 @@ await runTest("read_notebook large Orion metadata uses compact fallback", async 
   const mgr = new NotebookManager();
   const notebookId = mgr.addNotebook("huge", "huge_metadata.ipynb", "k1");
   const tool = new ReadNotebookTool(ks, null, mgr);
-  const result = await tool.execute({ notebookId, responseFormat: "brief", startIndex: 0, limit: 10, includeOrionMetadata: true });
+  const result = await tool.execute({ notebookId, startIndex: 0, limit: 10, includeOrionMetadata: true });
   assertIncludes(result, "Content is too large to read safely", "should trigger compact fallback");
 });
 

@@ -186,11 +186,9 @@ export abstract class BaseTool {
       );
     }
 
-    const parentPath = notebookPath.includes("/")
-      ? notebookPath.slice(0, notebookPath.lastIndexOf("/"))
-      : "";
+    const parentPath = this.parentDirectoryPath(notebookPath);
 
-    await this.ensureDirectoryExists(contents, parentPath);
+    await this.ensureParentDirectoryExists(contents, notebookPath);
 
     let createdPath: string;
     try {
@@ -222,6 +220,26 @@ export abstract class BaseTool {
         `Created notebook at '${notebookPath}' but could not read it back: ${this.errorMessage(error)}`
       );
     }
+  }
+
+  /**
+   * Create missing parent directories for a Jupyter-relative file path.
+   *
+   * Used by file and notebook create/overwrite paths so the agent can write
+   * nested targets without a prior mkdir.
+   */
+  protected async ensureParentDirectoryExists(
+    contents: ReturnType<KernelService["getContentsManager"]>,
+    filePath: string
+  ): Promise<void> {
+    await this.ensureDirectoryExists(contents, this.parentDirectoryPath(filePath));
+  }
+
+  /** Jupyter-relative parent directory of a file path, or "" for the root. */
+  private parentDirectoryPath(filePath: string): string {
+    const normalizedPath = this.normalizeContentsPath(filePath);
+    if (!normalizedPath.includes("/")) return "";
+    return normalizedPath.slice(0, normalizedPath.lastIndexOf("/"));
   }
 
   /** Ensure each segment of a Jupyter-relative directory path exists. */

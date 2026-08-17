@@ -78,7 +78,6 @@ export interface UseNotebookParams {
 export interface ReadNotebookParams {
   /** ID returned by use_notebook; empty string selects the currently active notebook */
   notebookId: string;
-  responseFormat: "brief" | "detailed";
   startIndex: number;
   limit: number;
   /** Include notebook/cell metadata.orion JSON in the response */

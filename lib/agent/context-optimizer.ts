@@ -61,7 +61,7 @@ export const TOOL_OUTPUT_STUB_MARKER = "stubbed for context";
 function stubOutput(output: unknown, toolName: string): string {
   const chars = outputCharCount(output);
   const images = outputImageCount(output);
-  let stub = `[${toolName}: ${chars} chars, ${TOOL_OUTPUT_STUB_MARKER}]`;
+  let stub = `[${toolName}: ${chars} chars, ${TOOL_OUTPUT_STUB_MARKER}. Re-read it if you still need it.]`;
   if (images > 0) {
     stub += `\n[${images} image(s) stripped for context]`;
   }

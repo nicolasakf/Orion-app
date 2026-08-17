@@ -86,12 +86,13 @@ Common failures:
 
 Expected behavior:
 
-- Creates `.tmp/path-resolution/nested/audit.txt` via `edit_file` (overwrite) or safe shell redirection under the workspace, using an absolute path when the Jupyter root is known.
+- Creates `.tmp/path-resolution/nested/audit.txt` via `edit_file` (overwrite) or safe shell redirection under the workspace, using an absolute path when the Jupyter root is known. `edit_file` overwrite creates missing parent directories, so a prior `mkdir` is not required.
 - Writes exactly `path-resolution nested write ok` on one line.
 - Reads the same relative path back and confirms content.
 
 Common failures:
 
+- Runs `mkdir` and then `edit_file` instead of writing the nested path in one overwrite call.
 - Writes outside `.tmp/` without reason.
 - Uses a path missing the `.tmp/path-resolution/` prefix.
 - Claims verification without a read tool call.

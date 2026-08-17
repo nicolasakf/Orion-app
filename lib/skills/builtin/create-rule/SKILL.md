@@ -82,7 +82,7 @@ Rule files are plain markdown — **no YAML frontmatter**. Write clear, actionab
 2. **Choose filename** — Prefer **`AGENTS.md`**. Use **`CLAUDE.md`** only when the user explicitly wants Claude Code compatibility and `AGENTS.md` already exists with different content they do not want to merge.
 3. **Check existing file** — Read the target path first. **Merge or update** thoughtfully when a file already exists; do not blindly overwrite team conventions unless the user asked to replace them.
 4. **Draft content** — If the user pasted a full spec, encode it into the rule file. Trim redundancy with existing repo docs (README, CONTRIBUTING) when the user wants a pointer instead of duplication.
-5. **Write the file** — Use `edit_file` (overwrite) on the Jupyter server. Create parent directories as needed.
+5. **Write the file** — Use `edit_file` (overwrite) on the Jupyter server.
 6. **Remind** — Rules reload when Orion detects the file change. If the new rule does not appear in the next message, reload the app or reconnect the kernel.
 
 ## Anti-patterns

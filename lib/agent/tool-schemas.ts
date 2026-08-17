@@ -138,17 +138,12 @@ export const orionTools = {
 
   read_notebook: tool({
     description:
-      "Read the content of a managed notebook, preferring Orion's unsaved editor buffer for the active notebook before falling back to the Jupyter server. Returns cell types, sources, and optionally Orion metadata. Use 'brief' format for an overview, 'detailed' for full content. Set includeOrionMetadata=false unless you specifically need metadata.orion.",
+      "Read the content of a managed notebook, preferring Orion's unsaved editor buffer for the active notebook before falling back to the Jupyter server. Returns full cell sources, types, and per-output type/mime summaries (not full output bodies). Set includeOrionMetadata=false unless you specifically need metadata.orion.",
     inputSchema: z.object({
       notebookId: z
         .string()
         .describe(
           "ID returned by use_notebook for the notebook to read. Pass an empty string \"\" to read the currently active notebook."
-        ),
-      responseFormat: z
-        .enum(["brief", "detailed"])
-        .describe(
-          "'brief' returns a table with first-line previews and per-output type/mime summaries (same summaries as detailed, not full output bodies). 'detailed' returns full source plus those summaries under each cell."
         ),
       startIndex: z
         .number()
@@ -208,7 +203,7 @@ export const orionTools = {
 
   insert_cell: tool({
     description:
-      "Insert one or more code or markdown cells at a specific position in the notebook. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Existing cells at or after the index are shifted down. Each cell can also merge a JSON object into metadata.orion via orionMetadataJson, which is the easiest way to mark inserted App View markdown cells with {\"app\":{\"enabled\":true}}. Set execute=true to run the inserted code cells immediately and get their output back in this same call — prefer that over a separate execute_cell call, which costs an extra model round-trip for no added control. In Research mode, prefer one coherent research step at a time and interleave markdown observations/decisions with evidence cells.",
+      "Insert one or more code or markdown cells at a specific position in the notebook. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Existing cells at or after the index are shifted down. Each cell can also merge a JSON object into metadata.orion via orionMetadataJson, which is the easiest way to mark inserted App View markdown cells with {\"app\":{\"enabled\":true}}. Set execute=true to run the inserted code cells immediately and get their output back in this same call — prefer that over a separate execute_cell call, which costs an extra model round-trip for no added control.",
     inputSchema: z.object({
       cells: z
         .array(
@@ -271,7 +266,7 @@ export const orionTools = {
 
   overwrite_cell_source: tool({
     description:
-      "Replace the source code of one or more existing cells. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. Each entry can also merge a JSON object into metadata.orion via orionMetadataJson, which is the easiest way to keep or add App View inclusion while editing source. In Research mode, edit the next coherent research step or a focused fix, then run it before adding a new notebook.",
+      "Replace the source code of one or more existing cells. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. Each entry can also merge a JSON object into metadata.orion via orionMetadataJson, which is the easiest way to keep or add App View inclusion while editing source.",
     inputSchema: z.object({
       cells: z
         .array(
@@ -304,7 +299,7 @@ export const orionTools = {
 
   execute_cell: tool({
     description:
-      "Execute one or more cells in the notebook by their indices and return their outputs. If the active notebook has unsaved editor changes, Orion saves them before execution. Cells are executed sequentially in the order provided. All cells must already exist in the notebook. In Research mode, run the cells for the current coherent research step, inspect the evidence, then document the observation and next decision in notebook markdown.",
+      "Execute one or more cells in the notebook by their indices and return their outputs. If the active notebook has unsaved editor changes, Orion saves them before execution. Cells are executed sequentially in the order provided. All cells must already exist in the notebook — to run cells you are creating now, use insert_cell with execute=true instead.",
     inputSchema: z.object({
       cellIndices: z
         .array(z.number().int().min(0))
@@ -336,7 +331,7 @@ export const orionTools = {
 
   read_cell_output: tool({
     description:
-      "Read one or more outputs from notebook cells, preferring Orion's unsaved editor buffer for the active notebook before falling back to the Jupyter server. Outputs are intelligently formatted by mime type. For DataFrames it returns a TSV table; for Plotly charts a structured summary; for plain text the raw text. For images it returns the image itself only when the selected model accepts image input, and a placeholder explaining why otherwise — check the result rather than assuming you will be able to see it. Do NOT re-read an image that execute_cell or execute_code already returned in this turn; you have already been shown it, and fetching it again costs the same tokens for nothing. Pass multiple reads to fetch several outputs in one call.",
+      "Read one or more outputs from notebook cells, preferring Orion's unsaved editor buffer for the active notebook before falling back to the Jupyter server. Outputs are intelligently formatted by mime type. For DataFrames it returns a TSV table; for Plotly charts a structured summary; for plain text the raw text. For images it returns the image itself only when the selected model accepts image input, and a placeholder explaining why otherwise — check the result rather than assuming you will be able to see it. Do NOT re-read an image that an execution result already showed you earlier in this turn; you have been shown it, and fetching it again costs the same tokens for nothing. Outputs that were stubbed or stripped from earlier turns to save context can be re-read when you still need them. Pass multiple reads to fetch several outputs in one call.",
     inputSchema: z.object({
       reads: z
         .array(
@@ -506,7 +501,7 @@ export const orionTools = {
 
   edit_file: tool({
     description:
-      "Write or modify a non-notebook text file. If the active text file has unsaved editor changes, Orion saves them before this mutation runs. Use mode='overwrite' to replace the entire file content, or mode='replace' to make a targeted string substitution. Never use this tool on .ipynb files — use the notebook cell tools instead.",
+      "Write or modify a non-notebook text file. If the active text file has unsaved editor changes, Orion saves them before this mutation runs. Use mode='overwrite' to create or replace the entire file (missing parent directories are created automatically; do not mkdir first), or mode='replace' to make a targeted string substitution. Never use this tool on .ipynb files — use the notebook cell tools instead.",
     inputSchema: z.object({
       filePath: z
         .string()
@@ -593,7 +588,7 @@ export const orionTools = {
 
   delegate: tool({
     description:
-      "Spawn a focused notebook-defined sub-agent to perform a specific task and return a summary. Choose the sub-agent by exact name from the Available Sub-agents section of the system prompt. The sub-agent runs autonomously in a temporary notebook copy and returns a concise text summary.",
+      "Spawn a focused notebook-defined sub-agent to perform a specific task and return a summary. Choose the sub-agent by exact name from the Sub-agent Delegation section of the system prompt. The sub-agent runs autonomously in a temporary notebook copy and returns a concise text summary.",
     inputSchema: z.object({
       description: z
         .string()
@@ -603,7 +598,7 @@ export const orionTools = {
       subagent: z
         .string()
         .min(1)
-        .describe("Exact sub-agent name to spawn, matching one of the notebook-defined sub-agents listed in the system prompt."),
+        .describe("Exact sub-agent name to spawn, matching one of the notebook-defined sub-agents listed under Sub-agent Delegation in the system prompt."),
       reconnectTmpNotebookPath: z
         .string()
         .describe(
@@ -622,7 +617,9 @@ export const orionTools = {
     inputSchema: z.object({
       name: z
         .string()
-        .describe("The name of the skill to load (must match exactly one of the names from the available skills list)."),
+        .describe(
+          "The name of the skill to load. Use an exact name from the Available Skills list, or from the Required Skills section — skills the user selected for this turn are named there and may not appear in the Available Skills list."
+        ),
     }),
   }),
 } as const;

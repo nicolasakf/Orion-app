@@ -96,6 +96,15 @@ function assertNotIncludes(text: string, substring: string, label?: string): voi
   }
 }
 
+/** Parse the highest cell index from read_notebook detailed output. */
+function parseLastCellIndex(notebookOutput: string, fallback = 0): number {
+  const matches = [...notebookOutput.matchAll(/=====Cell (\d+) \|/g)];
+  if (matches.length === 0) {
+    return fallback;
+  }
+  return parseInt(matches[matches.length - 1]![1]!, 10);
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -362,17 +371,17 @@ async function main() {
     });
 
     await runTest(
-      "ReadNotebookTool: reads notebook cells (brief)",
+      "ReadNotebookTool: reads notebook cells",
       async () => {
         const result = await tools.readNotebook.execute({
           notebookId: testNotebookId,
-          responseFormat: "brief",
           startIndex: 0,
           limit: 50,
           includeOrionMetadata: false,
         });
 
         assertIncludes(result, "cells", "should mention cell count");
+        assertIncludes(result, "=====Cell", "should use detailed cell format");
       }
     );
 
@@ -427,15 +436,11 @@ async function main() {
       // Get the notebook to find the last code cell index
       const notebook = await tools.readNotebook.execute({
         notebookId: "",
-        responseFormat: "brief",
         startIndex: 0,
         limit: 100,
         includeOrionMetadata: false,
       });
-      // Find the last cell index from the output
-      const cells = notebook.split("\n");
-      const lastCellLine = cells.filter((l) => l.match(/^\d+\t/)).pop();
-      const lastIndex = lastCellLine ? parseInt(lastCellLine.split("\t")[0]) : 2;
+      const lastIndex = parseLastCellIndex(notebook, 2);
 
       const result = await tools.overwriteCellSource.execute({
         cells: [
@@ -467,14 +472,11 @@ async function main() {
       // Execute the last cell (the overwritten one)
       const notebook = await tools.readNotebook.execute({
         notebookId: "",
-        responseFormat: "brief",
         startIndex: 0,
         limit: 100,
         includeOrionMetadata: false,
       });
-      const cells = notebook.split("\n");
-      const lastCellLine = cells.filter((l) => l.match(/^\d+\t/)).pop();
-      const lastIndex = lastCellLine ? parseInt(lastCellLine.split("\t")[0]) : 2;
+      const lastIndex = parseLastCellIndex(notebook, 2);
 
       const result = await tools.executeCell.execute({
         cellIndices: [lastIndex],

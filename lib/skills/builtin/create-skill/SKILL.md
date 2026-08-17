@@ -63,8 +63,6 @@ Orion-only tweak alongside it:
     └── SKILL.md
 ```
 
-Create parent directories as needed.
-
 ## Required `SKILL.md` format
 
 Orion parses **YAML frontmatter** between `---` lines, then the markdown body. Required fields:
@@ -117,7 +115,7 @@ Avoid: "I can help you split data" or "You can use this to split data."
 3. **Choose `name`** — Kebab-case, specific (not `helper` or `utils`).
 4. **Draft `description`** — Third person; what + when; include keywords users might say.
 5. **Write the body** — Instructions, optional examples or templates.
-6. **Create files** — Use `edit_file` (overwrite) to write `SKILL.md` on the Jupyter server. Create parent directories as needed by writing the full path (ContentsManager typically creates intermediate segments when saving).
+6. **Create files** — Use `edit_file` (overwrite) to write `SKILL.md` on the Jupyter server.
 7. **Remind** — Tell the user that if the new skill does not appear immediately, reconnect the kernel or reload the app.
 
 ## Anti-patterns

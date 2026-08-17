@@ -23,6 +23,14 @@ describe("web access tool schemas", () => {
   });
 });
 
+describe("edit_file tool schema", () => {
+  it("tells the model that overwrite creates missing parent directories", () => {
+    const description = (orionTools.edit_file as { description?: string }).description ?? "";
+    expect(description).toMatch(/parent directories/i);
+    expect(description).toMatch(/do not mkdir first/i);
+  });
+});
+
 describe("Ask mode tool schemas", () => {
   it("allows read-only kernel discovery and skill loading", () => {
     expect(ASK_MODE_TOOLS.list_kernels).toBe(orionTools.list_kernels);
@@ -47,17 +55,27 @@ describe("page reload tool schema", () => {
 });
 
 describe("research-oriented notebook tool schemas", () => {
-  it("describes notebook work as coherent research steps without numeric cell limits", () => {
-    expect((orionTools.insert_cell as { description?: string }).description).toContain(
-      "one coherent research step"
-    );
-    expect((orionTools.overwrite_cell_source as { description?: string }).description).toContain(
-      "focused fix"
-    );
-    expect((orionTools.execute_cell as { description?: string }).description).toContain(
-      "current coherent research step"
-    );
-    expect((orionTools.insert_cell as { description?: string }).description).not.toContain("at most 3");
+  /** Reads a tool description without the `unknown` gymnastics at each call. */
+  function description(toolName: keyof typeof orionTools): string {
+    return (orionTools[toolName] as { description?: string }).description ?? "";
+  }
+
+  it("leaves Research-mode workflow rules to the Research prompt section", () => {
+    // Tool descriptions ship in every mode, so mode-specific workflow guidance
+    // belongs in the mode prompt instead — repeating it here drifts and misfires
+    // in the modes where Research is not active.
+    for (const toolName of ["insert_cell", "overwrite_cell_source", "execute_cell"] as const) {
+      expect(description(toolName)).not.toContain("Research mode");
+    }
+  });
+
+  it("keeps notebook batching guidance free of numeric cell limits", () => {
+    expect(description("insert_cell")).not.toContain("at most 3");
+  });
+
+  it("points cell execution at the cheaper insert-and-run path", () => {
+    expect(description("insert_cell")).toContain("prefer that over a separate execute_cell call");
+    expect(description("execute_cell")).toContain("use insert_cell with execute=true instead");
   });
 
   it("does not expose legacy investigation control tools", () => {

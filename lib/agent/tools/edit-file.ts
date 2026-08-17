@@ -70,6 +70,7 @@ export class EditFileTool extends BaseTool {
 
   /**
    * Replace the entire file content with the provided string.
+   * Creates missing parent directories so overwrite can write nested paths.
    */
   private async overwrite(
     contents: ReturnType<KernelService["getContentsManager"]>,
@@ -79,6 +80,7 @@ export class EditFileTool extends BaseTool {
   ): Promise<string> {
     const beforeContent = await this.readCurrentTextContent(contents, jupyterPath);
     try {
+      await this.ensureParentDirectoryExists(contents, jupyterPath);
       await contents.save(jupyterPath, {
         type: "file",
         format: "text",
