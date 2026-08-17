@@ -20,7 +20,7 @@ function createContentsManager(initialModel: Partial<Contents.IModel>): FakeCont
   let handler:
     | ((sender: ContentsManager, args: Contents.IChangedArgs) => void)
     | null = null;
-  let currentModel = initialModel;
+  const currentModel = initialModel;
   const get = vi.fn(async () => currentModel);
   const manager = {
     get,

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -61,7 +62,7 @@ export function CloudOpenClient({ slug, apiBaseUrl }: CloudOpenClientProps) {
           <h1 className="text-xl font-semibold">Cannot open notebook</h1>
           <p className="mt-2 text-sm text-muted-foreground">{error}</p>
           <Button asChild className="mt-5">
-            <a href="/">Open Orion</a>
+            <Link href="/">Open Orion</Link>
           </Button>
         </section>
       </main>

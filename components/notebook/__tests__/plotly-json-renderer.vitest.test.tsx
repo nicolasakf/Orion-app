@@ -84,10 +84,9 @@ beforeEach(() => {
   );
   vi.stubGlobal("cancelAnimationFrame", (id: number) => window.clearTimeout(id));
   rectSpy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
-    const element = this;
-    const styledWidth = Number.parseFloat(element.style.width);
+    const styledWidth = Number.parseFloat(this.style.width);
     const width = Number.isFinite(styledWidth) ? styledWidth : currentWidth;
-    const styledHeight = Number.parseFloat(element.style.height);
+    const styledHeight = Number.parseFloat(this.style.height);
     const height = Number.isFinite(styledHeight) ? styledHeight : 420;
     return new DOMRect(0, 0, width, height);
   });

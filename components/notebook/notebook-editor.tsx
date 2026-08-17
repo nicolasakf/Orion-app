@@ -4050,7 +4050,7 @@ export function NotebookEditor({
 
       let nextCursorIndex = currentCursor;
       let currentAnchorIndex = selectionAnchorIndex;
-      let newSelectedIndices = new Set(selectedCellIndices);
+      const newSelectedIndices = new Set(selectedCellIndices);
       let scrollTargetIndex: number | null = null;
       let scrollTargetCellId: CellId | null = null;
       let scrollAlignment: CellScrollAlignment = "start";

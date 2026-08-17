@@ -1113,7 +1113,11 @@ function OrionUiTableInner({
       setSelectedCells((current) => {
         if (event?.metaKey || event?.ctrlKey) {
           const next = new Set(current);
-          next.has(key) ? next.delete(key) : next.add(key);
+          if (next.has(key)) {
+            next.delete(key);
+          } else {
+            next.add(key);
+          }
           return next;
         }
         return new Set([key]);

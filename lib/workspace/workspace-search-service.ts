@@ -445,7 +445,7 @@ export class WorkspaceSearchService {
   ): Promise<CandidateEnumeration> {
     const candidates: WorkspaceFileCandidate[] = [];
     const visitedDirectories = new Set<string>([rootPath]);
-    let pendingDirectories = [rootPath];
+    const pendingDirectories = [rootPath];
     let truncated = false;
 
     while (pendingDirectories.length > 0 && !truncated) {
@@ -632,8 +632,9 @@ export class WorkspaceSearchService {
     if (inFlight) return inFlight;
 
     const requestEpoch = this.cacheEpoch;
-    let request: Promise<readonly DirectoryEntry[]>;
-    request = this.contentsManager
+    // `request` is referenced by its own `finally` callback, which runs in a
+    // later microtask — the binding is always initialized by then.
+    const request: Promise<readonly DirectoryEntry[]> = this.contentsManager
       .get(path, { content: true })
       .then((model) => {
         const entries = getDirectoryEntries(model);
@@ -664,8 +665,8 @@ export class WorkspaceSearchService {
     if (inFlight) return inFlight;
 
     const requestEpoch = this.cacheEpoch;
-    let request: Promise<TextFileReadResult>;
-    request = this.contentsManager
+    // Same self-referencing `finally` pattern as readDirectory above.
+    const request: Promise<TextFileReadResult> = this.contentsManager
       .get(path, { content: true })
       .then((model): TextFileReadResult => {
         if (
