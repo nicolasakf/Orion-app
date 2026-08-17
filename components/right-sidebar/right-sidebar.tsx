@@ -115,10 +115,15 @@ import {
 import type { KernelStatus, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import { useAgentRunCompleteAlerts } from "@/hooks/use-agent-run-complete-alerts";
 import { useJupyterShellReady } from "@/hooks/use-jupyter-shell-ready";
 import { useKernelVariables } from "@/hooks/use-kernel-variables";
 import { useIsDesktopApp, usePlatformOs } from "@/hooks/use-platform";
 import { useOpenSettings } from "@/contexts/open-settings-context";
+import {
+  requestAgentCompleteNotificationPermission,
+  unlockAgentCompleteAudio,
+} from "@/lib/notifications/agent-run-complete";
 import { AutoRunConfirmDialog } from "@/components/common/auto-run-confirm-dialog";
 import { ProviderLogo } from "@/components/provider-logo";
 import {
@@ -752,6 +757,7 @@ export function RightSidebar({
     setUserSettings,
   } = useOrionSettings();
   const { openWithTab } = useOpenSettings();
+  const notifyAgentTurnComplete = useAgentRunCompleteAlerts();
   const { serverAvailable } = useJupyterShellReady(kernelService ?? null);
 
   // State management
@@ -4499,6 +4505,10 @@ export function RightSidebar({
       }
 
       if (!messageText.trim() && imageFileParts.length === 0) return;
+      unlockAgentCompleteAudio();
+      if (effectiveSettings.chat.notifyOnAgentFinish) {
+        void requestAgentCompleteNotificationPermission();
+      }
       const modelRequestId = crypto.randomUUID();
       modelRequestIdRef.current = modelRequestId;
       beginAgentTurn();
@@ -4786,6 +4796,17 @@ export function RightSidebar({
         void markCurrentEditCheckpointStatus(
           stopRequestedRef.current ? "interrupted" : "completed"
         );
+        notifyAgentTurnComplete({
+          wasActive,
+          isActive: isAgentTurnActive,
+          userStopped: stopRequestedRef.current,
+          queuedMessageCount: messageQueue.length,
+          chatTitle: currentChat?.title,
+          settings: {
+            notifyOnAgentFinish: effectiveSettings.chat.notifyOnAgentFinish,
+            playSoundOnAgentFinish: effectiveSettings.chat.playSoundOnAgentFinish,
+          },
+        });
       }
       return;
     }
@@ -4826,7 +4847,15 @@ export function RightSidebar({
     }, 0);
 
     return () => window.clearTimeout(releaseTimer);
-  }, [isAgentTurnActive, markCurrentEditCheckpointStatus, messageQueue]);
+  }, [
+    currentChat?.title,
+    effectiveSettings.chat.notifyOnAgentFinish,
+    effectiveSettings.chat.playSoundOnAgentFinish,
+    isAgentTurnActive,
+    markCurrentEditCheckpointStatus,
+    messageQueue,
+    notifyAgentTurnComplete,
+  ]);
 
   const handleStopGeneration = useCallback(() => {
     const cancelledAt = Date.now();

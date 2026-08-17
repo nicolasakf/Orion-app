@@ -100,6 +100,8 @@ describe("settings migrations", () => {
       "Edit",
       "Ask",
     ]);
+    expect(migrated.settings.chat.notifyOnAgentFinish).toBe(true);
+    expect(migrated.settings.chat.playSoundOnAgentFinish).toBe(true);
   });
 
   it("accepts any positive integer for read-only tool concurrency", () => {

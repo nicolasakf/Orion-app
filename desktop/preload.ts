@@ -45,4 +45,8 @@ contextBridge.exposeInMainWorld("orionDesktopShell", {
     ipcRenderer.on("orion:reload:requested", handler);
     return () => ipcRenderer.removeListener("orion:reload:requested", handler);
   },
+  isWindowFocused: (): Promise<boolean> =>
+    ipcRenderer.invoke("orion:shell:is-window-focused"),
+  showNotification: (request: { title: string; body: string }): Promise<boolean> =>
+    ipcRenderer.invoke("orion:shell:show-notification", request),
 });

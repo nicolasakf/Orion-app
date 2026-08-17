@@ -291,6 +291,10 @@ const SettingsDataSchema = z.object({
     customCommunicationStyle: z.string().catch(""),
     /** User-configurable built-in and custom chat interaction modes. */
     interactionModes: z.array(InteractionModeConfigSchema).default([]),
+    /** When true, show an OS/browser notification when a full agent turn finishes in the background. */
+    notifyOnAgentFinish: z.boolean().catch(true),
+    /** When true, play a short chime when a full agent turn finishes. */
+    playSoundOnAgentFinish: z.boolean().catch(true),
   }),
   /** Left sidebar file list typography. */
   fileTree: z.object({

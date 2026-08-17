@@ -33,6 +33,8 @@ interface OrionDesktopShellBridge {
   onReloadRequested: (
     listener: (options?: { bypassCache?: boolean }) => void
   ) => () => void;
+  isWindowFocused: () => Promise<boolean>;
+  showNotification: (request: { title: string; body: string }) => Promise<boolean>;
 }
 
 declare global {

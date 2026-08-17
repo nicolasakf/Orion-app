@@ -3,7 +3,9 @@
 import { Textarea } from "@/components/ui/textarea";
 import { SettingsInfoLabel } from "@/components/settings-dialog/settings-info-label";
 import { SettingsSectionLayout } from "@/components/settings-dialog/settings-section-layout";
+import { SettingsSwitchField } from "@/components/settings-dialog/settings-form-fields";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import { requestAgentCompleteNotificationPermission } from "@/lib/notifications/agent-run-complete";
 import { cn } from "@/lib/utils";
 import type { AgentCommunicationStyle } from "@/lib/settings/schema";
 
@@ -97,6 +99,41 @@ export function AgentCommunicationSection() {
                 chat: {
                   ...current.chat,
                   customCommunicationStyle: event.target.value,
+                },
+              }));
+            }}
+          />
+        </div>
+        <div className="space-y-3 pt-2">
+          <SettingsSwitchField
+            id="agent-notify-on-finish"
+            label="Notify when agent finishes"
+            description="Show a desktop or browser notification when a full agent run completes while Orion is in the background."
+            checked={chat.notifyOnAgentFinish}
+            onCheckedChange={(checked) => {
+              void setUserSettings((current) => ({
+                ...current,
+                chat: {
+                  ...current.chat,
+                  notifyOnAgentFinish: checked,
+                },
+              }));
+              if (checked) {
+                void requestAgentCompleteNotificationPermission();
+              }
+            }}
+          />
+          <SettingsSwitchField
+            id="agent-play-sound-on-finish"
+            label="Sound when agent finishes"
+            description="Play a short chime when a full agent run completes."
+            checked={chat.playSoundOnAgentFinish}
+            onCheckedChange={(checked) => {
+              void setUserSettings((current) => ({
+                ...current,
+                chat: {
+                  ...current.chat,
+                  playSoundOnAgentFinish: checked,
                 },
               }));
             }}

@@ -152,6 +152,8 @@ For `chat.interactionModes`, `[]` is accepted in authored JSON and is normalized
       "fontSize": 12,
       "communicationStyle": "default",
       "customCommunicationStyle": "",
+      "notifyOnAgentFinish": true,
+      "playSoundOnAgentFinish": true,
       "interactionModes": []
     },
     "fileTree": { "fontSize": 12 },
@@ -280,6 +282,8 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | `fontSize` | integer | 10–20 (px) | `12` | Chat message stream and composer font size. |
 | `communicationStyle` | string | `default`, `narrative`, `friendly`, `pragmatic` | `default` | Agent tone preset in system prompt. `default` = minimal tool narration; `narrative` = step-by-step; `friendly` = warm; `pragmatic` = minimal prose. |
 | `customCommunicationStyle` | string | Any string | `""` | Optional custom communication instructions. When non-empty, overrides `communicationStyle`. |
+| `notifyOnAgentFinish` | boolean | `true`, `false` | `true` | Show a desktop or browser notification when a full agent run completes while Orion is in the background. |
+| `playSoundOnAgentFinish` | boolean | `true`, `false` | `true` | Play a short chime when a full agent run completes. |
 | `interactionModes` | object[] | Interaction mode objects (see below) | Built-in `Agent`, `Research`, `Edit`, `Ask` modes | Configurable built-in and custom chat modes shown in Settings → Interaction Modes. Missing or empty built-ins are repaired on load. |
 
 #### `chat.interactionModes[]`

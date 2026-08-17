@@ -1,6 +1,6 @@
 import { basename, isAbsolute, join, relative, resolve, sep } from "path";
 
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from "electron";
 
 import { parseDesktopOptions } from "../lib/desktop/options";
 import {
@@ -247,6 +247,22 @@ async function createWindow(url: string): Promise<void> {
   mainWindow = await openDesktopAppWindow(url);
 }
 
+/** Returns true for a non-empty notification title/body payload from the renderer. */
+function isDesktopNotificationPayload(
+  value: unknown
+): value is { title: string; body: string } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const payload = value as { title?: unknown; body?: unknown };
+  return (
+    typeof payload.title === "string" &&
+    payload.title.trim().length > 0 &&
+    typeof payload.body === "string" &&
+    payload.body.trim().length > 0
+  );
+}
+
 /** Registers shell appearance controls exposed by the sandboxed preload. */
 function setupShellIpc(): void {
   ipcMain.handle("orion:shell:set-background-color", (event, color: unknown) => {
@@ -303,6 +319,36 @@ function setupShellIpc(): void {
       };
     }
   );
+  ipcMain.handle("orion:shell:is-window-focused", (event): boolean => {
+    const appWindow = getShellIpcWindow(event);
+    if (!appWindow) {
+      return false;
+    }
+    return appWindow.isFocused() && !appWindow.isMinimized();
+  });
+  ipcMain.handle("orion:shell:show-notification", (event, value: unknown): boolean => {
+    const appWindow = getShellIpcWindow(event);
+    if (!isDesktopNotificationPayload(value) || !Notification.isSupported()) {
+      return false;
+    }
+
+    const notification = new Notification({
+      title: value.title.trim(),
+      body: value.body.trim(),
+      silent: true,
+    });
+    notification.on("click", () => {
+      if (appWindow && !appWindow.isDestroyed()) {
+        if (appWindow.isMinimized()) {
+          appWindow.restore();
+        }
+        appWindow.show();
+        appWindow.focus();
+      }
+    });
+    notification.show();
+    return true;
+  });
 }
 
 /** Registers the narrow updater IPC surface exposed by the sandboxed preload. */
@@ -404,6 +450,9 @@ if (!gotSingleInstanceLock) {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === "win32") {
+    app.setAppUserModelId("ai.orion.notebook");
+  }
   setupShellIpc();
   setupUpdaterIpc();
   void boot().catch((error) => {

@@ -36,6 +36,8 @@ export const DEFAULT_SETTINGS: SettingsData = {
     communicationStyle: "default" as const,
     customCommunicationStyle: "",
     interactionModes: structuredClone(DEFAULT_INTERACTION_MODE_CONFIGS),
+    notifyOnAgentFinish: true,
+    playSoundOnAgentFinish: true,
   },
   fileTree: {
     fontSize: 12,
