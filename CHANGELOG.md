@@ -4,12 +4,27 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [0.19.0] - 2026-08-17
 
 ### Added
 
 - Notebook: retain and revisit rich output history with `ui.version()`
 - Notebook: mention markdown cells in chat from the cell context menu
+- Notebook: include markdown cells in App View references
+- Notebook: derive readable titles from notebook filenames
+- Chat: recover from context limit errors via compaction and resend
+- Chat: unified server-side context usage model with a consistent usage pill
+- Chat: compaction divider in history showing tokens saved
+- Agent: reasoning effort controls and tool runtime readiness gating
+- Agent: shared raster payload handling for token estimation and wire optimization
+- Editors: alert and follow active document renames/deletes from Jupyter
+- Cloud: publish notebooks via signed direct-to-Supabase Storage uploads
+
+### Changed
+
+- Agent: improve compaction folding, checkpoint restore, and bash tools
+
+[0.19.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.19.0
 
 ## [0.18.1] - 2026-08-11
 
