@@ -1,5 +1,7 @@
 import type { ServerConnection } from "@jupyterlab/services";
 
+import { isExportedNotebookCellVisuallyEmpty } from "@/lib/notebook/cell-presentation";
+
 export const NOTEBOOK_EXPORT_EVENT_NAME = "orion:notebook-export";
 
 export const NOTEBOOK_EXPORT_OPTIONS = [
@@ -256,6 +258,17 @@ function cleanInteractiveNotebookChrome(clone: HTMLElement): void {
         "focus-visible:ring-2",
       );
     });
+
+  clone.querySelectorAll(".notebook-cell").forEach((cell) => {
+    if (isExportedNotebookCellVisuallyEmpty(cell)) {
+      cell.remove();
+    }
+  });
+  clone.querySelectorAll(".jp-Cell").forEach((cell) => {
+    if (isExportedNotebookCellVisuallyEmpty(cell)) {
+      cell.remove();
+    }
+  });
 }
 
 /** Clones the rendered notebook DOM and preserves browser-only element state. */

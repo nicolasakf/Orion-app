@@ -115,6 +115,7 @@ import {
   type NotebookExportEventDetail,
   type NotebookExportFormat,
 } from "@/lib/notebook/notebook-export";
+import { isHiddenInputCellWithoutVisibleContent } from "@/lib/notebook/cell-presentation";
 import { titleFromNotebookFilename } from "@/lib/notebook/notebook-title";
 import {
   NOTEBOOK_PUBLISH_EVENT_NAME,
@@ -4871,6 +4872,24 @@ export function NotebookEditor({
                       ) : null}
                       {notebook.cells.map((cell, index) => {
                         const cellId = getCellId(cell) ?? `cell-${index}`;
+                        const orionMeta = cell.metadata?.orion as
+                          | { isInputHidden?: boolean }
+                          | undefined;
+                        if (
+                          isHiddenInputCellWithoutVisibleContent({
+                            cellType: cell.cell_type,
+                            presentationHideAllCellInputs,
+                            isInputHidden: orionMeta?.isInputHidden,
+                            outputCount: cell.outputs?.length ?? 0,
+                            isQueuedForExecution:
+                              cell.metadata?.orion?.cellState?.executionInfo
+                                ?.status === CellExecutionStatus.QUEUED,
+                            hasValidationIssue:
+                              subagentValidation.cellIssues.has(index),
+                          })
+                        ) {
+                          return null;
+                        }
                         return (
                           <div
                             key={cellId}

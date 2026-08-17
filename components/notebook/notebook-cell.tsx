@@ -122,6 +122,7 @@ import {
   isNotebookOutputInAppView,
   setNotebookOutputTableMetadata,
 } from "@/lib/notebook/app-view";
+import { isHiddenInputCellWithoutVisibleContent } from "@/lib/notebook/cell-presentation";
 import { getRelativeTime } from "@/lib/utils";
 
 interface NotebookCellProps {
@@ -2110,6 +2111,15 @@ function NotebookCellComponent({
   const inputHiddenForDisplay =
     isInputHidden ||
     (cell.cell_type === CellType.CODE && !!presentationHideAllCellInputs);
+  const omitEmptyHiddenInputCell = isHiddenInputCellWithoutVisibleContent({
+    cellType: cell.cell_type,
+    presentationHideAllCellInputs,
+    isInputHidden,
+    outputCount: cell.outputs?.length ?? 0,
+    isQueuedForExecution,
+    isMetadataEditingMode,
+    hasValidationIssue: !!validationIssue,
+  });
 
   // If cell has a parse error, show an error banner instead of normal content
   if (parseError) {
@@ -2179,6 +2189,10 @@ function NotebookCellComponent({
         </div>
       </div>
     );
+  }
+
+  if (omitEmptyHiddenInputCell) {
+    return null;
   }
 
   return (
