@@ -10,6 +10,9 @@
 
 import { inspect } from "util";
 
+import { TOOL_OUTPUT_STUB_MARKER } from "@/lib/agent/context-optimizer";
+import { summarizeRasterPayloads } from "@/lib/agent/raster-payloads";
+
 // ============================================================================
 // Config
 // ============================================================================
@@ -138,6 +141,48 @@ function serializeForLog(value: unknown): string {
   return inspect(value, { depth: null, breakLength: 80 });
 }
 
+/**
+ * Wire-side audit of the context optimizer.
+ *
+ * The optimizer runs in the browser, so the only trustworthy check on whether it
+ * did anything is what actually arrived here. A silently no-op optimizer looks
+ * identical to a working one in every other log line — session 1786825713795 ran
+ * 38 requests to a 550k-token prompt without a single stub — so summarize the
+ * prepared prompt directly instead of trusting the client's intent.
+ */
+function summarizeContextOptimization(messages: Array<{ role: string; content: unknown }>): {
+  toolResults: number;
+  stubbed: number;
+  rasterEntries: number;
+  rasterBase64Chars: number;
+} {
+  let toolResults = 0;
+  let stubbed = 0;
+  let rasterEntries = 0;
+  let rasterBase64Chars = 0;
+
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (typeof part !== "object" || part === null) continue;
+      const record = part as Record<string, unknown>;
+      if (record.type !== "tool-result") continue;
+
+      toolResults += 1;
+      const output = record.output as Record<string, unknown> | undefined;
+      const value = output?.value;
+      if (typeof value === "string" && value.includes(TOOL_OUTPUT_STUB_MARKER)) {
+        stubbed += 1;
+      }
+      const raster = summarizeRasterPayloads(value);
+      rasterEntries += raster.count;
+      rasterBase64Chars += raster.base64Chars;
+    }
+  }
+
+  return { toolResults, stubbed, rasterEntries, rasterBase64Chars };
+}
+
 // ============================================================================
 // Exported log functions
 // ============================================================================
@@ -195,6 +240,22 @@ export function logChatRequest(data: {
     }
     if (m.rootDirectory) lines.push(field("  Jupyter Root", m.rootDirectory));
     if (m.workspaceDirectory) lines.push(field("  Workspace", m.workspaceDirectory));
+  }
+
+  const optimization = summarizeContextOptimization(data.messages);
+  if (optimization.toolResults > 0) {
+    lines.push("");
+    lines.push("  Context Optimizer:");
+    lines.push(
+      field("  Tool Results", `${optimization.stubbed} stubbed / ${optimization.toolResults} total`)
+    );
+    lines.push(
+      field(
+        "  Raster On Wire",
+        `${optimization.rasterEntries} entr${optimization.rasterEntries === 1 ? "y" : "ies"}, ` +
+          `${optimization.rasterBase64Chars} base64 chars`
+      )
+    );
   }
 
   lines.push("");

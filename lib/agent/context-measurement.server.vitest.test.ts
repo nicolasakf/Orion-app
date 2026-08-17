@@ -7,6 +7,7 @@ import { z } from "zod";
 
 vi.mock("server-only", () => ({}));
 
+import { makeModelMessages, makeToolSet } from "./__fixtures__/context-payloads";
 import { measurePreparedPrompt } from "./context-measurement.server";
 
 describe("measurePreparedPrompt", () => {
@@ -70,5 +71,45 @@ describe("measurePreparedPrompt", () => {
     expect(large.breakdown.images).toBe(1500);
     expect(large.breakdown.messages).toBe(small.breakdown.messages);
     expect(large.rawInputTokens).toBe(small.rawInputTokens);
+  });
+
+  it("keeps the buckets exhaustive, so a displayed breakdown can sum to its total", async () => {
+    const measured = await measurePreparedPrompt({
+      messages: makeModelMessages({ turns: 3 }),
+      tools: makeToolSet(),
+    });
+
+    const bucketSum = Object.values(measured.breakdown).reduce((sum, value) => sum + value, 0);
+
+    expect(bucketSum).toBe(measured.rawInputTokens);
+    expect(measured.breakdown.tools).toBeGreaterThan(0);
+  });
+
+  it("applies a calibrated ratio below 1 instead of flooring it", async () => {
+    const measured = await measurePreparedPrompt({
+      messages: [{ role: "user", content: "hello" }],
+      tools: {},
+      calibration: { sampleCount: 8, correctionRatio: 0.8 },
+    });
+
+    // A model the estimator systematically overshoots must be correctable
+    // downward; flooring at 1 made that impossible before estimator version 2.
+    expect(measured.estimatedInputTokens).toBe(Math.ceil(measured.rawInputTokens * 0.8));
+  });
+
+  it("clamps an implausible calibrated ratio to the supported band", async () => {
+    const tooLow = await measurePreparedPrompt({
+      messages: [{ role: "user", content: "hello" }],
+      tools: {},
+      calibration: { sampleCount: 8, correctionRatio: 0.01 },
+    });
+    const tooHigh = await measurePreparedPrompt({
+      messages: [{ role: "user", content: "hello" }],
+      tools: {},
+      calibration: { sampleCount: 8, correctionRatio: 99 },
+    });
+
+    expect(tooLow.estimatedInputTokens).toBe(Math.ceil(tooLow.rawInputTokens * 0.5));
+    expect(tooHigh.estimatedInputTokens).toBe(Math.ceil(tooHigh.rawInputTokens * 3));
   });
 });

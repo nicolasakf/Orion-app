@@ -6,8 +6,35 @@
  */
 
 export const TOOL_OUTPUT_TEXT_CHAR_BUDGET = 10000 * 4;  // rule of thumb: 4 chars per token
-export const TOOL_OUTPUT_IMAGE_BASE64_CHAR_BUDGET = 1_000_000;
+/**
+ * Base64 costs roughly one token per 1.8 characters, so this cap is worth about
+ * 17k tokens — enough to read a chart, cheap enough to carry.
+ *
+ * The previous 200k budget was worth ~110k tokens *per preview*: a single
+ * `execute_cell` step in session 1786825713795 returned two 128k-char figures,
+ * both under the cap, and one call cost $1.66. `resizeRasterPreview` downscales
+ * to fit this budget rather than dropping the preview outright.
+ */
+export const TOOL_OUTPUT_IMAGE_BASE64_CHAR_BUDGET = 30_000;
 export const TOOL_OUTPUT_MAX_OMITTED_RATIO = 1 / 3;
+
+/**
+ * ANSI escape sequences: CSI (`ESC [ ... final`) plus OSC (`ESC ] ... BEL`).
+ *
+ * IPython colourizes tracebacks, so a single kernel error arrives wrapped in
+ * hundreds of escape sequences that the model cannot use and that ride along in
+ * every later prompt — one `EmptyDataError` in session 1786825713795 accounted
+ * for 4,833 of them. Stripping keeps the frames and drops the paint.
+ */
+const ANSI_ESCAPE_PATTERN =
+  // eslint-disable-next-line no-control-regex
+  /\u001B\][^\u0007\u001B]*(?:\u0007|\u001B\\)|\u001B\[[0-?]*[ -/]*[@-~]/g;
+
+/** Removes terminal colour codes while leaving the underlying text intact. */
+export function stripAnsiEscapes(text: string): string {
+  if (!text.includes("\u001B")) return text;
+  return text.replace(ANSI_ESCAPE_PATTERN, "");
+}
 
 const DEFAULT_TRUNCATION_MARKER = "...[truncated for context safety]";
 const DEFAULT_TOO_LARGE_MESSAGE =
@@ -51,9 +78,11 @@ export interface GuardToolResultOptions extends GuardToolTextOptions {
  * - large overflow: return a short fallback message
  */
 export function guardToolText(
-  text: string,
+  rawText: string,
   options: GuardToolTextOptions = {}
 ): GuardToolTextResult {
+  // Strip before measuring so the budget is spent on content, not colour codes.
+  const text = stripAnsiEscapes(rawText);
   const maxChars = options.maxChars ?? TOOL_OUTPUT_TEXT_CHAR_BUDGET;
   const maxOmittedRatio = options.maxOmittedRatio ?? TOOL_OUTPUT_MAX_OMITTED_RATIO;
   const truncationMarker = options.truncationMarker ?? DEFAULT_TRUNCATION_MARKER;

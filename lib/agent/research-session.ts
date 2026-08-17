@@ -295,6 +295,20 @@ export function advanceResearchSessionForContinuation(
   }
 
   if (next.stepCount >= RESEARCH_SESSION_MAX_STEPS) {
+    // Stopping cold on the budget cap throws away the run: the notebook keeps
+    // every piece of evidence but never says what it means, which is the most
+    // expensive way to end. Spend one final step on synthesis first. The branch
+    // above terminates on the very next call, so this cannot extend the run
+    // further than that.
+    if (!next.finalSynthesisRequested) {
+      next = { ...next, finalSynthesisRequested: true };
+      return {
+        session: next,
+        continue: true,
+        nudge: "final_synthesis",
+        reason: "budget_final_synthesis",
+      };
+    }
     return {
       session: { ...next, active: false },
       continue: false,

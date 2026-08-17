@@ -1,5 +1,7 @@
 "use client";
 
+import { Children, type ReactNode } from "react";
+
 import MarkdownPreview, { type MarkdownPreviewProps } from "@uiw/react-markdown-preview";
 import "@uiw/react-markdown-preview/markdown.css";
 import "katex/dist/katex.css";
@@ -15,6 +17,7 @@ import {
   openNotebookLinkExternally,
   shouldOpenNotebookLinkExternally,
 } from "@/lib/markdown/notebook-links";
+import { scopeCssToNotebook } from "@/lib/notebook/scoped-html-styles";
 
 interface MarkdownRendererProps {
   source: string;
@@ -29,8 +32,16 @@ interface MarkdownRendererProps {
  */
 const defaultMarkdownStyle: React.CSSProperties = {
   backgroundColor: "transparent",
-  fontFamily: "var(--font-sans), sans-serif",
 };
+
+/** Converts a parsed style element's primitive children back into CSS text. */
+function getStyleText(children: ReactNode): string {
+  return Children.toArray(children)
+    .filter((child): child is string | number =>
+      typeof child === "string" || typeof child === "number"
+    )
+    .join("");
+}
 
 const notebookMarkdownComponents: NonNullable<MarkdownPreviewProps["components"]> = {
   a({ href, children, ...props }) {
@@ -55,6 +66,13 @@ const notebookMarkdownComponents: NonNullable<MarkdownPreviewProps["components"]
       <a {...props} href={href} target={isInternalNotebookAnchor(href) ? undefined : props.target}>
         {children}
       </a>
+    );
+  },
+  style({ children, node: _node, ...props }) {
+    return (
+      <style {...props} data-orion-style-scoped="notebook-editor">
+        {scopeCssToNotebook(getStyleText(children))}
+      </style>
     );
   },
 };

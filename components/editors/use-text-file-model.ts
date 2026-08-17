@@ -288,22 +288,23 @@ export function useTextFileModel({
         }
 
         const contentsManager = kernelService!.getContentsManager();
-        if (pathExtension === "ipynb" && openNotebookAsText) {
-          await documentSync.runLocalWrite(() =>
-            contentsManager.save(filepath, {
-              type: "notebook",
-              format: "json",
-              content: JSON.parse(contentToSave) as unknown,
-            }),
-          );
+        const writeFile = () =>
+          pathExtension === "ipynb" && openNotebookAsText
+            ? contentsManager.save(filepath, {
+                type: "notebook",
+                format: "json",
+                content: JSON.parse(contentToSave) as unknown,
+              })
+            : contentsManager.save(filepath, {
+                type: "file",
+                format: "text",
+                content: contentToSave,
+              });
+        const documentSyncController = documentSyncRef.current;
+        if (documentSyncController) {
+          await documentSyncController.runLocalWrite(writeFile);
         } else {
-          await documentSync.runLocalWrite(() =>
-            contentsManager.save(filepath, {
-              type: "file",
-              format: "text",
-              content: contentToSave,
-            }),
-          );
+          await writeFile();
         }
 
         if (dirtyVersionRef.current === dirtyVersionToSave) {
@@ -337,7 +338,6 @@ export function useTextFileModel({
       pathExtension,
       openNotebookAsText,
       markClean,
-      documentSync,
     ],
   );
 

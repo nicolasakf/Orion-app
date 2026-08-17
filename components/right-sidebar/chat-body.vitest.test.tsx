@@ -514,3 +514,79 @@ describe("ChatBody assistant message actions", () => {
     expect(screen.queryByRole("button", { name: "Copy message" })).not.toBeInTheDocument();
   });
 });
+
+describe("ChatBody compaction divider", () => {
+  it("renders a divider after the summarized message boundary", () => {
+    renderMessageChatBody(
+      [
+        {
+          id: "user-1",
+          role: "user",
+          parts: [{ type: "text", text: "Hi" }],
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          parts: [{ type: "text", text: "Hello" }],
+        },
+        {
+          id: "user-2",
+          role: "user",
+          parts: [{ type: "text", text: "More" }],
+        },
+      ],
+      {
+        compactionSummary: {
+          text: "User greeted the assistant.",
+          coversThrough: "assistant-1",
+          createdAt: new Date("2026-01-01T12:00:00.000Z"),
+          model: "test-model",
+          tokensSaved: 1200,
+        },
+      }
+    );
+
+    expect(
+      screen.getByRole("button", { name: "View compaction summary" })
+    ).toHaveTextContent("Conversation compacted");
+  });
+
+  it("opens the compaction summary in a dialog", async () => {
+    renderMessageChatBody(
+      [
+        {
+          id: "user-1",
+          role: "user",
+          parts: [{ type: "text", text: "Hi" }],
+        },
+        {
+          id: "assistant-1",
+          role: "assistant",
+          parts: [{ type: "text", text: "Hello" }],
+        },
+        {
+          id: "user-2",
+          role: "user",
+          parts: [{ type: "text", text: "More" }],
+        },
+      ],
+      {
+        compactionSummary: {
+          text: "User greeted the assistant.",
+          coversThrough: "assistant-1",
+          createdAt: new Date("2026-01-01T12:00:00.000Z"),
+          model: "test-model",
+          tokensSaved: 1200,
+        },
+      }
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "View compaction summary" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("dialog")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Compaction summary")).toBeInTheDocument();
+    expect(screen.getByText("User greeted the assistant.")).toBeInTheDocument();
+  });
+});

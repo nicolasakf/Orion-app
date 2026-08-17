@@ -10,6 +10,7 @@ import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { JupyterServerInfo } from "@/lib/kernel/kernel-service";
 import type { AgentRule } from "@/lib/agent/rules";
+import type { AgentContextSettings } from "@/lib/settings/schema";
 import type { PlatformOS } from "@/lib/utils";
 import type { NotebookType } from "@/lib/types";
 import type { UIMessage } from "ai";
@@ -78,6 +79,12 @@ export interface SubagentPromptPayload {
 export interface RunSubagentOptions {
   /** Sub-agent to run (must be registered in the registry). */
   subagentType: SubagentType;
+
+  /**
+   * Context settings for the run. Only `optimizerRetentionTurns` is used, to keep
+   * the subagent's wire payload trimmed the same way the main chat's is.
+   */
+  contextSettings?: AgentContextSettings;
 
   /** All notebook-defined sub-agents available in the current session. */
   availableSubagents: SubagentDefinition[];

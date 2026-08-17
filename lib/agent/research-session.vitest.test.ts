@@ -3,6 +3,7 @@ import type { UIMessage } from "ai";
 
 import {
   RESEARCH_SESSION_BUDGET_WARNING_STEP,
+  RESEARCH_SESSION_MAX_STEPS,
   advanceResearchSessionForContinuation,
   createResearchSession,
   getResearchTurnActivity,
@@ -97,6 +98,54 @@ describe("research session continuation", () => {
     });
     expect(finished.continue).toBe(false);
     expect(finished.session.active).toBe(false);
+  });
+
+  it("spends the last step on synthesis instead of stopping cold", () => {
+    const productive = {
+      completedToolCount: 1,
+      successfulSubstantiveToolCount: 1,
+      evidenceProduced: false,
+      markdownDocumented: true,
+      proseOnly: false,
+    };
+    const session = {
+      ...createResearchSession({ objective: "Analyze data" }),
+      stepCount: RESEARCH_SESSION_MAX_STEPS - 1,
+      synthesisNudgeIssued: true,
+    };
+
+    const atBudget = advanceResearchSessionForContinuation(session, productive);
+
+    // A run that ends on the cap has all the evidence and none of the meaning.
+    expect(atBudget.continue).toBe(true);
+    expect(atBudget.nudge).toBe("final_synthesis");
+    expect(atBudget.session.finalSynthesisRequested).toBe(true);
+
+    // The synthesis step itself ends the session — it cannot run on.
+    const afterSynthesis = advanceResearchSessionForContinuation(atBudget.session, productive);
+    expect(afterSynthesis.continue).toBe(false);
+    expect(afterSynthesis.terminal).toBe(true);
+    expect(afterSynthesis.session.active).toBe(false);
+  });
+
+  it("terminates at the budget when synthesis was already requested", () => {
+    const session = {
+      ...createResearchSession({ objective: "Analyze data" }),
+      stepCount: RESEARCH_SESSION_MAX_STEPS - 1,
+      synthesisNudgeIssued: true,
+      finalSynthesisRequested: true,
+    };
+
+    const decision = advanceResearchSessionForContinuation(session, {
+      completedToolCount: 0,
+      successfulSubstantiveToolCount: 0,
+      evidenceProduced: false,
+      markdownDocumented: false,
+      proseOnly: false,
+    });
+
+    expect(decision.continue).toBe(false);
+    expect(decision.reason).toBe("step_budget_exhausted");
   });
 
   it("nudges synthesis near the step budget", () => {

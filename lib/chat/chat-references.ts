@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+import {
+  ContextMeasurementSchema,
+  type ContextMeasurement,
+} from "@/lib/agent/context-usage";
+
 export const CHAT_REFERENCE_TYPES = [
   "file",
   "folder",
@@ -75,6 +80,12 @@ export interface ResolvedChatReference extends ChatReference {
 export interface ChatMessageMetadata {
   references?: ResolvedChatReference[];
   slashCommands?: ChatSlashCommandToken[];
+  /**
+   * Context accounting for the request that produced this assistant message,
+   * including the exact input-token count the provider reported. This is the only
+   * path by which real token counts reach the UI — everything else is an estimate.
+   */
+  contextUsage?: ContextMeasurement;
 }
 
 export type ChatSlashCommandCategory = "builtin" | "subagent" | "skill";
@@ -165,6 +176,7 @@ const ChatSlashCommandTokenSchema = z.object({
 export const ChatMessageMetadataSchema = z.object({
   references: z.array(ResolvedChatReferenceSchema).max(20).optional(),
   slashCommands: z.array(ChatSlashCommandTokenSchema).max(10).optional(),
+  contextUsage: ContextMeasurementSchema.optional(),
 });
 
 /** Returns validated references from unknown message metadata. */
@@ -181,18 +193,34 @@ export function parseChatMessageSlashCommands(metadata: unknown): ChatSlashComma
   return parsed.data.slashCommands ?? [];
 }
 
-/** Keeps only chat metadata fields that Orion understands and should persist. */
+/** Returns validated context accounting from unknown message metadata. */
+export function parseChatMessageContextUsage(metadata: unknown): ContextMeasurement | null {
+  const parsed = ChatMessageMetadataSchema.safeParse(metadata);
+  if (!parsed.success) return null;
+  return parsed.data.contextUsage ?? null;
+}
+
+/**
+ * Keeps only chat metadata fields that Orion understands and should persist.
+ *
+ * Every recognised field must be checked before returning `undefined`, or a
+ * message carrying only that field is silently stripped on persist.
+ */
 export function normalizeChatMessageMetadata(metadata: unknown): ChatMessageMetadata | undefined {
   const parsed = ChatMessageMetadataSchema.safeParse(metadata);
   if (!parsed.success) return undefined;
 
   const references = parsed.data.references ?? [];
   const slashCommands = parsed.data.slashCommands ?? [];
-  if (references.length === 0 && slashCommands.length === 0) return undefined;
+  const contextUsage = parsed.data.contextUsage;
+  if (references.length === 0 && slashCommands.length === 0 && !contextUsage) {
+    return undefined;
+  }
 
   return {
     ...(references.length > 0 ? { references } : {}),
     ...(slashCommands.length > 0 ? { slashCommands } : {}),
+    ...(contextUsage ? { contextUsage } : {}),
   };
 }
 

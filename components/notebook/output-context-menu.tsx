@@ -97,7 +97,7 @@ export function OutputContextMenu({
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
       <ContextMenuContent
-        className="w-48"
+        className="w-max [&_[data-slot=context-menu-item]]:whitespace-nowrap [&_[data-slot=context-menu-sub-trigger]]:whitespace-nowrap"
         onCloseAutoFocus={handleCloseAutoFocus}
       >
         {showPresentationSubmenu && (

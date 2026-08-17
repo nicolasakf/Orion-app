@@ -25,6 +25,7 @@ import {
 } from "ai";
 import { parseJsonEventStream, type ParseResult } from "@ai-sdk/provider-utils";
 
+import { optimizeMessagesForWire } from "@/lib/agent/context-optimizer";
 import { OrderedToolExecutionScheduler } from "@/lib/agent/tool-execution-scheduler";
 import { DEFAULT_MAX_PARALLEL_READ_ONLY_CALLS } from "@/lib/agent/tool-execution-policy";
 import { guardToolResult } from "@/lib/agent/tool-output-guard";
@@ -117,11 +118,19 @@ async function fetchSubagentStep(
   stepIndex: number,
   promptPayload: SubagentPromptPayload
 ): Promise<Response> {
+  // Subagent steps accumulate the whole isolated transcript, so without the same
+  // wire optimizer the main chat applies, inspected raster bytes and superseded
+  // tool outputs are resent verbatim on every step until the provider rejects
+  // the request. Subagents have no compaction path to recover with.
+  const wireMessages = optimizeMessagesForWire(messages, {
+    retentionTurns: options.contextSettings?.optimizerRetentionTurns,
+  });
+
   return fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      messages: messages.map(({ id: _id, ...message }) => message),
+      messages: wireMessages.map(({ id: _id, ...message }) => message),
       model: options.modelId,
       provider: options.providerId,
       agentMode: true,

@@ -752,6 +752,7 @@ export function OutputRenderer({
           onOpenChange={setIsFullScreenOpen}
         >
           <OutputFrame
+            fitContent
             onClickCapture={
               onMentionOutput ? handleOptionClickMention : undefined
             }

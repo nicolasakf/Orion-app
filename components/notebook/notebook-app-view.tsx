@@ -38,6 +38,7 @@ import {
 import {
   isNotebookCellInAppView,
   isNotebookOutputInAppView,
+  listNotebookAppViewReferences,
   type NotebookAppViewReference,
 } from "@/lib/notebook/app-view";
 import {
@@ -70,6 +71,8 @@ interface NotebookAppViewProps {
   onNotebookViewRequest?: () => void;
   onRemoveAppViewReference?: (reference: NotebookAppViewReference) => void;
   onRestoreAppViewReference?: (reference: NotebookAppViewReference) => void;
+  /** Adds every markdown cell and notebook output to App View from the empty-state shortcut. */
+  onAddAllCellsToAppView?: () => void;
   onOrionUiStateChange?: (
     key: string,
     value: OrionUiLocalValue,
@@ -290,7 +293,7 @@ function AppViewMarkdownContextMenu({
       <ContextMenuTrigger asChild>
         <div>{children}</div>
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-48">
+      <ContextMenuContent className="w-max [&_[data-slot=context-menu-item]]:whitespace-nowrap">
         {onMention ? (
           <ContextMenuItem onClick={onMention}>
             <AtSign className="mr-2 h-4 w-4" />
@@ -434,6 +437,7 @@ export function NotebookAppView({
   onNotebookViewRequest,
   onRemoveAppViewReference,
   onRestoreAppViewReference,
+  onAddAllCellsToAppView,
   onOrionUiStateChange,
   onOrionUiAction,
   onOrionUiUnmount,
@@ -451,6 +455,10 @@ export function NotebookAppView({
     [notebook],
   );
   const hasContent = useMemo(() => notebookHasContent(notebook), [notebook]);
+  const hasAddableCells = useMemo(
+    () => listNotebookAppViewReferences(notebook).length > 0,
+    [notebook],
+  );
   const displayItems = useMemo(
     () =>
       businessMode && appViewItems.length === 0 && hasContent
@@ -819,26 +827,39 @@ export function NotebookAppView({
 
   return (
     <div
-      className="flex min-h-[60vh] items-center justify-center p-6"
+      className="flex min-h-full flex-1 items-center justify-center overflow-y-auto p-6"
       data-notebook-export-root="app"
     >
-      <div className="max-w-sm text-center">
+      <div className="max-w-lg text-center">
         <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-lg bg-muted text-muted-foreground">
           <LayoutTemplate className="h-5 w-5" />
         </div>
         <h3 className="text-sm font-medium text-foreground mt-2">
           No cells in App View yet
         </h3>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="mt-4"
-          onClick={() => dispatchInsertChatSkill("create-app")}
-        >
-          <Sparkles className="mr-2 h-4 w-4" />
-          Use Create App skill
-        </Button>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => dispatchInsertChatSkill("create-app")}
+          >
+            <Sparkles className="mr-2 h-4 w-4" />
+            Use Create App skill
+          </Button>
+          {onAddAllCellsToAppView ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={!hasAddableCells}
+              onClick={onAddAllCellsToAppView}
+            >
+              <LayoutTemplate className="mr-2 h-4 w-4" />
+              Add all cells
+            </Button>
+          ) : null}
+        </div>
         <div
           className="my-4 flex items-center gap-3 text-xs uppercase tracking-wide text-muted-foreground"
           aria-hidden

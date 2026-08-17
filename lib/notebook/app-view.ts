@@ -1,4 +1,8 @@
-import { type NotebookCellType, type NotebookType } from "@/lib/types";
+import {
+  CellType,
+  type NotebookCellType,
+  type NotebookType,
+} from "@/lib/types";
 
 export const NOTEBOOK_APP_VIEW_SCHEMA_VERSION = 1;
 export const ORION_UI_MIME_TYPE = "application/vnd.orion.ui+json";
@@ -257,6 +261,38 @@ function updateNotebookCellAppMetadata(
     ...notebook,
     cells,
   };
+}
+
+/** Collects markdown cells and code-cell outputs as App View references, in notebook order. */
+export function listNotebookAppViewReferences(
+  notebook: NotebookType,
+): NotebookAppViewReference[] {
+  return notebook.cells.flatMap((cell, cellIndex): NotebookAppViewReference[] => {
+    if (cell.cell_type === CellType.MARKDOWN) {
+      return [{ kind: "markdown" as const, cellIndex }];
+    }
+
+    if (cell.cell_type !== CellType.CODE || !cell.outputs?.length) {
+      return [];
+    }
+
+    return cell.outputs.map((_, outputIndex) => ({
+      kind: "output" as const,
+      cellIndex,
+      outputIndex,
+    }));
+  });
+}
+
+/** Adds every markdown cell and code-cell output to App View metadata. */
+export function addAllNotebookCellsToAppView(
+  notebook: NotebookType,
+): NotebookType {
+  return listNotebookAppViewReferences(notebook).reduce(
+    (nextNotebook, reference) =>
+      addNotebookAppViewReference(nextNotebook, reference),
+    notebook,
+  );
 }
 
 /** Adds a cell or output to App View cell-level metadata. */

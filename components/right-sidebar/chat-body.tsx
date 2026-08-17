@@ -23,10 +23,13 @@ import {
   isActivityGroupWaitingForFinalResponse,
   shouldAutoCollapseActivityGroup,
   shouldForceExpandActivityGroup,
+  type AssistantActivityMessageBlock,
   type AssistantActivityMessagePart,
   type AssistantPartWithIndex,
   type ToolTiming,
 } from "./assistant-activity-grouping";
+import { CompactionDivider } from "./compaction-divider";
+import type { CompactionSummary } from "@/lib/chat/chat-types";
 import { Button } from "@/components/ui/button";
 import {
   CheckmarkedButton,
@@ -92,6 +95,8 @@ export interface ChatBodyProps {
   emptyPromptCategories?: readonly BusinessPromptCategory[];
   /** Resets the prompt library when an empty chat is started again. */
   emptyPromptLibraryKey?: string;
+  /** When set, renders a divider after the summarized portion of the conversation. */
+  compactionSummary?: CompactionSummary | null;
 }
 
 interface ChatMessageRowProps {
@@ -145,7 +150,8 @@ type ChatRenderItem =
     message: string | undefined;
     actionUrl?: string;
     actionLabel?: string;
-  };
+  }
+  | { type: "compactionDivider"; summary: CompactionSummary };
 
 type ConversationSelectionSource = "assistant" | "tool";
 
@@ -320,6 +326,48 @@ function ConversationSelectionMentionPopover({
       Mention in chat
     </button>
   );
+}
+
+/** True when a rendered row includes the message at `messageIndex`. */
+function rowContainsMessageIndex(
+  item: Extract<ChatRenderItem, { type: "message" | "activityRun" }>,
+  messageIndex: number
+): boolean {
+  if (item.type === "message") return item.messageIndex === messageIndex;
+  return messageIndex >= item.firstMessageIndex && messageIndex <= item.lastMessageIndex;
+}
+
+/** Inserts a compaction divider after the last summarized message row. */
+function appendMessageRowsWithCompactionDivider(
+  blocks: AssistantActivityMessageBlock[],
+  messages: UIMessage[],
+  compactionSummary: CompactionSummary | null | undefined
+): ChatRenderItem[] {
+  const coversThroughIndex = compactionSummary
+    ? messages.findIndex((message) => message.id === compactionSummary.coversThrough)
+    : -1;
+  const shouldInsertDivider =
+    compactionSummary != null &&
+    coversThroughIndex >= 0 &&
+    coversThroughIndex < messages.length - 1;
+
+  const rows: ChatRenderItem[] = [];
+  let dividerInserted = false;
+
+  for (const block of blocks) {
+    rows.push(block);
+    if (
+      shouldInsertDivider &&
+      !dividerInserted &&
+      (block.type === "message" || block.type === "activityRun") &&
+      rowContainsMessageIndex(block, coversThroughIndex)
+    ) {
+      rows.push({ type: "compactionDivider", summary: compactionSummary });
+      dividerInserted = true;
+    }
+  }
+
+  return rows;
 }
 
 /** Compare UI message parts by the fields that affect rendered chat rows. */
@@ -497,6 +545,9 @@ function getActivityStatus(
   return "complete";
 }
 
+/** Stable stand-in for a tool call that has no input yet. */
+const EMPTY_TOOL_ARGS: Record<string, unknown> = {};
+
 /** True while this reasoning part is still the tail of an in-flight assistant turn. */
 function isReasoningPartActivelyStreaming({
   isLoading,
@@ -550,8 +601,10 @@ function renderAssistantActivityItem({
   if (isToolUIPart(part)) {
     const inv = part;
     const toolName = inv.type.slice(5) as OrionToolName;
+    // Shared constant, not a fresh literal: the tool cards memoize on `args`
+    // identity, and a new `{}` each render would defeat that for pending calls.
     const invArgs =
-      ("input" in inv && inv.input != null) ? (inv.input as Record<string, unknown>) : {};
+      ("input" in inv && inv.input != null) ? (inv.input as Record<string, unknown>) : EMPTY_TOOL_ARGS;
     const invResult = "output" in inv ? inv.output : undefined;
     const invErrorText =
       "errorText" in inv && typeof inv.errorText === "string" ? inv.errorText : undefined;
@@ -989,10 +1042,14 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
   const prevTurnActive = prev.isLastMessage ? (prev.isAgentTurnActive ?? false) : false;
   const nextTurnActive = next.isLastMessage ? (next.isAgentTurnActive ?? false) : false;
   if (prevTurnActive !== nextTurnActive) return false;
-  if (next.isLastMessage && (next.isLoading || next.isAgentTurnActive)) {
-    return false;
-  }
 
+  // An agent loop appends steps to one assistant message, so the "last message"
+  // can hold a hundred parts by the end of a run. Re-rendering it on every
+  // streaming commit repaints the entire run ~20×/sec and starves the main
+  // thread — which is what left the chat body frozen mid-run. The comparisons
+  // below already catch everything a streaming turn can change: part content
+  // and tool state via `areRenderedPartsEqual`, elapsed times via
+  // `areToolTimingValuesEqual`, and the loading/turn-active flags above.
   if (!areRenderedPartsEqual(prev.message.parts, next.message.parts)) return false;
   if (prev.message.metadata !== next.message.metadata) return false;
   if (!arePendingApprovalValuesEqual(next.message, prev.pendingApprovalIds, next.pendingApprovalIds)) {
@@ -1166,6 +1223,7 @@ export function ChatBody({
   onForkFromAssistantMessage,
   emptyPromptCategories,
   emptyPromptLibraryKey,
+  compactionSummary,
 }: ChatBodyProps) {
   const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = React.useRef(true);
@@ -1182,15 +1240,29 @@ export function ChatBody({
   const errorActionUrl = parsedApiError?.actionUrl;
   const errorActionLabel = parsedApiError?.actionLabel;
 
+  /**
+   * An agent loop is one `/api/chat` request per step, so `isLoading` drops to
+   * false in the gap between every step — 38 times in session 1786825713795,
+   * which is what made the indicator flash on and off for the whole run. The
+   * turn-active signal spans those gaps. Approvals are excluded: the turn is
+   * still "active" while waiting on the user, but nothing is loading.
+   */
+  const showLoadingRow =
+    isLoading || (Boolean(isAgentTurnActive) && !(pendingApprovalIds && pendingApprovalIds.size > 0));
+
   const rowItems = React.useMemo<ChatRenderItem[]>(() => {
-    const rows: ChatRenderItem[] = buildAssistantActivityMessageBlocks(messages, {
-      groupConsecutiveActivityOnlyMessages: groupConsecutiveAssistantActivity,
-    });
+    const rows = appendMessageRowsWithCompactionDivider(
+      buildAssistantActivityMessageBlocks(messages, {
+        groupConsecutiveActivityOnlyMessages: groupConsecutiveAssistantActivity,
+      }),
+      messages,
+      compactionSummary
+    );
 
     if (showKernelPrompt) {
       rows.push({ type: "kernelPrompt" });
     }
-    if (isLoading) {
+    if (showLoadingRow) {
       rows.push({ type: "loading" });
     }
     if (showError) {
@@ -1208,21 +1280,24 @@ export function ChatBody({
     messages,
     groupConsecutiveAssistantActivity,
     showKernelPrompt,
-    isLoading,
+    showLoadingRow,
     showError,
     errorMessage,
     errorTitle,
     errorActionUrl,
     errorActionLabel,
+    compactionSummary,
   ]);
 
   const rowVirtualizer = useVirtualizer({
     count: rowItems.length,
     getScrollElement: () => scrollParentRef.current,
-    estimateSize: (index) =>
-      rowItems[index]?.type === "message" || rowItems[index]?.type === "activityRun"
-        ? 180
-        : 80,
+    estimateSize: (index) => {
+      const item = rowItems[index];
+      if (item?.type === "message" || item?.type === "activityRun") return 180;
+      if (item?.type === "compactionDivider") return 40;
+      return 80;
+    },
     getItemKey: (index) => {
       const item = rowItems[index];
       if (!item) return `${viewKey}:missing:${index}`;
@@ -1233,6 +1308,9 @@ export function ChatBody({
         const first = item.items[0]?.message.id ?? "activity";
         const last = item.items.at(-1)?.message.id ?? first;
         return `${viewKey}:activity-run:${first}:${last}:${item.firstMessageIndex}-${item.lastMessageIndex}`;
+      }
+      if (item.type === "compactionDivider") {
+        return `${viewKey}:compaction:${item.summary.coversThrough}`;
       }
       return `${viewKey}:${item.type}`;
     },
@@ -1405,6 +1483,10 @@ export function ChatBody({
                 )}
 
                 {item.type === "loading" && <LoadingMessage />}
+
+                {item.type === "compactionDivider" && (
+                  <CompactionDivider summary={item.summary} />
+                )}
 
                 {item.type === "error" && (
                   <div className="flex justify-end">

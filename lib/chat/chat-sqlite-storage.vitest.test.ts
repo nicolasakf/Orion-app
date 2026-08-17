@@ -686,6 +686,28 @@ describe("SQLite chat storage", () => {
     ).resolves.toMatchObject({ sampleCount: 0, correctionRatio: 1.15 });
   });
 
+  it("reports a below-1 correction ratio when the model is consistently overestimated", async () => {
+    const key = {
+      providerId: "anthropic",
+      modelId: "claude-opus-5",
+      interactionMode: "agent",
+      estimatorVersion: 2,
+    };
+    for (const actualInputTokens of [70, 75, 80, 78]) {
+      await updateContextCalibration(key, {
+        rawEstimatedTokens: 100,
+        actualInputTokens,
+      });
+    }
+
+    const calibration = await getContextCalibration(key);
+
+    // Flooring this at 1 would report tokens the provider never charges.
+    expect(calibration.sampleCount).toBe(4);
+    expect(calibration.correctionRatio).toBeLessThan(1);
+    expect(calibration.correctionRatio).toBeGreaterThan(0.5);
+  });
+
   it("records and coalesces repeated text file edits for one request", async () => {
     await recordEditCheckpointTarget({
       requestId: "request-1",

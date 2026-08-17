@@ -54,7 +54,13 @@ import {
 } from "@/lib/agent/subagents";
 import { detectClientPlatformOs, isJupyterServerHostLocal } from "@/lib/utils";
 import { inspectPlotlyOutput } from "@/lib/notebook/plotly-output-inspection";
-import { guardExecutionToolResult, isExecutionToolResult } from "./visual-evidence";
+import {
+  guardExecutionToolResult,
+  isExecutionToolResult,
+  type ExecutionToolResult,
+} from "./visual-evidence";
+import { parseInsertedRange } from "./tools/insert-cell";
+import type { InsertCellParams, ReadCellOutputParams } from "./tools/types";
 import { throwIfToolExecutionAborted } from "./tool-execution-scheduler";
 import { resolveAgentPath } from "./path-resolver";
 import { isProtectedMemoryWriteAttempt } from "./memory-write-guard";
@@ -128,6 +134,92 @@ function getStringParam(params: unknown, key: string): string | null {
 function resolveProviderJupyterPath(path: string, rootDirectory?: string | null): string {
   const resolved = resolveAgentPath(path, { rootDirectory });
   return resolved.ok ? resolved.jupyterPath : path;
+}
+
+/** Per-cell timeout used when `insert_cell` runs its own cells without being told one. */
+const INSERT_CELL_DEFAULT_TIMEOUT_SECONDS = 120;
+
+/** Identifies one notebook output across an execution and a later read. */
+function cellOutputKey(cellIndex: number, outputIndex: number): string {
+  return `${cellIndex}:${outputIndex}`;
+}
+
+/**
+ * Notebook outputs whose images the last execution tool call already returned.
+ *
+ * Replaced (not merged) on every execution, so it always describes the step the
+ * model just took. Anything older has since been stripped from context and is
+ * legitimately worth re-reading.
+ */
+function collectDeliveredVisualKeys(result: ExecutionToolResult): Set<string> {
+  const keys = new Set<string>();
+  for (const visual of result.visuals) {
+    // execute_code output has no cell to read back, so it cannot be duplicated.
+    if (!visual.data || visual.cellIndex === undefined) continue;
+    keys.add(cellOutputKey(visual.cellIndex, visual.outputIndex));
+  }
+  return keys;
+}
+
+/** Adds a skipped-read explanation to a read_cell_output result of either shape. */
+function appendSkippedReadNote(result: unknown, note: string): unknown {
+  if (!note) return result;
+  if (typeof result === "string") return `${result}\n${note}`;
+  if (typeof result === "object" && result !== null) {
+    const record = result as Record<string, unknown>;
+    const text = typeof record.text === "string" ? record.text : "";
+    return { ...record, text: text ? `${text}\n${note}` : note };
+  }
+  return result;
+}
+
+/**
+ * Run the code cells an `insert_cell` call just created, when it asked for it.
+ *
+ * Writing a cell and running it is one intent but was two tool calls, and with
+ * one model step per tool call the second one re-sent the entire prompt to emit
+ * roughly a hundred tokens. In session 1786825713795 that pattern accounted for
+ * $5.53 of a $13.70 run. Chaining here keeps the step accounting unchanged —
+ * the model still sees one call and one result.
+ *
+ * @param insertResult - Raw string returned by the insert, passed through
+ *   unchanged when nothing needs to run.
+ */
+async function runInsertedCellsIfRequested(
+  toolSet: JupyterToolSet,
+  params: InsertCellParams,
+  insertResult: string
+): Promise<string | ExecutionToolResult> {
+  if (!params.execute) return insertResult;
+
+  const range = parseInsertedRange(insertResult);
+  if (!range) return insertResult;
+
+  // Markdown cells have nothing to run, so only code cells reach the kernel.
+  const cellIndices = params.cells
+    .map((cell, offset) => ({ cell, index: range.startIndex + offset }))
+    .filter(({ cell }) => cell.cellType === "code")
+    .map(({ index }) => index);
+
+  if (cellIndices.length === 0) {
+    return `${insertResult}\n\nNothing to execute: all inserted cells are markdown.`;
+  }
+
+  const executionResult = await toolSet.tools.executeCell.execute({
+    cellIndices,
+    timeoutSeconds: params.timeoutSeconds ?? INSERT_CELL_DEFAULT_TIMEOUT_SECONDS,
+    stream: false,
+    progressInterval: 1000,
+  });
+
+  const executionText = isExecutionToolResult(executionResult)
+    ? executionResult.text
+    : String(executionResult);
+  const mergedText = `${insertResult}\n\n${executionText}`;
+
+  return isExecutionToolResult(executionResult)
+    ? { ...executionResult, text: mergedText }
+    : mergedText;
 }
 
 export interface AssistantContextValue {
@@ -284,6 +376,9 @@ export function AssistantProvider({
   // Ref so registries and tools can read the latest workspaceDirectory without stale closures
   const workspaceDirRef = useRef<string | undefined>(workspaceDirectory);
   const rootDirectoryRef = useRef<string | undefined>(rootDirectory ?? undefined);
+  // Cell outputs whose images the most recent execution already handed the model,
+  // so read_cell_output can decline to charge for them a second time.
+  const recentlyDeliveredVisualsRef = useRef<Set<string>>(new Set());
   // Expose the pool via context so TerminalPanel can subscribe to pool state
   const [terminalPool, setTerminalPool] = useState<TerminalPool | null>(null);
   const openDocumentSnapshotsRef = useRef<OpenDocumentSnapshotProvider | undefined>(
@@ -978,9 +1073,18 @@ export function AssistantProvider({
           case "read_cell":
             result = await toolSet.tools.readCell.execute(sanitizedParams as any);
             break;
-          case "insert_cell":
-            result = await executeWithCheckpointContext(toolSet.tools.insertCell, sanitizedParams);
+          case "insert_cell": {
+            const insertResult = await executeWithCheckpointContext(
+              toolSet.tools.insertCell,
+              sanitizedParams
+            );
+            result = await runInsertedCellsIfRequested(
+              toolSet,
+              sanitizedParams as unknown as InsertCellParams,
+              String(insertResult)
+            );
             break;
+          }
           case "delete_cell":
             result = await executeWithCheckpointContext(toolSet.tools.deleteCell, sanitizedParams);
             break;
@@ -1016,10 +1120,42 @@ export function AssistantProvider({
             break;
           case "read_cell_output": {
             // May return a MultimodalToolResult object (for image outputs) instead of a plain string.
+            // Re-reading an output the previous step already returned buys the
+            // model nothing and costs the payload twice — one such call in
+            // session 1786825713795 re-fetched 255,707 characters for $1.66.
+            const requestedReads =
+              (sanitizedParams as unknown as ReadCellOutputParams | undefined)?.reads ?? [];
+            const alreadyDelivered = recentlyDeliveredVisualsRef.current;
+            const freshReads = requestedReads.filter(
+              (read) => !alreadyDelivered.has(cellOutputKey(read.cellIndex, read.outputIndex))
+            );
+            const skippedCount = requestedReads.length - freshReads.length;
+            const skippedNote =
+              skippedCount > 0
+                ? `[${skippedCount} read(s) skipped: that output was already returned to you by the preceding execution. Re-run the cell if you need a fresh copy.]`
+                : "";
+
+            if (requestedReads.length > 0 && freshReads.length === 0) {
+              logToolResult({
+                requestId,
+                toolName,
+                params,
+                result: skippedNote,
+                durationMs: Date.now() - startMs,
+              }, chatIdRef.current);
+              return skippedNote;
+            }
+
             // Pass it through as-is so addToolOutput sends the object; toModelOutput in the
             // tool schema converts it to multimodal content on the server side.
-            const cellOutputResult = await toolSet.tools.readCellOutput.execute(sanitizedParams as any);
-            const guardedCellOutputResult = guardToolResult(cellOutputResult);
+            const cellOutputResult = await toolSet.tools.readCellOutput.execute({
+              ...(sanitizedParams as any),
+              ...(requestedReads.length > 0 ? { reads: freshReads } : {}),
+            });
+            const guardedCellOutputResult = appendSkippedReadNote(
+              guardToolResult(cellOutputResult),
+              skippedNote
+            );
             const durationMsCellOutput = Date.now() - startMs;
             logToolResult({
               requestId,
@@ -1037,6 +1173,9 @@ export function AssistantProvider({
         throwIfToolExecutionAborted(executionContext?.abortSignal);
 
         if (isExecutionToolResult(result)) {
+          // Replaced, not merged: this records the outputs the model is seeing
+          // right now, which is the only window where a re-read is redundant.
+          recentlyDeliveredVisualsRef.current = collectDeliveredVisualKeys(result);
           // Preserve raster bytes until RightSidebar applies the selected model's
           // image capability and configured preview budget.
           const finalResult = guardExecutionToolResult(result, Number.POSITIVE_INFINITY);

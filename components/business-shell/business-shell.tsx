@@ -285,6 +285,8 @@ interface BusinessShellProps {
   onIsRunningChange: React.Dispatch<React.SetStateAction<boolean>>;
   onNotebookChange: React.Dispatch<React.SetStateAction<NotebookType | null>>;
   onUnsavedChangesChange: React.Dispatch<React.SetStateAction<boolean>>;
+  /** Reports an unresolved disk/editor divergence so autosave can pause. */
+  onDocumentConflictChange: (hasConflict: boolean) => void;
   onTextSnapshotGetterChange: (
     getter: OpenDocumentSnapshotProvider["getTextSnapshot"] | null
   ) => void;
@@ -345,6 +347,7 @@ export function BusinessShell({
   onIsRunningChange,
   onNotebookChange,
   onUnsavedChangesChange,
+  onDocumentConflictChange,
   onTextSnapshotGetterChange,
   onNotebookSnapshotGetterChange,
   onTextSaveHandlerChange,
@@ -980,6 +983,7 @@ export function BusinessShell({
                 onIsRunningChange={onIsRunningChange}
                 onNotebookChange={onNotebookChange}
                 onUnsavedChangesChange={onUnsavedChangesChange}
+                onDocumentConflictChange={onDocumentConflictChange}
                 onTextSnapshotGetterChange={onTextSnapshotGetterChange}
                 onNotebookSnapshotGetterChange={onNotebookSnapshotGetterChange}
                 onTextSaveHandlerChange={onTextSaveHandlerChange}

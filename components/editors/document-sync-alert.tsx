@@ -2,7 +2,6 @@
 
 import { AlertTriangle, RefreshCw, Save } from "lucide-react";
 
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import type { ActiveDocumentSyncState } from "@/hooks/use-active-document-sync";
 
@@ -40,24 +39,41 @@ export function DocumentSyncAlert({
         : "Your current editor content has not been discarded. Saving will recreate the file at this path.";
 
   return (
-    <Alert className="mx-2 mt-2 shrink-0 border-amber-500/50 bg-amber-500/10">
-      <AlertTriangle className="h-4 w-4 text-amber-600" />
-      <AlertTitle>{title}</AlertTitle>
-      <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
-        <span>{description}</span>
-        <span className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => void onSaveEditorVersion()}>
-            <Save className="mr-1.5 h-3.5 w-3.5" />
+    <div className="min-w-0 shrink-0 px-2 pt-2">
+      <div
+        role="alert"
+        className="corner-squircle flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-amber-500/50 bg-amber-500/10 px-2.5 py-1.5"
+      >
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium leading-tight">{title}</p>
+          <p className="text-xs leading-snug text-muted-foreground">
+            {description}
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 px-2.5 text-xs [&_svg]:size-3.5"
+            onClick={() => void onSaveEditorVersion()}
+          >
+            <Save />
             Save editor version
           </Button>
           {state.status !== "deleted" ? (
-            <Button size="sm" variant="outline" onClick={() => void onReloadDiskVersion()}>
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2.5 text-xs [&_svg]:size-3.5"
+              onClick={() => void onReloadDiskVersion()}
+            >
+              <RefreshCw />
               Reload disk version
             </Button>
           ) : null}
-        </span>
-      </AlertDescription>
-    </Alert>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -1,4 +1,5 @@
 import { APICallError } from "@ai-sdk/provider";
+import { InvalidToolInputError, NoSuchToolError } from "ai";
 import { z } from "zod";
 
 /** ChatGPT account page where users can upgrade or manage subscription limits. */
@@ -19,7 +20,7 @@ const OpenAiUsageLimitErrorSchema = z.object({
 });
 
 export type ChatApiErrorPayload = {
-  code?: "context_budget_exceeded";
+  code?: "context_budget_exceeded" | "invalid_tool_input";
   title: string;
   message: string;
   actionUrl?: string;
@@ -304,6 +305,50 @@ function readApiErrorStatusCode(error: unknown): number | undefined {
 }
 
 /**
+ * Describes a tool call the SDK rejected before it ever reached the browser.
+ *
+ * `isInstance` matches on the SDK's symbol marker rather than the prototype
+ * chain, which survives the bundle boundaries that make `instanceof Error`
+ * unreliable inside the Next.js server runtime.
+ */
+function readToolCallError(error: unknown): { title: string; message: string } | null {
+  if (NoSuchToolError.isInstance(error)) {
+    return {
+      title: "Unknown Tool",
+      message:
+        `No tool named "${error.toolName}" is available in this mode. ` +
+        "Use one of the tools listed for the current mode instead.",
+    };
+  }
+
+  if (InvalidToolInputError.isInstance(error)) {
+    const detail =
+      error.cause instanceof Error && error.cause.message
+        ? error.cause.message
+        : error.message;
+    return {
+      title: "Invalid Tool Input",
+      message:
+        `The arguments for "${error.toolName}" did not match its schema: ${detail}. ` +
+        "Re-issue the call with that argument corrected — the tool itself is working.",
+    };
+  }
+
+  return null;
+}
+
+/** Best-effort message text from an error that may not survive `instanceof`. */
+function readErrorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) return error.message || undefined;
+  if (typeof error === "string") return error || undefined;
+  if (typeof error === "object" && error !== null) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim() !== "") return message;
+  }
+  return undefined;
+}
+
+/**
  * Builds a structured chat API error payload for both pre-stream failures and
  * streamed `onError` handlers.
  */
@@ -318,6 +363,14 @@ export function buildChatApiErrorPayload(
       title: "Context Budget Exceeded",
       message: "The prepared request exceeded the selected model's context budget.",
     };
+  }
+
+  // Checked before the provider/status branches: a rejected tool call is Orion's
+  // own schema talking, not the provider, and the model can only recover from it
+  // if the reply names the offending argument.
+  const toolCallError = readToolCallError(error);
+  if (toolCallError) {
+    return { code: "invalid_tool_input", ...toolCallError };
   }
 
   const usageLimitError = readUsageLimitError(error);
@@ -352,11 +405,13 @@ export function buildChatApiErrorPayload(
     };
   }
 
-  if (error instanceof Error) {
-    return {
-      title: "API Error",
-      message: error.message || "An unexpected error occurred.",
-    };
+  // Not `instanceof Error`: server-runtime bundling and stream serialization
+  // both produce error-shaped objects that fail the prototype check, and
+  // discarding their message is what turned a one-line schema complaint into
+  // "check the server logs" in session 1786897277027.
+  const message = readErrorMessage(error);
+  if (message) {
+    return { title: "API Error", message };
   }
 
   return {

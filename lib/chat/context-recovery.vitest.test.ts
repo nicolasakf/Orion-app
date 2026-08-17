@@ -1,14 +1,22 @@
 import type { UIMessage } from "ai";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ContextPreflightResult } from "@/lib/agent/context-preflight";
+import { CONTEXT_USAGE_VERSION, type ContextMeasurement } from "@/lib/agent/context-usage";
 import type { CompactionSummary } from "@/lib/chat/chat-storage";
 import { canStartContextRecovery, runContextRecoveryAttempt } from "./context-recovery";
 
-function preflight(tokens: number, status: "ok" | "compact" | "over"): ContextPreflightResult {
+function preflight(tokens: number, status: "ok" | "compact" | "over"): ContextMeasurement {
   return {
-    version: 1,
-    model: {
+    version: CONTEXT_USAGE_VERSION,
+    kind: "estimate",
+    rawInputTokens: tokens,
+    inputTokens: tokens,
+    buckets: { system: 0, messages: tokens, tools: 0, images: 0, framing: 0 },
+    calibrationDelta: 0,
+    confidence: "low",
+    calibrationSampleCount: 0,
+    estimatorVersion: 2,
+    window: {
       modelId: "test-model",
       providerId: "openai",
       contextWindow: 100_000,
@@ -23,15 +31,9 @@ function preflight(tokens: number, status: "ok" | "compact" | "over"): ContextPr
       thresholdTokens: 88_000,
       autoCompactThreshold: 0.92,
     },
-    measurement: {
-      rawInputTokens: tokens,
-      estimatedInputTokens: tokens,
-      confidence: "low",
-      calibrationSampleCount: 0,
-      percentUsed: tokens / 96_000,
-      status,
-      breakdown: { system: 0, messages: tokens, tools: 0, images: 0, framing: 0 },
-    },
+    status,
+    percentUsed: tokens / 96_000,
+    measuredAt: "2026-08-14T00:00:00.000Z",
   };
 }
 
@@ -85,7 +87,7 @@ describe("context recovery", () => {
     const restoreMessages = vi.fn();
     const resend = vi.fn();
     const preflightCall = vi
-      .fn<(messages: UIMessage[]) => Promise<ContextPreflightResult | null>>()
+      .fn<(messages: UIMessage[]) => Promise<ContextMeasurement | null>>()
       .mockResolvedValueOnce(preflight(100_000, "over"))
       .mockResolvedValueOnce(preflight(50_000, "ok"));
 
@@ -107,6 +109,104 @@ describe("context recovery", () => {
     expect(resend).toHaveBeenCalledWith();
   });
 
+  it("does not resend when compaction removed the turn being retried", async () => {
+    const resend = vi.fn();
+    const messages: UIMessage[] = [
+      { id: "user-1", role: "user", parts: [{ type: "text", text: "rework the chart" }] },
+    ];
+    const summary: CompactionSummary = {
+      text: "The chart was reworked.",
+      coversThrough: "user-1",
+      createdAt: new Date(0),
+      model: "test-model",
+      tokensSaved: 0,
+    };
+
+    await expect(
+      runContextRecoveryAttempt({
+        messages,
+        preflight: vi
+          .fn<(messages: UIMessage[]) => Promise<ContextMeasurement | null>>()
+          .mockResolvedValueOnce(preflight(100_000, "over"))
+          .mockResolvedValueOnce(preflight(5_000, "ok")),
+        compact: async () => summary,
+        persistSummary: async () => undefined,
+        applySummary: () => undefined,
+        restoreMessages: () => undefined,
+        // Only the synthetic compaction turns survive — nothing to act on.
+        buildPayload: () =>
+          [
+            { id: "compaction-u-0", role: "user", parts: [{ type: "text", text: "Prior…" }] },
+            { id: "compaction-a-0", role: "assistant", parts: [{ type: "text", text: "Got it." }] },
+          ] as UIMessage[],
+        resend,
+      })
+    ).rejects.toThrow("nothing left to resend");
+    expect(resend).not.toHaveBeenCalled();
+  });
+
+  it("resends when the compacted payload still carries a real user turn", async () => {
+    const resend = vi.fn();
+    const messages: UIMessage[] = [
+      { id: "user-1", role: "user", parts: [{ type: "text", text: "rework the chart" }] },
+    ];
+    const summary: CompactionSummary = {
+      text: "Tool loop so far.",
+      coversThrough: "user-1",
+      createdAt: new Date(0),
+      model: "test-model",
+      tokensSaved: 0,
+      resumeFromMessageId: "user-1",
+    };
+
+    await runContextRecoveryAttempt({
+      messages,
+      preflight: vi
+        .fn<(messages: UIMessage[]) => Promise<ContextMeasurement | null>>()
+        .mockResolvedValueOnce(preflight(100_000, "over"))
+        .mockResolvedValueOnce(preflight(5_000, "ok")),
+      compact: async () => summary,
+      persistSummary: async () => undefined,
+      applySummary: () => undefined,
+      restoreMessages: () => undefined,
+      buildPayload: () =>
+        [
+          { id: "compaction-u-0", role: "user", parts: [{ type: "text", text: "Prior…" }] },
+          { id: "compaction-a-0", role: "assistant", parts: [{ type: "text", text: "Got it." }] },
+          ...messages,
+        ] as UIMessage[],
+      resend,
+    });
+
+    expect(resend).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not resend when context measurement is unavailable", async () => {
+    const resend = vi.fn();
+    const messages: UIMessage[] = [
+      { id: "user-1", role: "user", parts: [{ type: "text", text: "continue" }] },
+    ];
+
+    await expect(
+      runContextRecoveryAttempt({
+        messages,
+        preflight: async () => null,
+        compact: async () => ({
+          text: "Summary",
+          coversThrough: "user-1",
+          createdAt: new Date(0),
+          model: "test-model",
+          tokensSaved: 0,
+        }),
+        persistSummary: async () => undefined,
+        applySummary: () => undefined,
+        restoreMessages: () => undefined,
+        resend,
+      })
+    ).rejects.toThrow("Context measurement is unavailable");
+    expect(resend).not.toHaveBeenCalled();
+  });
+
   it("does not resend when the compacted request remains over budget", async () => {
     const resend = vi.fn();
     const messages: UIMessage[] = [
@@ -124,7 +224,7 @@ describe("context recovery", () => {
       runContextRecoveryAttempt({
         messages,
         preflight: vi
-          .fn<(messages: UIMessage[]) => Promise<ContextPreflightResult | null>>()
+          .fn<(messages: UIMessage[]) => Promise<ContextMeasurement | null>>()
           .mockResolvedValueOnce(preflight(100_000, "over"))
           .mockResolvedValueOnce(preflight(99_000, "over")),
         compact: async () => summary,

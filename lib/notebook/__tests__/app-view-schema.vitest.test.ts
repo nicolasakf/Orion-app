@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  addAllNotebookCellsToAppView,
   addNotebookAppViewReference,
   isNotebookAppViewReferenceInNotebook,
   isNotebookCellInAppView,
   isNotebookOutputInAppView,
+  listNotebookAppViewReferences,
   ORION_UI_MIME_TYPE,
   removeNotebookAppViewReference,
   setNotebookOutputTableMetadata,
@@ -62,6 +64,31 @@ describe("cell-level App View inclusion metadata", () => {
     expect(isNotebookCellInAppView(notebook.cells[0]!)).toBe(false);
     expect(isNotebookOutputInAppView(notebook.cells[1]!, 0)).toBe(false);
     expect(isNotebookOutputInAppView(notebook.cells[1]!, 1)).toBe(true);
+  });
+
+  it("lists markdown cells and code-cell outputs in notebook order", () => {
+    expect(listNotebookAppViewReferences(makeNotebook())).toEqual([
+      { kind: "markdown", cellIndex: 0 },
+      { kind: "output", cellIndex: 1, outputIndex: 0 },
+      { kind: "output", cellIndex: 1, outputIndex: 1 },
+      { kind: "markdown", cellIndex: 2 },
+    ]);
+  });
+
+  it("adds every markdown cell and code-cell output without clearing existing App View metadata", () => {
+    const added = addAllNotebookCellsToAppView(makeNotebook());
+
+    expect(isNotebookCellInAppView(added.cells[0]!)).toBe(true);
+    expect(isNotebookOutputInAppView(added.cells[1]!, 0)).toBe(true);
+    expect(isNotebookOutputInAppView(added.cells[1]!, 1)).toBe(true);
+    expect(isNotebookCellInAppView(added.cells[2]!)).toBe(true);
+    expect(added.cells[1]!.metadata?.orion?.app).toEqual({
+      title: "Chart cell",
+      outputs: {
+        "0": { enabled: true },
+        "1": { enabled: true, title: "Existing output" },
+      },
+    });
   });
 
   it("ignores notebook-level appView schema metadata for inclusion checks", () => {

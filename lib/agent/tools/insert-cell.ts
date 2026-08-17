@@ -21,6 +21,29 @@ import type { EditCheckpointRecorder } from "../edit-checkpoint-recorder";
 import type { OpenDocumentSnapshotProvider } from "../open-document-snapshots";
 import type { InsertCellParams } from "./types";
 
+/** Opening line of a successful insert; {@link parseInsertedRange} reads it back. */
+function formatInsertSummary(count: number, actualIndex: number): string {
+  return `${count} cell${count === 1 ? "" : "s"} inserted successfully at index ${actualIndex}!`;
+}
+
+/**
+ * Recover where an insert landed from its own summary line.
+ *
+ * Lives beside the formatter so the two cannot drift. Callers that chain another
+ * tool onto an insert — `insert_cell` with `execute: true` — need the resulting
+ * indices, and the notebook may have been appended to (`startIndex: -1`).
+ *
+ * @param result - The string {@link InsertCellTool.execute} returned.
+ * @returns The inserted range, or null if the insert did not succeed.
+ */
+export function parseInsertedRange(
+  result: string
+): { startIndex: number; count: number } | null {
+  const match = result.match(/^(\d+) cells? inserted successfully at index (\d+)!/);
+  if (!match) return null;
+  return { count: Number(match[1]), startIndex: Number(match[2]) };
+}
+
 export class InsertCellTool extends BaseTool {
   private notebookManager: NotebookManager;
 
@@ -122,9 +145,7 @@ export class InsertCellTool extends BaseTool {
 
     const infoList: string[] = [];
     const count = cells.length;
-    infoList.push(
-      `${count} cell${count === 1 ? "" : "s"} inserted successfully at index ${actualIndex}!`
-    );
+    infoList.push(formatInsertSummary(count, actualIndex));
     infoList.push(`Notebook now has ${newTotalCells} cells`);
     infoList.push("");
     infoList.push(formatCellSourceDeltaSummary(sourceDeltas));

@@ -407,7 +407,8 @@ describe("useActiveDocumentSync", () => {
 
     path = "renamed.py";
     rerender();
-    expect(result.current.state.status).toBe("renamed");
+    // The editor now follows the new path, so the buffer is merely unsaved.
+    expect(result.current.state.status).toBe("current");
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(ACTIVE_DOCUMENT_POLL_INTERVAL_MS);
@@ -419,6 +420,235 @@ describe("useActiveDocumentSync", () => {
     });
     expect(onReload).toHaveBeenCalledTimes(1);
     expect(onRenamed).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps retrying a reload the editor could not apply yet", async () => {
+    const first = model("active.py", "one");
+    const second = model("active.py", "two");
+    const contents = createContentsManager(first);
+    contents.get.mockResolvedValue(second);
+    let deferred = true;
+    const onReload = vi.fn(async () => (deferred ? "deferred" : undefined));
+    const { result } = renderHook(() =>
+      useActiveDocumentSync({
+        path: "active.py",
+        contentsManager: contents.manager,
+        isDirty: () => false,
+        onReload,
+      }),
+    );
+    act(() => result.current.recordLoadedModel(first));
+
+    await act(async () => {
+      contents.emit({ type: "save", oldValue: null, newValue: second });
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(onReload).toHaveBeenCalledTimes(1);
+    expect(result.current.state.status).toBe("current");
+
+    // The deferred attempt must not advance the baseline, so polling retries.
+    deferred = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ACTIVE_DOCUMENT_POLL_INTERVAL_MS);
+    });
+    expect(onReload).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ACTIVE_DOCUMENT_POLL_INTERVAL_MS);
+    });
+    expect(onReload).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a conflict visible when an explicit reload has to wait", async () => {
+    const first = model("active.py", "one");
+    const second = model("active.py", "two");
+    const contents = createContentsManager(first);
+    const onReload = vi.fn(async () => "deferred" as const);
+    const { result } = renderHook(() =>
+      useActiveDocumentSync({
+        path: "active.py",
+        contentsManager: contents.manager,
+        isDirty: () => true,
+        onReload,
+      }),
+    );
+    act(() => result.current.recordLoadedModel(first));
+
+    await act(async () => {
+      contents.emit({ type: "save", oldValue: null, newValue: second });
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(result.current.state.status).toBe("conflicted");
+
+    await act(async () => {
+      await result.current.reloadDiskVersion();
+    });
+    expect(result.current.state.status).toBe("conflicted");
+  });
+
+  it("applies a change that lands while a reload is running", async () => {
+    const first = model("active.py", "one");
+    const second = model("active.py", "two");
+    const third = model("active.py", "three");
+    const contents = createContentsManager(first);
+    let releaseFirstReload: (() => void) | null = null;
+    const onReload = vi.fn(async () => {
+      if (onReload.mock.calls.length > 1) return;
+      await new Promise<void>((resolve) => {
+        releaseFirstReload = resolve;
+      });
+    });
+    const { result } = renderHook(() =>
+      useActiveDocumentSync({
+        path: "active.py",
+        contentsManager: contents.manager,
+        isDirty: () => false,
+        onReload,
+      }),
+    );
+    act(() => result.current.recordLoadedModel(first));
+
+    await act(async () => {
+      contents.emit({ type: "save", oldValue: null, newValue: second });
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(onReload).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      contents.emit({ type: "save", oldValue: null, newValue: third });
+      await vi.advanceTimersByTimeAsync(100);
+      releaseFirstReload?.();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(onReload).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the revision the editor actually loaded as the baseline", async () => {
+    const first = model("active.py", "one");
+    const trigger = model("active.py", "two");
+    const onDisk = model("active.py", "three");
+    const contents = createContentsManager(first);
+    contents.get.mockResolvedValue(onDisk);
+    let recordLoaded: ((model: Partial<Contents.IModel>) => void) | null = null;
+    const onReload = vi.fn(async () => {
+      recordLoaded?.(onDisk);
+    });
+    const { result } = renderHook(() =>
+      useActiveDocumentSync({
+        path: "active.py",
+        contentsManager: contents.manager,
+        isDirty: () => false,
+        onReload,
+      }),
+    );
+    act(() => result.current.recordLoadedModel(first));
+    recordLoaded = result.current.recordLoadedModel;
+
+    await act(async () => {
+      contents.emit({ type: "save", oldValue: null, newValue: trigger });
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(onReload).toHaveBeenCalledTimes(1);
+
+    // The baseline is the loaded revision, so polling must not reload again.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ACTIVE_DOCUMENT_POLL_INTERVAL_MS);
+    });
+    expect(onReload).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a polled deletion only once", async () => {
+    const first = model("active.py", "one");
+    const contents = createContentsManager(first);
+    const notFound = Object.assign(new Error("missing"), {
+      response: { status: 404 },
+    });
+    contents.get.mockRejectedValue(notFound);
+    const onDeleted = vi.fn();
+    const { result } = renderHook(() =>
+      useActiveDocumentSync({
+        path: "active.py",
+        contentsManager: contents.manager,
+        isDirty: () => true,
+        onReload: vi.fn().mockResolvedValue(undefined),
+        onDeleted,
+      }),
+    );
+    act(() => result.current.recordLoadedModel(first));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ACTIVE_DOCUMENT_POLL_INTERVAL_MS * 3);
+    });
+
+    expect(onDeleted).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps hash polling after a transient metadata failure", async () => {
+    const first = model("active.py", "one", "abc");
+    const contents = createContentsManager(first);
+    const serverError = Object.assign(new Error("boom"), {
+      response: { status: 500 },
+    });
+    contents.get.mockRejectedValueOnce(serverError).mockResolvedValue(first);
+    const { result } = renderHook(() =>
+      useActiveDocumentSync({
+        path: "active.py",
+        contentsManager: contents.manager,
+        isDirty: () => false,
+        onReload: vi.fn().mockResolvedValue(undefined),
+      }),
+    );
+    act(() => result.current.recordLoadedModel(first));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ACTIVE_DOCUMENT_POLL_INTERVAL_MS);
+    });
+    contents.get.mockClear();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ACTIVE_DOCUMENT_POLL_INTERVAL_MS);
+    });
+
+    expect(contents.get).toHaveBeenCalledWith("active.py", {
+      content: false,
+      hash: true,
+    });
+  });
+
+  it("keeps polling after a rename the app never followed", async () => {
+    const first = model("active.py", "one");
+    const contents = createContentsManager(first);
+    const onReload = vi.fn().mockResolvedValue(undefined);
+    let path = "active.py";
+    const { result, rerender } = renderHook(() =>
+      useActiveDocumentSync({
+        path,
+        contentsManager: contents.manager,
+        isDirty: () => false,
+        onReload,
+      }),
+    );
+    act(() => result.current.recordLoadedModel(first));
+    act(() => {
+      contents.emit({
+        type: "rename",
+        oldValue: first,
+        newValue: model("renamed.py", "two"),
+      });
+    });
+
+    // The app opened an unrelated file instead of following the rename.
+    path = "other.py";
+    contents.get.mockResolvedValue(model("other.py", "two"));
+    rerender();
+    act(() => result.current.recordLoadedModel(model("other.py", "one")));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ACTIVE_DOCUMENT_POLL_INTERVAL_MS);
+    });
+
+    expect(onReload).toHaveBeenCalledTimes(1);
   });
 
   it("turns an edit made during an automatic reload into a conflict", async () => {

@@ -14,6 +14,7 @@ import {
   type RecordEditCheckpointTargetRequest,
   type UpdateEditCheckpointStatusRequest,
 } from "@/lib/agent/edit-checkpoints";
+import { UNCALIBRATED_CORRECTION_RATIO } from "@/lib/agent/token-budget";
 import {
   getChatStorageDegradedReason,
   isChatStorageDegraded,
@@ -1340,11 +1341,20 @@ export interface ContextCalibrationSnapshot {
   correctionRatio: number;
 }
 
-/** Reads the conservative correction factor for one provider/model/mode tuple. */
+/**
+ * Reads the conservative correction factor for one provider/model/mode tuple.
+ *
+ * Conservative means `max(ewma, p90)` — a spiky model should be budgeted against
+ * its worse turns. It deliberately does *not* floor the result at 1: a model the
+ * estimator systematically overshoots must be correctable downward, or the pill
+ * reports a number the provider never charges. The caller clamps to a sane band.
+ */
 export async function getContextCalibration(
   key: ContextCalibrationKey
 ): Promise<ContextCalibrationSnapshot> {
-  if (usingFallbackStorage()) return { sampleCount: 0, correctionRatio: 1.15 };
+  if (usingFallbackStorage()) {
+    return { sampleCount: 0, correctionRatio: UNCALIBRATED_CORRECTION_RATIO };
+  }
   const db = await getChatDatabase();
   const row = db.prepare(
     `select sample_count as sampleCount, ewma_ratio as ewmaRatio,
@@ -1355,7 +1365,7 @@ export async function getContextCalibration(
   ).get(key.providerId, key.modelId, key.interactionMode, key.estimatorVersion) as
     | { sampleCount: number; ewmaRatio: number; rollingRatiosJson: string }
     | undefined;
-  if (!row) return { sampleCount: 0, correctionRatio: 1.15 };
+  if (!row) return { sampleCount: 0, correctionRatio: UNCALIBRATED_CORRECTION_RATIO };
   let ratios: number[] = [];
   try {
     const parsed = JSON.parse(row.rollingRatiosJson) as unknown;
@@ -1368,12 +1378,14 @@ export async function getContextCalibration(
     ratios = [];
   }
   const sorted = [...ratios].sort((left, right) => left - right);
+  // With no usable rolling samples the EWMA is the only signal; a literal 1 here
+  // would silently re-introduce the floor this function no longer applies.
   const p90 = sorted.length === 0
-    ? 1
+    ? row.ewmaRatio
     : sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * 0.9) - 1)];
   return {
     sampleCount: row.sampleCount,
-    correctionRatio: Math.max(1, row.ewmaRatio, p90),
+    correctionRatio: Math.max(row.ewmaRatio, p90),
   };
 }
 

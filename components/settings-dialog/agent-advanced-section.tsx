@@ -63,6 +63,7 @@ export function AgentAdvancedSection({ section }: { section: AgentSettingsSectio
                 <SettingsNumberField
                   id="agent-text-char-budget"
                   label="Text character budget"
+                  description="Maximum characters Orion returns from text tool outputs (read, grep, bash, etc.). Larger results are truncated or replaced with a short summary."
                   value={agent.toolOutput.textCharBudget}
                   min={1}
                   onChange={(value) =>
@@ -72,6 +73,7 @@ export function AgentAdvancedSection({ section }: { section: AgentSettingsSectio
                 <SettingsNumberField
                   id="agent-image-base64-char-budget"
                   label="Image base64 character budget"
+                  description="Maximum base64 characters for image tool outputs (plots, previews). Images above this limit are omitted from context because they use many tokens."
                   value={agent.toolOutput.imageBase64CharBudget}
                   min={1}
                   onChange={(value) =>

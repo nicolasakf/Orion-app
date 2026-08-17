@@ -10,6 +10,7 @@ import type { UIMessage } from "ai";
 import { callCompactionApi } from "@/lib/chat/compaction-client";
 import type { CompactionSummary } from "@/lib/chat/chat-storage";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
+import type { AgentContextSettings } from "@/lib/settings/schema";
 import { COMPACTION_RETENTION_TURNS } from "./token-budget";
 
 const COMPACTION_TOOL_INPUT_MAX_CHARS = 6_000;
@@ -131,6 +132,8 @@ export async function compactConversation(
     previousSummary?: CompactionSummary;
     model: string;
     provider: ProviderId;
+    /** Forwarded so the server fits summary chunks against the user's threshold. */
+    contextSettings?: AgentContextSettings;
   }
 ): Promise<CompactionResult> {
   const retentionTurns = opts.retentionTurns ?? COMPACTION_RETENTION_TURNS;
@@ -153,12 +156,24 @@ export async function compactConversation(
     throw new Error("No uncovered conversation history is available to compact.");
   }
 
+  // When the retention window came up empty the summary swallows the live user
+  // instruction along with the tool loop, leaving the retry with nothing to act
+  // on. Record it so the wire payload can re-issue it after the summary. The
+  // live instruction is always the last user message, which is only the same as
+  // `boundaryIdx` when retention is a single turn.
+  const liveUserIdx = findRetentionBoundary(messages, 1);
+  const liveUserMessage =
+    messages[liveUserIdx]?.role === "user" ? messages[liveUserIdx] : undefined;
+  const resumeFromMessageId =
+    older.length === 0 && liveUserMessage ? liveUserMessage.id : undefined;
+
   const { summaryText, coversThrough: responseCoversThrough } = await callCompactionApi(
     preparedMessages,
     opts.previousSummary?.text,
     opts.model,
     opts.provider,
-    opts.chatId
+    opts.chatId,
+    opts.contextSettings
   );
 
   const summary: CompactionSummary = {
@@ -168,6 +183,7 @@ export async function compactConversation(
     model: opts.model,
     // The caller replaces this with before/after server preflight measurements.
     tokensSaved: 0,
+    ...(resumeFromMessageId ? { resumeFromMessageId } : {}),
   };
 
   return { summary };

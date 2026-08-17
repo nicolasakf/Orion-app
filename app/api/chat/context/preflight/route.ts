@@ -1,12 +1,12 @@
 import { POST as handleChatPost } from "@/app/api/chat/route";
-import { ContextPreflightRequestSchema } from "@/lib/agent/context-preflight";
+import { ContextMeasurementRequestSchema } from "@/lib/agent/context-usage";
 
 /** Measures the fully prepared chat prompt without invoking a model. */
 export async function POST(req: Request): Promise<Response> {
-  const parsed = ContextPreflightRequestSchema.safeParse(await req.json().catch(() => null));
+  const parsed = ContextMeasurementRequestSchema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
     return Response.json(
-      { title: "Invalid Request", message: "Context preflight request is invalid." },
+      { title: "Invalid Request", message: "Context measurement request is invalid." },
       { status: 400 }
     );
   }

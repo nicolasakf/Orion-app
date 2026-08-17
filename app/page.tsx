@@ -326,6 +326,7 @@ interface MobileLayoutProps {
   onIsRunningChange: React.Dispatch<React.SetStateAction<boolean>>;
   onNotebookChange: React.Dispatch<React.SetStateAction<NotebookType | null>>;
   onUnsavedChangesChange: React.Dispatch<React.SetStateAction<boolean>>;
+  onDocumentConflictChange: (hasConflict: boolean) => void;
   openDocumentSnapshots: OpenDocumentSnapshotProvider;
   onTextSnapshotGetterChange: (
     getter: OpenDocumentSnapshotProvider["getTextSnapshot"] | null,
@@ -394,6 +395,7 @@ function MobileLayout({
   onIsRunningChange,
   onNotebookChange,
   onUnsavedChangesChange,
+  onDocumentConflictChange,
   openDocumentSnapshots,
   onTextSnapshotGetterChange,
   onNotebookSnapshotGetterChange,
@@ -529,6 +531,7 @@ function MobileLayout({
               onIsRunningChange={onIsRunningChange}
               onNotebookChange={onNotebookChange}
               onUnsavedChangesChange={onUnsavedChangesChange}
+              onDocumentConflictChange={onDocumentConflictChange}
               onTextSnapshotGetterChange={onTextSnapshotGetterChange}
               onNotebookSnapshotGetterChange={onNotebookSnapshotGetterChange}
               onTextSaveHandlerChange={onTextSaveHandlerChange}
@@ -670,6 +673,8 @@ export default function Page() {
   );
   // Unsaved changes and reload dialog state
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  /** True while the open document has an unresolved disk/editor conflict. */
+  const [hasDocumentConflict, setHasDocumentConflict] = useState(false);
   const [unsavedDialogIntent, setUnsavedDialogIntent] =
     useState<UnsavedDialogIntent | null>(null);
   const [fileNotFoundDialogPath, setFileNotFoundDialogPath] = useState<
@@ -708,7 +713,10 @@ export default function Page() {
     if (
       !shouldAutosave ||
       !currentFile.path ||
-      !hasUnsavedChanges
+      !hasUnsavedChanges ||
+      // The file also changed on disk. Autosaving here would silently discard
+      // that version, so wait for the user to resolve the conflict banner.
+      hasDocumentConflict
     ) {
       return;
     }
@@ -746,6 +754,7 @@ export default function Page() {
     currentFile,
     effectiveSettings.editor.autosaveEnabled,
     effectiveSettings.editor.autosaveIntervalMs,
+    hasDocumentConflict,
     hasUnsavedChanges,
     isBusinessExperience,
     openDocumentSnapshots,
@@ -2931,6 +2940,7 @@ export default function Page() {
                 onIsRunningChange={setIsRunning}
                 onNotebookChange={setNotebook}
                 onUnsavedChangesChange={setHasUnsavedChanges}
+                onDocumentConflictChange={setHasDocumentConflict}
                 openDocumentSnapshots={openDocumentSnapshots}
                 onTextSnapshotGetterChange={handleTextSnapshotGetterChange}
                 onNotebookSnapshotGetterChange={
@@ -3061,6 +3071,7 @@ export default function Page() {
                   onIsRunningChange={setIsRunning}
                   onNotebookChange={setNotebook}
                   onUnsavedChangesChange={setHasUnsavedChanges}
+                  onDocumentConflictChange={setHasDocumentConflict}
                   onTextSnapshotGetterChange={handleTextSnapshotGetterChange}
                   onNotebookSnapshotGetterChange={
                     handleNotebookSnapshotGetterChange
@@ -3326,6 +3337,7 @@ export default function Page() {
                             onIsRunningChange={setIsRunning}
                             onNotebookChange={setNotebook}
                             onUnsavedChangesChange={setHasUnsavedChanges}
+                            onDocumentConflictChange={setHasDocumentConflict}
                             onTextSnapshotGetterChange={
                               handleTextSnapshotGetterChange
                             }

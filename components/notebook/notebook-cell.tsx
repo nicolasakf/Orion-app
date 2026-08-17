@@ -2165,6 +2165,7 @@ function NotebookCellComponent({
         className="relative isolate notebook-cell"
         data-orion-cell-index={cellIndex}
         data-orion-output-count={cell.outputs?.length ?? 0}
+        data-notebook-export-remove
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >

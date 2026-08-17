@@ -28,6 +28,8 @@ export interface EditorRuntimeProps {
   onIsRunningChange?: React.Dispatch<React.SetStateAction<boolean>>;
   onNotebookChange?: (notebook: NotebookType | null) => void;
   onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
+  /** Reports an unresolved disk/editor divergence so autosave can pause. */
+  onDocumentConflictChange?: (hasConflict: boolean) => void;
   onFileLoadError?: (failedFilepath: string, error?: unknown) => boolean | void;
   onNotebookSnapshotGetterChange?: (
     getter: OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null,

@@ -80,6 +80,11 @@ describe("compactConversation", () => {
       retentionTurns: 1,
       model: "gpt-test",
       provider: "openai",
+      contextSettings: {
+        compactionAutoThreshold: 0.8,
+        compactionRetentionTurns: 4,
+        optimizerRetentionTurns: 6,
+      },
     });
 
     expect(vi.mocked(callCompactionApi)).toHaveBeenLastCalledWith(
@@ -90,11 +95,53 @@ describe("compactConversation", () => {
       "existing summary",
       "gpt-test",
       "openai",
-      "chat-1"
+      "chat-1",
+      // Forwarded so the server fits summary chunks against the user's own
+      // threshold rather than silently falling back to the default.
+      expect.objectContaining({ compactionAutoThreshold: 0.8 })
     );
     const sentMessages = vi.mocked(callCompactionApi).mock.calls.at(-1)?.[0] ?? [];
     expect(sentMessages.map((message) => message.id)).toEqual(["u2", "a2"]);
     expect(result.summary.coversThrough).toBe("a2");
+  });
+
+  it("records a resume id when the retention window swallows the live turn", async () => {
+    vi.mocked(callCompactionApi).mockClear();
+    // A single user turn plus its agent tool loop — nothing older to summarize.
+    const messages = [
+      textMessage("u1", "user", "remove the second chart"),
+      textMessage("a1", "assistant", "reading the notebook"),
+      textMessage("a2", "assistant", "rewriting cell 9"),
+    ];
+
+    const result = await compactConversation(messages, {
+      chatId: "chat-1",
+      retentionTurns: 1,
+      model: "gpt-test",
+      provider: "openai",
+    });
+
+    expect(result.summary.resumeFromMessageId).toBe("u1");
+    expect(result.summary.coversThrough).toBe("a2");
+  });
+
+  it("leaves the resume id unset when older history covers the summary", async () => {
+    vi.mocked(callCompactionApi).mockClear();
+    const messages = [
+      textMessage("u1", "user", "first"),
+      textMessage("a1", "assistant", "first answer"),
+      textMessage("u2", "user", "second"),
+      textMessage("a2", "assistant", "second answer"),
+    ];
+
+    const result = await compactConversation(messages, {
+      chatId: "chat-1",
+      retentionTurns: 1,
+      model: "gpt-test",
+      provider: "openai",
+    });
+
+    expect(result.summary.resumeFromMessageId).toBeUndefined();
   });
 
   it("reuses the prior summary when no newly compactable history exists", async () => {

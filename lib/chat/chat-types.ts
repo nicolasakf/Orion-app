@@ -36,6 +36,12 @@ export interface CompactionSummary {
   model: string;
   /** Approximate tokens saved vs. replaying the full history (informational). */
   tokensSaved: number;
+  /**
+   * Set when the summary absorbed the user turn that is still being worked on
+   * (an overflow inside a single agent turn). Wire payloads re-issue this
+   * message after the summary so the model still has an instruction to act on.
+   */
+  resumeFromMessageId?: string;
 }
 
 export type ChatForkMode = "edit_resend" | "fork_from_message";
@@ -77,6 +83,7 @@ export const CompactionSummaryWireSchema = z.object({
   createdAt: DateStringSchema,
   model: z.string(),
   tokensSaved: z.number(),
+  resumeFromMessageId: z.string().optional(),
 });
 
 export const ChatForkMetadataWireSchema = z.object({

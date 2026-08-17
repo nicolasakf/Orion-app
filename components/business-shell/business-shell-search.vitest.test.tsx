@@ -144,6 +144,7 @@ function renderBusinessShell(onPanelResizeDragging = vi.fn()) {
       onIsRunningChange={noop}
       onNotebookChange={noop}
       onUnsavedChangesChange={noop}
+      onDocumentConflictChange={noop}
       onTextSnapshotGetterChange={noop}
       onNotebookSnapshotGetterChange={noop}
       onTextSaveHandlerChange={noop}

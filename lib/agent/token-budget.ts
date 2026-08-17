@@ -4,6 +4,11 @@
 
 import type { UIMessage } from "ai";
 
+// Type-only, so the cycle with `context-usage.ts` (which imports the compaction
+// threshold from here) is erased at compile time rather than existing at runtime.
+import type { AppendedTokenEstimate, DraftTokenEstimate } from "./context-usage";
+import { summarizeRasterPayloads } from "./raster-payloads";
+
 // ────────────────────────────────────────────────────────────────────────────
 // Constants
 // ────────────────────────────────────────────────────────────────────────────
@@ -23,34 +28,80 @@ export const OPTIMIZER_RETENTION_STEPS = 6;
 /** Number of recent user-turn pairs kept verbatim after a compaction. */
 export const COMPACTION_RETENTION_TURNS = 4;
 
-/** Flat token cost per image part (conservative estimate for typical plots). */
-const FIXED_IMAGE_TOKEN_COST = 1500;
+/** Flat token cost per image part carrying no inline bytes (e.g. a file reference). */
+export const FIXED_IMAGE_TOKEN_COST = 1500;
 
 /** Default chars-per-token ratio before calibration data is available. */
-const DEFAULT_CHARS_PER_TOKEN = 3.7;
+export const DEFAULT_CHARS_PER_TOKEN = 3.7;
+
+/**
+ * Base64 tokenizes far worse than prose — measured payloads land near 1 token
+ * per 1.8 characters, roughly double what the prose ratio predicts. Pricing
+ * inline raster bytes at the prose ratio is what let a single 219 KB plot slip
+ * past the pre-send budget check.
+ */
+export const BASE64_CHARS_PER_TOKEN = 1.8;
+
+/**
+ * Correction applied to a raw estimate until enough real provider counts have
+ * been observed to learn a per-model ratio. Lives here rather than beside the
+ * measurement code so the storage layer can share it without pulling in
+ * `server-only`.
+ */
+export const UNCALIBRATED_CORRECTION_RATIO = 1.15;
+
+/**
+ * Bounds on the learned calibration ratio.
+ *
+ * The lower bound is deliberately below 1: a systematic *over*estimate is as real
+ * a failure as an underestimate, and flooring the ratio at 1 — as this did until
+ * estimator version 2 — made it uncorrectable.
+ */
+export const CORRECTION_RATIO_MIN = 0.5;
+export const CORRECTION_RATIO_MAX = 3;
+
+// ────────────────────────────────────────────────────────────────────────────
+// Raster pricing
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface RasterPriceResult {
+  /** Raster entries found, including entries whose bytes were already dropped. */
+  entries: number;
+  /** Base64 characters still carried by those entries. */
+  base64Chars: number;
+  /** Token cost of the bytes still present. */
+  tokens: number;
+}
+
+/**
+ * Price the raster payloads carried inside one tool result.
+ *
+ * This is the single pricing function for raster bytes. The client delta
+ * estimator, the server prepared-prompt measurement, and any future consumer all
+ * call it so the payload shapes enumerated in `raster-payloads.ts` cannot drift
+ * apart — the exact drift that let a 219 KB plot be priced two different ways on
+ * the two sides of the wire.
+ *
+ * @param output - A tool result payload of unknown shape.
+ */
+export function priceRasterPayloads(output: unknown): RasterPriceResult {
+  const summary = summarizeRasterPayloads(output);
+  return {
+    entries: summary.count,
+    base64Chars: summary.base64Chars,
+    tokens: priceBase64Chars(summary.base64Chars),
+  };
+}
+
+/** Token cost of raw base64 characters, which tokenize far worse than prose. */
+export function priceBase64Chars(chars: number): number {
+  if (chars <= 0) return 0;
+  return Math.ceil(chars / BASE64_CHARS_PER_TOKEN);
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Types
 // ────────────────────────────────────────────────────────────────────────────
-
-export interface TokenEstimate {
-  /** Total estimated input tokens for the wire payload. */
-  totalTokens: number;
-  /** Usable input budget after output headroom is reserved. */
-  cap: number;
-  /** 0..1+ (may exceed 1.0 when over budget). */
-  percentUsed: number;
-  contextWindow: number;
-  outputReserve: number;
-  thresholdTokens: number;
-  breakdown: {
-    system: number;
-    messages: number;
-    tools: number;
-    images: number;
-    framing: number;
-  };
-}
 
 /** Clamps a number to an inclusive range. */
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -81,7 +132,18 @@ export function calculateContextBudget(options: {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// Estimation
+// Delta estimation
+//
+// These functions price *additions* to a conversation that has already been
+// measured server-side against its real prepared prompt. They deliberately take
+// no system prompt, no tool set and no context window: they cannot know any of
+// those, and the anchoring measurement already accounts for all three.
+//
+// Widening either of them into a whole-conversation estimator would recreate the
+// two-estimator split this module was refactored to remove — where the client
+// guessed the system prompt at a fixed 3000 characters, ignored tool schemas
+// entirely, and produced a number that jumped whenever the server's real
+// measurement arrived.
 // ────────────────────────────────────────────────────────────────────────────
 
 function countTextChars(value: unknown): number {
@@ -96,6 +158,11 @@ function countTextChars(value: unknown): number {
   return 0;
 }
 
+/**
+ * Count attached image parts, which carry no inline bytes we can measure and so
+ * are priced at a flat rate. Raster payloads inside tool results are measured
+ * from their actual base64 length instead, via `priceRasterPayloads`.
+ */
 function countImageParts(parts: unknown[]): number {
   let count = 0;
   for (const part of parts) {
@@ -107,56 +174,61 @@ function countImageParts(parts: unknown[]): number {
       p.mediaType.startsWith("image/")
     ) {
       count += 1;
-      continue;
-    }
-    // DynamicToolUIPart or ToolUIPart with image output
-    if (
-      typeof p.type === "string" &&
-      p.type.startsWith("tool-") &&
-      p.state === "output-available"
-    ) {
-      const output = p.output;
-      if (
-        typeof output === "object" &&
-        output !== null &&
-        Array.isArray((output as Record<string, unknown>).images)
-      ) {
-        count += ((output as { images: unknown[] }).images ?? []).length;
-      }
     }
   }
   return count;
 }
 
 /**
- * Estimate the number of input tokens for the given messages + system prompt.
+ * Price the composer draft the user has typed since the last server measurement.
  *
- * @param messages - Wire-ready UIMessage array (after optimizer pass).
- * @param systemPrompt - Agent system prompt string.
- * @param opts.contextWindow - Model's context window (used to compute cap).
- * @param opts.calibrationRatio - Override chars-per-token (default: 3.7).
+ * Delta-only by design — see the section note above.
+ *
+ * @param draft.text - Raw composer contents, not yet sent.
+ * @param draft.imageAttachmentCount - Pending composer image attachments.
+ * @param draft.referenceBlockChars - Length of the reference block the server will
+ *   inline for the attached references.
+ * @param opts.charsPerToken - Overrides the default prose ratio.
  */
-export function estimateMessageTokens(
+export function estimateDraftTokens(
+  draft: {
+    text: string;
+    imageAttachmentCount?: number;
+    referenceBlockChars?: number;
+  },
+  opts?: { charsPerToken?: number }
+): DraftTokenEstimate {
+  const ratio = opts?.charsPerToken ?? DEFAULT_CHARS_PER_TOKEN;
+  const textTokens = Math.ceil(draft.text.length / ratio);
+  const referenceTokens = Math.ceil((draft.referenceBlockChars ?? 0) / ratio);
+  const attachmentTokens = (draft.imageAttachmentCount ?? 0) * FIXED_IMAGE_TOKEN_COST;
+
+  return {
+    tokens: textTokens + referenceTokens + attachmentTokens,
+    textTokens,
+    referenceTokens,
+    attachmentTokens,
+  };
+}
+
+/**
+ * Price messages that arrived after the anchoring measurement was taken —
+ * typically the single assistant reply of the turn that just finished.
+ *
+ * Delta-only by design — see the section note above.
+ *
+ * @param messages - Messages appended since the anchor, in wire form.
+ * @param opts.charsPerToken - Overrides the default prose ratio.
+ */
+export function estimateAppendedTokens(
   messages: UIMessage[],
-  systemPrompt: string,
-  opts: {
-    contextWindow: number;
-    maxOutputTokens?: number | null;
-    autoCompactThreshold?: number;
-    calibrationRatio?: number;
-    additionalImageCount?: number;
-  }
-): TokenEstimate {
-  const ratio = opts.calibrationRatio ?? DEFAULT_CHARS_PER_TOKEN;
-  const budget = calculateContextBudget(opts);
-  const cap = budget.usableInputTokens;
+  opts?: { charsPerToken?: number }
+): AppendedTokenEstimate {
+  const ratio = opts?.charsPerToken ?? DEFAULT_CHARS_PER_TOKEN;
 
-  // System prompt
-  const systemChars = systemPrompt.length;
-  const systemTokens = Math.ceil(systemChars / ratio);
-
-  let msgTextChars = 0;
-  let toolOutputChars = 0;
+  let textChars = 0;
+  let toolChars = 0;
+  let rasterBase64Chars = 0;
   let imageCount = 0;
 
   for (const msg of messages) {
@@ -166,40 +238,30 @@ export function estimateMessageTokens(
     for (const part of msg.parts) {
       const p = part as Record<string, unknown>;
       if (p.type === "text" && typeof p.text === "string") {
-        msgTextChars += (p.text as string).length;
-      } else if (
-        typeof p.type === "string" &&
-        p.type.startsWith("tool-")
-      ) {
+        textChars += p.text.length;
+      } else if (typeof p.type === "string" && p.type.startsWith("tool-")) {
         if (p.state === "output-available") {
-          toolOutputChars += countTextChars(p.output);
+          // Inline raster bytes are billed at the base64 ratio below, so keep
+          // them out of the prose-rate tool total rather than counting twice.
+          const raster = priceRasterPayloads(p.output);
+          rasterBase64Chars += raster.base64Chars;
+          toolChars += Math.max(0, countTextChars(p.output) - raster.base64Chars);
         } else if (p.state === "input-available" || p.state === "input-streaming") {
-          // Count tool input arguments
-          toolOutputChars += countTextChars(p.input);
+          toolChars += countTextChars(p.input);
         }
       }
     }
   }
 
-  const imageTokens = (imageCount + (opts.additionalImageCount ?? 0)) * FIXED_IMAGE_TOKEN_COST;
-  const msgTokens = Math.ceil(msgTextChars / ratio);
-  const toolTokens = Math.ceil(toolOutputChars / ratio);
-
-  const totalTokens = systemTokens + msgTokens + toolTokens + imageTokens;
+  const textTokens = Math.ceil(textChars / ratio);
+  const toolTokens = Math.ceil(toolChars / ratio);
+  const imageTokens =
+    imageCount * FIXED_IMAGE_TOKEN_COST + priceBase64Chars(rasterBase64Chars);
 
   return {
-    totalTokens,
-    cap,
-    percentUsed: cap > 0 ? totalTokens / cap : 1,
-    contextWindow: opts.contextWindow,
-    outputReserve: budget.outputReserve,
-    thresholdTokens: budget.thresholdTokens,
-    breakdown: {
-      system: systemTokens,
-      messages: msgTokens,
-      tools: toolTokens,
-      images: imageTokens,
-      framing: 0,
-    },
+    tokens: textTokens + toolTokens + imageTokens,
+    textTokens,
+    toolTokens,
+    imageTokens,
   };
 }

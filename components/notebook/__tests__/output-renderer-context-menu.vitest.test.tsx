@@ -68,6 +68,27 @@ describe("OutputRenderer context menu", () => {
     expect(frame).toHaveStyle({ contain: "paint" });
   });
 
+  it("lets the full-screen output boundary keep its intrinsic width", async () => {
+    render(
+      <OutputRenderer
+        output={{
+          output_type: OutputType.DISPLAY_DATA,
+          data: { "text/plain": ["intrinsic output"] },
+          metadata: {},
+        }}
+        onMentionOutput={vi.fn()}
+      />,
+    );
+
+    fireEvent.contextMenu(screen.getByText("intrinsic output"));
+    fireEvent.click(await screen.findByText("Open in full screen"));
+
+    const dialog = screen.getByRole("dialog");
+    const frame = dialog.querySelector<HTMLElement>("[data-orion-output-frame]");
+    expect(frame).toHaveClass("w-max", "max-w-none");
+    expect(frame).not.toHaveClass("max-w-full");
+  });
+
   it("switches versioned output snapshots through a hover/focus picker", async () => {
     render(
       <OutputRenderer

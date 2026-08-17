@@ -106,6 +106,10 @@ export interface InsertCellSpec {
 export interface InsertCellParams {
   cells: InsertCellSpec[];
   startIndex: number;
+  /** Run the inserted code cells in the same tool call. Handled by the dispatcher. */
+  execute?: boolean;
+  /** Per-cell execution timeout used when `execute` is true. */
+  timeoutSeconds?: number;
 }
 
 /** Parameters for DeleteCellTool */

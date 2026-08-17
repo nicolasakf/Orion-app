@@ -81,6 +81,7 @@ import {
   dispatchActiveDocumentDeleted,
   dispatchActiveDocumentRenamed,
   useActiveDocumentSync,
+  type ActiveDocumentReloadOutcome,
   type ActiveDocumentSyncController,
 } from "@/hooks/use-active-document-sync";
 import { runCells as runCellsBatch } from "@/lib/notebook/cell-executor";
@@ -114,12 +115,14 @@ import {
   type NotebookExportEventDetail,
   type NotebookExportFormat,
 } from "@/lib/notebook/notebook-export";
+import { titleFromNotebookFilename } from "@/lib/notebook/notebook-title";
 import {
   NOTEBOOK_PUBLISH_EVENT_NAME,
   publishNotebookToCloud,
   type PublishNotebookResponse,
 } from "@/lib/cloud/publishing";
 import {
+  addAllNotebookCellsToAppView,
   addNotebookAppViewReference,
   isNotebookAppViewReferenceInNotebook,
   NOTEBOOK_APP_VIEW_SCHEMA_VERSION,
@@ -193,6 +196,8 @@ interface NotebookEditorProps {
   onIsRunningChange?: React.Dispatch<React.SetStateAction<boolean>>;
   onNotebookChange?: (notebook: NotebookType | null) => void;
   onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
+  /** Reports an unresolved disk/editor divergence so autosave can pause. */
+  onDocumentConflictChange?: (hasConflict: boolean) => void;
   onFileLoadError?: (failedFilepath: string, error?: unknown) => boolean | void;
   onNotebookSnapshotGetterChange?: (
     getter: OpenDocumentSnapshotProvider["getNotebookSnapshot"] | null,
@@ -227,6 +232,7 @@ const NOTEBOOK_SHORTCUT_GROUPS = [
       { keys: "Alt + A", description: "Run all code cells above" },
       { keys: "Alt + B", description: "Run selected code cell and below" },
       { keys: "Alt + Up / Down", description: "Move selected cell" },
+      { keys: "Alt + H", description: "Hide or show selected cells" },
       { keys: "M", description: "Change selected cells to Markdown" },
       { keys: "Y", description: "Change selected cells to Code" },
       { keys: "I", description: "Mention the selected cell in chat" },
@@ -434,6 +440,7 @@ export function NotebookEditor({
   onIsRunningChange: parentSetIsRunning,
   onNotebookChange,
   onUnsavedChangesChange,
+  onDocumentConflictChange,
   onFileLoadError,
   onNotebookSnapshotGetterChange,
   onNotebookSaveHandlerChange,
@@ -1278,6 +1285,34 @@ export function NotebookEditor({
   }, []);
 
   /**
+   * Promotes cell text that Monaco already holds but whose debounced change
+   * notification has not fired yet, so dirty checks never miss recent typing.
+   */
+  const promoteUnflushedCellEdits = useCallback((): void => {
+    const currentNotebook = notebookRef.current;
+    if (!currentNotebook) return;
+
+    currentNotebook.cells.forEach((cell) => {
+      const cellId = getCellId(cell);
+      if (!cellId || modifiedCellsRef.current.has(cellId)) return;
+      const cellRef = cellComponentRefs.current.get(cellId);
+      if (!cellRef) return;
+
+      const source = cellRef.getSource();
+      if (
+        normalizeSourceForDirtyCheck(source) ===
+        normalizeSourceForDirtyCheck(cell.source.join(""))
+      ) {
+        return;
+      }
+
+      pendingCellChangesRef.current.set(cellId, source);
+      modifiedCellsRef.current.add(cellId);
+      markDirty();
+    });
+  }, [markDirty]);
+
+  /**
    * Return the active in-memory notebook, including pending Monaco cell edits.
    */
   const getNotebookSnapshot = useCallback(
@@ -1506,8 +1541,7 @@ export function NotebookEditor({
       return metadataTitle.trim();
     }
 
-    const basename = filepath.split("/").filter(Boolean).pop() ?? "notebook";
-    return basename.replace(/\.ipynb$/i, "") || "Notebook";
+    return titleFromNotebookFilename(filepath);
   }, [filepath, notebook?.metadata?.title]);
 
   /** Saves pending editor edits and returns the notebook content used by publish/export flows. */
@@ -1813,14 +1847,20 @@ export function NotebookEditor({
     };
   }, []);
 
-  const reloadNotebookAfterAgentModification = useCallback(async () => {
+  /**
+   * Reloads the notebook from disk, or reports `"deferred"` when the reload has
+   * to wait for in-flight agent execution so the sync layer keeps retrying.
+   */
+  const reloadNotebookAfterAgentModification = useCallback(async (): Promise<
+    ActiveDocumentReloadOutcome
+  > => {
     if (!parentKernelService) {
-      return;
+      return "deferred";
     }
 
     if (activeAgentExecutionCellsRef.current.size > 0) {
       pendingAgentNotebookReloadRef.current = true;
-      return;
+      return "deferred";
     }
 
     try {
@@ -1901,7 +1941,12 @@ export function NotebookEditor({
   const documentSync = useActiveDocumentSync({
     path: filepath,
     contentsManager: parentKernelService?.getContentsManager() ?? null,
-    isDirty: () => isUnsavedRef.current,
+    isDirty: () => {
+      // Cell editors report changes on a debounce, so recover any typing that
+      // has not reached the dirty flag before deciding to replace the buffer.
+      promoteUnflushedCellEdits();
+      return isUnsavedRef.current;
+    },
     onReload: reloadNotebookAfterAgentModification,
     onDeleted: (source) => {
       if (isUnsavedRef.current) return;
@@ -1922,6 +1967,13 @@ export function NotebookEditor({
     },
   });
   documentSyncRef.current = documentSync;
+
+  useEffect(() => {
+    onDocumentConflictChange?.(documentSync.state.status === "conflicted");
+    return () => {
+      onDocumentConflictChange?.(false);
+    };
+  }, [documentSync.state.status, onDocumentConflictChange]);
 
   /** Discards the notebook buffer only after explicit user confirmation. */
   const reloadDiskVersion = useCallback(async (): Promise<void> => {
@@ -2028,7 +2080,9 @@ export function NotebookEditor({
         if (activeAgentExecutionCellsRef.current.size === 0) {
           if (pendingAgentNotebookReloadRef.current) {
             pendingAgentNotebookReloadRef.current = false;
-            void reloadNotebookAfterAgentModification();
+            // Re-enter through the sync layer so a buffer that went dirty while
+            // cells were running raises a conflict instead of being discarded.
+            void documentSyncRef.current?.checkNow();
           }
         }
       }
@@ -2048,7 +2102,6 @@ export function NotebookEditor({
     filepath,
     markCellsQueued,
     parentExecutionCountRef,
-    reloadNotebookAfterAgentModification,
     updateExecutionRunningState,
     updateExecutionInfo,
   ]);
@@ -3458,6 +3511,70 @@ export function NotebookEditor({
     [applyPendingChanges, applySelectionState, notebook, markDirty],
   );
 
+  /** Toggles whole-cell visibility for the current selection (Alt+H). */
+  const handleToggleSelectedCellsHidden = useCallback(() => {
+    if (!notebook) return;
+
+    const targetIndices =
+      selectedCellIndices.size > 0
+        ? Array.from(selectedCellIndices)
+        : cellCursorIndex !== null
+          ? [cellCursorIndex]
+          : [];
+    if (targetIndices.length === 0) return;
+
+    capturePendingCellSources();
+    setNotebook((prevNotebook) => {
+      if (!prevNotebook) return null;
+
+      const updatedNotebook = JSON.parse(
+        JSON.stringify(prevNotebook),
+      ) as NotebookType;
+
+      for (const cellIndex of targetIndices) {
+        const cell = updatedNotebook.cells[cellIndex];
+        if (!cell) continue;
+
+        const orion = cell.metadata?.orion ?? {};
+        const cellState = { ...(orion.cellState ?? {}) };
+        const isHidden = cellState.isWholeCellHidden === true;
+        const isMuted =
+          cellState.isMuted === true ||
+          (orion.cellType === "raw" && isHidden);
+
+        if (isHidden) {
+          if (isMuted) {
+            cell.cell_type = CellType.CODE;
+            cellState.isMuted = false;
+          }
+          cellState.isWholeCellHidden = false;
+        } else {
+          cellState.isWholeCellHidden = true;
+        }
+
+        cell.metadata = {
+          ...cell.metadata,
+          orion: {
+            ...orion,
+            cellState,
+          },
+        };
+
+        const cellId = getCellId(cell);
+        if (cellId) modifiedCellsRef.current.add(cellId);
+      }
+
+      return updatedNotebook;
+    });
+    markDirty();
+  }, [
+    capturePendingCellSources,
+    cellCursorIndex,
+    markDirty,
+    notebook,
+    selectedCellIndices,
+  ]);
+
   /**
    * Handles cell actions from the action bar (buttons on the cell)
    */
@@ -3844,6 +3961,16 @@ export function NotebookEditor({
     [applyPendingChanges, capturePendingCellSources, markDirty],
   );
 
+  /** Adds every markdown cell and notebook output to App View metadata in a single update. */
+  const handleAddAllCellsToAppView = useCallback(() => {
+    capturePendingCellSources();
+    setNotebook((prevNotebook) => {
+      if (!prevNotebook) return null;
+      return addAllNotebookCellsToAppView(applyPendingChanges(prevNotebook));
+    });
+    markDirty();
+  }, [applyPendingChanges, capturePendingCellSources, markDirty]);
+
   // Effect for handling global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -3976,6 +4103,13 @@ export function NotebookEditor({
             currentCursor,
             event.code === "ArrowUp" ? "up" : "down",
           );
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+
+        if (event.code === "KeyH") {
+          handleToggleSelectedCellsHidden();
           event.preventDefault();
           event.stopPropagation();
           return;
@@ -4352,6 +4486,7 @@ export function NotebookEditor({
     handleRestoreDeletedCells,
     handleMoveCell,
     handleChangeCellTypes,
+    handleToggleSelectedCellsHidden,
     handleRunCell,
     handleMentionCell,
     focusNotebookCommandTarget,
@@ -4462,7 +4597,7 @@ export function NotebookEditor({
             box-shadow: none !important;
           }
         `}</style>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-sidebar">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-sidebar">
           <DocumentSyncAlert
             state={documentSync.state}
             onSaveEditorVersion={() => saveOpenNotebookIfDirty(filepath)}
@@ -4524,6 +4659,7 @@ export function NotebookEditor({
                   }
                   onRemoveAppViewReference={handleRemoveAppViewReference}
                   onRestoreAppViewReference={handleRestoreAppViewReference}
+                  onAddAllCellsToAppView={handleAddAllCellsToAppView}
                   onOrionUiStateChange={handleOrionUiStateChange}
                   onOrionUiAction={handleOrionUiAction}
                   onOrionUiUnmount={handleOrionUiUnmount}

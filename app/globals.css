@@ -551,8 +551,8 @@ html {
   }
 }
 
-/* @uiw/react-markdown-preview ships a system-ui stack on .wmde-markdown */
+/* Keep the preview library from overriding notebook-authored container fonts. */
 .wmde-markdown,
 .wmde-markdown-var {
-  font-family: var(--font-sans), sans-serif !important;
+  font-family: inherit !important;
 }

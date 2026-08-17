@@ -31,6 +31,13 @@ Recommended progression:
 3. Inspect one plot family or relationship question at a time, then record the observation and next decision.
 4. Only add synthesis after the notebook markdown shows the evidence path taken.
 
+## Working efficiently
+
+A long EDA is many steps, and every step costs a full model round-trip. Two habits keep a run affordable without cutting coverage:
+
+- Insert and run in one call. When you write a code cell you intend to run next, pass `execute: true` to `insert_cell` instead of following it with a separate `execute_cell`. Reserve a standalone `execute_cell` for re-running cells that already exist.
+- Do not re-read output you have already been shown. `execute_cell` and `execute_code` return figures with their result. Calling `read_cell_output` on the same output again pays for it a second time and tells you nothing new — use it for outputs you have not seen, or after re-running a cell.
+
 ## Visualization defaults
 
 - Prefer static Matplotlib/Seaborn plots for distributions, missingness, outliers, group comparisons, relationships, and time patterns.

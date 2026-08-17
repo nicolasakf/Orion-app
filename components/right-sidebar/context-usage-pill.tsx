@@ -2,52 +2,94 @@
 
 import * as React from "react";
 import { Minimize2 } from "lucide-react";
+
 import { cn } from "@/lib/utils";
 import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
-import {
-  estimateMessageTokens,
-  type TokenEstimate,
-} from "@/lib/agent/token-budget";
-import { buildWirePayload } from "@/lib/agent/context-optimizer";
-import type { CompactionSummary } from "@/lib/chat/chat-storage";
-import type { UIMessage } from "ai";
+import type {
+  ContextUsageRowKey,
+  ContextUsageView,
+} from "@/lib/agent/context-usage";
+
+import type { ContextUsagePhase } from "./use-context-usage";
 
 // ────────────────────────────────────────────────────────────────────────────
-// Types
+// Formatting
 // ────────────────────────────────────────────────────────────────────────────
 
-type UsageLevel = "ok" | "watch" | "warn" | "over";
+type UsageLevel = "unknown" | "ok" | "watch" | "warn" | "over";
 
-function usageLevelOf(pct: number): UsageLevel {
-  if (pct < 0.5) return "ok";
-  if (pct < 0.8) return "watch";
-  if (pct < 1.0) return "warn";
+/**
+ * Map a fraction of the usable budget to a display level.
+ *
+ * `null` means the model's context window is a guess, so there is no honest
+ * denominator — the ring renders neutral rather than inventing a percentage.
+ */
+function usageLevelOf(percentUsed: number | null): UsageLevel {
+  if (percentUsed === null) return "unknown";
+  if (percentUsed < 0.5) return "ok";
+  if (percentUsed < 0.8) return "watch";
+  if (percentUsed < 1.0) return "warn";
   return "over";
 }
 
-function formatTokens(n: number): string {
-  if (n >= 1000) return `${Math.round(n / 1000)}k`;
-  return `${n}`;
+const compactFormatter = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+const exactFormatter = new Intl.NumberFormat("en-US");
+
+/** Compact form for headline numbers, e.g. "12.4k". */
+function formatCompact(tokens: number): string {
+  return compactFormatter.format(tokens);
 }
 
-/** Small SVG ring; `fraction` is 0..1 (clamped for stroke; true % still in hovercard). */
+/**
+ * Exact, grouped form for breakdown rows.
+ *
+ * Rows are shown exactly rather than rounded to thousands so they visibly sum to
+ * the total. Independently rounding each row is what made the old breakdown look
+ * like it could not add up.
+ */
+function formatExact(tokens: number): string {
+  const formatted = exactFormatter.format(Math.abs(tokens));
+  return tokens < 0 ? `−${formatted}` : formatted;
+}
+
+const ROW_LABELS: Record<ContextUsageRowKey, string> = {
+  system: "System prompt",
+  messages: "Messages",
+  tools: "Tool definitions",
+  images: "Images & attachments",
+  framing: "Message framing",
+  calibration: "Provider accounting",
+  reply: "Latest reply",
+  draft: "Your draft",
+};
+
+/** Rows priced locally rather than measured server-side. */
+const LOCAL_ROW_KEYS = new Set<ContextUsageRowKey>(["reply", "draft"]);
+
+// ────────────────────────────────────────────────────────────────────────────
+// Ring
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Small progress ring; renders an indeterminate track when the budget is unknown. */
 function ContextUsageRing({
-  fraction,
+  percentUsed,
   level,
   className,
 }: {
-  fraction: number;
+  percentUsed: number | null;
   level: UsageLevel;
   className?: string;
 }) {
   const r = 7;
-  const stroke = 2;
   const c = 2 * Math.PI * r;
-  const clamped = Math.min(Math.max(fraction, 0), 1);
+  const clamped = Math.min(Math.max(percentUsed ?? 0, 0), 1);
   const dash = c * clamped;
 
   return (
@@ -63,85 +105,32 @@ function ContextUsageRing({
         cy={10}
         r={r}
         fill="none"
-        strokeWidth={stroke}
-        className="text-muted-foreground/25"
-        stroke="currentColor"
-      />
-      <circle
-        cx={10}
-        cy={10}
-        r={r}
-        fill="none"
-        strokeWidth={stroke}
-        strokeLinecap="round"
-        stroke="currentColor"
-        strokeDasharray={`${dash} ${c}`}
+        strokeWidth={2}
         className={cn(
-          level === "ok" && "text-muted-foreground",
-          level === "watch" && "text-amber-500",
-          (level === "warn" || level === "over") && "text-red-500"
+          level === "unknown" ? "text-muted-foreground/40" : "text-muted-foreground/25"
         )}
+        stroke="currentColor"
+        strokeDasharray={level === "unknown" ? "2 3" : undefined}
       />
+      {level !== "unknown" && (
+        <circle
+          cx={10}
+          cy={10}
+          r={r}
+          fill="none"
+          strokeWidth={2}
+          strokeLinecap="round"
+          stroke="currentColor"
+          strokeDasharray={`${dash} ${c}`}
+          className={cn(
+            level === "ok" && "text-muted-foreground",
+            level === "watch" && "text-amber-500",
+            (level === "warn" || level === "over") && "text-red-500"
+          )}
+        />
+      )}
     </svg>
   );
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// Hook
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Memoized token estimate for the current wire payload.
- * Recomputes when messages, model, or compaction summary change.
- * Debounced to avoid redundant work on rapid message updates.
- */
-export function useContextEstimate(
-  messages: UIMessage[],
-  contextWindow: number,
-  compactionSummary: CompactionSummary | null | undefined,
-  options?: {
-    maxOutputTokens?: number | null;
-    autoCompactThreshold?: number;
-    optimizerRetentionTurns?: number;
-    systemPromptEstimateChars?: number;
-    additionalImageCount?: number;
-  }
-) {
-  const [estimate, setEstimate] = React.useState<ReturnType<typeof estimateMessageTokens> | null>(
-    null
-  );
-
-  const systemPrompt = React.useMemo(
-    () => " ".repeat(options?.systemPromptEstimateChars ?? 3000),
-    [options?.systemPromptEstimateChars]
-  );
-
-  React.useEffect(() => {
-    const id = window.setTimeout(() => {
-      const wire = buildWirePayload(messages, compactionSummary, {
-        retentionTurns: options?.optimizerRetentionTurns,
-      });
-      const est = estimateMessageTokens(wire, systemPrompt, {
-        contextWindow,
-        maxOutputTokens: options?.maxOutputTokens,
-        autoCompactThreshold: options?.autoCompactThreshold,
-        additionalImageCount: options?.additionalImageCount,
-      });
-      setEstimate(est);
-    }, 150);
-    return () => window.clearTimeout(id);
-  }, [
-    messages,
-    contextWindow,
-    compactionSummary,
-    systemPrompt,
-    options?.optimizerRetentionTurns,
-    options?.maxOutputTokens,
-    options?.autoCompactThreshold,
-    options?.additionalImageCount,
-  ]);
-
-  return estimate;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -149,53 +138,74 @@ export function useContextEstimate(
 // ────────────────────────────────────────────────────────────────────────────
 
 interface ContextUsagePillProps {
-  estimate: TokenEstimate | null;
+  usage: ContextUsageView | null;
+  phase: ContextUsagePhase;
   hasMessages: boolean;
   /** Hides technical token categories in simplified experiences. */
   simple?: boolean;
-  /** Called when the user clicks the pill at warn/over context levels. */
+  /** Called when the user clicks the pill to compact the conversation. */
   onCompact?: () => void;
   className?: string;
 }
 
+/**
+ * Shows how much of the model's context the conversation occupies.
+ *
+ * Every number here comes from one server-side measurement of the real prepared
+ * prompt, plus locally priced additions that are labelled as such. The rows always
+ * sum to the headline total, and the reply reserve is presented as part of the
+ * window rather than as a consumer of it — it is subtracted from the denominator,
+ * not added to the numerator.
+ */
 export function ContextUsagePill({
-  estimate,
+  usage,
+  phase,
   hasMessages,
   simple = false,
   onCompact,
   className,
 }: ContextUsagePillProps) {
-  if (!estimate || !hasMessages) return null;
+  if (!hasMessages || phase === "idle") return null;
 
-  const level = usageLevelOf(estimate.percentUsed);
-  const cap = estimate.cap;
-  const isActionable = level === "warn" || level === "over";
-  const isOverBudget = estimate.totalTokens >= estimate.thresholdTokens;
-  const pctLabel = `${Math.round(estimate.percentUsed * 100)}%`;
+  const level = usageLevelOf(usage?.percentUsed ?? null);
+  const percentLabel =
+    usage?.percentUsed != null ? `${Math.round(usage.percentUsed * 100)}%` : "—";
 
-  const handleClick = () => {
-    if (isActionable && onCompact) onCompact();
-  };
+  // Compaction is offered whenever the conversation is genuinely large. With an
+  // unknown window there is no percentage to threshold on, so the affordance
+  // follows the measured status instead of disappearing entirely.
+  const isActionable =
+    usage != null && (level === "warn" || level === "over" || usage.status !== "ok");
+  const canCompact = isActionable && onCompact != null;
+
+  const ariaLabel = usage
+    ? usage.percentUsed != null
+      ? `Context usage ${percentLabel} of the model window${canCompact ? ". Click to compact." : ""}`
+      : `Context usage ${formatCompact(usage.totalTokens)} tokens; model window unknown${canCompact ? ". Click to compact." : ""}`
+    : "Context usage is being measured";
 
   const trigger = (
     <button
       type="button"
-      aria-disabled={!isActionable || !onCompact}
-      aria-label={`Context usage ${pctLabel} of window${isOverBudget && isActionable ? ". Click to compact." : ""}`}
-      onClick={handleClick}
+      aria-disabled={!canCompact}
+      aria-label={ariaLabel}
+      onClick={() => {
+        if (canCompact) onCompact();
+      }}
       className={cn(
         "corner-squircle relative inline-flex size-7 items-center justify-center rounded-md transition-colors",
+        level === "unknown" && "text-muted-foreground hover:bg-muted/60",
         level === "ok" && "text-muted-foreground hover:bg-muted/60",
         level === "watch" && "text-amber-500 hover:bg-amber-500/10",
         level === "warn" && "text-red-500 hover:bg-red-500/10",
         level === "over" && "text-red-600 hover:bg-red-600/10",
-        isActionable && onCompact && "cursor-pointer",
-        (!isActionable || !onCompact) && "cursor-default",
+        canCompact ? "cursor-pointer" : "cursor-default",
+        usage?.isStale && "opacity-70",
         className
       )}
     >
-      <ContextUsageRing fraction={estimate.percentUsed} level={level} />
-      {isActionable && onCompact && (
+      <ContextUsageRing percentUsed={usage?.percentUsed ?? null} level={level} />
+      {canCompact && (
         <Minimize2
           className="pointer-events-none absolute bottom-0.5 right-0.5 h-2 w-2 opacity-90"
           aria-hidden
@@ -210,56 +220,89 @@ export function ContextUsagePill({
       <HoverCardContent
         side="top"
         align="end"
-        className="w-auto min-w-[11rem] space-y-2 p-3 text-xs"
+        className="w-auto min-w-[13rem] space-y-2 p-3 text-xs"
       >
         <div className="flex items-baseline justify-between gap-4">
           <span className="font-medium text-foreground">Context usage</span>
           <span
             className={cn(
               "font-mono tabular-nums",
+              level === "unknown" && "text-muted-foreground",
               level === "ok" && "text-muted-foreground",
               level === "watch" && "text-amber-600 dark:text-amber-400",
               (level === "warn" || level === "over") && "text-red-600 dark:text-red-400"
             )}
           >
-            {pctLabel}
+            {percentLabel}
           </span>
         </div>
-        <p className="font-mono text-[11px] tabular-nums text-muted-foreground">
-          {formatTokens(estimate.totalTokens)} / {formatTokens(cap)} tokens
-        </p>
-        {!simple && (
-          <div className="space-y-1 border-t border-border pt-2 text-[11px] text-muted-foreground">
-            <div className="flex justify-between gap-6">
-              <span>System</span>
-              <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.system)}</span>
-            </div>
-            <div className="flex justify-between gap-6">
-              <span>Messages</span>
-              <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.messages)}</span>
-            </div>
-            <div className="flex justify-between gap-6">
-              <span>Tools</span>
-              <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.tools)}</span>
-            </div>
-            <div className="flex justify-between gap-6">
-              <span>Images & attachments</span>
-              <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.images)}</span>
-            </div>
-            {estimate.breakdown.framing > 0 && (
-              <div className="flex justify-between gap-6">
-                <span>Message framing</span>
-                <span className="font-mono tabular-nums">{formatTokens(estimate.breakdown.framing)}</span>
+
+        {!usage ? (
+          <p className="text-[11px] text-muted-foreground">
+            {phase === "unavailable"
+              ? "Context measurement is unavailable right now."
+              : "Measuring the prepared prompt…"}
+          </p>
+        ) : (
+          <>
+            <p className="font-mono text-[11px] tabular-nums text-muted-foreground">
+              {formatCompact(usage.totalTokens)} tokens used
+            </p>
+
+            {!simple && (
+              <div className="space-y-1 border-t border-border pt-2 text-[11px] text-muted-foreground">
+                {usage.rows.map((row) => (
+                  <div key={row.key} className="flex justify-between gap-6">
+                    <span>
+                      {ROW_LABELS[row.key]}
+                      {LOCAL_ROW_KEYS.has(row.key) && (
+                        <span className="ml-1 opacity-60">(estimated)</span>
+                      )}
+                    </span>
+                    <span className="font-mono tabular-nums">{formatExact(row.tokens)}</span>
+                  </div>
+                ))}
+                <div className="flex justify-between gap-6 border-t border-border pt-1 font-medium text-foreground">
+                  <span>Total</span>
+                  <span className="font-mono tabular-nums">{formatExact(usage.totalTokens)}</span>
+                </div>
               </div>
             )}
-            <div className="flex justify-between gap-6">
-              <span>Reply reserve</span>
-              <span className="font-mono tabular-nums">{formatTokens(estimate.outputReserve)}</span>
-            </div>
-          </div>
-        )}
-        {isActionable && onCompact && (
-          <p className="text-[11px] text-muted-foreground">Click the ring to compact and free space.</p>
+
+            {/* The reply reserve belongs to the window, not to usage: it is
+                subtracted from the budget rather than consumed by the prompt. */}
+            <p className="border-t border-border pt-2 text-[11px] text-muted-foreground">
+              {usage.window.contextWindowIsFallback
+                ? "Model context window unknown, so no percentage is shown."
+                : `Window ${formatCompact(usage.window.contextWindow)} · ${formatCompact(
+                    usage.budget.outputReserve
+                  )} reserved for the reply`}
+            </p>
+
+            <p className="text-[11px] text-muted-foreground">
+              {usage.confidence === "exact"
+                ? "Measured by the provider"
+                : usage.confidence === "calibrated"
+                  ? `Estimate, calibrated from ${usage.calibrationSampleCount} request${
+                      usage.calibrationSampleCount === 1 ? "" : "s"
+                    }`
+                  : "Estimate, not yet calibrated for this model"}
+              {usage.hasLocalDelta && ", plus unsent additions"}
+              {usage.isStale && " · awaiting remeasure"}
+            </p>
+
+            {phase === "unavailable" && (
+              <p className="text-[11px] text-muted-foreground">
+                Last known measurement; a refresh did not succeed.
+              </p>
+            )}
+
+            {canCompact && (
+              <p className="text-[11px] text-muted-foreground">
+                Click the ring to compact and free space.
+              </p>
+            )}
+          </>
         )}
       </HoverCardContent>
     </HoverCard>

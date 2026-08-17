@@ -41,7 +41,11 @@ import {
   CONTEXT_ESTIMATOR_VERSION,
   measurePreparedPrompt,
 } from "@/lib/agent/context-measurement.server";
-import { ContextPreflightSettingsSchema } from "@/lib/agent/context-preflight";
+import {
+  ContextUsageSettingsSchema,
+  buildEstimateContextMeasurement,
+  buildProviderContextMeasurement,
+} from "@/lib/agent/context-usage";
 import { getRuntimeModelProfile } from "@/lib/agent/model-runtime-profile.server";
 import { calculateContextBudget } from "@/lib/agent/token-budget";
 import {
@@ -387,7 +391,7 @@ async function handleChatRequest(
     contextSettings: rawContextSettings,
   } = body;
 
-  const parsedContextSettings = ContextPreflightSettingsSchema.safeParse(rawContextSettings ?? {});
+  const parsedContextSettings = ContextUsageSettingsSchema.safeParse(rawContextSettings ?? {});
   if (!parsedContextSettings.success) {
     return Response.json(
       { title: "Invalid Request", message: "Context settings are invalid." },
@@ -661,9 +665,15 @@ async function handleChatRequest(
 
   if (allUiStyle) {
     try {
+      // `tools` is what lets the SDK apply each tool's `toModelOutput`. Without it
+      // every result is serialized as `{ type: "json" }`, so raster previews reach
+      // the model as base64 text instead of image parts. Pass the full catalog
+      // rather than the mode-filtered set: output conversion does not depend on
+      // which tools the current mode may call, only on which tools produced the
+      // results already in history.
       messages = await convertToModelMessages(
         rawMessagesForModel as Array<Omit<UIMessage, "id">>,
-        { ignoreIncompleteToolCalls: true }
+        { ignoreIncompleteToolCalls: true, tools: orionTools }
       );
     } catch {
       return new Response(
@@ -1256,27 +1266,21 @@ async function handleChatRequest(
       calibration,
     });
 
+    const measurementWindow = runtimeProfile;
+    const measurementBudget = {
+      ...budget,
+      autoCompactThreshold: contextSettings.compactionAutoThreshold,
+    };
+
     if (options.preflight) {
-      const status =
-        promptMeasurement.estimatedInputTokens >= budget.usableInputTokens
-          ? "over"
-          : promptMeasurement.estimatedInputTokens >= budget.thresholdTokens
-            ? "compact"
-            : "ok";
-      return Response.json({
-        version: 1,
-        model: runtimeProfile,
-        budget: {
-          ...budget,
-          autoCompactThreshold: contextSettings.compactionAutoThreshold,
-        },
-        measurement: {
-          ...promptMeasurement,
-          percentUsed:
-            promptMeasurement.estimatedInputTokens / budget.usableInputTokens,
-          status,
-        },
-      });
+      return Response.json(
+        buildEstimateContextMeasurement({
+          prepared: promptMeasurement,
+          window: measurementWindow,
+          budget: measurementBudget,
+          estimatorVersion: CONTEXT_ESTIMATOR_VERSION,
+        })
+      );
     }
 
     logLLMCall({
@@ -1366,6 +1370,24 @@ async function handleChatRequest(
 
     return result.toUIMessageStreamResponse({
       sendReasoning: true,
+      // The provider's own input-token count is the only ground truth available
+      // to the UI. Attaching it here — rather than in `onFinish`, which must
+      // await SQLite — lets the context pill show an exact number instead of an
+      // estimate for everything through this turn.
+      messageMetadata: ({ part }) => {
+        if (part.type !== "finish") return undefined;
+        const actualInputTokens = safeToken(part.totalUsage.inputTokens);
+        if (actualInputTokens == null) return undefined;
+        return {
+          contextUsage: buildProviderContextMeasurement({
+            prepared: promptMeasurement,
+            actualInputTokens,
+            window: measurementWindow,
+            budget: measurementBudget,
+            estimatorVersion: CONTEXT_ESTIMATOR_VERSION,
+          }),
+        };
+      },
       onError: (error) =>
         serializeChatApiErrorPayload(buildChatApiErrorPayload(error, providerId, modelId)),
     });

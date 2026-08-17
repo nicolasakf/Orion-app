@@ -22,6 +22,13 @@ export interface ActiveDocumentDeletedEventDetail {
 
 export type ActiveDocumentDeletionSource = "contents-manager" | "poll";
 
+/**
+ * Result of an editor reload request. `"deferred"` means the editor could not
+ * reload yet (for example while agent cells are still executing) and the change
+ * is still outstanding, so the sync layer must keep retrying.
+ */
+export type ActiveDocumentReloadOutcome = "deferred" | void;
+
 /** Notifies the app shell that the clean active editor should follow a rename. */
 export function dispatchActiveDocumentRenamed(
   detail: ActiveDocumentRenamedEventDetail,
@@ -66,7 +73,7 @@ interface UseActiveDocumentSyncOptions {
   path: string | null;
   contentsManager: ContentsManager | null;
   isDirty: () => boolean;
-  onReload: () => Promise<void>;
+  onReload: () => Promise<ActiveDocumentReloadOutcome>;
   onRenamed?: (newPath: string) => void;
   onDeleted?: (source: ActiveDocumentDeletionSource) => void;
   pollIntervalMs?: number;
@@ -137,12 +144,15 @@ export function useActiveDocumentSync({
   const [state, setState] = useState<ActiveDocumentSyncState>({
     status: "current",
   });
+  const stateRef = useRef<ActiveDocumentSyncState>(state);
+  stateRef.current = state;
   const baselineRef = useRef<ActiveDocumentVersion | null>(null);
   const baselineGenerationRef = useRef(0);
   const pendingVersionRef = useRef<ActiveDocumentVersion | null>(null);
   const pendingRenameRef = useRef<string | null>(null);
   const localWriteDepthRef = useRef(0);
   const hashFetchSupportedRef = useRef(true);
+  const deletedNotifiedRef = useRef(false);
   const coalesceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
   const isDirtyRef = useRef(isDirty);
@@ -162,10 +172,22 @@ export function useActiveDocumentSync({
       baselineGenerationRef.current += 1;
       pendingVersionRef.current = null;
       pendingRenameRef.current = null;
+      deletedNotifiedRef.current = false;
       setState({ status: "current" });
     },
     [],
   );
+
+  const handleChangedVersionRef = useRef<
+    ((version: ActiveDocumentVersion) => Promise<void>) | null
+  >(null);
+
+  /** Restores a non-terminal status after a refresh attempt that changed nothing. */
+  const clearRefreshingState = useCallback((): void => {
+    setState((previous) =>
+      previous.status === "refreshing" ? { status: "current" } : previous,
+    );
+  }, []);
 
   /** Reloads a clean document, or records a conflict for a dirty document. */
   const handleChangedVersion = useCallback(
@@ -183,15 +205,30 @@ export function useActiveDocumentSync({
       }
 
       if (refreshInFlightRef.current) {
+        // Re-check once the in-flight reload settles so a change that landed
+        // during it is applied instead of dropped until the next poll.
         await refreshInFlightRef.current;
+        await handleChangedVersionRef.current?.(version);
         return;
       }
 
       const refresh = (async () => {
         setState({ status: "refreshing" });
         try {
-          await onReloadRef.current();
-          baselineRef.current = version;
+          const generationBeforeReload = baselineGenerationRef.current;
+          const outcome = await onReloadRef.current();
+          if (outcome === "deferred") {
+            // The editor could not apply the change yet. Leave the baseline
+            // stale so polling retries until the reload can actually happen.
+            pendingVersionRef.current = null;
+            clearRefreshingState();
+            return;
+          }
+          // Only fall back to the triggering version when the editor did not
+          // record the revision it actually loaded.
+          if (baselineGenerationRef.current === generationBeforeReload) {
+            baselineRef.current = version;
+          }
           pendingVersionRef.current = null;
           setState({ status: "current" });
         } catch (error) {
@@ -200,7 +237,7 @@ export function useActiveDocumentSync({
             pendingVersionRef.current = version;
             setState({ status: "conflicted", version });
           } else {
-            setState({ status: "current" });
+            clearRefreshingState();
           }
         } finally {
           refreshInFlightRef.current = null;
@@ -209,8 +246,10 @@ export function useActiveDocumentSync({
       refreshInFlightRef.current = refresh;
       await refresh;
     },
-    [],
+    [clearRefreshingState],
   );
+
+  handleChangedVersionRef.current = handleChangedVersion;
 
   /** Fetches only the active document metadata used for polling. */
   const fetchVersion = useCallback(async (): Promise<ActiveDocumentVersion | null> => {
@@ -224,8 +263,12 @@ export function useActiveDocumentSync({
           hash: true,
         });
       } catch (error) {
-        // Jupyter Server 1.x and older content providers may reject `hash`.
-        hashFetchSupportedRef.current = false;
+        // Jupyter Server 1.x and older content providers reject `hash` with a
+        // 400. Any other failure (offline, 5xx, missing path) is transient, so
+        // fall back for this call only instead of downgrading every later poll.
+        const status = (error as { response?: { status?: unknown } })?.response
+          ?.status;
+        if (status === 400) hashFetchSupportedRef.current = false;
         try {
           model = await contentsManager.get(path, { content: false });
         } catch (fallbackError) {
@@ -247,6 +290,8 @@ export function useActiveDocumentSync({
     // A same-manager rename already supplied the destination. Polling the old
     // path would incorrectly turn the pending rename conflict into a deletion.
     if (pendingRenameRef.current) return;
+    // A reported deletion is terminal until the document is loaded again.
+    if (deletedNotifiedRef.current) return;
     if (!baselineRef.current) return;
 
     try {
@@ -258,6 +303,7 @@ export function useActiveDocumentSync({
     } catch (error) {
       const status = (error as { response?: { status?: unknown } })?.response?.status;
       if (status === 404) {
+        deletedNotifiedRef.current = true;
         setState({ status: "deleted" });
         onDeletedRef.current?.("poll");
         return;
@@ -291,9 +337,16 @@ export function useActiveDocumentSync({
       onRenamedRef.current?.(newPath);
       return;
     }
+    const previousState = stateRef.current;
     setState({ status: "refreshing" });
     try {
-      await onReloadRef.current();
+      const outcome = await onReloadRef.current();
+      if (outcome === "deferred") {
+        // Nothing was replaced yet, so keep the unresolved state visible
+        // instead of implying the disk version is now in the editor.
+        setState(previousState.status === "refreshing" ? { status: "current" } : previousState);
+        return;
+      }
       const version = pendingVersionRef.current ?? (await fetchVersion());
       if (version) baselineRef.current = version;
       pendingVersionRef.current = null;
@@ -312,20 +365,24 @@ export function useActiveDocumentSync({
 
   useEffect(() => {
     if (pendingRenameRef.current === path) {
+      // The editor already follows the new path, so an unsaved buffer here is
+      // ordinary unsaved work rather than an unresolved divergence.
       baselineRef.current = pendingVersionRef.current;
       baselineGenerationRef.current += 1;
       pendingRenameRef.current = null;
+      pendingVersionRef.current = null;
       hashFetchSupportedRef.current = true;
-      if (!isDirtyRef.current()) {
-        pendingVersionRef.current = null;
-        setState({ status: "current" });
-      }
+      deletedNotifiedRef.current = false;
+      setState({ status: "current" });
       return;
     }
     baselineRef.current = null;
     baselineGenerationRef.current += 1;
     pendingVersionRef.current = null;
+    // A rename the app never followed must not keep polling disabled here.
+    pendingRenameRef.current = null;
     hashFetchSupportedRef.current = true;
+    deletedNotifiedRef.current = false;
     setState({ status: "current" });
   }, [contentsManager, path]);
 
@@ -352,6 +409,8 @@ export function useActiveDocumentSync({
         return;
       }
       if (args.type === "delete" && modelMatchesPath(args.oldValue, path)) {
+        if (deletedNotifiedRef.current) return;
+        deletedNotifiedRef.current = true;
         setState({ status: "deleted" });
         onDeletedRef.current?.("contents-manager");
         return;

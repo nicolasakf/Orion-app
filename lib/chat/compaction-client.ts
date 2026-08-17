@@ -4,6 +4,7 @@
  */
 
 import type { UIMessage } from "ai";
+import type { AgentContextSettings } from "@/lib/settings/schema";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
 
 export interface CompactionApiResult {
@@ -19,13 +20,17 @@ export interface CompactionApiResult {
  * @param messages - The subset of messages to summarize (older turns only).
  * @param previousSummaryText - If a prior summary exists, pass it here so the
  *   server can extend it rather than re-summarize from scratch.
+ * @param contextSettings - The user's context settings. Without these the server
+ *   fits summary chunks against the default threshold, silently ignoring a
+ *   threshold the user lowered.
  */
 export async function callCompactionApi(
   messages: UIMessage[],
   previousSummaryText?: string,
   model?: string,
   provider?: ProviderId,
-  chatId?: string
+  chatId?: string,
+  contextSettings?: AgentContextSettings
 ): Promise<CompactionApiResult> {
   const payload: Record<string, unknown> = {
     messages,
@@ -34,6 +39,7 @@ export async function callCompactionApi(
     ...(provider && { provider }),
     ...(chatId && { chatId }),
     ...(previousSummaryText && { previousSummaryText }),
+    ...(contextSettings && { contextSettings }),
   };
 
   const response = await fetch("/api/chat", {

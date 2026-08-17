@@ -1,125 +1,125 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  formatOutputReferenceLabel,
-  formatReferencesForMessage,
-  parseChatMessageReferences,
-  type ResolvedChatReference,
+  CONTEXT_USAGE_VERSION,
+  type ContextMeasurement,
+} from "@/lib/agent/context-usage";
+
+import {
+  normalizeChatMessageMetadata,
+  parseChatMessageContextUsage,
 } from "./chat-references";
+import { ChatWireSchema, deserializeChat, serializeChat, type Chat } from "./chat-types";
 
-describe("external file chat references", () => {
-  const externalFileReference: ResolvedChatReference = {
-    id: "external-file:test",
-    type: "external-file",
-    label: "report.pdf",
-    locator: {
-      type: "external-file",
-      fileName: "report.pdf",
-      mediaType: "application/pdf",
-      size: 2048,
-      lastModified: 1_700_000_000_000,
+function makeMeasurement(): ContextMeasurement {
+  return {
+    version: CONTEXT_USAGE_VERSION,
+    kind: "provider",
+    rawInputTokens: 18_000,
+    inputTokens: 21_400,
+    buckets: { system: 4000, messages: 9000, tools: 3000, images: 1500, framing: 500 },
+    calibrationDelta: 3_400,
+    confidence: "exact",
+    calibrationSampleCount: 4,
+    estimatorVersion: 2,
+    window: {
+      providerId: "anthropic",
+      modelId: "claude-opus-5",
+      contextWindow: 200_000,
+      maxOutputTokens: 16_384,
+      contextWindowSource: "models_dev",
+      contextWindowFetchedAt: "2026-08-01T00:00:00.000Z",
+      contextWindowIsFallback: false,
     },
-    status: "resolved",
-    preview: "External file: report.pdf",
-    resolvedAt: "2026-05-27T00:00:00.000Z",
-    toolHint:
-      "This external file is pointer-only; no file contents are available through workspace tools.",
+    budget: {
+      outputReserve: 10_000,
+      usableInputTokens: 190_000,
+      thresholdTokens: 174_800,
+      autoCompactThreshold: 0.92,
+    },
+    status: "ok",
+    percentUsed: 21_400 / 190_000,
+    measuredAt: "2026-08-14T00:00:00.000Z",
   };
+}
 
-  it("parses external-file metadata without absolute paths", () => {
-    const references = parseChatMessageReferences({
-      references: [externalFileReference],
-    });
+describe("normalizeChatMessageMetadata", () => {
+  /**
+   * The regression that would make the whole ground-truth path inert: assistant
+   * messages carry context usage and nothing else, so an early return keyed only
+   * on references and slash commands silently discards it on persist.
+   */
+  it("preserves context usage when it is the only field present", () => {
+    const normalized = normalizeChatMessageMetadata({ contextUsage: makeMeasurement() });
 
-    expect(references).toHaveLength(1);
-    expect(references[0]?.locator).toMatchObject({
-      type: "external-file",
-      fileName: "report.pdf",
-      mediaType: "application/pdf",
-      size: 2048,
-    });
-    expect(JSON.stringify(references[0])).not.toContain("/Users/");
+    expect(normalized?.contextUsage?.inputTokens).toBe(21_400);
   });
 
-  it("formats external files as pointer-only context", () => {
-    const context = formatReferencesForMessage([externalFileReference]);
+  it("preserves context usage alongside other metadata", () => {
+    const normalized = normalizeChatMessageMetadata({
+      slashCommands: [{ label: "/compact" }],
+      contextUsage: makeMeasurement(),
+    });
 
-    expect(context).toContain("External file: report.pdf");
-    expect(context).toContain("pointer-only");
-    expect(context).toContain("report.pdf (application/pdf, 2.0 KB)");
+    expect(normalized?.slashCommands).toHaveLength(1);
+    expect(normalized?.contextUsage?.kind).toBe("provider");
   });
 
-  it("parses and formats managed external-file paths for agent tools", () => {
-    const managedReference: ResolvedChatReference = {
-      ...externalFileReference,
-      locator: {
-        type: "external-file",
-        fileName: "report.pdf",
-        mediaType: "application/pdf",
-        size: 2048,
-        lastModified: 1_700_000_000_000,
-        managedPath: ".orion/chat-attachments/chat-1/file-1/report.pdf",
-        attachmentId: "file-1",
-      },
-      toolHint: "Use workspace tools to read the managed path.",
-    };
+  it("still returns undefined for genuinely empty metadata", () => {
+    expect(normalizeChatMessageMetadata({})).toBeUndefined();
+    expect(normalizeChatMessageMetadata({ references: [], slashCommands: [] })).toBeUndefined();
+  });
 
-    const [parsed] = parseChatMessageReferences({
-      references: [managedReference],
+  it("drops malformed context usage rather than persisting it", () => {
+    const normalized = normalizeChatMessageMetadata({
+      contextUsage: { version: CONTEXT_USAGE_VERSION, inputTokens: "lots" },
     });
-    const context = formatReferencesForMessage([managedReference]);
 
-    expect(parsed?.locator).toMatchObject({
-      type: "external-file",
-      managedPath: ".orion/chat-attachments/chat-1/file-1/report.pdf",
-      attachmentId: "file-1",
-    });
-    expect(context).toContain(
-      ".orion/chat-attachments/chat-1/file-1/report.pdf"
-    );
-    expect(context).toContain("Use workspace tools");
-    expect(context).not.toContain("External file references are pointer-only");
+    expect(normalized).toBeUndefined();
   });
 });
 
-describe("notebook output chat references", () => {
-  const outputReference: ResolvedChatReference = {
-    id: "output:test",
-    type: "output",
-    label: formatOutputReferenceLabel(2, 1),
-    locator: {
-      type: "output",
-      notebookPath: "/workspace/analysis.ipynb",
-      cellIndex: 2,
-      outputIndex: 1,
-    },
-    status: "resolved",
-    preview: "Notebook cell 2, output 1.",
-    resolvedAt: "2026-05-27T00:00:00.000Z",
-    toolHint:
-      'Use use_notebook with notebookPath="/workspace/analysis.ipynb", then read_cell_output with reads=[{cellIndex:2,outputIndex:1}].',
-  };
-
-  it("parses and labels output metadata", () => {
-    const references = parseChatMessageReferences({
-      references: [outputReference],
-    });
-
-    expect(formatOutputReferenceLabel(2, 1)).toBe("Cell #2 output #1");
-    expect(references[0]?.type).toBe("output");
-    expect(references[0]?.locator).toMatchObject({
-      type: "output",
-      cellIndex: 2,
-      outputIndex: 1,
-    });
+describe("parseChatMessageContextUsage", () => {
+  it("returns the measurement from valid metadata", () => {
+    expect(parseChatMessageContextUsage({ contextUsage: makeMeasurement() })?.inputTokens).toBe(
+      21_400
+    );
   });
 
-  it("formats output references with read_cell_output guidance", () => {
-    const context = formatReferencesForMessage([outputReference]);
+  it("returns null rather than throwing on unknown input", () => {
+    expect(parseChatMessageContextUsage(undefined)).toBeNull();
+    expect(parseChatMessageContextUsage({ contextUsage: { nope: true } })).toBeNull();
+    expect(parseChatMessageContextUsage({ references: [] })).toBeNull();
+  });
+});
 
-    expect(context).toContain("Output: Cell #2 output #1");
-    expect(context).toContain("/workspace/analysis.ipynb cell 2 output 1");
-    expect(context).toContain("read_cell_output");
-    expect(context).not.toContain("Selected text:");
+describe("chat persistence", () => {
+  it("round-trips context usage through the wire shape", () => {
+    const chat: Chat = {
+      id: "chat-1",
+      title: "Measured chat",
+      createdAt: new Date("2026-08-14T00:00:00.000Z"),
+      updatedAt: new Date("2026-08-14T00:00:00.000Z"),
+      messages: [
+        {
+          id: "assistant-1",
+          role: "assistant",
+          parts: [{ type: "text", text: "done" }],
+          metadata: { contextUsage: makeMeasurement() },
+          timestamp: new Date("2026-08-14T00:00:00.000Z"),
+        },
+      ],
+    } as unknown as Chat;
+
+    const wire = serializeChat(chat);
+
+    // The wire schema is passthrough, so the anchor survives reload and chat
+    // switch without a dedicated persistence path.
+    expect(() => ChatWireSchema.parse(wire)).not.toThrow();
+    const restored = deserializeChat(ChatWireSchema.parse(wire));
+    const usage = parseChatMessageContextUsage(restored.messages[0].metadata);
+
+    expect(usage?.inputTokens).toBe(21_400);
+    expect(usage?.confidence).toBe("exact");
   });
 });

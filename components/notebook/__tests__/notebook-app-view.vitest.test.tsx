@@ -245,6 +245,9 @@ describe("NotebookAppView", () => {
     );
 
     expect(screen.getByText("No cells in App View yet")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add all cells" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the business empty-file state for an empty notebook", () => {
@@ -604,6 +607,50 @@ describe("NotebookAppView", () => {
         detail: { skillName: "create-app" },
       }),
     );
+  });
+
+  it("adds every notebook cell from the empty-state shortcut", () => {
+    const onAddAllCellsToAppView = vi.fn();
+
+    render(
+      <NotebookAppView
+        notebook={{
+          ...makeNotebook(),
+          cells: makeNotebook().cells.map((cell) => ({
+            ...cell,
+            metadata: { orion: { id: cell.metadata?.orion?.id } },
+          })),
+        }}
+        onAddAllCellsToAppView={onAddAllCellsToAppView}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Add all cells" }));
+
+    expect(onAddAllCellsToAppView).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the empty-state add-all-cells shortcut when the notebook has nothing to add", () => {
+    const onAddAllCellsToAppView = vi.fn();
+
+    render(
+      <NotebookAppView
+        notebook={{
+          ...makeNotebook(),
+          cells: [
+            {
+              cell_type: CellType.CODE,
+              source: ["1 + 1"],
+              metadata: { orion: { id: "empty" } },
+              outputs: [],
+            },
+          ],
+        }}
+        onAddAllCellsToAppView={onAddAllCellsToAppView}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Add all cells" })).toBeDisabled();
   });
 
   it("ignores notebook-level appView schema metadata", () => {

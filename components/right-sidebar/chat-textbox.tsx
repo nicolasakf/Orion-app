@@ -88,8 +88,9 @@ import type {
 } from "@/lib/agent/interaction-modes";
 import { isImmediateSlashCommand, SLASH_COMMANDS, type SlashCommand } from "./slash-commands";
 import { ContextUsagePill } from "./context-usage-pill";
+import type { ContextUsagePhase } from "./use-context-usage";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
-import type { TokenEstimate } from "@/lib/agent/token-budget";
+import type { ContextUsageView } from "@/lib/agent/context-usage";
 import {
   getReferenceTypeLabel,
   type ChatReferenceOption,
@@ -177,8 +178,10 @@ export interface ChatTextboxProps {
   onRefreshSlashCommands?: () => Promise<void>;
   /** Whether the active chat has messages; keeps the context pill hidden for empty chats. */
   hasMessages?: boolean;
-  /** Precomputed context usage estimate for the active chat. */
-  contextEstimate?: TokenEstimate | null;
+  /** Resolved context usage for the active chat; null until first measured. */
+  contextUsage?: ContextUsageView | null;
+  /** Distinguishes "not measured yet" from "measurement failed". */
+  contextUsagePhase?: ContextUsagePhase;
   /** Shows only the context total, without technical categories. */
   simpleContextUsage?: boolean;
   /** Called when the user clicks the context usage pill. */
@@ -635,7 +638,8 @@ export function ChatTextbox({
   onImmediateSlashCommand,
   onRefreshSlashCommands,
   hasMessages = false,
-  contextEstimate = null,
+  contextUsage = null,
+  contextUsagePhase = "idle",
   simpleContextUsage = false,
   onCompact,
   isOverContextBudget = false,
@@ -2522,11 +2526,6 @@ export function ChatTextbox({
 
             {/* Bottom right - context usage + send */}
             <div className="flex items-center gap-1">
-              {isOverContextBudget && (
-                <span className="mr-1 text-[11px] text-muted-foreground" role="status">
-                  Compacting context and retrying…
-                </span>
-              )}
               {!readOnly && (
                 <Button
                   type="button"
@@ -2542,7 +2541,8 @@ export function ChatTextbox({
                 </Button>
               )}
               <ContextUsagePill
-                estimate={contextEstimate}
+                usage={contextUsage}
+                phase={contextUsagePhase}
                 hasMessages={!readOnly && (hasMessages || attachments.length > 0)}
                 onCompact={onCompact}
                 simple={simpleContextUsage}

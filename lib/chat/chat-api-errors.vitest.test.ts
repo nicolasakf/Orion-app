@@ -1,4 +1,5 @@
 import { APICallError } from "@ai-sdk/provider";
+import { InvalidToolInputError, NoSuchToolError } from "ai";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -232,5 +233,53 @@ describe("parseChatApiErrorMessage", () => {
     const parsed = parseChatApiErrorMessage(serializeChatApiErrorPayload(payload));
 
     expect(parsed).toEqual(payload);
+  });
+});
+
+describe("tool call errors", () => {
+  it("names the offending argument instead of pointing at the server logs", () => {
+    // Reproduces session 1786897277027: the model omitted `progressInterval`,
+    // was told only that "an unexpected error occurred", and gave up on the tool.
+    const error = new InvalidToolInputError({
+      toolName: "execute_cell",
+      toolInput: JSON.stringify({ cellIndices: [1], stream: false }),
+      cause: new Error('Invalid input: expected number, received undefined at "progressInterval"'),
+    });
+
+    const payload = buildChatApiErrorPayload(error, "vercel", "moonshotai/kimi-k2.6");
+
+    expect(payload.code).toBe("invalid_tool_input");
+    expect(payload.title).toBe("Invalid Tool Input");
+    expect(payload.message).toContain("execute_cell");
+    expect(payload.message).toContain("progressInterval");
+    expect(payload.message).toContain("the tool itself is working");
+    expect(payload.message).not.toContain("check the server logs");
+  });
+
+  it("identifies an unknown tool by name", () => {
+    const payload = buildChatApiErrorPayload(
+      new NoSuchToolError({ toolName: "run_notebook" }),
+      "vercel"
+    );
+
+    expect(payload.code).toBe("invalid_tool_input");
+    expect(payload.message).toContain("run_notebook");
+  });
+
+  it("keeps an error-shaped object's message when instanceof Error fails", () => {
+    // Server-runtime bundling and stream serialization both produce these, and
+    // discarding the message is what made the original failure unreadable.
+    const payload = buildChatApiErrorPayload(
+      { message: "Kernel connection closed unexpectedly" },
+      "vercel"
+    );
+
+    expect(payload.message).toBe("Kernel connection closed unexpectedly");
+  });
+
+  it("falls back to the generic message only when there is nothing to report", () => {
+    const payload = buildChatApiErrorPayload({}, "vercel");
+
+    expect(payload.message).toContain("check the server logs");
   });
 });

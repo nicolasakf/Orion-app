@@ -20,6 +20,54 @@ describe("Jupyter-compatible notebook class hooks", () => {
     expect(heading.closest(".jp-RenderedHTMLCommon")).toBeInTheDocument();
   });
 
+  it("scopes markdown style tags to rendered content only", () => {
+    const { container } = render(
+      <MarkdownRenderer
+        source={`
+<style>
+  body, .jp-RenderedHTMLCommon, .jp-OutputArea-output,
+  .cm-editor, .jp-InputArea-editor {
+    font-family: Arial, sans-serif;
+  }
+</style>
+
+# Styled heading
+`}
+      />,
+    );
+
+    const style = container.querySelector("style");
+    expect(style).toHaveAttribute(
+      "data-orion-style-scoped",
+      "notebook-editor",
+    );
+    expect(style?.textContent).toContain(
+      ".notebook-editor-content-area .jp-RenderedHTMLCommon",
+    );
+    expect(style?.textContent).toContain(
+      ".orion-app-view .jp-OutputArea-output",
+    );
+    expect(style?.textContent).not.toContain("body,");
+    expect(style?.textContent).not.toContain(".cm-editor");
+    expect(style?.textContent).not.toContain(".jp-InputArea-editor");
+    expect(container.querySelector(".wmde-markdown")).not.toHaveStyle({
+      fontFamily: "var(--font-sans), sans-serif",
+    });
+  });
+
+  it("does not rewrite style examples inside fenced code blocks", () => {
+    const { container } = render(
+      <MarkdownRenderer
+        source={'```html\n<style>body { font-family: serif; }</style>\n```'}
+      />,
+    );
+
+    expect(container.querySelector("style")).not.toBeInTheDocument();
+    expect(container.querySelector("code")).toHaveTextContent(
+      "<style>body { font-family: serif; }</style>",
+    );
+  });
+
   it("marks HTML outputs with the JupyterLab rendered HTML class", () => {
     render(
       <HtmlOutputRenderer

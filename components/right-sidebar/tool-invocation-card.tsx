@@ -9,7 +9,7 @@
  */
 
 import * as React from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -331,7 +331,7 @@ interface ToolInvocationCardProps {
   };
 }
 
-export function ToolInvocationCard({
+function ToolInvocationCardImpl({
   toolName,
   args: rawArgs,
   result,
@@ -362,18 +362,49 @@ export function ToolInvocationCard({
     detectIsError(result, isPending, leadingText)
   );
   const isWarning = detectIsWarning(isPending, isError, leadingText);
-  const fullResultText = resultToText(result);
-  /** Expanded panel: selected tools hide redundant metadata; full text stays in tool result. */
-  const cardResultText = cardDisplayTextForToolResult(toolName, fullResultText);
-  const devDisplaySegments = IS_TOOL_CARD_DEV_OVERLAY
-    ? getToolResultDisplaySegments(toolName, fullResultText)
-    : null;
-  const notebookCellSourceChanges = getNotebookCellSourceChanges(fullResultText);
+
+  /**
+   * Stringifying a result is O(payload), and an `execute_cell` result can carry
+   * hundreds of KB of base64. During an agent loop this card re-renders on every
+   * streaming commit, so the collapsed path must never touch the full text —
+   * only whether text exists at all.
+   */
+  const hasResultText = typeof result === "string" ? result.length > 0 : result != null;
+  const canExpand = !isPending && hasResultText;
+
+  /**
+   * Cell-delta rows render while collapsed, but the marker they look for only
+   * ever appears in the plain-text results that mutation tools return, so
+   * structured payloads skip the walk entirely.
+   */
+  const notebookCellSourceChanges = useMemo(
+    () => (typeof result === "string" ? getNotebookCellSourceChanges(result) : []),
+    [result]
+  );
+
   const plotlyInspectionImage =
     toolName === "inspect_plotly_output" ? getPlotlyInspectionImage(result) : null;
+
+  // Everything below is read only by the expanded panel — keep it out of the
+  // collapsed render path entirely.
+  const fullResultText = useMemo(
+    () => (isExpanded ? resultToText(result) : ""),
+    [isExpanded, result]
+  );
+  /** Expanded panel: selected tools hide redundant metadata; full text stays in tool result. */
+  const cardResultText = useMemo(
+    () => (isExpanded ? cardDisplayTextForToolResult(toolName, fullResultText) : ""),
+    [isExpanded, toolName, fullResultText]
+  );
+  const devDisplaySegments = useMemo(
+    () =>
+      IS_TOOL_CARD_DEV_OVERLAY && isExpanded
+        ? getToolResultDisplaySegments(toolName, fullResultText)
+        : null,
+    [isExpanded, toolName, fullResultText]
+  );
   /** Scroll/size observer: in dev the expanded pre shows the full raw result. */
   const expandedScrollKey = IS_TOOL_CARD_DEV_OVERLAY ? fullResultText : cardResultText;
-  const canExpand = !isPending && !!fullResultText;
 
   const awaitCommandCountdown = useAwaitCommandCountdown(toolName, args, isPending);
   const toolLabel =
@@ -556,6 +587,45 @@ export function ToolInvocationCard({
     </div>
   );
 }
+
+/**
+ * A long agent loop renders one card per step and re-renders the whole run on
+ * every streaming commit, so a settled card must not repaint just because a
+ * later step arrived.
+ *
+ * The parent builds `conversationReference` inline and wraps `onApprove` /
+ * `onReject` in fresh closures each render, so a shallow compare would never
+ * hit — compare those by value and identity-check only what actually drives
+ * this card's output.
+ */
+export const ToolInvocationCard = React.memo(
+  ToolInvocationCardImpl,
+  (prev, next) => {
+    if (prev.toolName !== next.toolName) return false;
+    if (prev.state !== next.state) return false;
+    if (prev.result !== next.result) return false;
+    if (prev.args !== next.args) return false;
+    if (prev.errorText !== next.errorText) return false;
+    if (prev.className !== next.className) return false;
+    if (prev.pendingApproval !== next.pendingApproval) return false;
+    if (prev.toolApprovalMode !== next.toolApprovalMode) return false;
+    if (prev.onToolApprovalModeChange !== next.onToolApprovalModeChange) return false;
+    if (Boolean(prev.onApprove) !== Boolean(next.onApprove)) return false;
+    if (Boolean(prev.onReject) !== Boolean(next.onReject)) return false;
+
+    const prevRef = prev.conversationReference;
+    const nextRef = next.conversationReference;
+    if (Boolean(prevRef) !== Boolean(nextRef)) return false;
+    if (prevRef && nextRef) {
+      if (prevRef.toolCallId !== nextRef.toolCallId) return false;
+      if (prevRef.messageId !== nextRef.messageId) return false;
+      if (prevRef.messageIndex !== nextRef.messageIndex) return false;
+      if (prevRef.partIndex !== nextRef.partIndex) return false;
+    }
+
+    return true;
+  }
+);
 
 // ============================================================================
 // Small private sub-components

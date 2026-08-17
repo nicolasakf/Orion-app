@@ -40,6 +40,7 @@ import { downloadChatTranscriptMarkdown } from "@/lib/chat/export-chat-transcrip
 import {
   formatCellReferenceLabel,
   formatOutputReferenceLabel,
+  formatReferencesForMessage,
   normalizeChatMessageMetadata,
   parseChatMessageReferences,
   type ChatReferenceOption,
@@ -61,7 +62,7 @@ import {
   runContextRecoveryAttempt,
 } from "@/lib/chat/context-recovery";
 import { compactConversation } from "@/lib/agent/context-manager";
-import { buildWirePayload, stripInspectedRasterData } from "@/lib/agent/context-optimizer";
+import { buildWirePayload, stripAllRasterData } from "@/lib/agent/context-optimizer";
 import { resolveModelDisplayLabel } from "@/lib/agent/model-display-label";
 import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
 import {
@@ -72,9 +73,11 @@ import {
 } from "@/lib/agent/local-provider-models";
 import { UNKNOWN_CONTEXT_FALLBACK_TOKENS } from "@/lib/agent/token-budget";
 import {
-  ContextPreflightResultSchema,
-  type ContextPreflightResult,
-} from "@/lib/agent/context-preflight";
+  ContextMeasurementSchema,
+  exceedsContextBudget,
+  shouldCompactBeforeSend,
+  type ContextMeasurement,
+} from "@/lib/agent/context-usage";
 import { useAssistantChatOptional } from "@/lib/agent";
 import type { AgentRule } from "@/lib/agent/rules";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
@@ -87,10 +90,7 @@ import {
 } from "@/lib/agent/interaction-modes";
 import { isReadOnlyBashBlocked } from "@/lib/agent/read-only-bash-guard";
 import { restoreEditCheckpoint } from "@/lib/agent/edit-checkpoint-restore";
-import {
-  isExecutionToolResult,
-  prepareExecutionToolResultForModel,
-} from "@/lib/agent/visual-evidence";
+import { prepareToolResultForModel } from "@/lib/agent/visual-evidence";
 import {
   advanceResearchSessionForContinuation,
   createInactiveResearchSession,
@@ -152,8 +152,7 @@ import {
   getCompletedToolContinuationKey,
   shouldContinueAfterToolCalls,
 } from "./assistant-turn-state";
-import { useContextEstimate } from "./context-usage-pill";
-import { useDebouncedContextPreflight } from "./use-debounced-context-preflight";
+import { useContextUsage } from "./use-context-usage";
 import { usePendingCostAutoRefresh } from "./use-pending-cost-auto-refresh";
 import {
   ORION_GITHUB_ISSUES_URL,
@@ -952,7 +951,11 @@ export function RightSidebar({
           outputPrice: 0,
           cachedPrice: 0,
           icon: getProviderIcon(providerId),
-          contextWindow: 32768,
+          // Locally served models have no catalog entry, so their real window is
+          // unknown. The server resolves the same models to
+          // UNKNOWN_CONTEXT_FALLBACK_TOKENS; matching it keeps the model tooltip
+          // from contradicting the budget every measurement is taken against.
+          contextWindow: UNKNOWN_CONTEXT_FALLBACK_TOKENS,
           supportsImageInput: false,
           supportsForcedToolChoice: false,
           supportsToolCalling: false,
@@ -2282,14 +2285,11 @@ export function RightSidebar({
 
   /** Runs the server-side context measurement against the real prepared prompt. */
   const requestContextPreflight = useCallback(
-    async (candidateMessages: UIMessage[], signal?: AbortSignal): Promise<ContextPreflightResult> => {
+    async (candidateMessages: UIMessage[], signal?: AbortSignal): Promise<ContextMeasurement> => {
       const wireMessages = buildWirePayload(
         candidateMessages,
         compactionSummaryRef.current,
-        {
-          retentionTurns: contextSettingsRef.current.optimizerRetentionTurns,
-          researchActive: researchSessionRef.current.active,
-        }
+        { retentionTurns: contextSettingsRef.current.optimizerRetentionTurns }
       );
       const response = await fetch("/api/chat/context/preflight", {
         method: "POST",
@@ -2303,7 +2303,7 @@ export function RightSidebar({
       if (!response.ok) {
         throw new Error(`Context preflight returned HTTP ${response.status}`);
       }
-      return ContextPreflightResultSchema.parse(await response.json());
+      return ContextMeasurementSchema.parse(await response.json());
     },
     [buildChatRequestBody]
   );
@@ -2395,7 +2395,6 @@ export function RightSidebar({
             ...body,
             messages: buildWirePayload(messages, compactionSummaryRef.current, {
               retentionTurns: contextSettingsRef.current.optimizerRetentionTurns,
-              researchActive: researchSessionRef.current.active,
             }),
           },
         };
@@ -2524,7 +2523,7 @@ export function RightSidebar({
           ? normalizedFinalMessages[checkpointUserMessageIndex]?.id
           : undefined;
       const persistedMessages = attachPersistedToolTimings(
-        stripInspectedRasterData(normalizedFinalMessages),
+        stripAllRasterData(normalizedFinalMessages),
         toolTimingsRef.current
       );
       const newChatMessages: ChatMessage[] = persistedMessages.map((m, messageIndex) => {
@@ -2591,6 +2590,7 @@ export function RightSidebar({
         reactiveContextRetryRef.current = true;
         compactionInFlightRef.current = true;
         setIsCompacting(true);
+        const recoveryToastId = toast.loading("Compacting context and retrying…");
         const outboundSnapshot = lastOutboundMessagesRef.current?.slice();
         const currentMessages = outboundSnapshot ?? messagesRef.current.slice();
         const prevSummary = compactionSummaryRef.current;
@@ -2600,6 +2600,10 @@ export function RightSidebar({
             previousSummary: prevSummary,
             preflight: (candidateMessages) =>
               requestContextPreflight(candidateMessages).catch(() => null),
+            buildPayload: (candidateMessages) =>
+              buildWirePayload(candidateMessages, compactionSummaryRef.current, {
+                retentionTurns: contextSettingsRef.current.optimizerRetentionTurns,
+              }),
             compact: async () =>
               (
                 await compactConversation(currentMessages, {
@@ -2608,6 +2612,7 @@ export function RightSidebar({
                   model: apiModelId,
                   provider: modelInfo.provider,
                   retentionTurns: 1,
+                  contextSettings: contextSettingsRef.current,
                 })
               ).summary,
             persistSummary: async (summary) => {
@@ -2629,11 +2634,16 @@ export function RightSidebar({
               void sendMessage();
             },
           });
+          toast.success("Context compacted. Retrying request…", {
+            id: recoveryToastId,
+          });
         })()
           .catch((err) => {
             console.error("Reactive compaction failed:", err);
             const message = err instanceof Error ? err.message : String(err);
-            toast.error(`Context recovery stopped: ${message}`);
+            toast.error(`Context recovery stopped: ${message}`, {
+              id: recoveryToastId,
+            });
           })
           .finally(() => {
             compactionInFlightRef.current = false;
@@ -2651,57 +2661,39 @@ export function RightSidebar({
       automaticContinuationPendingRef.current = false;
     }
   }, [status]);
-  const selectedContextWindow =
-    getModel(selectedModel)?.contextWindow ?? UNKNOWN_CONTEXT_FALLBACK_TOKENS;
   const draftImageAttachmentCount = React.useMemo(
     () => draftAttachments.filter((attachment) => attachment.imageFilePart).length,
     [draftAttachments]
   );
   const deferredMessagesForContext = React.useDeferredValue(messages);
-  const fallbackContextEstimate = useContextEstimate(
-    deferredMessagesForContext,
-    selectedContextWindow,
-    currentChat?.compactionSummary,
-    {
-      maxOutputTokens: getModel(selectedModel)?.maxOutputTokens,
-      autoCompactThreshold: effectiveSettings.agent.context.compactionAutoThreshold,
-      optimizerRetentionTurns: effectiveSettings.agent.context.optimizerRetentionTurns,
-      additionalImageCount: draftImageAttachmentCount,
-    }
-  );
-  const draftPreflightMessages = React.useMemo(
-    () => appendDraftForPreflight(
-      deferredMessagesForContext,
-      input,
-      draftAttachments
-        .map((attachment) => attachment.imageFilePart)
-        .filter((part): part is FileUIPart => part !== undefined),
-      draftReferences
-    ),
-    [deferredMessagesForContext, input, draftAttachments, draftReferences]
+
+  // Bumped on every successful compaction so a pre-compaction measurement is
+  // never carried over onto a transcript it no longer describes.
+  const [compactionEpoch, setCompactionEpoch] = useState(0);
+
+  const contextDraft = React.useMemo(
+    () => ({
+      text: input,
+      imageAttachmentCount: draftImageAttachmentCount,
+      // The server inlines exactly this block, so price its real length.
+      referenceBlockChars: formatReferencesForMessage(draftReferences).length,
+    }),
+    [input, draftImageAttachmentCount, draftReferences]
   );
 
-  const requestDraftContextPreflight = React.useCallback(
-    (signal: AbortSignal) =>
-      requestContextPreflight(draftPreflightMessages, signal),
-    [draftPreflightMessages, requestContextPreflight]
-  );
-  const [contextPreflight, setContextPreflight] = useDebouncedContextPreflight(
-    requestDraftContextPreflight
-  );
-
-  const contextEstimate = React.useMemo(() => {
-    if (!contextPreflight) return fallbackContextEstimate;
-    return {
-      totalTokens: contextPreflight.measurement.estimatedInputTokens,
-      cap: contextPreflight.budget.usableInputTokens,
-      percentUsed: contextPreflight.measurement.percentUsed,
-      contextWindow: contextPreflight.model.contextWindow,
-      outputReserve: contextPreflight.budget.outputReserve,
-      thresholdTokens: contextPreflight.budget.thresholdTokens,
-      breakdown: contextPreflight.measurement.breakdown,
-    };
-  }, [contextPreflight, fallbackContextEstimate]);
+  const {
+    usage: contextUsage,
+    phase: contextUsagePhase,
+    setAnchor: setContextAnchor,
+  } = useContextUsage({
+    messages: deferredMessagesForContext,
+    draft: contextDraft,
+    modelKey: selectedModel,
+    chatId: effectiveChatId ?? null,
+    compactionEpoch,
+    isTurnActive: isLoading,
+    requestMeasurement: requestContextPreflight,
+  });
 
   // Ref to always hold the latest addToolOutput so async tool callbacks
   // never invoke a stale closure (which would see an outdated `status`
@@ -2903,6 +2895,7 @@ export function RightSidebar({
     if (!modelInfo?.provider) return null;
     compactionInFlightRef.current = true;
     setIsCompacting(true);
+    const compactionToastId = toast.loading("Compacting conversation…");
 
     try {
       const measurementMessages = opts?.measurementMessages ?? messagesRef.current;
@@ -2914,6 +2907,7 @@ export function RightSidebar({
         provider: modelInfo.provider,
         retentionTurns:
           opts?.retentionTurns ?? contextSettingsRef.current.compactionRetentionTurns,
+        contextSettings: contextSettingsRef.current,
       });
 
       // Install the summary before measuring so preflight builds the compacted replay.
@@ -2923,14 +2917,13 @@ export function RightSidebar({
         ...result.summary,
         tokensSaved:
           beforePreflight && afterPreflight
-            ? Math.max(
-              0,
-              beforePreflight.measurement.estimatedInputTokens -
-                afterPreflight.measurement.estimatedInputTokens
-              )
+            ? Math.max(0, beforePreflight.inputTokens - afterPreflight.inputTokens)
             : 0,
       };
-      setContextPreflight(afterPreflight);
+      // Invalidate the pre-compaction anchor before installing the new one, so a
+      // measurement of the old transcript can never be shown against the new one.
+      setCompactionEpoch((epoch) => epoch + 1);
+      if (afterPreflight) setContextAnchor(afterPreflight);
       await chatStorage.updateCompactionSummary(effectiveChatId, measuredSummary);
       compactionSummaryRef.current = measuredSummary;
 
@@ -2944,13 +2937,16 @@ export function RightSidebar({
       toast.success(
         beforePreflight && afterPreflight
           ? `Compacted — freed ${savedK > 0 ? `${savedK}k` : "some"} tokens`
-          : "Compacted — token savings will be measured on the next preflight"
+          : "Compacted — token savings will be measured on the next preflight",
+        { id: compactionToastId }
       );
 
       return measuredSummary;
     } catch (err) {
       console.error("Compaction failed:", err);
-      toast.error("Failed to compact conversation. Please try again.");
+      toast.error("Failed to compact conversation. Please try again.", {
+        id: compactionToastId,
+      });
       return null;
     } finally {
       compactionInFlightRef.current = false;
@@ -2962,7 +2958,7 @@ export function RightSidebar({
     effectiveChatId,
     modelInfo?.provider,
     requestContextPreflight,
-    setContextPreflight,
+    setContextAnchor,
     setChats,
   ]);
 
@@ -3210,16 +3206,14 @@ export function RightSidebar({
     ]
   );
 
-  /** Applies model-specific raster preview handling for execution evidence. */
+  /** Applies model-specific raster preview handling to every tool result shape. */
   const prepareAgentToolResult = useCallback(
-    async (result: unknown): Promise<unknown> => {
-      if (!isExecutionToolResult(result)) return result;
-      return prepareExecutionToolResultForModel({
+    async (result: unknown): Promise<unknown> =>
+      prepareToolResultForModel({
         result,
         supportsImageInput: modelInfo?.supportsImageInput === true,
         imageMaxBase64Chars: effectiveSettings.agent.toolOutput.imageBase64CharBudget,
-      });
-    },
+      }),
     [
       effectiveSettings.agent.toolOutput.imageBase64CharBudget,
       modelInfo?.supportsImageInput,
@@ -3447,6 +3441,7 @@ export function RightSidebar({
 
               const subagentResult = await runSubagent({
                 subagentType,
+                contextSettings: contextSettingsRef.current,
                 availableSubagents: assistant.availableSubagents,
                 agentRules: assistant.availableRules,
                 description,
@@ -4526,13 +4521,15 @@ export function RightSidebar({
       );
       try {
         let preflight = await requestContextPreflight(candidateMessages);
-        setContextPreflight(preflight);
-        if (preflight.measurement.status !== "ok" && !compactionInFlightRef.current) {
+        setContextAnchor(preflight);
+        if (shouldCompactBeforeSend(preflight) && !compactionInFlightRef.current) {
           const compacted = await runCompaction({ measurementMessages: candidateMessages });
           if (compacted) {
             preflight = await requestContextPreflight(candidateMessages);
-            setContextPreflight(preflight);
-            if (preflight.measurement.status !== "ok") {
+            setContextAnchor(preflight);
+            // Only warn about a real overflow. Still being above the compaction
+            // threshold means the request fits — warning there is a false alarm.
+            if (exceedsContextBudget(preflight)) {
               toast.warning("The prepared prompt is still above the context budget; sending anyway.");
             }
           } else {
@@ -5186,6 +5183,7 @@ export function RightSidebar({
               key="main-chat-body"
               viewKey={`main:${effectiveChatId ?? "no-chat"}`}
               messages={visibleMessages}
+              compactionSummary={currentChat?.compactionSummary}
               error={error}
               isLoading={isLoading}
               isAgentTurnActive={isAgentTurnActive}
@@ -5251,7 +5249,8 @@ export function RightSidebar({
               onImmediateSlashCommand={handleImmediateSlashCommand}
               onRefreshSlashCommands={assistant ? handleRefreshSlashCommands : undefined}
               hasMessages={visibleMessages.length > 0}
-              contextEstimate={contextEstimate}
+              contextUsage={contextUsage}
+              contextUsagePhase={contextUsagePhase}
               simpleContextUsage={isBusinessExperience}
               onCompact={runCompaction}
               isOverContextBudget={isCompacting}

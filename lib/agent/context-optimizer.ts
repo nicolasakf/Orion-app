@@ -5,6 +5,7 @@
  */
 
 import type { UIMessage } from "ai";
+import { stripRasterPayloads, summarizeRasterPayloads } from "./raster-payloads";
 import { OPTIMIZER_RETENTION_STEPS, OPTIMIZER_RETENTION_TURNS } from "./token-budget";
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -31,7 +32,10 @@ function outputCharCount(output: unknown): number {
     const o = output as Record<string, unknown>;
     let n = typeof o.text === "string" ? o.text.length : 0;
     if (typeof o.error === "string") n += o.error.length;
-    if (Array.isArray(o.value)) {
+    // `value` is a plain string for text results and an array for content results.
+    if (typeof o.value === "string") {
+      n += o.value.length;
+    } else if (Array.isArray(o.value)) {
       for (const v of o.value) {
         if (typeof v === "object" && v !== null && typeof (v as Record<string, unknown>).text === "string") {
           n += ((v as { text: string }).text).length;
@@ -43,109 +47,202 @@ function outputCharCount(output: unknown): number {
   return 0;
 }
 
-/** Count images in the output shape used by read_cell_output and similar. */
+/** Count raster previews across every tool-result shape that can carry them. */
 function outputImageCount(output: unknown): number {
-  if (typeof output === "object" && output !== null) {
-    const o = output as Record<string, unknown>;
-    if (Array.isArray(o.images)) return o.images.length;
-    // Multimodal content array { type: "content", value: [...] }
-    if (Array.isArray(o.value)) {
-      return (o.value as unknown[]).filter(
-        (v) =>
-          typeof v === "object" &&
-          v !== null &&
-          (v as Record<string, unknown>).type === "image-data"
-      ).length;
-    }
-  }
-  return 0;
+  return summarizeRasterPayloads(output).count;
 }
+
+/**
+ * Substring every optimizer stub carries. Exported so log tooling can tell a
+ * working optimizer from a silently no-op one without duplicating the wording.
+ */
+export const TOOL_OUTPUT_STUB_MARKER = "stubbed for context";
 
 function stubOutput(output: unknown, toolName: string): string {
   const chars = outputCharCount(output);
   const images = outputImageCount(output);
-  let stub = `[${toolName}: ${chars} chars, stubbed for context]`;
+  let stub = `[${toolName}: ${chars} chars, ${TOOL_OUTPUT_STUB_MARKER}]`;
   if (images > 0) {
     stub += `\n[${images} image(s) stripped for context]`;
   }
   return stub;
 }
 
-function hasLaterAssistantStep(messages: UIMessage[], messageIndex: number): boolean {
-  return messages.slice(messageIndex + 1).some((message) => message.role === "assistant");
+/**
+ * A position in the conversation at part granularity.
+ *
+ * An agent tool loop is a single assistant message whose `parts` array grows by
+ * one step per model call, so message indices alone cannot separate "old" work
+ * from "recent" work. Every retention decision here is therefore a
+ * (message, part) pair rather than a message index.
+ */
+interface StepPosition {
+  messageIndex: number;
+  partIndex: number;
 }
 
-/** Remove raster bytes after a later model step has had a chance to review them. */
+/** Retain-everything sentinel: nothing in the conversation is old. */
+const KEEP_ALL: StepPosition = { messageIndex: 0, partIndex: 0 };
+
+function isBefore(a: StepPosition, b: StepPosition): boolean {
+  if (a.messageIndex !== b.messageIndex) return a.messageIndex < b.messageIndex;
+  return a.partIndex < b.partIndex;
+}
+
+/** The later of two positions, so the tighter retention window wins. */
+function latestPosition(a: StepPosition, b: StepPosition): StepPosition {
+  return isBefore(a, b) ? b : a;
+}
+
+/**
+ * True when any assistant message carries an explicit `step-start` marker.
+ *
+ * The AI SDK emits one per model call, which is the most faithful notion of a
+ * step. Histories predating it (or produced by a provider that omits it) fall
+ * back to counting tool parts, which is one-per-step in practice.
+ */
+function hasExplicitStepMarkers(messages: UIMessage[]): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "assistant" &&
+      message.parts.some((part) => part.type === "step-start")
+  );
+}
+
+/** Walk every assistant part from newest to oldest. */
+function* assistantPartsFromEnd(
+  messages: UIMessage[]
+): Generator<{ position: StepPosition; part: UIMessage["parts"][number] }> {
+  for (let messageIndex = messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
+    const message = messages[messageIndex];
+    if (message.role !== "assistant") continue;
+    for (let partIndex = message.parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      yield { position: { messageIndex, partIndex }, part: message.parts[partIndex] };
+    }
+  }
+}
+
+/**
+ * True when the model has taken at least one step since the given part, so a
+ * raster preview carried there has already had its chance to be reviewed.
+ *
+ * A step can show up two ways: as a later assistant *message* (multi-message
+ * histories, where the model replied after seeing the image), or as a later
+ * step boundary *inside* the same message (agent loops, where every step is
+ * another `step-start` and tool part on one growing assistant message).
+ */
+function hasLaterAssistantStep(messages: UIMessage[], position: StepPosition): boolean {
+  const laterMessageIsAssistant = messages
+    .slice(position.messageIndex + 1)
+    .some((message) => message.role === "assistant");
+  if (laterMessageIsAssistant) return true;
+
+  const message = messages[position.messageIndex];
+  if (message?.role !== "assistant") return false;
+
+  return message.parts
+    .slice(position.partIndex + 1)
+    .some((part) => part.type === "step-start" || part.type.startsWith("tool-"));
+}
+
+/**
+ * Remove raster bytes after a later model step has had a chance to review them.
+ * Covers every raster shape a tool result can use — see `raster-payloads.ts`.
+ */
 export function stripInspectedRasterData(messages: UIMessage[]): UIMessage[] {
   return messages.map((message, messageIndex) => ({
     ...message,
+    parts: message.parts.map((part, partIndex) => {
+      if (!isOutputAvailableToolPart(part)) return part;
+      if (!hasLaterAssistantStep(messages, { messageIndex, partIndex })) {
+        return part;
+      }
+      const toolPart = part as unknown as Record<string, unknown>;
+      const stripped = stripRasterPayloads(toolPart.output);
+      return stripped.changed
+        ? ({ ...part, output: stripped.output } as typeof part)
+        : part;
+    }),
+  })) as UIMessage[];
+}
+
+/** Reason recorded on previews dropped before a conversation is written to disk. */
+const RASTER_NOT_PERSISTED_REASON =
+  "raw preview not persisted; the notebook holds the original output";
+
+/**
+ * Drop raster bytes from every tool result regardless of position.
+ *
+ * Position-aware stripping is the right policy on the wire, where the newest
+ * preview still has to reach the model. Storage has no such requirement: the
+ * notebook holds the real outputs, so persisting base64 only inflates the row
+ * and makes every reload rehydrate it. Session 1786825713795 wrote a single
+ * 1,216,570-byte assistant message this way.
+ */
+export function stripAllRasterData(messages: UIMessage[]): UIMessage[] {
+  return messages.map((message) => ({
+    ...message,
     parts: message.parts.map((part) => {
-      if (!hasLaterAssistantStep(messages, messageIndex)) return part;
       if (!isOutputAvailableToolPart(part)) return part;
       const toolPart = part as unknown as Record<string, unknown>;
-      const output = toolPart.output;
-      if (typeof output !== "object" || output === null || Array.isArray(output)) return part;
-      const visuals = (output as Record<string, unknown>).visuals;
-      if (!Array.isArray(visuals)) return part;
-      let changed = false;
-      const nextVisuals = visuals.map((visual) => {
-        if (typeof visual !== "object" || visual === null) return visual;
-        const record = visual as Record<string, unknown>;
-        if (!("data" in record)) return visual;
-        changed = true;
-        const { data: _data, ...withoutData } = record;
-        return {
-          ...withoutData,
-          visualInspectionUnavailableReason: "raw preview removed after a subsequent model step",
-        };
-      });
-      return changed
-        ? ({ ...part, output: { ...(output as Record<string, unknown>), visuals: nextVisuals } } as typeof part)
+      const stripped = stripRasterPayloads(toolPart.output, RASTER_NOT_PERSISTED_REASON);
+      return stripped.changed
+        ? ({ ...part, output: stripped.output } as typeof part)
         : part;
     }),
   })) as UIMessage[];
 }
 
 /**
- * Return the 0-based index of the first message that should be kept verbatim
- * (everything before this index is "old" and gets optimized).
+ * Return the first position that should be kept verbatim (everything before it
+ * is "old" and gets optimized).
  *
  * "Turns" are counted as user messages. We retain the last `retentionTurns`
  * user messages plus the assistant responses that follow them.
  */
-function findRetentionCutoff(messages: UIMessage[], retentionTurns: number): number {
-  if (retentionTurns <= 0) return 0;
+function findRetentionCutoff(messages: UIMessage[], retentionTurns: number): StepPosition {
+  if (retentionTurns <= 0) return KEEP_ALL;
 
   let userTurnCount = 0;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "user") {
       userTurnCount++;
       if (userTurnCount >= retentionTurns) {
-        return i;
+        return { messageIndex: i, partIndex: 0 };
       }
     }
   }
   // Fewer user turns than retention window — keep everything
-  return 0;
+  return KEEP_ALL;
 }
 
 /**
- * Research loops usually happen inside one user turn, so user-turn retention
- * never trims them. Count assistant/tool steps from the end as a loop-aware cap.
+ * Agent tool loops run inside a single user turn *and* a single assistant
+ * message, so neither user-turn nor message-level retention trims them. Count
+ * step boundaries backwards through the parts themselves — that is the only
+ * granularity at which a 38-step loop has anything to trim.
  */
-function findAgentStepRetentionCutoff(messages: UIMessage[], retentionSteps: number): number {
-  if (retentionSteps <= 0) return 0;
+function findAgentStepRetentionCutoff(
+  messages: UIMessage[],
+  retentionSteps: number
+): StepPosition {
+  if (retentionSteps <= 0) return KEEP_ALL;
 
-  let assistantStepCount = 0;
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    if (messages[i].role !== "assistant") continue;
-    if (!messages[i].parts.some((part) => part.type.startsWith("tool-"))) continue;
-    assistantStepCount += 1;
-    if (assistantStepCount >= retentionSteps) {
-      return i;
-    }
+  const useStepMarkers = hasExplicitStepMarkers(messages);
+  let stepCount = 0;
+
+  for (const { position, part } of assistantPartsFromEnd(messages)) {
+    const isBoundary = useStepMarkers
+      ? part.type === "step-start"
+      : part.type.startsWith("tool-");
+    if (!isBoundary) continue;
+
+    stepCount += 1;
+    if (stepCount >= retentionSteps) return position;
   }
-  return 0;
+
+  // Fewer steps than the retention window — keep everything
+  return KEEP_ALL;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -159,18 +256,16 @@ function findAgentStepRetentionCutoff(messages: UIMessage[], retentionSteps: num
  */
 export function optimizeMessagesForWire(
   messages: UIMessage[],
-  opts?: { retentionTurns?: number; retentionSteps?: number; researchActive?: boolean }
+  opts?: { retentionTurns?: number; retentionSteps?: number }
 ): UIMessage[] {
   const withoutInspectedRasterData = stripInspectedRasterData(messages);
   const retention = opts?.retentionTurns ?? OPTIMIZER_RETENTION_TURNS;
-  const userTurnCutoffIdx = findRetentionCutoff(withoutInspectedRasterData, retention);
-  const agentStepCutoffIdx = opts?.researchActive === true
-    ? findAgentStepRetentionCutoff(
-        withoutInspectedRasterData,
-        opts?.retentionSteps ?? OPTIMIZER_RETENTION_STEPS
-      )
-    : 0;
-  const cutoffIdx = Math.max(userTurnCutoffIdx, agentStepCutoffIdx);
+  const userTurnCutoff = findRetentionCutoff(withoutInspectedRasterData, retention);
+  const agentStepCutoff = findAgentStepRetentionCutoff(
+    withoutInspectedRasterData,
+    opts?.retentionSteps ?? OPTIMIZER_RETENTION_STEPS
+  );
+  const cutoff = latestPosition(userTurnCutoff, agentStepCutoff);
 
   return withoutInspectedRasterData.map((msg, idx) => {
     const hasOldToolParts = msg.parts.some(
@@ -180,11 +275,11 @@ export function optimizeMessagesForWire(
 
     return {
       ...msg,
-      parts: msg.parts.map((part) => {
+      parts: msg.parts.map((part, partIndex) => {
         if (!part.type.startsWith("tool-")) return part;
         const toolName = part.type.slice("tool-".length);
         const p = part as unknown as Record<string, unknown>;
-        const oldByStepRetention = idx < cutoffIdx;
+        const oldByStepRetention = isBefore({ messageIndex: idx, partIndex }, cutoff);
         if (!oldByStepRetention) return part;
 
         const next = { ...p };
@@ -197,15 +292,29 @@ export function optimizeMessagesForWire(
   }) as UIMessage[];
 }
 
+/** True for the placeholder turns `buildWirePayload` injects around a summary. */
+export function isSyntheticCompactionMessageId(id: string): boolean {
+  return id.startsWith("compaction-u-") || id.startsWith("compaction-a-");
+}
+
 /**
  * Build the wire payload: apply compaction summary replay then optimize.
  * This is the single source of truth used by both the transport interceptor
  * and the pre-send token estimator.
+ *
+ * When the summary swallowed the turn that is still being worked on, the
+ * summary carries `resumeFromMessageId` and that user message is re-issued
+ * verbatim after the summary so the model still has something to act on.
  */
 export function buildWirePayload(
   messages: UIMessage[],
-  compactionSummary?: { text: string; coversThrough: string; createdAt: Date } | null,
-  opts?: { retentionTurns?: number; retentionSteps?: number; researchActive?: boolean }
+  compactionSummary?: {
+    text: string;
+    coversThrough: string;
+    createdAt: Date;
+    resumeFromMessageId?: string;
+  } | null,
+  opts?: { retentionTurns?: number; retentionSteps?: number }
 ): UIMessage[] {
   let wire = messages;
 
@@ -233,7 +342,21 @@ export function buildWirePayload(
           },
         ],
       };
-      wire = [syntheticUser, syntheticAsst, ...wire.slice(idx + 1)];
+      // Only replay a resume message that the summary actually absorbed;
+      // anything after the boundary is already carried by the tail below.
+      const resumeIdx = compactionSummary.resumeFromMessageId
+        ? wire.findIndex((m) => m.id === compactionSummary.resumeFromMessageId)
+        : -1;
+      const resumeMessage =
+        resumeIdx >= 0 && resumeIdx <= idx && wire[resumeIdx].role === "user"
+          ? wire[resumeIdx]
+          : undefined;
+      wire = [
+        syntheticUser,
+        syntheticAsst,
+        ...(resumeMessage ? [resumeMessage] : []),
+        ...wire.slice(idx + 1),
+      ];
     }
   }
 

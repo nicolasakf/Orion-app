@@ -56,6 +56,8 @@ interface EditorProps {
   onIsRunningChange?: Dispatch<SetStateAction<boolean>>;
   onNotebookChange?: (notebook: NotebookType | null) => void;
   onUnsavedChangesChange?: (hasUnsavedChanges: boolean) => void;
+  /** Reports an unresolved disk/editor divergence so autosave can pause. */
+  onDocumentConflictChange?: (hasConflict: boolean) => void;
   onTextSnapshotGetterChange?: (
     getter: OpenDocumentSnapshotProvider["getTextSnapshot"] | null,
   ) => void;
@@ -120,6 +122,7 @@ export function Editor({
   onIsRunningChange,
   onNotebookChange,
   onUnsavedChangesChange,
+  onDocumentConflictChange,
   onTextSnapshotGetterChange,
   onNotebookSnapshotGetterChange,
   onTextSaveHandlerChange,
@@ -262,6 +265,20 @@ export function Editor({
   };
 
   useEffect(() => {
+    if (!isTextBackedEditor) return;
+    onDocumentConflictChange?.(
+      textFileModel.documentSyncState.status === "conflicted",
+    );
+    return () => {
+      onDocumentConflictChange?.(false);
+    };
+  }, [
+    isTextBackedEditor,
+    onDocumentConflictChange,
+    textFileModel.documentSyncState.status,
+  ]);
+
+  useEffect(() => {
     onTextSnapshotGetterChange?.(
       isTextBackedEditor ? textFileModel.getSnapshot : null,
     );
@@ -335,6 +352,9 @@ export function Editor({
         onIsRunningChange={onIsRunningChange}
         onNotebookChange={onNotebookChange}
         onUnsavedChangesChange={onUnsavedChangesChange}
+        onDocumentConflictChange={
+          isTextBackedEditor ? undefined : onDocumentConflictChange
+        }
         onFileLoadError={onFileLoadError}
         onNotebookSnapshotGetterChange={onNotebookSnapshotGetterChange}
         onNotebookSaveHandlerChange={onNotebookSaveHandlerChange}

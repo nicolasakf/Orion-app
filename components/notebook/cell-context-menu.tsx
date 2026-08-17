@@ -129,7 +129,10 @@ export function CellContextMenu({
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
-      <ContextMenuContent className="w-56" onCloseAutoFocus={handleCloseAutoFocus}>
+      <ContextMenuContent
+        className="w-max [&_[data-slot=context-menu-item]]:whitespace-nowrap [&_[data-slot=context-menu-sub-trigger]]:whitespace-nowrap"
+        onCloseAutoFocus={handleCloseAutoFocus}
+      >
         {cellType === CellType.MARKDOWN && onMarkdownAction && (
           <>
             <TooltipProvider delayDuration={300}>

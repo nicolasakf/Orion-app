@@ -5,6 +5,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useEffect } from "react";
 
 import { NotebookEditor } from "@/components/notebook/notebook-editor";
 import type {
@@ -30,6 +31,7 @@ type NotebookAppViewTestProps = {
   businessEditMode?: boolean;
   onGoToSourceCell?: (cellIndex: number) => void;
   onSaveMarkdownCell?: (cellIndex: number, source: string) => Promise<void>;
+  onAddAllCellsToAppView?: () => void;
   onOrionUiStateChange?: (
     key: string,
     value: OrionUiLocalValue,
@@ -48,8 +50,32 @@ vi.mock("@/components/notebook/notebook-app-view", () => ({
   },
 }));
 
+/** Cell text Monaco holds locally, keyed by cell index, before it is flushed. */
+const unflushedCellSources = vi.hoisted(() => new Map<number, string>());
+
 vi.mock("@/components/notebook/notebook-cell", () => ({
-  NotebookCell: () => null,
+  NotebookCell: ({
+    cell,
+    cellIndex,
+    onRegisterRef,
+  }: {
+    cell: { source: string[] };
+    cellIndex: number;
+    onRegisterRef?: (
+      cellIndex: number,
+      ref: { getSource: () => string; focusSource: () => void } | null,
+    ) => void;
+  }) => {
+    useEffect(() => {
+      onRegisterRef?.(cellIndex, {
+        getSource: () =>
+          unflushedCellSources.get(cellIndex) ?? cell.source.join(""),
+        focusSource: () => {},
+      });
+      return () => onRegisterRef?.(cellIndex, null);
+    }, [cell, cellIndex, onRegisterRef]);
+    return null;
+  },
 }));
 
 vi.mock("@/components/notebook/notebook-publish-dialog", () => ({
@@ -156,6 +182,7 @@ async function getOrionUiUnmountCallback(): Promise<
 afterEach(() => {
   cleanup();
   notebookAppViewMock.mockClear();
+  unflushedCellSources.clear();
   vi.restoreAllMocks();
 });
 
@@ -278,6 +305,56 @@ describe("NotebookEditor App View source navigation", () => {
   });
 });
 
+describe("NotebookEditor App View bulk cell add", () => {
+  it("adds every markdown cell and notebook output to App View metadata", async () => {
+    const notebook = makeNotebook();
+    notebook.cells[0]!.metadata = { orion: { id: "markdown-cell" } };
+    notebook.cells[1]!.outputs = [
+      ...(notebook.cells[1]!.outputs ?? []),
+      {
+        output_type: OutputType.DISPLAY_DATA,
+        data: { "text/plain": ["second"] },
+        metadata: {},
+      },
+    ];
+    const contentsManager = {
+      get: vi.fn().mockResolvedValue({ content: notebook }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+
+    render(
+      <NotebookEditor
+        filepath="/workspace/report.ipynb"
+        activeNotebookView="app"
+        kernelService={makeKernelService(contentsManager)}
+      />,
+    );
+
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.onAddAllCellsToAppView).toBeTypeOf("function");
+    });
+
+    const props = notebookAppViewMock.mock.lastCall?.[0] as NotebookAppViewTestProps;
+    act(() => props.onAddAllCellsToAppView?.());
+
+    await waitFor(() => {
+      const nextProps = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(nextProps?.notebook?.cells[0]?.metadata?.orion?.app?.enabled).toBe(
+        true,
+      );
+      expect(nextProps?.notebook?.cells[1]?.metadata?.orion?.app?.outputs).toEqual({
+        "0": { enabled: true },
+        "1": { enabled: true },
+      });
+    });
+  });
+});
+
 describe("NotebookEditor agent execution state", () => {
   it("refreshes a clean open notebook after a matching ContentsManager save", async () => {
     const path = "/workspace/report.ipynb";
@@ -339,6 +416,71 @@ describe("NotebookEditor agent execution state", () => {
         | undefined;
       expect(props?.notebook?.metadata.title).toBe("After agent edit");
     });
+  });
+
+  it("keeps cell text that has not left its change debounce yet", async () => {
+    const path = "/workspace/report.ipynb";
+    let currentNotebook = {
+      ...makeNotebook(),
+      metadata: { title: "Before agent edit" },
+    };
+    let fileChangedHandler:
+      | ((sender: unknown, args: {
+          type: "save";
+          oldValue: null;
+          newValue: { path: string; last_modified: string; size: number };
+        }) => void)
+      | null = null;
+    const contentsManager = {
+      get: vi.fn().mockImplementation(async () => ({ content: currentNotebook })),
+      save: vi.fn().mockResolvedValue(undefined),
+      fileChanged: {
+        connect: vi.fn((handler) => {
+          fileChangedHandler = handler;
+        }),
+        disconnect: vi.fn(),
+      },
+    };
+
+    const view = render(
+      <NotebookEditor
+        filepath={path}
+        kernelService={makeKernelService(contentsManager)}
+      />,
+    );
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.notebook?.metadata.title).toBe("Before agent edit");
+      expect(fileChangedHandler).toBeTypeOf("function");
+    });
+
+    // Monaco holds the new text, but the 300ms change debounce has not fired,
+    // so nothing has marked the notebook dirty yet.
+    unflushedCellSources.set(1, "1 + 2");
+
+    currentNotebook = {
+      ...makeNotebook(),
+      metadata: { title: "After agent edit" },
+    };
+    act(() => {
+      fileChangedHandler?.(contentsManager, {
+        type: "save",
+        oldValue: null,
+        newValue: {
+          path,
+          last_modified: "2026-08-13T12:00:01.000Z",
+          size: 100,
+        },
+      });
+    });
+
+    expect(await view.findByText(/changed on disk/i)).toBeTruthy();
+    const props = notebookAppViewMock.mock.lastCall?.[0] as
+      | NotebookAppViewTestProps
+      | undefined;
+    expect(props?.notebook?.metadata.title).toBe("Before agent edit");
   });
 
   it("does not report a conflict when agent execution state precedes its disk save", async () => {

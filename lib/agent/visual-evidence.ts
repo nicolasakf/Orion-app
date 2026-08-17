@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { stripRasterPayloads } from "./raster-payloads";
 import { TOOL_OUTPUT_IMAGE_BASE64_CHAR_BUDGET, guardToolText } from "./tool-output-guard";
 
 /** Raster MIME types that Orion can pass back to a vision-capable model. */
@@ -88,6 +89,41 @@ async function resizeRasterPreview(
     scale *= 0.7;
   }
   return null;
+}
+
+/**
+ * Applies model-capability handling to a tool result of *any* shape.
+ *
+ * `prepareExecutionToolResultForModel` only recognizes the `{ text, visuals }`
+ * shape, so `read_cell_output` — which returns `{ text, images }` — used to slip
+ * past it entirely: one such call in session 1786825713795 carried 255,707
+ * characters of base64 to a model that then reported it could not read them.
+ * Every other shape falls through to the shared walkers in `raster-payloads.ts`.
+ */
+export async function prepareToolResultForModel(options: {
+  result: unknown;
+  supportsImageInput: boolean;
+  imageMaxBase64Chars: number;
+}): Promise<unknown> {
+  if (isExecutionToolResult(options.result)) {
+    return prepareExecutionToolResultForModel({
+      result: options.result,
+      supportsImageInput: options.supportsImageInput,
+      imageMaxBase64Chars: options.imageMaxBase64Chars,
+    });
+  }
+
+  // A model without image input cannot use raster bytes in any shape, so drop
+  // them rather than paying to ship them.
+  if (!options.supportsImageInput) {
+    const stripped = stripRasterPayloads(
+      options.result,
+      "the selected model does not support image input"
+    );
+    return stripped.changed ? stripped.output : options.result;
+  }
+
+  return options.result;
 }
 
 /** Prepares raster previews according to model capability and configured budget. */

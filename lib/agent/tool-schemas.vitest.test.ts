@@ -67,3 +67,66 @@ describe("research-oriented notebook tool schemas", () => {
     expect("complete_investigation" in orionTools).toBe(false);
   });
 });
+
+describe("execution knob defaults", () => {
+  /** Parses a tool's input schema without the `unknown` gymnastics at each call. */
+  function parseInput(toolName: keyof typeof orionTools, input: unknown) {
+    return (orionTools[toolName] as unknown as {
+      inputSchema: { safeParse: (value: unknown) => { success: boolean; data?: Record<string, unknown> };
+      };
+    }).inputSchema.safeParse(input);
+  }
+
+  it("accepts the execute_cell call that failed in session 1786897277027", () => {
+    // The model omitted progressInterval; the schema rejected the call, and the
+    // rejection surfaced as an unreadable "API Error" it never recovered from.
+    const result = parseInput("execute_cell", {
+      cellIndices: [1, 3, 5, 7, 14],
+      stream: false,
+      timeoutSeconds: 120,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.progressInterval).toBe(1000);
+  });
+
+  it("fills every execution knob when only the essential argument is given", () => {
+    const result = parseInput("execute_cell", { cellIndices: [0] });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toMatchObject({
+      cellIndices: [0],
+      timeoutSeconds: 120,
+      stream: false,
+      progressInterval: 1000,
+    });
+  });
+
+  it("defaults insert_cell to inserting without executing", () => {
+    const result = parseInput("insert_cell", {
+      cells: [{ cellType: "code", cellSource: "1 + 1", orionMetadataJson: "" }],
+      startIndex: -1,
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.execute).toBe(false);
+    expect(result.data?.timeoutSeconds).toBe(120);
+  });
+
+  it("defaults execute_code and delete_cell knobs", () => {
+    expect(parseInput("execute_code", { code: "1 + 1" }).data?.timeoutSeconds).toBe(120);
+    expect(parseInput("delete_cell", { cellIndices: [2] }).data?.includeSource).toBe(false);
+  });
+
+  it("still rejects arguments that carry real intent", () => {
+    // Defaults are only for transport knobs — a missing target is still an error.
+    expect(parseInput("execute_cell", { stream: false }).success).toBe(false);
+    expect(parseInput("execute_code", { timeoutSeconds: 30 }).success).toBe(false);
+    expect(parseInput("insert_cell", { startIndex: 0 }).success).toBe(false);
+  });
+
+  it("keeps knobs inside their documented ranges", () => {
+    expect(parseInput("execute_cell", { cellIndices: [0], progressInterval: 10 }).success).toBe(false);
+    expect(parseInput("execute_cell", { cellIndices: [0], timeoutSeconds: 9_000 }).success).toBe(false);
+  });
+});

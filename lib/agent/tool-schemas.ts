@@ -22,6 +22,30 @@ import { MAX_PERSONAL_CONTEXT_CHARS } from "@/lib/onboarding/personal-context";
 import { EditOrionMetadataParamsSchema } from "./tools/edit-orion-metadata-schema";
 import type { ExecutionToolResult } from "./visual-evidence";
 
+/**
+ * Defaults for execution knobs the model has no real opinion about.
+ *
+ * Orion's schemas otherwise require every argument explicitly, which keeps the
+ * model from silently relying on hidden behaviour. Transport details are the
+ * exception: they are not decisions, and making them mandatory turns a missing
+ * field into a hard tool failure. In session 1786897277027 a model omitted
+ * `progressInterval` on `execute_cell`, got a schema rejection it could not
+ * read, and abandoned the tool for the rest of the run.
+ */
+const DEFAULT_EXECUTION_TIMEOUT_SECONDS = 120;
+const DEFAULT_PROGRESS_INTERVAL_MS = 1000;
+
+/** Per-cell execution timeout, defaulted so a missing value cannot fail the call. */
+function executionTimeoutSecondsSchema(description: string) {
+  return z
+    .number()
+    .int()
+    .min(1)
+    .max(600)
+    .default(DEFAULT_EXECUTION_TIMEOUT_SECONDS)
+    .describe(description);
+}
+
 /** Converts structured execution output into text plus raster model input. */
 function executionResultToModelOutput({ output }: { output: unknown }) {
   if (typeof output === "string") {
@@ -184,7 +208,7 @@ export const orionTools = {
 
   insert_cell: tool({
     description:
-      "Insert one or more code or markdown cells at a specific position in the notebook. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Existing cells at or after the index are shifted down. Each cell can also merge a JSON object into metadata.orion via orionMetadataJson, which is the easiest way to mark inserted App View markdown cells with {\"app\":{\"enabled\":true}}. In Research mode, prefer one coherent research step at a time and interleave markdown observations/decisions with evidence cells.",
+      "Insert one or more code or markdown cells at a specific position in the notebook. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Existing cells at or after the index are shifted down. Each cell can also merge a JSON object into metadata.orion via orionMetadataJson, which is the easiest way to mark inserted App View markdown cells with {\"app\":{\"enabled\":true}}. Set execute=true to run the inserted code cells immediately and get their output back in this same call — prefer that over a separate execute_cell call, which costs an extra model round-trip for no added control. In Research mode, prefer one coherent research step at a time and interleave markdown observations/decisions with evidence cells.",
     inputSchema: z.object({
       cells: z
         .array(
@@ -213,7 +237,17 @@ export const orionTools = {
         .describe(
           "Zero-based index at which to insert the first cell. Use -1 to append at the end. Use the current number of cells to append."
         ),
+      execute: z
+        .boolean()
+        .default(false)
+        .describe(
+          "Whether to run the inserted code cells right away and return their outputs with the insert summary. Markdown cells are skipped. Use true whenever you would otherwise call execute_cell on exactly these cells next. Optional; defaults to false."
+        ),
+      timeoutSeconds: executionTimeoutSecondsSchema(
+        `When execute is true, maximum execution time in seconds per cell. Ignored when execute is false. Optional; defaults to ${DEFAULT_EXECUTION_TIMEOUT_SECONDS}.`
+      ),
     }),
+    toModelOutput: executionResultToModelOutput,
   }),
 
   delete_cell: tool({
@@ -228,8 +262,9 @@ export const orionTools = {
         ),
       includeSource: z
         .boolean()
+        .default(false)
         .describe(
-          "Whether to include deleted cell sources in the response (false keeps the reply shorter)."
+          "Whether to include deleted cell sources in the response (false keeps the reply shorter). Optional; defaults to false."
         ),
     }),
   }),
@@ -277,24 +312,23 @@ export const orionTools = {
         .describe(
           "Array of zero-based cell indices to execute, in order. Provide a single-element array to execute one cell."
         ),
-      timeoutSeconds: z
-        .number()
-        .int()
-        .min(1)
-        .max(600)
-        .describe("Maximum execution time in seconds per cell (e.g. 60)."),
+      timeoutSeconds: executionTimeoutSecondsSchema(
+        `Maximum execution time in seconds per cell. Optional; defaults to ${DEFAULT_EXECUTION_TIMEOUT_SECONDS}.`
+      ),
       stream: z
         .boolean()
+        .default(false)
         .describe(
-          "Whether to stream output progressively (true) or return when each cell finishes without progress chunks (false)."
+          "Whether to stream output progressively (true) or return when each cell finishes without progress chunks (false). Optional; defaults to false."
         ),
       progressInterval: z
         .number()
         .int()
         .min(250)
         .max(10000)
+        .default(DEFAULT_PROGRESS_INTERVAL_MS)
         .describe(
-          "When stream is true, how often (in ms) to emit progress updates (250–10000)."
+          `When stream is true, how often (in ms) to emit progress updates (250–10000). Optional; defaults to ${DEFAULT_PROGRESS_INTERVAL_MS}.`
         ),
     }),
     toModelOutput: executionResultToModelOutput,
@@ -302,7 +336,7 @@ export const orionTools = {
 
   read_cell_output: tool({
     description:
-      "Read one or more outputs from notebook cells, preferring Orion's unsaved editor buffer for the active notebook before falling back to the Jupyter server. Outputs are intelligently formatted by mime type. For DataFrames it returns a TSV table; for Plotly charts a structured summary; for images the actual image data (so you can see it); for plain text the raw text. Use this after execute_cell to inspect results you cannot fully see. Pass multiple reads to fetch several outputs in one call.",
+      "Read one or more outputs from notebook cells, preferring Orion's unsaved editor buffer for the active notebook before falling back to the Jupyter server. Outputs are intelligently formatted by mime type. For DataFrames it returns a TSV table; for Plotly charts a structured summary; for plain text the raw text. For images it returns the image itself only when the selected model accepts image input, and a placeholder explaining why otherwise — check the result rather than assuming you will be able to see it. Do NOT re-read an image that execute_cell or execute_code already returned in this turn; you have already been shown it, and fetching it again costs the same tokens for nothing. Pass multiple reads to fetch several outputs in one call.",
     inputSchema: z.object({
       reads: z
         .array(
@@ -376,12 +410,9 @@ export const orionTools = {
       code: z
         .string()
         .describe("Python or IPython code to execute in the kernel."),
-      timeoutSeconds: z
-        .number()
-        .int()
-        .min(1)
-        .max(600)
-        .describe("Maximum execution time in seconds."),
+      timeoutSeconds: executionTimeoutSecondsSchema(
+        `Maximum execution time in seconds. Optional; defaults to ${DEFAULT_EXECUTION_TIMEOUT_SECONDS}.`
+      ),
     }),
     toModelOutput: executionResultToModelOutput,
   }),
