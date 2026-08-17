@@ -268,7 +268,7 @@ describe("agent path prompt contract", () => {
   });
 
   it("uses absolute open-file hints when a Jupyter root is known", () => {
-    const prompt = buildAskModeSystemPrompt({
+    const prompt = buildEditModeSystemPrompt({
       rootDirectory: "/Users/taylor",
       workspaceDirectory: "project",
       activeFilePath: "project/src/app.py",
@@ -277,6 +277,32 @@ describe("agent path prompt contract", () => {
     expect(prompt).toContain("When the user says \"this file\", they mean `/Users/taylor/project/src/app.py`");
     expect(prompt).toContain('read_file` with path="/Users/taylor/project/src/app.py"');
     expect(prompt).toContain('edit_file` with path="/Users/taylor/project/src/app.py"');
+  });
+
+  it("never points a read-only mode at tools it was not given", () => {
+    const prompt = buildAskModeSystemPrompt({
+      rootDirectory: "/Users/taylor",
+      workspaceDirectory: "project",
+      activeFilePath: "project/src/app.py",
+      notebookPath: undefined,
+    });
+
+    expect(prompt).toContain('read_file` with path="/Users/taylor/project/src/app.py"');
+    expect(prompt).not.toContain('edit_file` with path=');
+    expect(prompt).not.toContain("Call `use_notebook` before using cell-level notebook tools.");
+    expect(prompt).toContain("`use_notebook` is unavailable in this mode");
+  });
+
+  it("describes an open notebook without offering unavailable notebook actions", () => {
+    const askPrompt = buildAskModeSystemPrompt({
+      rootDirectory: "/Users/taylor",
+      notebookPath: "project/notebooks/analysis.ipynb",
+    });
+
+    expect(askPrompt).toContain("## Open Notebook");
+    expect(askPrompt).not.toContain('mode="connect"');
+    expect(askPrompt).not.toContain('mode="create"');
+    expect(askPrompt).toContain("you cannot connect to this notebook or create a new one");
   });
 
   it("falls back to Jupyter-relative paths when the root is unavailable", () => {
@@ -288,5 +314,15 @@ describe("agent path prompt contract", () => {
     expect(prompt).toContain("Absolute host paths are unavailable");
     expect(prompt).toContain("Use Jupyter-root-relative paths");
     expect(prompt).toContain('read_file` with path="project/src/app.py"');
+    expect(prompt).toContain("Orion cannot access files outside the Jupyter root");
+  });
+
+  it("still states the path contract when no root or workspace is known", () => {
+    const prompt = buildAgentSystemPrompt();
+
+    expect(prompt).toContain("## Jupyter Path Context");
+    expect(prompt).toContain("Neither the Jupyter root nor a workspace directory is known");
+    expect(prompt).toContain("Absolute host paths are unavailable");
+    expect(prompt).toContain("Orion cannot access files outside the Jupyter root");
   });
 });

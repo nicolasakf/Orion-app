@@ -12,6 +12,9 @@ import {
 } from "@/lib/agent/agent-system-prompt";
 import type { InteractionModeConfig } from "@/lib/agent/interaction-modes";
 import { getToolsForInteractionMode } from "@/lib/agent/interaction-modes";
+import { resolveModeToolCapabilities } from "@/lib/agent/mode-capabilities";
+import { filterDiscoverableSubagents } from "@/lib/agent/subagents/discovery";
+import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import { getModelGateway, type GatewayResponse } from "@/lib/agent/model-gateway";
 import type { CredentialMode, ProviderId } from "@/lib/agent/model-gateway-types";
 import type { AgentRule } from "@/lib/agent/rules";
@@ -98,20 +101,43 @@ export function prepareChatInvocation(
     communicationStyle: input.communicationStyle,
     customCommunicationStyle: input.customCommunicationStyle,
     customSystemPrompt: input.interactionMode.customSystemPrompt,
+    // Capability wording is derived from the mode's real configuration, which
+    // users can customize per mode — including for the built-ins.
+    modeToolNames: input.interactionMode.toolNames,
+    bashPolicy: input.interactionMode.bashPolicy,
+    businessExperienceMode: input.businessExperienceMode,
+    availableSkills: input.availableSkills,
+    availableSubagents: input.availableSubagents,
+    forcedSkillNames: input.missingForcedSkillNames,
+    forcedSubagentName: input.forcedSubagentName,
+    enableSkills,
+    enableSubagents,
   };
 
   let agentSystemPrompt: string | undefined;
   if ((effectiveMode === "Research" || effectiveMode === "Agent") &&
       input.origin === "subagent" && input.subagentPrompt) {
+    // A sub-agent must work only in its temporary notebook copy. The parent's
+    // editor context describes the user's GUI, so passing it through would add
+    // "Open Notebook" / "Connected Notebook" sections telling the sub-agent to
+    // connect to — or keep operating on — a notebook its own prompt forbids
+    // touching. Only report a connection once it is the sub-agent's own copy.
+    const subagentConnectedNotebookPath =
+      input.connectedNotebookPath === input.subagentPrompt.tmpNotebookPath
+        ? input.connectedNotebookPath
+        : null;
     const envContext = buildAgentEnvironmentContextPrompt({
       serverInfo: input.serverInfo,
       jupyterServerIsLocal: input.jupyterServerIsLocal,
       clientPlatformOs: input.clientPlatformOs,
       rootDirectory: input.rootDirectory,
       workspaceDirectory: input.workspaceDirectory,
-      connectedNotebookPath: input.connectedNotebookPath,
-      notebookPath: input.notebookPath,
-      activeFilePath: input.activeFilePath,
+      connectedNotebookPath: subagentConnectedNotebookPath,
+      capabilities: resolveModeToolCapabilities({
+        baseMode: "Agent",
+        toolNames: input.interactionMode.toolNames,
+        bashPolicy: input.interactionMode.bashPolicy,
+      }),
     });
     agentSystemPrompt = buildSubagentSystemPrompt({
       subagent: input.subagentPrompt,
@@ -122,47 +148,13 @@ export function prepareChatInvocation(
       personalContext: input.personalContext,
     });
   } else if (effectiveMode === "Research") {
-    agentSystemPrompt = buildResearchModeSystemPrompt({
-      ...sharedPromptOptions,
-      availableSkills: input.availableSkills,
-      availableSubagents: input.availableSubagents,
-      forcedSkillNames: input.missingForcedSkillNames,
-      forcedSubagentName: input.forcedSubagentName,
-      enableSkills,
-      enableSubagents,
-      businessExperienceMode: input.businessExperienceMode,
-    });
+    agentSystemPrompt = buildResearchModeSystemPrompt(sharedPromptOptions);
   } else if (effectiveMode === "Agent") {
-    agentSystemPrompt = buildAgentSystemPrompt({
-      ...sharedPromptOptions,
-      availableSkills: input.availableSkills,
-      availableSubagents: input.availableSubagents,
-      forcedSkillNames: input.missingForcedSkillNames,
-      forcedSubagentName: input.forcedSubagentName,
-      enableSkills,
-      enableSubagents,
-      businessExperienceMode: input.businessExperienceMode,
-    });
+    agentSystemPrompt = buildAgentSystemPrompt(sharedPromptOptions);
   } else if (effectiveMode === "Ask") {
-    agentSystemPrompt = buildAskModeSystemPrompt({
-      ...sharedPromptOptions,
-      availableSkills: input.availableSkills,
-      availableSubagents: input.availableSubagents,
-      forcedSkillNames: input.missingForcedSkillNames,
-      forcedSubagentName: input.forcedSubagentName,
-      enableSkills,
-      enableSubagents,
-    });
+    agentSystemPrompt = buildAskModeSystemPrompt(sharedPromptOptions);
   } else {
-    agentSystemPrompt = buildEditModeSystemPrompt({
-      ...sharedPromptOptions,
-      availableSkills: input.availableSkills,
-      availableSubagents: input.availableSubagents,
-      forcedSkillNames: input.missingForcedSkillNames,
-      forcedSubagentName: input.forcedSubagentName,
-      enableSkills,
-      enableSubagents,
-    });
+    agentSystemPrompt = buildEditModeSystemPrompt(sharedPromptOptions);
   }
 
   if (effectiveMode === "Research" && input.researchSession && agentSystemPrompt) {
@@ -188,14 +180,30 @@ export function prepareChatInvocation(
     modelSettings: input.modelSettings,
     credentials: input.credential,
   });
-  const toolMode = input.origin === "subagent"
-    ? {
-        ...input.interactionMode,
-        toolNames: input.interactionMode.toolNames.filter(
-          (toolName) => toolName !== "update_memory",
-        ),
-      }
-    : input.interactionMode;
+  // Never advertise a tool the model cannot use successfully: `delegate` and
+  // `load_skill` both point at a system-prompt list that is omitted when empty,
+  // and sub-agents are hard-blocked from delegating and writing memory.
+  const hasDelegationTarget =
+    filterDiscoverableSubagents(input.availableSubagents ?? []).length > 0 ||
+    Boolean(input.forcedSubagentName);
+  const hasLoadableSkill = (input.availableSkills ?? []).length > 0;
+  const unusableTools = new Set<OrionToolName>();
+  if (input.origin === "subagent") {
+    unusableTools.add("update_memory");
+    unusableTools.add("delegate");
+  } else if (!hasDelegationTarget) {
+    unusableTools.add("delegate");
+  }
+  if (!hasLoadableSkill) {
+    unusableTools.add("load_skill");
+  }
+
+  const toolMode = {
+    ...input.interactionMode,
+    toolNames: input.interactionMode.toolNames.filter(
+      (toolName) => !unusableTools.has(toolName)
+    ),
+  };
   const tools = getToolsForInteractionMode(toolMode);
   const requestedToolChoice: PreparedChatInvocation["toolChoice"] =
     enableSubagents && input.forcedSubagentName && !input.hasDelegatedForcedSubagent

@@ -14,6 +14,14 @@ import { filterDiscoverableSubagents } from "@/lib/agent/subagents/discovery";
 import { filterModelInvocableSkills } from "@/lib/skills/discovery";
 import { buildRequiredSkillsPromptSection } from "@/lib/agent/implicit-skills";
 import { buildRulesPromptSection, type AgentRule } from "@/lib/agent/rules";
+import {
+  buildModeToolAccessSection,
+  resolveModeToolCapabilities,
+  type CapabilityBaseMode,
+  type ModeToolCapabilities,
+} from "@/lib/agent/mode-capabilities";
+import type { InteractionModeBashPolicy } from "@/lib/agent/interaction-modes";
+import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import { PARALLEL_TOOL_CALLS_PROMPT_SECTION } from "@/lib/agent/tool-execution-policy";
 import {
   buildPersonalContextPromptSection,
@@ -187,6 +195,11 @@ export function buildAgentEnvironmentContextPrompt(options: {
   connectedNotebookPath?: string | null;
   notebookPath?: string;
   activeFilePath?: string;
+  /**
+   * Tools the resolved mode actually grants. Editor and path guidance is phrased
+   * against these so the context never tells the model to call a missing tool.
+   */
+  capabilities?: ModeToolCapabilities;
 }): string {
   const {
     serverInfo,
@@ -198,6 +211,8 @@ export function buildAgentEnvironmentContextPrompt(options: {
     notebookPath,
     activeFilePath,
   } = options;
+  const capabilities =
+    options.capabilities ?? resolveModeToolCapabilities({ baseMode: "Agent" });
 
   // XOR: if notebook is open, do not treat activeFilePath as the editor file
   const filePath = notebookPath ? undefined : activeFilePath;
@@ -224,6 +239,14 @@ export function buildAgentEnvironmentContextPrompt(options: {
     sections.push(`## Jupyter Server Environment\n\n${jupyterEnvLines.join("\n")}`);
   }
 
+  /** Terminal line, emitted only when the mode can actually run shell commands. */
+  const terminalLine = (cwd: string): string =>
+    capabilities.canRunShell
+      ? `\n- Use \`bash\` for shell commands. For a fresh terminal in this workspace, pass \`terminalName: ""\` and \`cwd: "${cwd}"\`; follow the \`bash\` / \`await_command\` tool descriptions for terminal reuse and long-running commands.`
+      : "";
+  const outsideRootLine =
+    "- Orion cannot access files outside the Jupyter root. If the user asks for one, say the path is outside the Jupyter root and cannot be accessed.";
+
   if (rootDirectory) {
     sections.push(`## Jupyter Path Context
 
@@ -231,16 +254,26 @@ Jupyter root absolute path: \`${rootDirectory}\`
 Workspace absolute path: \`${workspacePromptPath ?? rootDirectory}\`
 - Use absolute host paths for all path-like tool inputs, including \`notebookPath\`, \`filePath\`, search/list paths, and fresh \`bash\` \`cwd\` values.
 - Orion can access files anywhere under the Jupyter root, including outside the active workspace.
-- Orion cannot access files outside the Jupyter root. If the user asks for one, say the path is outside the Jupyter root and cannot be accessed.
-- Tool implementations convert absolute paths back to Jupyter-relative paths internally; do not do that conversion yourself.
-- Use \`bash\` for shell commands. For a fresh terminal in this workspace, pass \`terminalName: ""\` and \`cwd: "${workspacePromptPath ?? rootDirectory}"\`; follow the \`bash\` / \`await_command\` tool descriptions for terminal reuse and long-running commands.`);
+${outsideRootLine}
+- Tool implementations convert absolute paths back to Jupyter-relative paths internally; do not do that conversion yourself.${terminalLine(
+      workspacePromptPath ?? rootDirectory
+    )}`);
   } else if (workspaceDirectory) {
     sections.push(`## Jupyter Path Context
 
 Workspace directory relative to the Jupyter root: \`${workspaceDirectory}\`
 - Absolute host paths are unavailable for this Jupyter connection because Orion does not know the Jupyter root directory.
 - Use Jupyter-root-relative paths for path-like tool inputs, prefixed with this workspace directory when needed.
-- Use \`bash\` for shell commands. For a fresh terminal in this workspace, pass \`terminalName: ""\` and \`cwd: "${workspaceDirectory}"\`; follow the \`bash\` / \`await_command\` tool descriptions for terminal reuse and long-running commands.`);
+${outsideRootLine}${terminalLine(workspaceDirectory)}`);
+  } else {
+    sections.push(`## Jupyter Path Context
+
+Neither the Jupyter root nor a workspace directory is known for this session.
+- Absolute host paths are unavailable; use Jupyter-root-relative paths for path-like tool inputs.
+${outsideRootLine}
+- Discover the available paths with a listing tool before assuming any location exists.${terminalLine(
+      "."
+    )}`);
   }
 
   if (connectedNotebookPromptPath) {
@@ -248,11 +281,16 @@ Workspace directory relative to the Jupyter root: \`${workspaceDirectory}\`
 
 The notebook currently connected to the agent's notebook tools is: \`${connectedNotebookPromptPath}\`.
 - Cell-level notebook tools operate on this notebook unless a tool call explicitly selects a different notebook ID.`);
-  } else {
+  } else if (capabilities.canConnectNotebook) {
     sections.push(`## Connected Notebook
 
 No notebook is currently connected to the agent's notebook tools.
 - Call \`use_notebook\` before using cell-level notebook tools.`);
+  } else {
+    sections.push(`## Connected Notebook
+
+No notebook is currently connected to the agent's notebook tools.
+- \`use_notebook\` is unavailable in this mode, so cell-level notebook tools cannot be used until the user opens or connects a notebook. Say that instead of trying to connect one yourself.`);
   }
 
   if (notebookPath) {
@@ -263,30 +301,45 @@ No notebook is currently connected to the agent's notebook tools.
 
     const isOpenNotebookConnected =
       connectedNotebookPromptPath === notebookDisplayPath;
-    const connectionInstruction = isOpenNotebookConnected
-      ? "- This notebook is already connected to the agent's notebook tools; do not call `use_notebook` again unless the connection changes."
-      : `- To work on this notebook, call \`use_notebook\` with notebookName=<notebook-filename>, notebookPath="${notebookDisplayPath}", and mode="connect".`;
+    const connectionLines = capabilities.canConnectNotebook
+      ? [
+          isOpenNotebookConnected
+            ? "- This notebook is already connected to the agent's notebook tools; do not call `use_notebook` again unless the connection changes."
+            : `- To work on this notebook, call \`use_notebook\` with notebookName=<notebook-filename>, notebookPath="${notebookDisplayPath}", and mode="connect".`,
+          `- If the user asks to create a **new** notebook, call \`use_notebook\` with a new notebookName, a new notebookPath (e.g. \`${directory}/<descriptive_name>.ipynb\`), and mode="create". Do NOT connect to the existing notebook when the user wants a new one.`,
+          "- Determine whether to connect or create based on the user's request.",
+        ]
+      : [
+          "- `use_notebook` is unavailable in this mode: you cannot connect to this notebook or create a new one. Work with whatever is already connected, and tell the user if the notebook they mean is not.",
+        ];
+    const bufferLine = capabilities.canEditNotebookCells
+      ? "- Official notebook reads see Orion's unsaved editor buffer, and official notebook mutations save the active dirty editor before writing; shell commands read only the saved disk copy."
+      : "- Official notebook reads see Orion's unsaved editor buffer; shell commands read only the saved disk copy.";
 
     sections.push(`## Open Notebook
 
 The user currently has a notebook open in the editor at path: \`${notebookDisplayPath}\`
-${connectionInstruction}
-- If the user asks to create a **new** notebook, call \`use_notebook\` with a new notebookName, a new notebookPath (e.g. \`${directory}/<descriptive_name>.ipynb\`), and mode="create". Do NOT connect to the existing notebook when the user wants a new one.
-- Official notebook reads see Orion's unsaved editor buffer, and official notebook mutations save the active dirty editor before writing; shell commands read only the saved disk copy.
-- Determine whether to connect or create based on the user's request.`);
+${connectionLines.join("\n")}
+${bufferLine}`);
   }
 
   if (filePath) {
     const fileDisplayPath = filePromptPath ?? filePath;
+    const editLine = capabilities.canEditFiles
+      ? `\n- To edit this file, use \`edit_file\` with path="${fileDisplayPath}".`
+      : "\n- `edit_file` is unavailable in this mode; describe the change instead of making it.";
+    const fileBufferLine = capabilities.canEditFiles
+      ? "- Official reads see Orion's unsaved editor buffer, and official mutation tools save the active dirty editor before writing; shell commands read only the saved disk copy."
+      : "- Official reads see Orion's unsaved editor buffer; shell commands read only the saved disk copy.";
+
     sections.push(`## Open File
 
 The user currently has a non-notebook file open in the editor at path: \`${fileDisplayPath}\`
 **This is the file the user is working in.** When the user says "this file", they mean \`${fileDisplayPath}\`.
 - This is already known — do not call tools to discover or verify this path.
-- To read this file, use \`read_file\` with path="${fileDisplayPath}".
-- To edit this file, use \`edit_file\` with path="${fileDisplayPath}".
-- Official reads see Orion's unsaved editor buffer, and official mutation tools save the active dirty editor before writing; shell commands read only the saved disk copy.
-- This is not a notebook — do not call \`use_notebook\`, \`read_notebook\`, or any notebook tools unless the user explicitly asks to work with a notebook.`);
+- To read this file, use \`read_file\` with path="${fileDisplayPath}".${editLine}
+${fileBufferLine}
+- This is not a notebook — do not call \`read_notebook\` or any notebook tools unless the user explicitly asks to work with a notebook.`);
   }
 
   return sections.join("\n\n");
@@ -313,24 +366,57 @@ Core loop:
 - Keep batches flexible when one coherent step needs several cells, but avoid full-notebook scaffolding before the first execution.
 - Finish with a notebook synthesis section covering findings, decisions made along the way, uncertainty, limitations, and useful next steps.`;
 
-const BUSINESS_EXPERIENCE_MODE_SECTION = `## User-Facing Terminology
+/**
+ * Terminology rule for Business View. Applies to every mode, because the
+ * experience mode and the interaction mode are chosen independently.
+ */
+const BUSINESS_TERMINOLOGY_SECTION = `## User-Facing Terminology
 
 Internally, you are working with **Jupyter notebooks** (\`.ipynb\` files, a Jupyter kernel, Jupyter server paths, etc.). Keep that technical understanding when choosing tools and interpreting results.
 
-When **communicating with the user**, always call the notebook format **Orion notebook** (or **Orion notebooks** when plural). Never say "Jupyter notebook" or "Jupyter notebooks" in user-facing messages.
+When **communicating with the user**, always call the notebook format **Orion notebook** (or **Orion notebooks** when plural). Never say "Jupyter notebook" or "Jupyter notebooks" in user-facing messages.`;
 
-## Business View Mode
+/**
+ * Builds the Business View authoring rules, which only make sense when the mode
+ * can actually change notebook content.
+ *
+ * @param capabilities - Resolved mode capabilities
+ * @param enableSkills - Whether `load_skill` is available in this mode
+ */
+function buildBusinessAppViewSection(
+  capabilities: ModeToolCapabilities,
+  enableSkills: boolean
+): string {
+  const intro = `## Business View Mode
 
-The user is in Orion Business View. They see only the notebook **App View**—not raw notebook cells, code, or Notebook view.
+The user is in Orion Business View. They see only the notebook **App View**—not raw notebook cells, code, or Notebook view.`;
 
-When you create, edit, or run a notebook in this session:
-- Load the \`create-app\` skill before selecting App View content.
-- Every narrative section, chart, table, metric, or control the user should see MUST be marked for App View via \`metadata.orion.app\` on the relevant markdown cells and code outputs.
-- After adding or updating notebook content, run cells as needed, then update App View selections so the user's App View reflects the work.
-- Prefer \`orion_ui\` outputs for charts, tables, cards, and interactive controls; load \`orion-ui\` when building those.
+  if (!capabilities.canEditNotebookCells) {
+    return `${intro}
+
+This mode cannot change notebook content, so you cannot update what the user sees in App View. Answer in chat, and when work would require App View changes, say which notebook content would need to be added or marked and let the user switch to a mode that can do it.`;
+  }
+
+  const loadCreateAppLine = enableSkills
+    ? "- Load the `create-app` skill before selecting App View content.\n"
+    : "";
+  const orionUiLine = enableSkills
+    ? "- Prefer `orion_ui` outputs for charts, tables, cards, and interactive controls; load `orion-ui` when building those."
+    : "- Prefer `orion_ui` outputs for charts, tables, cards, and interactive controls.";
+  const executionLine = capabilities.canExecuteCode
+    ? "- After adding or updating notebook content, run cells as needed, then update App View selections so the user's App View reflects the work."
+    : "- After adding or updating notebook content, update App View selections so the user's App View reflects the work. This mode cannot run cells, so tell the user which cells they need to run for the outputs to appear.";
+
+  return `${intro}
+
+When you create or edit a notebook in this session:
+${loadCreateAppLine}- Every narrative section, chart, table, metric, or control the user should see MUST be marked for App View via \`metadata.orion.app\` on the relevant markdown cells and code outputs.
+${executionLine}
+${orionUiLine}
 - Do not treat notebook-only content as complete—the user cannot see it until it is included in App View.
 
 If App View would still be empty after your changes, keep working until meaningful report content is visible there.`;
+}
 
 function buildSubagentDelegationSection(
   availableSubagents?: Array<{
@@ -395,7 +481,7 @@ The user explicitly selected the \`${forcedSubagentName}\` sub-agent for this tu
  * @param options.customCommunicationStyle - Optional custom instructions; overrides preset when non-empty
  * @returns Formatted system prompt string
  */
-export function buildAgentSystemPrompt(options?: {
+export interface ModeSystemPromptOptions {
   /** Open notebook path (editor). Mutually exclusive with activeFilePath. */
   notebookPath?: string;
   /** Open non-notebook file path (editor). Mutually exclusive with notebookPath. */
@@ -439,7 +525,32 @@ export function buildAgentSystemPrompt(options?: {
   enableSubagents?: boolean;
   /** When true, the user is in Business View and only sees notebook App View. */
   businessExperienceMode?: boolean;
-}): string {
+  /**
+   * Tool names the resolved mode actually grants. Every capability claim in the
+   * prompt is derived from these, so a customized mode can never be described as
+   * more or less capable than the tools it ships with. Omit to assume the base
+   * mode's defaults.
+   */
+  modeToolNames?: readonly OrionToolName[];
+  /** Shell policy enforced for `bash`; omit to assume the base mode's default. */
+  bashPolicy?: InteractionModeBashPolicy;
+}
+
+/**
+ * Assembles a mode system prompt from a base prompt plus the dynamic sections.
+ *
+ * All four modes share this assembly so a section added for one mode cannot
+ * silently go missing in another.
+ *
+ * @param basePrompt - Protected, mode-specific base prompt markdown
+ * @param baseMode - Base mode used to resolve default capabilities
+ * @param options - Session context and resolved mode configuration
+ */
+function buildModeSystemPrompt(
+  basePrompt: string,
+  baseMode: CapabilityBaseMode,
+  options?: ModeSystemPromptOptions
+): string {
   const {
     notebookPath,
     rootDirectory,
@@ -459,18 +570,26 @@ export function buildAgentSystemPrompt(options?: {
     customCommunicationStyle,
     customSystemPrompt,
     businessExperienceMode,
+    modeToolNames,
+    bashPolicy,
   } = options ?? {};
   const enableSkills = options?.enableSkills ?? true;
   const enableSubagents = options?.enableSubagents ?? true;
+  const capabilities = resolveModeToolCapabilities({
+    baseMode,
+    toolNames: modeToolNames,
+    bashPolicy,
+  });
 
   // XOR enforcement: a request has either a notebook or a file, never both.
   // If both are somehow provided, notebookPath takes precedence.
   const activeFilePath = notebookPath ? undefined : options?.activeFilePath;
-  const sections: string[] = [
-    ORION_AGENT_SYSTEM_PROMPT,
-    PARALLEL_TOOL_CALLS_PROMPT_SECTION,
-    MEMORY_UPDATE_POLICY_PROMPT_SECTION,
-  ];
+  const sections: string[] = [basePrompt];
+
+  const toolAccessSection = buildModeToolAccessSection(capabilities);
+  if (toolAccessSection) sections.push(toolAccessSection);
+
+  sections.push(PARALLEL_TOOL_CALLS_PROMPT_SECTION, MEMORY_UPDATE_POLICY_PROMPT_SECTION);
 
   const styleSection = buildCommunicationStyleSection({
     style: communicationStyle,
@@ -521,221 +640,44 @@ export function buildAgentSystemPrompt(options?: {
     connectedNotebookPath,
     notebookPath,
     activeFilePath,
+    capabilities,
   });
   if (envContext) {
     sections.push(envContext);
   }
 
   if (businessExperienceMode) {
-    sections.push(BUSINESS_EXPERIENCE_MODE_SECTION);
+    sections.push(
+      BUSINESS_TERMINOLOGY_SECTION,
+      buildBusinessAppViewSection(capabilities, enableSkills)
+    );
   }
 
   return sections.join("\n\n");
+}
+
+export function buildAgentSystemPrompt(options?: ModeSystemPromptOptions): string {
+  return buildModeSystemPrompt(ORION_AGENT_SYSTEM_PROMPT, "Agent", options);
 }
 
 /** Builds the system prompt for Research mode, Orion's evidence-driven default mode. */
-export function buildResearchModeSystemPrompt(options?: Parameters<typeof buildAgentSystemPrompt>[0]): string {
-  const basePrompt = buildAgentSystemPrompt(options);
+export function buildResearchModeSystemPrompt(options?: ModeSystemPromptOptions): string {
+  const basePrompt = buildModeSystemPrompt(ORION_AGENT_SYSTEM_PROMPT, "Research", options);
   return `${basePrompt}\n\n${RESEARCH_MODE_SECTION}`;
 }
 
-/** Shared options accepted by Ask and Edit mode prompt builders. */
-interface ModeModePromptOptions {
-  notebookPath?: string;
-  activeFilePath?: string;
-  rootDirectory?: string;
-  workspaceDirectory?: string;
-  connectedNotebookPath?: string | null;
-  serverInfo?: JupyterServerInfo | null;
-  jupyterServerIsLocal?: boolean;
-  clientPlatformOs?: PlatformOS;
-  /** AGENTS.md / CLAUDE.md rule files loaded for this workspace. */
-  agentRules?: AgentRule[];
-  /** User-maintained background loaded from `~/.orion/ORION.md`. */
-  personalContext?: string;
-  /** Skills available in this session — injected as an Available Skills section. */
-  availableSkills?: Array<{ name: string; description: string; disableModelInvocation?: boolean }>;
-  /** Sub-agents available in this session — injected when delegation is enabled. */
-  availableSubagents?: Array<{
-    name: string;
-    label?: string;
-    description: string;
-    options?: { disableModelInvocation?: boolean };
-  }>;
-  /** Skills selected by the user for this turn. */
-  forcedSkillNames?: string[];
-  /** Sub-agent selected by the user for this turn. */
-  forcedSubagentName?: string;
-  /** Whether to advertise loadable skills in this mode. */
-  enableSkills?: boolean;
-  /** Whether to advertise notebook-defined sub-agent delegation in this mode. */
-  enableSubagents?: boolean;
-  /** Communication style preset; omitting or "default" uses minimal narration instructions */
-  communicationStyle?: AgentCommunicationStyle;
-  /** Custom communication instructions; overrides preset when non-empty */
-  customCommunicationStyle?: string;
-  customSystemPrompt?: string;
-}
-
 /**
- * Builds the system prompt for Ask mode (read-only tool access).
+ * Builds the system prompt for Ask mode (read-only by default).
  * Skills remain available because loading instructions does not mutate user state.
  */
-export function buildAskModeSystemPrompt(options?: ModeModePromptOptions): string {
-  const sections: string[] = [
-    ORION_AGENT_SYSTEM_PROMPT_ASK,
-    PARALLEL_TOOL_CALLS_PROMPT_SECTION,
-    MEMORY_UPDATE_POLICY_PROMPT_SECTION,
-  ];
-
-  const styleSection = buildCommunicationStyleSection({
-    style: options?.communicationStyle,
-    customStyle: options?.customCommunicationStyle,
-  });
-  if (styleSection) sections.push(styleSection);
-
-  const rulesSection = buildRulesPromptSection(options?.agentRules);
-  if (rulesSection) sections.push(rulesSection);
-
-  const personalContextSection = buildPersonalContextPromptSection(
-    options?.personalContext,
-  );
-  if (personalContextSection) sections.push(personalContextSection);
-
-  const customModeSection = buildCustomInteractionModeSection(options?.customSystemPrompt);
-  if (customModeSection) sections.push(customModeSection);
-
-  const subagentSection = options?.enableSubagents === false
-    ? null
-    : buildSubagentDelegationSection(options?.availableSubagents);
-  if (subagentSection) sections.push(subagentSection);
-
-  const skillsSection = options?.enableSkills === false
-    ? ""
-    : buildAvailableSkillsPromptSection(options?.availableSkills);
-  if (skillsSection) sections.push(skillsSection);
-
-  if (options?.forcedSkillNames && options.forcedSkillNames.length > 0) {
-    const requiredSkillsSection = buildRequiredSkillsPromptSection(options.forcedSkillNames);
-    if (requiredSkillsSection) sections.push(requiredSkillsSection);
-  }
-
-  const forcedSubagentSection =
-    buildForcedSubagentPromptSection(options?.forcedSubagentName);
-  if (forcedSubagentSection) sections.push(forcedSubagentSection);
-
-  const envContext = buildAgentEnvironmentContextPrompt({
-    serverInfo: options?.serverInfo,
-    jupyterServerIsLocal: options?.jupyterServerIsLocal,
-    clientPlatformOs: options?.clientPlatformOs,
-    rootDirectory: options?.rootDirectory,
-    workspaceDirectory: options?.workspaceDirectory,
-    connectedNotebookPath: options?.connectedNotebookPath,
-    notebookPath: options?.notebookPath,
-    activeFilePath: options?.notebookPath ? undefined : options?.activeFilePath,
-  });
-  if (envContext) sections.push(envContext);
-
-  return sections.join("\n\n");
+export function buildAskModeSystemPrompt(options?: ModeSystemPromptOptions): string {
+  return buildModeSystemPrompt(ORION_AGENT_SYSTEM_PROMPT_ASK, "Ask", options);
 }
 
 /**
- * Builds the system prompt for Edit mode (file/terminal access, no notebook execution).
- * Includes sub-agent delegation and skills sections just like Agent mode.
+ * Builds the system prompt for Edit mode (file/terminal access, no notebook execution
+ * by default). Includes sub-agent delegation and skills sections just like Agent mode.
  */
-export function buildEditModeSystemPrompt(options?: {
-  notebookPath?: string;
-  activeFilePath?: string;
-  rootDirectory?: string;
-  workspaceDirectory?: string;
-  connectedNotebookPath?: string | null;
-  availableSkills?: Array<{ name: string; description: string; disableModelInvocation?: boolean }>;
-  availableSubagents?: Array<{
-    name: string;
-    label?: string;
-    description: string;
-    options?: { disableModelInvocation?: boolean };
-  }>;
-  agentRules?: AgentRule[];
-  /** User-maintained background loaded from `~/.orion/ORION.md`. */
-  personalContext?: string;
-  forcedSkillName?: string;
-  forcedSkillNames?: string[];
-  forcedSubagentName?: string;
-  serverInfo?: JupyterServerInfo | null;
-  jupyterServerIsLocal?: boolean;
-  clientPlatformOs?: PlatformOS;
-  /** Communication style preset; omitting or "default" uses minimal narration instructions */
-  communicationStyle?: AgentCommunicationStyle;
-  /** Custom communication instructions; overrides preset when non-empty */
-  customCommunicationStyle?: string;
-  /** User-authored instructions appended to this mode's protected base prompt. */
-  customSystemPrompt?: string;
-  /** Whether to advertise loadable skills in this mode. */
-  enableSkills?: boolean;
-  /** Whether to advertise notebook-defined sub-agent delegation in this mode. */
-  enableSubagents?: boolean;
-}): string {
-  const sections: string[] = [
-    ORION_AGENT_SYSTEM_PROMPT_EDIT,
-    PARALLEL_TOOL_CALLS_PROMPT_SECTION,
-    MEMORY_UPDATE_POLICY_PROMPT_SECTION,
-  ];
-
-  const styleSection = buildCommunicationStyleSection({
-    style: options?.communicationStyle,
-    customStyle: options?.customCommunicationStyle,
-  });
-  if (styleSection) sections.push(styleSection);
-
-  const rulesSection = buildRulesPromptSection(options?.agentRules);
-  if (rulesSection) sections.push(rulesSection);
-
-  const personalContextSection = buildPersonalContextPromptSection(
-    options?.personalContext,
-  );
-  if (personalContextSection) sections.push(personalContextSection);
-
-  const customModeSection = buildCustomInteractionModeSection(options?.customSystemPrompt);
-  if (customModeSection) sections.push(customModeSection);
-
-  const subagentSection = options?.enableSubagents === false
-    ? null
-    : buildSubagentDelegationSection(options?.availableSubagents);
-  if (subagentSection) sections.push(subagentSection);
-
-  const skillsSection = options?.enableSkills === false
-    ? ""
-    : buildAvailableSkillsPromptSection(options?.availableSkills);
-  if (skillsSection) sections.push(skillsSection);
-
-  const requiredSkillNames = options?.forcedSkillNames?.length
-    ? options.forcedSkillNames
-    : options?.forcedSkillName
-      ? [options.forcedSkillName]
-      : [];
-
-  if (requiredSkillNames.length > 0) {
-    const requiredSkillsSection = buildRequiredSkillsPromptSection(requiredSkillNames);
-    if (requiredSkillsSection) sections.push(requiredSkillsSection);
-  }
-
-  const forcedSubagentSection =
-    buildForcedSubagentPromptSection(options?.forcedSubagentName);
-  if (forcedSubagentSection) sections.push(forcedSubagentSection);
-
-  const activeFilePath = options?.notebookPath ? undefined : options?.activeFilePath;
-  const envContext = buildAgentEnvironmentContextPrompt({
-    serverInfo: options?.serverInfo,
-    jupyterServerIsLocal: options?.jupyterServerIsLocal,
-    clientPlatformOs: options?.clientPlatformOs,
-    rootDirectory: options?.rootDirectory,
-    workspaceDirectory: options?.workspaceDirectory,
-    connectedNotebookPath: options?.connectedNotebookPath,
-    notebookPath: options?.notebookPath,
-    activeFilePath,
-  });
-  if (envContext) sections.push(envContext);
-
-  return sections.join("\n\n");
+export function buildEditModeSystemPrompt(options?: ModeSystemPromptOptions): string {
+  return buildModeSystemPrompt(ORION_AGENT_SYSTEM_PROMPT_EDIT, "Edit", options);
 }
