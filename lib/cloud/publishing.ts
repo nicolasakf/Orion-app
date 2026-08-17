@@ -22,11 +22,45 @@ export const PublishedNotebookBundleSchema = z.object({
   staticHtmlSnapshot: z.string().min(1),
 });
 
+/** Client-side publish payload used to build Storage artifacts locally. */
 export const PublishNotebookRequestSchema = z.object({
   publishId: z.string().uuid().optional(),
   metadata: PublishedNotebookMetadataSchema,
   bundle: PublishedNotebookBundleSchema,
   password: z.string().trim().min(1).max(256).optional(),
+});
+
+export const PublishNotebookArtifactSizesSchema = z.object({
+  bundleBytes: z.number().int().min(0),
+  htmlBytes: z.number().int().min(0),
+  ipynbBytes: z.number().int().min(0),
+});
+
+export const PublishNotebookUploadSessionRequestSchema = z.object({
+  publishId: z.string().uuid().optional(),
+  metadata: PublishedNotebookMetadataSchema,
+  artifactSizes: PublishNotebookArtifactSizesSchema,
+});
+
+export const PublishNotebookConfirmRequestSchema = z.object({
+  publishId: z.string().uuid(),
+  metadata: PublishedNotebookMetadataSchema,
+  password: z.string().trim().min(1).max(256).optional(),
+});
+
+export const PublishNotebookSignedUploadSchema = z.object({
+  path: z.string(),
+  token: z.string(),
+  signedUrl: z.string().url(),
+});
+
+export const PublishNotebookUploadSessionResponseSchema = z.object({
+  publishId: z.string().uuid(),
+  uploads: z.object({
+    bundle: PublishNotebookSignedUploadSchema,
+    html: PublishNotebookSignedUploadSchema,
+    ipynb: PublishNotebookSignedUploadSchema,
+  }),
 });
 
 export const PublishNotebookResponseSchema = z.object({
@@ -50,14 +84,21 @@ export const MyPublishedNotebooksResponseSchema = z.object({
 export type PublishedNotebookMetadata = z.infer<typeof PublishedNotebookMetadataSchema>;
 export type PublishedNotebookBundle = z.infer<typeof PublishedNotebookBundleSchema>;
 export type PublishNotebookRequest = z.infer<typeof PublishNotebookRequestSchema>;
+export type PublishNotebookUploadSessionResponse = z.infer<
+  typeof PublishNotebookUploadSessionResponseSchema
+>;
 export type PublishNotebookResponse = z.infer<typeof PublishNotebookResponseSchema>;
-
-/** Hosted Orion API request body limit on Vercel (~4.5 MB); keep headroom for JSON overhead. */
-export const ORION_PUBLISH_MAX_REQUEST_BYTES = 4_000_000;
 
 export interface PublishedNotebookSourceDownload {
   filename: string;
   notebook: Record<string, unknown>;
+}
+
+interface PublishArtifacts {
+  bundleJson: string;
+  htmlSnapshot: string;
+  ipynbJson: string;
+  sizes: z.infer<typeof PublishNotebookArtifactSizesSchema>;
 }
 
 /** Builds the public share URL for a published notebook on the Orion API host. */
@@ -83,15 +124,28 @@ interface PublishNotebookOptions {
   request: PublishNotebookRequest;
 }
 
-/** Rejects publish payloads that exceed the hosted API request size limit. */
-function assertPublishRequestWithinSizeLimit(body: string): void {
-  const bytes = new TextEncoder().encode(body).byteLength;
-  if (bytes <= ORION_PUBLISH_MAX_REQUEST_BYTES) return;
+/** UTF-8 byte length of a publish artifact string. */
+export function getPublishArtifactByteLength(value: string): number {
+  return new TextEncoder().encode(value).byteLength;
+}
 
-  const megabytes = (bytes / (1024 * 1024)).toFixed(1);
-  throw new Error(
-    `This notebook is too large to publish (${megabytes} MB). Orion Cloud accepts publish requests up to about 4 MB. Try hiding large chart or image outputs, clearing heavy cell outputs, or publishing a smaller notebook.`,
-  );
+/** Serializes the three publish artifacts and their byte sizes. */
+export function buildPublishArtifacts(request: PublishNotebookRequest): PublishArtifacts {
+  const parsed = PublishNotebookRequestSchema.parse(request);
+  const bundleJson = JSON.stringify(parsed.bundle, null, 2);
+  const htmlSnapshot = parsed.bundle.staticHtmlSnapshot;
+  const ipynbJson = JSON.stringify(parsed.bundle.notebook, null, 2);
+
+  return {
+    bundleJson,
+    htmlSnapshot,
+    ipynbJson,
+    sizes: {
+      bundleBytes: getPublishArtifactByteLength(bundleJson),
+      htmlBytes: getPublishArtifactByteLength(htmlSnapshot),
+      ipynbBytes: getPublishArtifactByteLength(ipynbJson),
+    },
+  };
 }
 
 /** Builds a useful browser-network error for unreachable Orion API endpoints. */
@@ -154,44 +208,134 @@ function getFilenameFromContentDisposition(value: string | null): string {
   return bareMatch?.[1]?.trim() || fallback;
 }
 
-/** Publishes a notebook bundle to the hosted Orion API. */
+/** Uploads one publish artifact directly to Supabase Storage via a signed PUT URL. */
+async function uploadPublishArtifact(params: {
+  signedUrl: string;
+  body: string;
+  contentType: string;
+}): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(params.signedUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": params.contentType,
+        "x-upsert": "true",
+      },
+      body: params.body,
+    });
+  } catch (error) {
+    throw new Error(
+      error instanceof Error
+        ? `Failed to upload publish artifact: ${error.message}`
+        : "Failed to upload publish artifact.",
+    );
+  }
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(
+      detail
+        ? `Failed to upload publish artifact (${response.status}): ${detail.slice(0, 240)}`
+        : `Failed to upload publish artifact (${response.status}).`,
+    );
+  }
+}
+
+/** Publishes a notebook bundle to the hosted Orion API via direct Storage uploads. */
 export async function publishNotebookToCloud({
   apiBaseUrl,
   accessToken,
   request,
 }: PublishNotebookOptions): Promise<PublishNotebookResponse> {
-  const body = JSON.stringify(PublishNotebookRequestSchema.parse(request));
-  assertPublishRequestWithinSizeLimit(body);
+  const parsed = PublishNotebookRequestSchema.parse(request);
+  const artifacts = buildPublishArtifacts(parsed);
+  const authHeaders = {
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+  };
 
-  let response: Response;
+  let sessionResponse: Response;
   try {
-    response = await fetch(`${apiBaseUrl}/api/notebooks/publish`, {
+    sessionResponse = await fetch(`${apiBaseUrl}/api/notebooks/publish/uploads`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body,
+      headers: authHeaders,
+      body: JSON.stringify(
+        PublishNotebookUploadSessionRequestSchema.parse({
+          publishId: parsed.publishId,
+          metadata: parsed.metadata,
+          artifactSizes: artifacts.sizes,
+        }),
+      ),
     });
   } catch (error) {
     throw createOrionApiFetchError(apiBaseUrl, error);
   }
 
-  const json = (await response.json().catch(() => ({}))) as unknown;
-  if (!response.ok) {
+  const sessionJson = (await sessionResponse.json().catch(() => ({}))) as unknown;
+  if (!sessionResponse.ok) {
     const message =
-      typeof json === "object" &&
-      json !== null &&
-      "message" in json &&
-      typeof (json as { message?: unknown }).message === "string"
-        ? (json as { message: string }).message
+      typeof sessionJson === "object" &&
+      sessionJson !== null &&
+      "message" in sessionJson &&
+      typeof (sessionJson as { message?: unknown }).message === "string"
+        ? (sessionJson as { message: string }).message
+        : "Failed to start publish upload session.";
+    throw new Error(message);
+  }
+
+  const session = PublishNotebookUploadSessionResponseSchema.parse(sessionJson);
+
+  await Promise.all([
+    uploadPublishArtifact({
+      signedUrl: session.uploads.bundle.signedUrl,
+      body: artifacts.bundleJson,
+      contentType: "application/json; charset=utf-8",
+    }),
+    uploadPublishArtifact({
+      signedUrl: session.uploads.html.signedUrl,
+      body: artifacts.htmlSnapshot,
+      contentType: "text/html; charset=utf-8",
+    }),
+    uploadPublishArtifact({
+      signedUrl: session.uploads.ipynb.signedUrl,
+      body: artifacts.ipynbJson,
+      contentType: "application/x-ipynb+json; charset=utf-8",
+    }),
+  ]);
+
+  let confirmResponse: Response;
+  try {
+    confirmResponse = await fetch(`${apiBaseUrl}/api/notebooks/publish`, {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify(
+        PublishNotebookConfirmRequestSchema.parse({
+          publishId: session.publishId,
+          metadata: parsed.metadata,
+          password: parsed.password,
+        }),
+      ),
+    });
+  } catch (error) {
+    throw createOrionApiFetchError(apiBaseUrl, error);
+  }
+
+  const confirmJson = (await confirmResponse.json().catch(() => ({}))) as unknown;
+  if (!confirmResponse.ok) {
+    const message =
+      typeof confirmJson === "object" &&
+      confirmJson !== null &&
+      "message" in confirmJson &&
+      typeof (confirmJson as { message?: unknown }).message === "string"
+        ? (confirmJson as { message: string }).message
         : "Failed to publish notebook.";
     throw new Error(message);
   }
 
   return normalizePublishResponse(
     apiBaseUrl,
-    PublishNotebookResponseSchema.parse(json),
+    PublishNotebookResponseSchema.parse(confirmJson),
   );
 }
 
@@ -271,6 +415,7 @@ export async function downloadPublishedNotebookSource(options: {
         headers: {
           Authorization: `Bearer ${options.accessToken}`,
         },
+        redirect: "follow",
       },
     );
   } catch (error) {

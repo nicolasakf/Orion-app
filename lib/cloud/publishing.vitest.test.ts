@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildPublishedNotebookUrl,
+  buildPublishArtifacts,
   downloadPublishedNotebookSource,
   listPublishedNotebooks,
-  ORION_PUBLISH_MAX_REQUEST_BYTES,
   publishNotebookToCloud,
   unpublishNotebookFromCloud,
   PublishNotebookResponseSchema,
@@ -47,6 +47,27 @@ const response = {
   updatedAt: "2026-06-08T10:00:00.000Z",
 };
 
+const uploadSession = {
+  publishId: response.id,
+  uploads: {
+    bundle: {
+      path: "owner/publish/bundle.json",
+      token: "bundle-token",
+      signedUrl: "https://storage.orion.local/upload/bundle",
+    },
+    html: {
+      path: "owner/publish/notebook.html",
+      token: "html-token",
+      signedUrl: "https://storage.orion.local/upload/html",
+    },
+    ipynb: {
+      path: "owner/publish/notebook.ipynb",
+      token: "ipynb-token",
+      signedUrl: "https://storage.orion.local/upload/ipynb",
+    },
+  },
+};
+
 describe("Orion cloud publishing API client", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -61,10 +82,45 @@ describe("Orion cloud publishing API client", () => {
     );
   });
 
-  it("posts a validated publish payload with a Supabase bearer token", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => response,
+  it("builds publish artifacts with byte sizes", () => {
+    const artifacts = buildPublishArtifacts(request);
+    expect(artifacts.bundleJson).toContain('"schemaVersion": 1');
+    expect(artifacts.ipynbJson).toContain('"nbformat": 4');
+    expect(artifacts.sizes.bundleBytes).toBeGreaterThan(0);
+    expect(artifacts.sizes.htmlBytes).toBeGreaterThan(0);
+    expect(artifacts.sizes.ipynbBytes).toBeGreaterThan(0);
+  });
+
+  it("uploads artifacts directly to Storage then confirms publish metadata", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/notebooks/publish/uploads")) {
+        return {
+          ok: true,
+          json: async () => uploadSession,
+        };
+      }
+      if (url.endsWith("/api/notebooks/publish")) {
+        expect(init?.method).toBe("POST");
+        const body = JSON.parse(String(init?.body)) as {
+          publishId: string;
+          metadata: PublishNotebookRequest["metadata"];
+          password?: string;
+        };
+        expect(body.publishId).toBe(response.id);
+        expect(body.metadata.title).toBe("Shared notebook");
+        expect("bundle" in body).toBe(false);
+        return {
+          ok: true,
+          json: async () => response,
+        };
+      }
+      if (url.startsWith("https://storage.orion.local/upload/")) {
+        expect(init?.method).toBe("PUT");
+        expect(init?.headers).toMatchObject({ "x-upsert": "true" });
+        return { ok: true, text: async () => "" };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -77,47 +133,65 @@ describe("Orion cloud publishing API client", () => {
     ).resolves.toEqual(response);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.orion.local/api/notebooks/publish",
+      "https://api.orion.local/api/notebooks/publish/uploads",
       expect.objectContaining({
         method: "POST",
         headers: {
           Authorization: "Bearer token-123",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(request),
       }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.orion.local/api/notebooks/publish",
+      expect.objectContaining({
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://storage.orion.local/upload/bundle",
+      expect.objectContaining({ method: "PUT" }),
     );
   });
 
-  it("rejects publish payloads that exceed the hosted API request size limit", async () => {
-    const fetchMock = vi.fn();
+  it("surfaces publish size-limit errors from the upload session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => ({
+        error: "Payload Too Large",
+        message:
+          "This notebook is too large to publish (5.0 MB). Orion Cloud accepts publish requests up to about 4 MB. Try hiding large chart or image outputs, clearing heavy cell outputs, or publishing a smaller notebook.",
+      }),
+    });
     vi.stubGlobal("fetch", fetchMock);
-
-    const oversizedRequest: PublishNotebookRequest = {
-      ...request,
-      bundle: {
-        ...request.bundle,
-        staticHtmlSnapshot: `<!doctype html><html><body>${"x".repeat(
-          ORION_PUBLISH_MAX_REQUEST_BYTES,
-        )}</body></html>`,
-      },
-    };
 
     await expect(
       publishNotebookToCloud({
         apiBaseUrl: "https://api.orion.local",
         accessToken: "token-123",
-        request: oversizedRequest,
+        request,
       }),
     ).rejects.toThrow(/too large to publish/i);
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.orion.local/api/notebooks/publish/uploads",
+      expect.any(Object),
+    );
   });
 
-  it("sends publish passwords outside the public notebook bundle", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ ...response, hasPassword: true }),
+  it("sends publish passwords only in the confirm request", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/notebooks/publish/uploads")) {
+        return { ok: true, json: async () => uploadSession };
+      }
+      if (url.endsWith("/api/notebooks/publish")) {
+        const body = JSON.parse(String(init?.body)) as { password?: string };
+        expect(body.password).toBe("team-secret");
+        return { ok: true, json: async () => ({ ...response, hasPassword: true }) };
+      }
+      return { ok: true, text: async () => "" };
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -133,24 +207,26 @@ describe("Orion cloud publishing API client", () => {
         request: passwordRequest,
       }),
     ).resolves.toEqual({ ...response, hasPassword: true });
-
-    const [, options] = fetchMock.mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(String(options.body)) as PublishNotebookRequest;
-
-    expect(body.password).toBe("team-secret");
-    expect("password" in body.metadata).toBe(false);
-    expect("password" in body.bundle.metadata).toBe(false);
   });
 
   it("rewrites publish share URLs to the configured API host", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          ...response,
-          url: "http://localhost:3001/p/shared-notebook",
-        }),
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/notebooks/publish/uploads")) {
+          return { ok: true, json: async () => uploadSession };
+        }
+        if (url.endsWith("/api/notebooks/publish")) {
+          return {
+            ok: true,
+            json: async () => ({
+              ...response,
+              url: "http://localhost:3001/p/shared-notebook",
+            }),
+          };
+        }
+        return { ok: true, text: async () => "" };
       }),
     );
 
@@ -169,9 +245,18 @@ describe("Orion cloud publishing API client", () => {
   it("validates malformed publish responses before the UI consumes them", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ ...response, url: "not-a-url" }),
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/notebooks/publish/uploads")) {
+          return { ok: true, json: async () => uploadSession };
+        }
+        if (url.endsWith("/api/notebooks/publish")) {
+          return {
+            ok: true,
+            json: async () => ({ ...response, url: "not-a-url" }),
+          };
+        }
+        return { ok: true, text: async () => "" };
       }),
     );
 
@@ -257,6 +342,7 @@ describe("Orion cloud publishing API client", () => {
         headers: {
           Authorization: "Bearer token-123",
         },
+        redirect: "follow",
       },
     );
   });
