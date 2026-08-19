@@ -1,47 +1,78 @@
 "use client";
 
 import * as React from "react";
-import { DefaultChatTransport } from "ai";
-import { useChat } from "@ai-sdk/react";
-import { FolderOpen, Loader2, RotateCcw, Send, Square } from "lucide-react";
+import { ArrowLeft, ArrowRight, Loader2, Sparkles } from "lucide-react";
 import { z } from "zod";
 
-import { ChatMarkdownRenderer } from "@/components/right-sidebar/chat-markdown-renderer";
+import { BusinessStackPicker } from "@/components/onboarding/business-stack-picker";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
-import { openNativeProjectFolderPicker } from "@/lib/local/project-folder-picker.client";
+import { dispatchSubmitChatMessage } from "@/lib/chat/chat-composer-events";
 import {
-  InterviewTranscriptSchema,
-  MAX_PERSONAL_CONTEXT_CHARS,
+  BusinessStackSelectionSchema,
+  countAnsweredCategories,
+  createEmptyBusinessStackSelection,
+  type BusinessStackSelection,
+} from "@/lib/onboarding/business-tools";
+import {
+  createEmptyOnboardingAnswers,
+  MAX_ONBOARDING_ANSWER_CHARS,
+  OnboardingAnswersSchema,
+  type OnboardingAnswers,
 } from "@/lib/onboarding/personal-context";
 import { cn } from "@/lib/utils";
 
-const InterviewResponseSchema = z.object({
-  transcript: InterviewTranscriptSchema,
+const AnswersResponseSchema = z.object({
+  answers: OnboardingAnswersSchema,
 });
 
-const DraftResponseSchema = z.object({
-  draft: z.string().max(MAX_PERSONAL_CONTEXT_CHARS),
+const StackResponseSchema = z.object({
+  selection: BusinessStackSelectionSchema,
 });
 
 const ErrorResponseSchema = z.object({ message: z.string().optional() });
 
-const STARTER_MESSAGE = {
-  id: "personal-context-welcome",
-  role: "assistant" as const,
-  parts: [
-    {
-      type: "text" as const,
-      text: "I’ll help Orion understand your work and where your data lives. Please don’t share passwords, tokens, or API keys—only describe where access is configured. To start, what kind of work do you do, and what would you most like Orion to help with?",
-    },
-  ],
-};
+/** The message that opens the tool-connection chat when the user opts in. */
+export const CONNECT_TOOLS_CHAT_MESSAGE = "help me setup my tools";
+
+/** The three questions, in the order they are asked. */
+const QUESTIONS: {
+  key: keyof Pick<
+    OnboardingAnswers,
+    "companyDescription" | "roleDescription" | "helpGoal"
+  >;
+  label: string;
+  placeholder: string;
+}[] = [
+  {
+    key: "companyDescription",
+    label: "What does your company do?",
+    placeholder: "What you sell, who buys it, and roughly how big the team is.",
+  },
+  {
+    key: "roleDescription",
+    label: "What kind of work do you do?",
+    placeholder: "Your role and the work that fills most of your week.",
+  },
+  {
+    key: "helpGoal",
+    label: "What would you most like Orion to help with?",
+    placeholder: "The reporting, analysis, or busywork you would hand off first.",
+  },
+];
+
+/**
+ * `questions` collects the three answers, `stack` picks the tools, `generating`
+ * writes `ORION.md`, and `connect` offers the hand-off into a chat.
+ */
+type OnboardingPhase = "loading" | "questions" | "stack" | "generating" | "connect";
 
 interface PersonalContextInterviewProps {
   /** Shows the first-run skip action and marks onboarding complete when used. */
   allowSkip?: boolean;
-  /** Called after a successful save or first-run skip. */
+  /** Called after a successful finish or first-run skip. */
   onDone?: () => void;
   className?: string;
 }
@@ -52,83 +83,97 @@ async function readApiError(response: Response, fallback: string): Promise<strin
   return parsed.success && parsed.data.message ? parsed.data.message : fallback;
 }
 
-/** Guided ChatGPT interview with explicit review before writing `ORION.md`. */
+/**
+ * Business onboarding: three questions, then the tool picker, then a generated
+ * `ORION.md`. It is asked once — later changes go through the agent's
+ * `update_memory` tool rather than a second pass through this form.
+ */
 export function PersonalContextInterview({
   allowSkip = false,
   onDone,
   className,
 }: PersonalContextInterviewProps) {
   const { setUserSettings } = useOrionSettings();
-  const [input, setInput] = React.useState("");
-  const [isLoadingHistory, setIsLoadingHistory] = React.useState(true);
-  const [isGeneratingDraft, setIsGeneratingDraft] = React.useState(false);
-  const [isSaving, setIsSaving] = React.useState(false);
-  const [isChoosingFolder, setIsChoosingFolder] = React.useState(false);
-  const [draft, setDraft] = React.useState<string | null>(null);
-  const [localError, setLocalError] = React.useState<string | null>(null);
-  const messageEndRef = React.useRef<HTMLDivElement | null>(null);
-  const transport = React.useMemo(
-    () => new DefaultChatTransport({ api: "/api/onboarding/interview" }),
-    [],
+  const [phase, setPhase] = React.useState<OnboardingPhase>("loading");
+  const [answers, setAnswers] = React.useState<OnboardingAnswers>(createEmptyOnboardingAnswers);
+  const [stack, setStack] = React.useState<BusinessStackSelection>(
+    createEmptyBusinessStackSelection,
   );
-  const {
-    messages,
-    sendMessage,
-    setMessages,
-    status,
-    error,
-    stop,
-    regenerate,
-  } = useChat({ transport, experimental_throttle: 50 });
-  const isGenerating = status === "submitted" || status === "streaming";
+  const [isFinishing, setIsFinishing] = React.useState(false);
+  const [localError, setLocalError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
-    void fetch("/api/onboarding/interview")
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(
-            await readApiError(response, "Could not load the interview transcript."),
-          );
-        }
-        return InterviewResponseSchema.parse(await response.json());
-      })
-      .then(({ transcript }) => {
-        if (cancelled) return;
-        setMessages(
-          transcript.messages.length > 0
-            ? transcript.messages.map((message) => ({
-                id: message.id,
-                role: message.role,
-                parts: [{ type: "text" as const, text: message.content }],
-              }))
-            : [STARTER_MESSAGE],
+
+    /** Restores both halves of onboarding and resumes at the right screen. */
+    async function restore(): Promise<void> {
+      const [answersResponse, stackResponse] = await Promise.all([
+        fetch("/api/onboarding/answers"),
+        fetch("/api/onboarding/stack"),
+      ]);
+      if (!answersResponse.ok) {
+        throw new Error(
+          await readApiError(answersResponse, "Could not load your saved answers."),
         );
-      })
-      .catch((loadError) => {
-        if (!cancelled) {
-          setLocalError(
-            loadError instanceof Error
-              ? loadError.message
-              : "Could not load the interview transcript.",
-          );
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setIsLoadingHistory(false);
-      });
+      }
+      if (!stackResponse.ok) {
+        throw new Error(
+          await readApiError(stackResponse, "Could not load your saved tool selection."),
+        );
+      }
+      const { answers: saved } = AnswersResponseSchema.parse(await answersResponse.json());
+      const { selection } = StackResponseSchema.parse(await stackResponse.json());
+      if (cancelled) return;
+
+      setAnswers(saved);
+      setStack(selection);
+      const stackDone =
+        Boolean(selection.completedAt) || countAnsweredCategories(selection) > 0;
+      setPhase(saved.updatedAt ? (stackDone ? "connect" : "stack") : "questions");
+    }
+
+    void restore().catch((loadError) => {
+      if (cancelled) return;
+      setLocalError(
+        loadError instanceof Error ? loadError.message : "Could not load your setup.",
+      );
+      // Failing to restore should not trap the user on a spinner.
+      setPhase("questions");
+    });
+
     return () => {
       cancelled = true;
     };
-  }, [setMessages]);
+  }, []);
 
-  React.useEffect(() => {
-    if (typeof messageEndRef.current?.scrollIntoView === "function") {
-      messageEndRef.current.scrollIntoView({ block: "nearest" });
+  /** Persists the answers so a closed dialog resumes where it left off. */
+  const persistAnswers = React.useCallback(async (next: OnboardingAnswers) => {
+    const stamped = { ...next, updatedAt: new Date().toISOString() };
+    setAnswers(stamped);
+    const response = await fetch("/api/onboarding/answers", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(stamped),
+    });
+    if (!response.ok) {
+      setLocalError(await readApiError(response, "Could not save your answers."));
     }
-  }, [messages, status]);
+  }, []);
 
-  /** Marks the Business interview step as dismissed or completed. */
+  /** Persists picker progress on every toggle. */
+  const persistStack = React.useCallback(async (selection: BusinessStackSelection) => {
+    setStack(selection);
+    const response = await fetch("/api/onboarding/stack", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(selection),
+    });
+    if (!response.ok) {
+      setLocalError(await readApiError(response, "Could not save your tool selection."));
+    }
+  }, []);
+
+  /** Marks the Business onboarding step as dismissed or completed. */
   const completeBusinessProfileStep = React.useCallback(async () => {
     await setUserSettings((current) => ({
       ...current,
@@ -139,246 +184,225 @@ export function PersonalContextInterview({
     }));
   }, [setUserSettings]);
 
-  /** Sends one text-only interview answer. */
-  const submitText = React.useCallback(
-    async (text: string) => {
-      const normalized = text.trim();
-      if (!normalized || isGenerating) return;
-      setLocalError(null);
-      setInput("");
-      await sendMessage({ text: normalized });
-    },
-    [isGenerating, sendMessage],
-  );
-
-  /** Adds a folder selected through Orion's validated local project picker. */
-  const chooseLocalFolder = React.useCallback(async () => {
-    setIsChoosingFolder(true);
-    setLocalError(null);
-    try {
-      const selection = await openNativeProjectFolderPicker();
-      if (!selection) return;
-      await submitText(
-        `Validated local data folder: ${selection.name} (Jupyter-root-relative path: ${selection.path || "."}).`,
-      );
-    } catch (folderError) {
-      setLocalError(
-        folderError instanceof Error
-          ? folderError.message
-          : "Could not choose that local folder.",
-      );
-    } finally {
-      setIsChoosingFolder(false);
-    }
-  }, [submitText]);
-
-  /** Generates a full editable replacement draft from the saved transcript. */
-  const reviewProfile = React.useCallback(async () => {
-    setIsGeneratingDraft(true);
-    setLocalError(null);
-    try {
-      const response = await fetch("/api/onboarding/interview/draft", {
-        method: "POST",
-      });
-      if (!response.ok) {
-        throw new Error(
-          await readApiError(response, "Could not generate a personal context draft."),
-        );
-      }
-      const result = DraftResponseSchema.parse(await response.json());
-      setDraft(result.draft);
-    } catch (draftError) {
-      setLocalError(
-        draftError instanceof Error
-          ? draftError.message
-          : "Could not generate a personal context draft.",
-      );
-    } finally {
-      setIsGeneratingDraft(false);
-    }
-  }, []);
-
-  /** Saves the reviewed draft and completes first-run onboarding. */
-  const saveDraft = React.useCallback(async () => {
-    if (draft === null) return;
-    setIsSaving(true);
-    setLocalError(null);
-    try {
-      const response = await fetch("/api/onboarding/profile", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: draft }),
-      });
-      if (!response.ok) {
-        throw new Error(
-          await readApiError(response, "Could not save your personal context."),
-        );
-      }
-      await completeBusinessProfileStep();
-      onDone?.();
-    } catch (saveError) {
-      setLocalError(
-        saveError instanceof Error
-          ? saveError.message
-          : "Could not save your personal context.",
-      );
-    } finally {
-      setIsSaving(false);
-    }
-  }, [completeBusinessProfileStep, draft, onDone]);
-
-  /** Skips first-run collection while leaving Settings available later. */
-  const skipInterview = React.useCallback(async () => {
-    setIsSaving(true);
+  const skipOnboarding = React.useCallback(async () => {
+    setIsFinishing(true);
     setLocalError(null);
     try {
       await completeBusinessProfileStep();
       onDone?.();
     } catch (skipError) {
       setLocalError(
-        skipError instanceof Error ? skipError.message : "Could not skip the interview.",
+        skipError instanceof Error ? skipError.message : "Could not skip setup.",
       );
-    } finally {
-      setIsSaving(false);
+      setIsFinishing(false);
     }
   }, [completeBusinessProfileStep, onDone]);
 
-  if (draft !== null) {
+  /** Generates and saves `ORION.md`, then offers the tool-connection chat. */
+  const generateProfile = React.useCallback(async () => {
+    setPhase("generating");
+    setLocalError(null);
+    const response = await fetch("/api/onboarding/profile/generate", { method: "POST" });
+    if (!response.ok) {
+      setLocalError(await readApiError(response, "Could not write your Orion memory."));
+      return;
+    }
+    setPhase("connect");
+  }, []);
+
+  /**
+   * Ends onboarding. When the user asks for help connecting, the chat message
+   * is dispatched on the next tick so the modal unmounts before the composer
+   * takes focus.
+   */
+  const finish = React.useCallback(
+    async (options: { startChat: boolean }) => {
+      setIsFinishing(true);
+      setLocalError(null);
+      try {
+        await completeBusinessProfileStep();
+        onDone?.();
+        if (options.startChat) {
+          setTimeout(() => dispatchSubmitChatMessage(CONNECT_TOOLS_CHAT_MESSAGE), 0);
+        }
+      } catch (finishError) {
+        setLocalError(
+          finishError instanceof Error ? finishError.message : "Could not finish setup.",
+        );
+        setIsFinishing(false);
+      }
+    },
+    [completeBusinessProfileStep, onDone],
+  );
+
+  const errorBanner = localError ? (
+    <p role="alert" className="text-sm text-destructive">
+      {localError}
+    </p>
+  ) : null;
+
+  if (phase === "loading") {
+    return (
+      <div
+        className={cn(
+          "flex min-h-64 flex-1 items-center justify-center text-sm text-muted-foreground",
+          className,
+        )}
+      >
+        <Loader2 className="mr-2 size-4 animate-spin" />
+        Loading your setup…
+      </div>
+    );
+  }
+
+  if (phase === "questions") {
     return (
       <div className={cn("flex min-h-0 flex-col gap-4", className)}>
-        <div>
-          <h3 className="text-base font-semibold">Review your personal context</h3>
-          <p className="text-sm text-muted-foreground">
-            Edit anything below. Orion writes this file only after you save it.
-          </p>
+        <div className="min-h-0 flex-1 space-y-5 overflow-y-auto pr-1">
+          {QUESTIONS.map((question) => (
+            <div key={question.key} className="space-y-2">
+              <Label htmlFor={question.key}>{question.label}</Label>
+              <Textarea
+                id={question.key}
+                rows={3}
+                maxLength={MAX_ONBOARDING_ANSWER_CHARS}
+                placeholder={question.placeholder}
+                value={answers[question.key]}
+                onChange={(event) =>
+                  setAnswers((current) => ({
+                    ...current,
+                    [question.key]: event.target.value,
+                  }))
+                }
+                onBlur={() => void persistAnswers(answers)}
+              />
+            </div>
+          ))}
+          {errorBanner}
         </div>
-        <Textarea
-          aria-label="Personal context draft"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          className="min-h-72 flex-1 resize-none font-mono text-xs"
-          maxLength={MAX_PERSONAL_CONTEXT_CHARS}
-        />
-        <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-          <span>{draft.length.toLocaleString()} / {MAX_PERSONAL_CONTEXT_CHARS.toLocaleString()}</span>
-          <span>Do not include passwords, tokens, or API keys.</span>
-        </div>
-        {localError ? <p className="text-sm text-destructive">{localError}</p> : null}
-        <div className="flex flex-wrap justify-end gap-2">
-          <Button type="button" variant="outline" disabled={isSaving} onClick={() => setDraft(null)}>
-            Back to interview
-          </Button>
-          <Button type="button" disabled={isSaving || draft.trim().length === 0} onClick={() => void saveDraft()}>
-            {isSaving ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-            Save to ORION.md
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-4">
+          {allowSkip ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={isFinishing}
+              onClick={() => void skipOnboarding()}
+            >
+              Skip for now
+            </Button>
+          ) : (
+            <span />
+          )}
+          <Button
+            type="button"
+            size="sm"
+            onClick={async () => {
+              await persistAnswers(answers);
+              setPhase("stack");
+            }}
+          >
+            Next
+            <ArrowRight className="ml-2 size-4" />
           </Button>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className={cn("flex min-h-0 flex-col gap-4", className)}>
-      <div className="min-h-64 flex-1 space-y-4 overflow-y-auto rounded-lg border bg-muted/20 p-4">
-        {isLoadingHistory ? (
-          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-            <Loader2 className="mr-2 size-4 animate-spin" />
-            Loading your interview…
-          </div>
-        ) : (
-          messages.map((message) => {
-            const content = message.parts
-              .filter((part): part is { type: "text"; text: string } => part.type === "text")
-              .map((part) => part.text)
-              .join("");
-            return (
-              <div
-                key={message.id}
-                className={cn(
-                  "max-w-[90%] rounded-lg px-3 py-2 text-sm",
-                  message.role === "user"
-                    ? "ml-auto bg-primary text-primary-foreground"
-                    : "mr-auto border bg-background",
-                )}
-              >
-                {message.role === "assistant" ? (
-                  <ChatMarkdownRenderer source={content} fontSize={13} />
-                ) : (
-                  <p className="whitespace-pre-wrap">{content}</p>
-                )}
-              </div>
-            );
-          })
-        )}
-        <div ref={messageEndRef} />
-      </div>
-
-      <form
-        className="space-y-2"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void submitText(input);
-        }}
-      >
-        <Textarea
-          aria-label="Interview answer"
-          value={input}
-          disabled={isLoadingHistory || isGenerating}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              void submitText(input);
-            }
-          }}
-          placeholder="Tell Orion about your work, goals, or data…"
-          className="min-h-20 resize-none"
-          maxLength={4_000}
-        />
-        <div className="flex flex-wrap items-center justify-between gap-2">
+  if (phase === "stack") {
+    return (
+      <div className={cn("flex min-h-0 flex-col gap-2", className)}>
+        <div>
           <Button
             type="button"
-            variant="outline"
+            variant="ghost"
             size="sm"
-            disabled={isChoosingFolder || isGenerating}
-            onClick={() => void chooseLocalFolder()}
+            className="-ml-2"
+            onClick={() => setPhase("questions")}
           >
-            {isChoosingFolder ? <Loader2 className="mr-2 size-4 animate-spin" /> : <FolderOpen className="mr-2 size-4" />}
-            Choose local data folder
-          </Button>
-          {isGenerating ? (
-            <Button type="button" variant="outline" size="sm" onClick={() => void stop()}>
-              <Square className="mr-2 size-3 fill-current" />
-              Stop
-            </Button>
-          ) : (
-            <Button type="submit" size="sm" disabled={!input.trim() || isLoadingHistory}>
-              <Send className="mr-2 size-4" />
-              Send
-            </Button>
-          )}
-        </div>
-      </form>
-
-      {(localError ?? error?.message) ? (
-        <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-3">
-          <p className="text-sm text-destructive">{localError ?? error?.message}</p>
-          <Button type="button" variant="outline" size="sm" onClick={() => void regenerate()}>
-            <RotateCcw className="mr-2 size-4" />
-            Retry
+            <ArrowLeft className="mr-2 size-4" />
+            Back
           </Button>
         </div>
-      ) : null}
+        <BusinessStackPicker
+          className="min-h-0 flex-1"
+          value={stack}
+          onChange={(selection) => void persistStack(selection)}
+          onComplete={() => {
+            // Stamped even with nothing selected, so a deliberate "Next" is not
+            // mistaken for an unfinished picker on the next launch.
+            void persistStack({ ...stack, completedAt: new Date().toISOString() });
+            void generateProfile();
+          }}
+          onSkipAll={allowSkip ? () => void skipOnboarding() : undefined}
+        />
+      </div>
+    );
+  }
 
-      <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-4">
-        {allowSkip ? (
-          <Button type="button" variant="ghost" disabled={isSaving || isGenerating} onClick={() => void skipInterview()}>
-            Skip for now
-          </Button>
-        ) : <span />}
-        <Button type="button" disabled={isGeneratingDraft || isGenerating || isLoadingHistory} onClick={() => void reviewProfile()}>
-          {isGeneratingDraft ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-          Review profile
+  if (phase === "generating") {
+    // A model error must not trap the user: "Continue anyway" always moves on.
+    return (
+      <div
+        className={cn("flex min-h-64 flex-1 flex-col items-center justify-center gap-4", className)}
+      >
+        {localError ? (
+          <>
+            <p role="alert" className="max-w-md text-center text-sm text-destructive">
+              {localError}
+            </p>
+            <div className="flex gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={() => void generateProfile()}>
+                Try again
+              </Button>
+              <Button type="button" size="sm" onClick={() => setPhase("connect")}>
+                Continue anyway
+              </Button>
+            </div>
+          </>
+        ) : (
+          <p className="flex items-center text-sm text-muted-foreground">
+            <Loader2 className="mr-2 size-4 animate-spin" />
+            Writing your Orion memory…
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={cn("flex min-h-64 flex-1 flex-col items-center justify-center gap-4", className)}
+    >
+      <Sparkles className="size-8 text-primary" aria-hidden />
+      <div className="max-w-md space-y-2 text-center">
+        <h3 className="text-base font-semibold">
+          Want Orion to help connect your tools?
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          Orion can walk you through reaching the tools you picked, one at a time, and
+          remember how each connection works for next time.
+        </p>
+      </div>
+      {errorBanner}
+      <div className="flex flex-wrap justify-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          disabled={isFinishing}
+          onClick={() => void finish({ startChat: true })}
+        >
+          Yes, help me connect
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={isFinishing}
+          onClick={() => void finish({ startChat: false })}
+        >
+          I&rsquo;ll do it later
         </Button>
       </div>
     </div>

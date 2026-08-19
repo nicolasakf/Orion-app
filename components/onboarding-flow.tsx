@@ -19,8 +19,7 @@ export function OnboardingFlow() {
       ? "experience"
       : !effectiveSettings.providers.inferenceProviderChosen
         ? "provider"
-        : effectiveSettings.appearance.experienceMode === "business" &&
-            !effectiveSettings.onboarding.businessProfileStepCompleted
+        : !effectiveSettings.onboarding.businessProfileStepCompleted
           ? "interview"
           : null;
   if (step === null) return null;
@@ -30,7 +29,7 @@ export function OnboardingFlow() {
       <DialogContent
         className={
           step === "interview"
-            ? "flex h-[min(48rem,calc(100vh-2rem))] w-[calc(100%-2rem)] max-w-2xl flex-col"
+            ? "flex h-[min(48rem,calc(100vh-2rem))] w-[calc(100%-2rem)] max-w-3xl flex-col"
             : step === "experience"
               ? "w-[calc(100%-2rem)] max-w-2xl"
             : "w-[calc(100%-2rem)] max-w-sm"

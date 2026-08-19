@@ -50,6 +50,7 @@ const TOOL_LABELS: Record<OrionToolName, string> = {
   execute_code: "Execute code",
   bash: "Bash",
   await_command: "Await command",
+  kill_command: "Kill command",
   read_file: "Read file",
   edit_file: "Edit file",
   update_memory: "Update memory",
@@ -58,6 +59,7 @@ const TOOL_LABELS: Record<OrionToolName, string> = {
   web_search: "Web search",
   delegate: "Delegate",
   load_skill: "Load skill",
+  connections: "Connections",
 };
 
 const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
@@ -80,7 +82,15 @@ const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
   },
   {
     label: "Files and Terminal",
-    tools: ["read_file", "edit_file", "bash", "await_command", "list_kernels", "shutdown_kernel"],
+    tools: [
+      "read_file",
+      "edit_file",
+      "bash",
+      "await_command",
+      "kill_command",
+      "list_kernels",
+      "shutdown_kernel",
+    ],
   },
   {
     label: "App",
@@ -88,7 +98,7 @@ const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
   },
   {
     label: "Web and Extensions",
-    tools: ["web_fetch", "web_search", "load_skill", "delegate"],
+    tools: ["web_fetch", "web_search", "load_skill", "delegate", "connections"],
   },
 ];
 

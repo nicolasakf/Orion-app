@@ -5,6 +5,7 @@ import * as React from "react";
 import { ChatMarkdownRenderer } from "@/components/right-sidebar/chat-markdown-renderer";
 import { splitStreamingMarkdown } from "@/components/right-sidebar/streaming-markdown";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import { cn } from "@/lib/utils";
 
 interface AssistantMessageProps {
   content: string;
@@ -16,6 +17,10 @@ interface AssistantMessageProps {
     messageIndex: number;
     partIndex: number;
   };
+  /** Overrides the global chat font size for this message. */
+  fontSize?: number;
+  /** Optional classes merged onto the message surface. */
+  className?: string;
 }
 
 /** Render the one active streaming Markdown block without rich parsing. */
@@ -43,9 +48,11 @@ export function AssistantMessage({
   content,
   isStreaming = false,
   conversationReference,
+  fontSize,
+  className,
 }: AssistantMessageProps) {
   const { effectiveSettings } = useOrionSettings();
-  const chatFontSize = effectiveSettings.chat.fontSize;
+  const chatFontSize = fontSize ?? effectiveSettings.chat.fontSize;
   const streamingContent = React.useMemo(
     () => (isStreaming ? splitStreamingMarkdown(content) : null),
     [content, isStreaming]
@@ -54,7 +61,7 @@ export function AssistantMessage({
 
   return (
     <div
-      className="bg-transparent px-1 py-1"
+      className={cn("bg-transparent px-1 py-1", className)}
       data-orion-conversation-reference={conversationReference ? "true" : undefined}
       data-orion-conversation-source={conversationReference ? "assistant" : undefined}
       data-orion-message-id={conversationReference?.messageId}

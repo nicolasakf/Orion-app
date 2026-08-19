@@ -13,6 +13,8 @@ import type { BashParams } from "./types";
 import type { TerminalPool } from "@/lib/shell/terminal-pool";
 import { resolveAgentPath } from "../path-resolver";
 import {
+  buildStalledResultText,
+  classifyUnfinishedCommand,
   DEFAULT_FOREGROUND_BUDGET_MS,
   formatTerminalResult,
   NEXT_STEP_AWAIT_BACKGROUND,
@@ -34,6 +36,26 @@ const OUTPUT_PREVIEW_TAIL_CHARS = 6_000;
 const NON_ASCII_OPTION_TOKEN_RE = /(?:^|\s)(-{1,2}[^\s]*[^\x00-\x7F][^\s]*)/u;
 
 export type TerminalShell = "posix" | "powershell";
+
+/**
+ * Environment forced on every agent-dispatched command.
+ *
+ * Agent commands run in a real PTY, so CLIs that page or prompt when stdout is
+ * a TTY (git, gh, man) block forever waiting for a keypress the agent cannot
+ * send, and the completion marker never prints. These are re-exported on every
+ * dispatch, so an `export PAGER=less` issued by an earlier agent command does
+ * not survive into the next one.
+ */
+const NON_INTERACTIVE_ENV: ReadonlyArray<readonly [string, string]> = [
+  ["PAGER", "cat"],
+  ["GIT_PAGER", "cat"],
+  ["GH_PAGER", "cat"],
+  ["MANPAGER", "cat"],
+  ["LESS", "FRX"],
+  ["GIT_TERMINAL_PROMPT", "0"],
+  ["GH_PROMPT_DISABLED", "1"],
+  ["DEBIAN_FRONTEND", "noninteractive"],
+];
 
 /** Encode arbitrary Unicode command text for safe single-line terminal transport. */
 function encodeUtf8Base64(value: string): string {
@@ -100,8 +122,12 @@ function buildPosixWrappedCommand(
   startMarker: string,
   endMarkerPrefix: string
 ): string {
+  const exports = NON_INTERACTIVE_ENV.map(
+    ([name, value]) => `${name}=${value}`
+  ).join(" ");
   return [
     `command printf '\\n%s\\n' '${startMarker}'`,
+    `export ${exports}`,
     `__orion_payload='${encodedCommand}'`,
     `__orion_cmd=$(command printf '%s' "$__orion_payload" | command base64 -d)`,
     `eval "$__orion_cmd"`,
@@ -124,8 +150,12 @@ function buildPowerShellWrappedCommand(
   startMarker: string,
   endMarkerPrefix: string
 ): string {
+  const envAssignments = NON_INTERACTIVE_ENV.map(
+    ([name, value]) => `$env:${name} = '${value}';`
+  ).join(" ");
   return [
     `[Console]::Out.Write("\`r\`n${startMarker}\`r\`n");`,
+    envAssignments,
     "$__orion_rc = 0;",
     "$global:LASTEXITCODE = $null;",
     "try {",
@@ -227,6 +257,7 @@ export class BashTool extends BaseTool {
     const startMarker = `ORION_CMD_START_${markerId}`;
     const endMarkerPrefix = `ORION_CMD_END_${markerId}`;
     let accumulated = "";
+    let lastOutputAtMs = startedAtMs;
 
     try {
       this.kernelService.readTerminalBuffer(resolvedTerminalName);
@@ -245,6 +276,7 @@ export class BashTool extends BaseTool {
         endMarkerPrefix,
         startedAtMs,
         buffer: "",
+        lastOutputAtMs: startedAtMs,
       });
       this.pool?.touchActivity(resolvedTerminalName);
     } catch (error) {
@@ -283,6 +315,7 @@ export class BashTool extends BaseTool {
         const chunk = this.kernelService.readTerminalBuffer(resolvedTerminalName);
         if (chunk) {
           accumulated += chunk;
+          lastOutputAtMs = Date.now();
           this.pool?.appendPendingBuffer(resolvedTerminalName, chunk);
           this.pool?.touchActivity(resolvedTerminalName);
         }
@@ -328,6 +361,26 @@ export class BashTool extends BaseTool {
         elapsedMs: Date.now() - startedAtMs,
         exitCode: finalProgress.exitCode,
         output: finalProgress.output,
+      });
+    }
+
+    const classification = classifyUnfinishedCommand({
+      output: finalProgress.output,
+      lastOutputAtMs,
+    });
+    if (classification.stalled) {
+      const stalledText = buildStalledResultText(
+        classification.promptLabel,
+        classification.idleMs
+      );
+      return this.buildResult({
+        status: "stalled",
+        terminalName: resolvedTerminalName,
+        elapsedMs: Date.now() - startedAtMs,
+        idleMs: classification.idleMs,
+        output: finalProgress.output,
+        message: stalledText.message,
+        nextStep: stalledText.nextStep,
       });
     }
 

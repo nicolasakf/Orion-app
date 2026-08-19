@@ -14,6 +14,7 @@ import {
 import {
   ToolApprovalModeSchema,
   UserSettingsDocumentSchema,
+  UserTerminalWorkingDirectorySchema,
 } from "@/lib/settings/schema";
 
 describe("ToolApprovalModeSchema", () => {
@@ -26,6 +27,17 @@ describe("ToolApprovalModeSchema", () => {
     ["Autorun", "auto_run"],
   ])("normalizes %s to %s", (input, expected) => {
     expect(ToolApprovalModeSchema.parse(input)).toBe(expected);
+  });
+});
+
+describe("UserTerminalWorkingDirectorySchema", () => {
+  it("accepts workspace and home", () => {
+    expect(UserTerminalWorkingDirectorySchema.parse("workspace")).toBe("workspace");
+    expect(UserTerminalWorkingDirectorySchema.parse("home")).toBe("home");
+  });
+
+  it("falls back to workspace for invalid values", () => {
+    expect(UserTerminalWorkingDirectorySchema.parse("other")).toBe("workspace");
   });
 });
 
@@ -44,6 +56,12 @@ describe("UserSettingsDocumentSchema", () => {
     );
     expect(doc.settings.shell.panelLayout.horizontal).toEqual([15, 50, 20]);
     expect(doc.settings.notebook.output.chartColors).toHaveLength(10);
+    expect(doc.settings.notebook.uiPreferences).toEqual({
+      charts: "Plotly",
+      tables: "Orion UI",
+      otherElements: "Orion UI",
+    });
+    expect(doc.settings.shell.userTerminalWorkingDirectory).toBe("workspace");
     expect(doc.settings.chat.interactionModes.map((mode) => mode.id)).toEqual([
       "Agent",
       "Research",
@@ -94,6 +112,14 @@ describe("settings migrations", () => {
     expect(migrated.settings.agent.toolOutput.textCharBudget).toBe(40_000);
     expect(migrated.settings.agent.execution.maxParallelReadOnlyCalls).toBe(10);
     expect(migrated.settings.shell.mobileBreakpointPx).toBe(768);
+    expect(migrated.settings.shell.userTerminalWorkingDirectory).toBe(
+      "workspace"
+    );
+    expect(migrated.settings.notebook.uiPreferences).toEqual({
+      charts: "Plotly",
+      tables: "Orion UI",
+      otherElements: "Orion UI",
+    });
     expect(migrated.settings.chat.interactionModes.map((mode) => mode.id)).toEqual([
       "Agent",
       "Research",

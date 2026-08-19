@@ -2258,6 +2258,7 @@ export function RightSidebar({
         clientPlatformOs,
         agentCommunicationStyle,
         agentCustomCommunicationStyle,
+        notebookUiPreferences: effectiveSettings.notebook.uiPreferences,
         researchSession: researchSessionRef.current.active ? researchSessionRef.current : undefined,
         researchNudge: researchNudgeRef.current,
         businessExperienceMode: isBusinessExperience,
@@ -2286,6 +2287,7 @@ export function RightSidebar({
       workspaceDirectory,
       isBusinessExperience,
       effectiveSettings.agent.context,
+      effectiveSettings.notebook.uiPreferences,
     ]
   );
 
@@ -3448,6 +3450,7 @@ export function RightSidebar({
               const subagentResult = await runSubagent({
                 subagentType,
                 contextSettings: contextSettingsRef.current,
+                uiPreferences: effectiveSettings.notebook.uiPreferences,
                 availableSubagents: assistant.availableSubagents,
                 agentRules: assistant.availableRules,
                 description,
@@ -3628,6 +3631,7 @@ export function RightSidebar({
       setChats,
       prepareAgentToolResult,
       effectiveSettings.agent.execution.maxParallelReadOnlyCalls,
+      effectiveSettings.notebook.uiPreferences,
     ]
   );
 

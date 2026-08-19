@@ -48,6 +48,7 @@ import type {
   NotebookExportSettings,
   NotebookOutputSettings,
   NotebookSettings,
+  NotebookUiPreferences,
   ShellChatSettings,
   ShellPanelLayoutSettings,
   ShellPanelVisibilitySettings,
@@ -215,6 +216,13 @@ export const BUILTIN_NOTEBOOK_EDITOR_DEFAULTS: NotebookEditorSettings = {
   doublePressTimeoutMs: NOTEBOOK_EDITOR_DOUBLE_PRESS_TIMEOUT_MS,
 };
 
+/** Default libraries for agent-authored notebook and App View interfaces. */
+export const BUILTIN_NOTEBOOK_UI_PREFERENCES: NotebookUiPreferences = {
+  charts: "Plotly",
+  tables: "Orion UI",
+  otherElements: "Orion UI",
+};
+
 /** Full built-in notebook settings (scrollbar flag filled in defaults.ts). */
 export const BUILTIN_NOTEBOOK_DEFAULTS: Omit<
   NotebookSettings,
@@ -223,6 +231,7 @@ export const BUILTIN_NOTEBOOK_DEFAULTS: Omit<
   output: BUILTIN_NOTEBOOK_OUTPUT_DEFAULTS,
   export: BUILTIN_NOTEBOOK_EXPORT_DEFAULTS,
   editor: BUILTIN_NOTEBOOK_EDITOR_DEFAULTS,
+  uiPreferences: BUILTIN_NOTEBOOK_UI_PREFERENCES,
 };
 
 /** Built-in shell panel visibility defaults. */
@@ -269,6 +278,7 @@ export const BUILTIN_SHELL_DEFAULTS: ShellSettings = {
   panelLayout: BUILTIN_SHELL_PANEL_LAYOUT_DEFAULTS,
   sidebar: BUILTIN_SHELL_SIDEBAR_DEFAULTS,
   chat: BUILTIN_SHELL_CHAT_DEFAULTS,
+  userTerminalWorkingDirectory: "workspace",
   mobileBreakpointPx: SHELL_MOBILE_BREAKPOINT_PX,
   minRefreshSpinMs: SHELL_MIN_REFRESH_SPIN_MS,
   toastLimit: SHELL_TOAST_LIMIT,

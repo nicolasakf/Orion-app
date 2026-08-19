@@ -15,14 +15,13 @@ interface BusinessProfileIntroDialogProps {
   embedded?: boolean;
 }
 
-/** Optional Business onboarding interview that creates the user's `ORION.md`. */
+/** Optional first-run setup that creates the user's `ORION.md`. */
 export function BusinessProfileIntroDialog({
   embedded = false,
 }: BusinessProfileIntroDialogProps) {
   const { effectiveSettings, isHydrated } = useOrionSettings();
   const shouldShow =
     isHydrated &&
-    effectiveSettings.appearance.experienceMode === "business" &&
     effectiveSettings.appearance.experienceModeChosen &&
     effectiveSettings.providers.inferenceProviderChosen &&
     !effectiveSettings.onboarding.businessProfileStepCompleted;
@@ -32,8 +31,8 @@ export function BusinessProfileIntroDialog({
       <DialogHeader>
         <DialogTitle>Help Orion understand your work</DialogTitle>
         <DialogDescription>
-          A short conversation will create local personal context you can review,
-          edit, or finish later in Settings.
+          Answer three short questions, then pick the tools your company runs on.
+          Everything is saved locally, and you can edit it later in Settings.
         </DialogDescription>
       </DialogHeader>
       <PersonalContextInterview allowSkip className="min-h-0 flex-1" />

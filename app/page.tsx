@@ -549,6 +549,7 @@ function MobileLayout({
         {activeMobileView === "terminal" && (
           <TerminalPanel
             kernelService={kernelService}
+            workspaceDirectory={workspaceDirectory}
             onOpenKernelDropdown={
               !currentKernel ? openConnectionDialog : onOpenKernelDropdown
             }
@@ -3378,6 +3379,7 @@ export default function Page() {
                     >
                       <TerminalPanel
                         kernelService={kernelService}
+                        workspaceDirectory={workspaceDirectory}
                         onOpenKernelDropdown={
                           !currentKernel
                             ? openConnectionDialog

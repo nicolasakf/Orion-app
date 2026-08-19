@@ -1268,7 +1268,7 @@ export class KernelService {
    * The terminal is still tracked in the connections map so closeTerminal()
    * and listTerminals() work.
    *
-   * @param cwd - Optional working directory for the terminal.
+   * @param cwd - Optional working directory for the terminal (relative to Jupyter root).
    * @returns The terminal connection (name + send/messageReceived).
    */
   async startTerminalRaw(cwd?: string): Promise<Terminal.ITerminalConnection> {

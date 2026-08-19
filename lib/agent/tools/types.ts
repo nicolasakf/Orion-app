@@ -200,6 +200,14 @@ export interface AwaitCommandParams {
 }
 
 
+/** Parameters for KillCommandTool */
+export interface KillCommandParams {
+  /** Exact terminalName returned by a prior bash or await_command result */
+  terminalName: string;
+  /** "interrupt" stops the running command; "close" shuts the terminal down */
+  mode: "interrupt" | "close";
+}
+
 /** Parameters for ReadFileTool */
 export interface ReadFileParams {
   filePath: string;

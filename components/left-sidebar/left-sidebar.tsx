@@ -74,6 +74,7 @@ import {
 } from "@/lib/utils";
 import {
   getWorkspacePathActionAvailability,
+  openWorkspacePath,
   revealWorkspacePath,
 } from "@/lib/desktop/workspace-actions.client";
 import { copyWorkspacePath } from "@/lib/workspace/copy-path.client";
@@ -647,6 +648,23 @@ export function LeftSidebar({
     [handleCopyWorkspacePath, kernelService]
   );
 
+  /** Opens a workspace file with the operating system's default application. */
+  const handleOpenExternally = useCallback(
+    (path: string) => {
+      if (!kernelService) return;
+      void openWorkspacePath({ path, kernelService }).then((result) => {
+        if (result.ok) return;
+        toast.error(result.message, {
+          action: {
+            label: "Copy path",
+            onClick: () => handleCopyWorkspacePath(path),
+          },
+        });
+      });
+    },
+    [handleCopyWorkspacePath, kernelService]
+  );
+
   // Load the file tree when the kernel connects or the workspace changes.
   useEffect(() => {
     if (!kernelService) {
@@ -840,6 +858,7 @@ export function LeftSidebar({
           onTreeChange={refreshFolder}
           onFetchChildren={fetchAndCacheChildren}
           onRevealInFinder={canRevealWorkspacePath ? handleRevealInFinder : undefined}
+          onOpenExternally={canRevealWorkspacePath ? handleOpenExternally : undefined}
           onCopyPath={handleCopyWorkspacePath}
           onPathRenamed={onWorkspacePathRenamed}
           onPathDeleted={onWorkspacePathDeleted}

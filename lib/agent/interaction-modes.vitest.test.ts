@@ -66,7 +66,7 @@ describe("interaction mode defaults", () => {
     );
   });
 
-  it("adds Plotly inspection beside output reading in persisted Ask tool order", () => {
+  it("adds Plotly inspection and terminal recovery to persisted Ask tool order", () => {
     const customizedToolNames = [
       "read_notebook",
       "read_cell",
@@ -91,10 +91,24 @@ describe("interaction mode defaults", () => {
       "inspect_plotly_output",
       "bash",
       "await_command",
+      "kill_command",
       "read_file",
       "web_fetch",
       "web_search",
     ]);
+  });
+
+  it("leaves a persisted tool set without await_command alone", () => {
+    const modes = normalizeInteractionModeConfigs([
+      {
+        id: "Ask",
+        toolNames: ["read_file", "web_search"],
+      },
+    ]);
+
+    expect(modes.find((mode) => mode.id === "Ask")?.toolNames).not.toContain(
+      "kill_command"
+    );
   });
 
   it("preserves a customized Ask tool set", () => {

@@ -25,6 +25,8 @@ export interface PendingTerminalCommand {
   startedAtMs: number;
   /** Accumulated ANSI/raw output observed so far for this command */
   buffer: string;
+  /** Epoch ms when output was last observed for this command (dispatch time until the first byte) */
+  lastOutputAtMs: number;
 }
 
 /** A terminal session tracked by the pool, with lifecycle metadata. */

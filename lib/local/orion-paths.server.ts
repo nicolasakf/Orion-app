@@ -25,14 +25,35 @@ export function getProviderCredentialsFilePath(): string {
   return path.join(getOrionDataDirectory(), "credentials.json");
 }
 
+/**
+ * Returns the absolute path to Orion's third-party connection file.
+ *
+ * Deliberately separate from `credentials.json`: that file holds model-provider
+ * secrets and is off-limits to the agent, while connections describe the user's
+ * own business systems and are managed through the Connections settings tab.
+ */
+export function getConnectionsFilePath(): string {
+  return path.join(getOrionDataDirectory(), "connections.json");
+}
+
 /** Returns the absolute path to the user-maintained Orion context file. */
 export function getPersonalContextFilePath(): string {
   return path.join(getOrionDataDirectory(), "ORION.md");
 }
 
-/** Returns the absolute path to the persisted personal-context interview transcript. */
-export function getPersonalContextInterviewFilePath(): string {
+/** Returns the absolute path to the persisted Business onboarding answers. */
+export function getOnboardingAnswersFilePath(): string {
+  return path.join(getOrionDataDirectory(), "onboarding-answers.json");
+}
+
+/** Returns the path to the transcript written by the removed chat interview. */
+export function getLegacyInterviewTranscriptFilePath(): string {
   return path.join(getOrionDataDirectory(), "personal-context-interview.json");
+}
+
+/** Returns the absolute path to the persisted Business onboarding stack answers. */
+export function getBusinessStackFilePath(): string {
+  return path.join(getOrionDataDirectory(), "business-stack.json");
 }
 
 /** Returns the absolute path to timestamped user settings backups. */

@@ -3,21 +3,23 @@ import path from "path";
 
 import {
   ensureOrionDataDirectory,
+  getBusinessStackFilePath,
+  getLegacyInterviewTranscriptFilePath,
+  getOnboardingAnswersFilePath,
   getPersonalContextFilePath,
-  getPersonalContextInterviewFilePath,
 } from "@/lib/local/orion-paths.server";
 import {
+  BusinessStackSelectionSchema,
+  createEmptyBusinessStackSelection,
+  type BusinessStackSelection,
+} from "@/lib/onboarding/business-tools";
+import {
   containsHighConfidenceSecret,
-  InterviewTranscriptSchema,
+  createEmptyOnboardingAnswers,
   MAX_PERSONAL_CONTEXT_BYTES,
-  type InterviewTranscript,
+  OnboardingAnswersSchema,
+  type OnboardingAnswers,
 } from "@/lib/onboarding/personal-context";
-
-const EMPTY_TRANSCRIPT: InterviewTranscript = {
-  version: 1,
-  messages: [],
-  updatedAt: new Date(0).toISOString(),
-};
 
 let writeChain: Promise<unknown> = Promise.resolve();
 
@@ -112,35 +114,66 @@ export async function deletePersonalContext(): Promise<void> {
   await rm(getPersonalContextFilePath(), { force: true });
 }
 
-/** Loads and validates the persisted interview transcript. */
-export async function loadInterviewTranscript(): Promise<InterviewTranscript> {
+/** Loads the saved Business onboarding answers, or blank ones. */
+export async function loadOnboardingAnswers(): Promise<OnboardingAnswers> {
   try {
-    const raw = await readFile(getPersonalContextInterviewFilePath(), "utf8");
-    return InterviewTranscriptSchema.parse(JSON.parse(raw));
+    const raw = await readFile(getOnboardingAnswersFilePath(), "utf8");
+    return OnboardingAnswersSchema.parse(JSON.parse(raw));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return structuredClone(EMPTY_TRANSCRIPT);
+      return createEmptyOnboardingAnswers();
     }
     throw error;
   }
 }
 
-/** Atomically saves a validated interview transcript. */
-export async function saveInterviewTranscript(
-  transcript: InterviewTranscript,
+/** Atomically saves validated Business onboarding answers. */
+export async function saveOnboardingAnswers(
+  answers: OnboardingAnswers,
 ): Promise<void> {
-  const parsed = InterviewTranscriptSchema.parse(transcript);
-  const combinedContent = parsed.messages.map((message) => message.content).join("\n");
-  if (containsHighConfidenceSecret(combinedContent)) {
-    throw new Error("Interview messages appear to contain a credential or private key.");
+  const parsed = OnboardingAnswersSchema.parse(answers);
+  const combined = [
+    parsed.companyDescription,
+    parsed.roleDescription,
+    parsed.helpGoal,
+  ].join("\n");
+  if (containsHighConfidenceSecret(combined)) {
+    throw new Error("Your answers appear to contain a credential or private key.");
   }
   await writePrivateFile(
-    getPersonalContextInterviewFilePath(),
+    getOnboardingAnswersFilePath(),
+    `${JSON.stringify(parsed, null, 2)}\n`,
+  );
+  // The chat interview these answers replaced left a transcript of the user's
+  // own words behind. Nothing reads it any more, so drop it as we pass by.
+  await rm(getLegacyInterviewTranscriptFilePath(), { force: true }).catch(() => {});
+}
+
+/** Loads the Business onboarding stack answers, or an empty selection. */
+export async function loadBusinessStackSelection(): Promise<BusinessStackSelection> {
+  try {
+    const raw = await readFile(getBusinessStackFilePath(), "utf8");
+    return BusinessStackSelectionSchema.parse(JSON.parse(raw));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return createEmptyBusinessStackSelection();
+    }
+    throw error;
+  }
+}
+
+/** Atomically saves validated Business onboarding stack answers. */
+export async function saveBusinessStackSelection(
+  selection: BusinessStackSelection,
+): Promise<void> {
+  const parsed = BusinessStackSelectionSchema.parse(selection);
+  await writePrivateFile(
+    getBusinessStackFilePath(),
     `${JSON.stringify(parsed, null, 2)}\n`,
   );
 }
 
-/** Deletes only the resumable interview transcript. */
-export async function clearInterviewTranscript(): Promise<void> {
-  await rm(getPersonalContextInterviewFilePath(), { force: true });
+/** Deletes only the stored stack answers. */
+export async function clearBusinessStackSelection(): Promise<void> {
+  await rm(getBusinessStackFilePath(), { force: true });
 }

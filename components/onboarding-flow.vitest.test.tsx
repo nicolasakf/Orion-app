@@ -85,10 +85,12 @@ describe("OnboardingFlow", () => {
     expect(screen.queryByText("Welcome to Orion")).not.toBeInTheDocument();
   });
 
-  it("shows the interview after provider setup for an eligible Business user", async () => {
+  it.each(["business", "pro"] as const)(
+    "shows personal-context setup after provider setup in %s mode",
+    async (experienceMode) => {
     const document = createDefaultUserSettingsDocument();
     document.settings.onboarding.signInStepCompleted = true;
-    document.settings.appearance.experienceMode = "business";
+    document.settings.appearance.experienceMode = experienceMode;
     document.settings.appearance.experienceModeChosen = true;
     document.settings.providers.inferenceProviderChosen = true;
     document.settings.onboarding.businessProfileStepCompleted = false;
@@ -102,11 +104,21 @@ describe("OnboardingFlow", () => {
         if (url.endsWith("/api/credentials")) {
           return Response.json({ credentials: {} });
         }
-        if (url.endsWith("/api/onboarding/interview")) {
+        if (url.endsWith("/api/onboarding/answers")) {
           return Response.json({
-            transcript: {
+            answers: {
               version: 1,
-              messages: [],
+              companyDescription: "",
+              roleDescription: "",
+              helpGoal: "",
+            },
+          });
+        }
+        if (url.endsWith("/api/onboarding/stack")) {
+          return Response.json({
+            selection: {
+              version: 1,
+              categories: {},
               updatedAt: new Date(0).toISOString(),
             },
           });
@@ -123,7 +135,10 @@ describe("OnboardingFlow", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Help Orion understand your work")).toBeInTheDocument();
+      // Every new user lands on the three questions before the tool picker.
+      expect(screen.getByLabelText("What does your company do?")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Skip for now" })).toBeInTheDocument();
     });
-  });
+    },
+  );
 });

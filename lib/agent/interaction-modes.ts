@@ -194,6 +194,16 @@ function normalizeBuiltInToolNames(
     const readOutputIndex = normalized.indexOf("read_cell_output");
     normalized.splice(readOutputIndex + 1, 0, "inspect_plotly_output");
   }
+
+  // Terminal recovery is a safe companion to await_command: without it a mode
+  // that can start commands has no way out of one stuck on an interactive prompt.
+  if (
+    normalized.includes("await_command") &&
+    !normalized.includes("kill_command")
+  ) {
+    const awaitIndex = normalized.indexOf("await_command");
+    normalized.splice(awaitIndex + 1, 0, "kill_command");
+  }
   return normalized;
 }
 

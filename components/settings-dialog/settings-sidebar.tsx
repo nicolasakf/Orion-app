@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronRight,
   Key,
+  Plug,
   FileJson,
   ExternalLink,
   Bot,
@@ -49,6 +50,7 @@ const SETTINGS_NAV_BASE: { id: SettingsTab; title: string; icon: React.ElementTy
   { id: "agent", title: "Agent", icon: Bot },
   { id: "models", title: "Models", icon: Box },
   { id: "providers", title: "Providers", icon: Key },
+  { id: "connections", title: "Connections", icon: Plug },
   { id: "settings-file", title: "Settings JSON", icon: FileJson },
 ];
 

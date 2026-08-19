@@ -23,6 +23,7 @@ import { ModelsTab } from "@/components/settings-dialog/models-tab";
 import { NotebookTab } from "@/components/settings-dialog/notebook-tab";
 import { PersonalContextTab } from "@/components/settings-dialog/personal-context-tab";
 import { ProvidersTab } from "@/components/settings-dialog/providers-tab";
+import { ConnectionsTab } from "@/components/settings-dialog/connections-tab";
 import { SettingsFileTab } from "@/components/settings-dialog/settings-file-tab";
 import { SettingsSidebar } from "@/components/settings-dialog/settings-sidebar";
 import {
@@ -141,6 +142,8 @@ export function SettingsDialog({
         );
       case "providers":
         return <ProvidersTab />;
+      case "connections":
+        return <ConnectionsTab />;
       case "settings-file":
         return <SettingsFileTab />;
       default:

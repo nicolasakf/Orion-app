@@ -19,7 +19,13 @@ export interface CommandProgress {
 }
 
 /** Machine-readable status returned by terminal tools. */
-export type TerminalResultStatus = "completed" | "running" | "matched" | "error";
+export type TerminalResultStatus =
+  | "completed"
+  | "running"
+  | "matched"
+  | "stalled"
+  | "killed"
+  | "error";
 
 /** Payload for formatting a stable, LLM-friendly terminal result envelope. */
 export interface TerminalResultPayload {
@@ -31,6 +37,8 @@ export interface TerminalResultPayload {
   message?: string;
   nextStep?: string;
   pattern?: string;
+  /** Milliseconds since the command last produced output (stalled results only). */
+  idleMs?: number;
 }
 
 /** Poll interval used by bash / await_command loops. */
@@ -41,19 +49,24 @@ export const DEFAULT_FOREGROUND_BUDGET_MS = 5_000;
 export const DEFAULT_AWAIT_BUDGET_MS = 30_000;
 /** Maximum block wait accepted by terminal tools (10 minutes). */
 export const MAX_TERMINAL_BLOCK_MS = 10 * 60 * 1000;
+/**
+ * Silence after which an unfinished command is reported as stalled rather than
+ * running, so the model is told it may recover instead of awaiting forever.
+ */
+export const IDLE_STALL_MS = 20_000;
 
 /**
  * When bash returns status: running because the foreground wait budget elapsed.
  * A command is still in flight — the next tool call must be await_command only.
  */
 export const NEXT_STEP_REQUIRED_AWAIT_AFTER_BASH_TIMEOUT =
-  "REQUIRED: The command is still running. Your very next tool call must be await_command with this same terminalName (copy the exact value returned above). Do not call bash again, resend the command, or invent a new terminalName. Keep calling await_command until status is completed or error.";
+  "REQUIRED: The command is still running. Your very next tool call must be await_command with this same terminalName (copy the exact value returned above), or kill_command with that terminalName if you decide to stop it. Do not call bash again, resend the command, or invent a new terminalName.";
 
 /**
  * When await_command returns status: running because its wait budget elapsed while a command is still tracked.
  */
 export const NEXT_STEP_REQUIRED_AWAIT_AFTER_AWAIT_TIMEOUT =
-  "REQUIRED: The command is still running. Your very next tool call must be await_command again with this same terminalName (copy the exact value returned above). Do not call bash, resend the command, or invent a new terminalName. Keep calling await_command until status is completed or error.";
+  "REQUIRED: The command is still running. Your very next tool call must be await_command again with this same terminalName (copy the exact value returned above), or kill_command with that terminalName if you decide to stop it. Do not call bash, resend the command, or invent a new terminalName.";
 
 /** When bash used background: true — poll with await_command; do not resend via bash. */
 export const NEXT_STEP_AWAIT_BACKGROUND =
@@ -62,6 +75,24 @@ export const NEXT_STEP_AWAIT_BACKGROUND =
 /** When await_command matched a pattern before the shell command finished. */
 export const NEXT_STEP_AWAIT_AFTER_PATTERN_MATCH =
   "REQUIRED: Call await_command again with this same terminalName (copy the exact value returned above) to wait for command completion. Do not call bash, resend the command, or invent a new terminalName.";
+
+/**
+ * When output stopped at something that looks like an interactive prompt.
+ * The command cannot finish on its own, so waiting longer is pointless.
+ */
+export const NEXT_STEP_STALLED_TERMINAL =
+  "REQUIRED: This terminal is blocked on an interactive prompt and will never complete on its own. Call kill_command with this same terminalName (mode: \"interrupt\"), then re-run the command non-interactively — for example add --no-pager, pipe through cat, or pass the flag that skips confirmation. Do not keep calling await_command.";
+
+/**
+ * When a tracked command has produced no output for a long time but shows no
+ * prompt: it may be a slow command or a silent block, so both paths are allowed.
+ */
+export const NEXT_STEP_IDLE_TERMINAL =
+  "The command may be working silently or blocked on input. Either call await_command again with this same terminalName to keep waiting, or call kill_command with that terminalName (mode: \"interrupt\") and re-run it non-interactively. Do not call bash with this terminalName or invent a new one.";
+
+/** When kill_command could not free a terminal by interrupting it. */
+export const NEXT_STEP_KILL_CLOSE_TERMINAL =
+  'REQUIRED: Call kill_command again with this same terminalName and mode: "close" to shut the terminal down, then run the next command with terminalName "" to get a fresh one.';
 
 /** When bash is asked to reuse a terminal that still has a tracked command. */
 export const NEXT_STEP_REQUIRED_AWAIT_BEFORE_REUSE =
@@ -106,6 +137,99 @@ export function parseCommandProgress(
   return { completed, exitCode, output };
 }
 
+/**
+ * Signatures of prompts that keep a PTY command from ever completing.
+ *
+ * Each pattern is matched against the last non-empty output line only: the same
+ * text appearing mid-output (a file that contains "(END)", a log line ending in
+ * "[y/N]") is ordinary output, not a prompt.
+ */
+const INTERACTIVE_PROMPT_SIGNATURES: ReadonlyArray<{
+  label: string;
+  pattern: RegExp;
+}> = [
+  { label: "pager end-of-file prompt ((END))", pattern: /\(END\)$/ },
+  { label: "pager prompt (--More--)", pattern: /--\s?More\s?--(\(\d+%\))?$/i },
+  { label: "pager prompt (:)", pattern: /^:$/ },
+  { label: "pager quit hint", pattern: /\(q to quit\)$/i },
+  {
+    label: "yes/no confirmation prompt",
+    pattern: /(\[y\/n\]|\[yes\/no\]|\(y\/n\))[\s?:]*$/i,
+  },
+  { label: "password prompt", pattern: /(password|passphrase)[^:]*:$/i },
+  { label: "keypress prompt", pattern: /press\s+(enter|return|any key)\b/i },
+];
+
+/**
+ * Return a label describing the interactive prompt the output ends at, or null
+ * when the tail does not look like a prompt.
+ */
+export function detectInteractivePrompt(output: string): string | null {
+  const lines = stripAnsi(output).split(/\r?\n|\r/);
+  let lastLine = "";
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const candidate = lines[index]!.trim();
+    if (candidate) {
+      lastLine = candidate;
+      break;
+    }
+  }
+  if (!lastLine) return null;
+
+  for (const { label, pattern } of INTERACTIVE_PROMPT_SIGNATURES) {
+    if (pattern.test(lastLine)) return label;
+  }
+  return null;
+}
+
+/**
+ * Decide whether an unfinished command should be reported as stalled.
+ *
+ * A command is stalled when its output ends at an interactive prompt (it can
+ * never complete on its own) or when it has produced nothing for
+ * {@link IDLE_STALL_MS} (it may be blocked on input Orion cannot see).
+ *
+ * @param options.output - Cleaned command output observed so far.
+ * @param options.lastOutputAtMs - Epoch ms of the last observed output byte.
+ * @param options.idleStallMs - Optional idle threshold override.
+ */
+export function classifyUnfinishedCommand(options: {
+  output: string;
+  lastOutputAtMs: number;
+  idleStallMs?: number;
+}): { stalled: boolean; promptLabel: string | null; idleMs: number } {
+  const idleMs = Math.max(0, Date.now() - options.lastOutputAtMs);
+  const promptLabel = detectInteractivePrompt(options.output);
+  const idleThreshold = options.idleStallMs ?? IDLE_STALL_MS;
+  return {
+    stalled: promptLabel !== null || idleMs >= idleThreshold,
+    promptLabel,
+    idleMs,
+  };
+}
+
+/**
+ * Build the message and next_step for a stalled command result.
+ *
+ * @param promptLabel - Prompt signature found at the end of the output, if any.
+ * @param idleMs - Milliseconds since the command last produced output.
+ */
+export function buildStalledResultText(
+  promptLabel: string | null,
+  idleMs: number
+): { message: string; nextStep: string } {
+  if (promptLabel) {
+    return {
+      message: `Command is waiting at an interactive ${promptLabel} and cannot finish on its own.`,
+      nextStep: NEXT_STEP_STALLED_TERMINAL,
+    };
+  }
+  return {
+    message: `Command produced no output for ${Math.round(idleMs / 1000)}s.`,
+    nextStep: NEXT_STEP_IDLE_TERMINAL,
+  };
+}
+
 /** Strip ANSI and known marker lines from arbitrary terminal output. */
 export function stripTerminalMarkerNoise(rawBuffer: string): string {
   return stripKnownMarkerTokens(stripAnsi(rawBuffer)).trim();
@@ -128,6 +252,9 @@ export function formatTerminalResult(payload: TerminalResultPayload): string {
   }
   if (payload.pattern) {
     lines.push(`pattern: ${payload.pattern}`);
+  }
+  if (typeof payload.idleMs === "number") {
+    lines.push(`idle_ms: ${payload.idleMs}`);
   }
   if (payload.message) {
     lines.push(`message: ${payload.message}`);

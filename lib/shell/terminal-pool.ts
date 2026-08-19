@@ -141,6 +141,7 @@ export class TerminalPool {
     const terminal = this.terminals.get(name);
     if (!terminal?.pendingCommand) return;
     terminal.pendingCommand.buffer += chunk;
+    terminal.pendingCommand.lastOutputAtMs = Date.now();
     terminal.lastActivityMs = Date.now();
   }
 

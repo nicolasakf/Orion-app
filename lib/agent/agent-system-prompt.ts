@@ -27,7 +27,11 @@ import {
   buildPersonalContextPromptSection,
   MEMORY_UPDATE_POLICY_PROMPT_SECTION,
 } from "@/lib/agent/personal-context-prompt";
-import type { AgentCommunicationStyle } from "@/lib/settings/schema";
+import type {
+  AgentCommunicationStyle,
+  NotebookUiPreferences,
+} from "@/lib/settings/schema";
+import { buildUiPreferencesPromptSection } from "@/lib/agent/ui-preferences-prompt";
 import { isAbsoluteAgentPath, toAgentAbsolutePath } from "./path-resolver";
 export { buildSubagentSystemPrompt } from "@/lib/agent/subagents";
 
@@ -367,6 +371,23 @@ Core loop:
 - Finish with a notebook synthesis section covering findings, decisions made along the way, uncertainty, limitations, and useful next steps.`;
 
 /**
+ * Communication guidance for Business View. The user is not a data practitioner;
+ * keep analysis rigorous internally but explain outcomes in business terms.
+ */
+const BUSINESS_AUDIENCE_SECTION = `## Business Audience
+
+The user is in Business View. They are a business owner, manager, or operator—not an analyst or data scientist.
+
+This guidance applies only to **user-facing messages**. In notebooks, code, tool use, and internal reasoning, work with full technical rigor—use whatever methods, libraries, and terminology the analysis requires.
+
+When communicating with them:
+- Write as you would to a business owner: plain language focused on outcomes, trends, risks, and decisions they can act on.
+- Use familiar business terms (revenue, customers, margins, growth, seasonality) instead of data-science or statistical jargon unless the user uses those terms first.
+- Explain what findings mean for the business, not how you computed them.
+- Do not assume they know notebooks, code, kernels, or technical tooling unless they ask.
+- Stay accurate: simplify the explanation, not the analysis behind it.`;
+
+/**
  * Terminology rule for Business View. Applies to every mode, because the
  * experience mode and the interaction mode are chosen independently.
  */
@@ -479,6 +500,7 @@ The user explicitly selected the \`${forcedSubagentName}\` sub-agent for this tu
  * @param options.clientPlatformOs - Browser OS; used when local server and server OS unknown
  * @param options.communicationStyle - Communication style preset ("default" | "narrative" | "friendly" | "pragmatic")
  * @param options.customCommunicationStyle - Optional custom instructions; overrides preset when non-empty
+ * @param options.uiPreferences - Preferred libraries for generated charts, tables, and UI elements
  * @returns Formatted system prompt string
  */
 export interface ModeSystemPromptOptions {
@@ -517,6 +539,8 @@ export interface ModeSystemPromptOptions {
   communicationStyle?: AgentCommunicationStyle;
   /** Custom communication instructions; overrides preset when non-empty */
   customCommunicationStyle?: string;
+  /** Preferred libraries for agent-authored notebook and App View interfaces. */
+  uiPreferences?: NotebookUiPreferences;
   /** User-authored instructions appended to this mode's protected base prompt. */
   customSystemPrompt?: string;
   /** Whether to advertise loadable skills in this mode. */
@@ -568,6 +592,7 @@ function buildModeSystemPrompt(
     clientPlatformOs,
     communicationStyle,
     customCommunicationStyle,
+    uiPreferences,
     customSystemPrompt,
     businessExperienceMode,
     modeToolNames,
@@ -602,6 +627,9 @@ function buildModeSystemPrompt(
 
   const personalContextSection = buildPersonalContextPromptSection(personalContext);
   if (personalContextSection) sections.push(personalContextSection);
+
+  const uiPreferencesSection = buildUiPreferencesPromptSection(uiPreferences);
+  if (uiPreferencesSection) sections.push(uiPreferencesSection);
 
   const customModeSection = buildCustomInteractionModeSection(customSystemPrompt);
   if (customModeSection) sections.push(customModeSection);
@@ -648,6 +676,7 @@ function buildModeSystemPrompt(
 
   if (businessExperienceMode) {
     sections.push(
+      BUSINESS_AUDIENCE_SECTION,
       BUSINESS_TERMINOLOGY_SECTION,
       buildBusinessAppViewSection(capabilities, enableSkills)
     );

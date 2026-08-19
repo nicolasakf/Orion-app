@@ -9,6 +9,7 @@
 
 export { TerminalPool } from "./terminal-pool";
 export { stripAnsi } from "./terminal-text";
+export { resolveUserTerminalCwd } from "./user-terminal-cwd";
 
 export {
   TerminalType,

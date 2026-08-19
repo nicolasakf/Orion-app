@@ -21,6 +21,7 @@ import type {
   EmptyEditorCardContent,
   ExperienceMode,
   ThemeSetting,
+  UserTerminalWorkingDirectory,
 } from "@/lib/settings/schema";
 
 const EMPTY_EDITOR_CARD_OPTIONS: Array<{
@@ -47,6 +48,14 @@ const THEME_OPTIONS: Array<{
   { value: "system", label: "System" },
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
+];
+
+const USER_TERMINAL_WORKING_DIRECTORY_OPTIONS: Array<{
+  value: UserTerminalWorkingDirectory;
+  label: string;
+}> = [
+  { value: "workspace", label: "Current workspace" },
+  { value: "home", label: "Home (~/)" },
 ];
 
 interface SettingsTabsFieldProps<T extends string> {
@@ -102,6 +111,8 @@ export function AppearanceTab() {
   const editor = effectiveSettings.editor;
   const emptyEditor = editor.emptyEditor;
   const isBusinessMode = appearance.experienceMode === "business";
+  const userTerminalWorkingDirectory =
+    effectiveSettings.shell.userTerminalWorkingDirectory;
 
   const handleThemeChange = (value: ThemeSetting) => {
     void setUserSettings((current) => ({
@@ -123,12 +134,24 @@ export function AppearanceTab() {
     }));
   };
 
+  const handleUserTerminalWorkingDirectoryChange = (
+    value: UserTerminalWorkingDirectory
+  ) => {
+    void setUserSettings((current) => ({
+      ...current,
+      shell: {
+        ...current.shell,
+        userTerminalWorkingDirectory: value,
+      },
+    }));
+  };
+
   return (
     <div className="flex flex-col gap-6 p-6">
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Appearance</h2>
         <p className="text-sm text-muted-foreground">
-          Control theme, editor defaults, and display preferences.
+          Control theme, editor defaults, terminal, and display preferences.
         </p>
       </div>
 
@@ -207,6 +230,27 @@ export function AppearanceTab() {
                     },
                   }));
                 }}
+              />
+            </div>
+          </div>
+        </section>
+
+        <Separator />
+
+        <section className="space-y-3">
+          <h3 className="text-sm font-bold">Terminal</h3>
+          <div className="grid gap-4 sm:grid-cols-2 max-w-2xl">
+            <div className="space-y-2">
+              <SettingsInfoLabel
+                htmlFor="user-terminal-working-directory"
+                label="New terminal directory"
+                description="Where terminals you create start. Agent terminals are not affected. Home is the Jupyter root, usually your user home directory (~/)."
+              />
+              <SettingsTabsField
+                ariaLabel="New terminal directory"
+                value={userTerminalWorkingDirectory}
+                options={USER_TERMINAL_WORKING_DIRECTORY_OPTIONS}
+                onValueChange={handleUserTerminalWorkingDirectoryChange}
               />
             </div>
           </div>

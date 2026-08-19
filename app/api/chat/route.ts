@@ -54,7 +54,11 @@ import {
 } from "@/lib/agent/vercel-generation.server";
 
 import { prepareChatInvocation } from "@/lib/agent/prepare-chat-invocation.server";
-import { AgentCommunicationStyleSchema, type AgentCommunicationStyle } from "@/lib/settings/schema";
+import {
+  AgentCommunicationStyleSchema,
+  NotebookUiPreferencesSchema,
+  type AgentCommunicationStyle,
+} from "@/lib/settings/schema";
 import type { AgentRule } from "@/lib/agent/rules";
 import { parseAgentRulesPayload } from "@/lib/agent/rules/request-schema";
 import type { SubagentPromptPayload } from "@/lib/agent/subagents";
@@ -323,6 +327,8 @@ async function handleChatRequest(
     agentCommunicationStyle?: unknown;
     /** Custom communication instructions; overrides preset when non-empty. */
     agentCustomCommunicationStyle?: unknown;
+    /** Preferred libraries for agent-authored notebook and App View interfaces. */
+    notebookUiPreferences?: unknown;
     /** Lightweight notebook-native Research mode session state. */
     researchSession?: unknown;
     /** Soft steering instruction selected by the client loop. */
@@ -383,6 +389,7 @@ async function handleChatRequest(
     previousSummaryText,
     agentCommunicationStyle: rawAgentCommunicationStyle,
     agentCustomCommunicationStyle: rawAgentCustomCommunicationStyle,
+    notebookUiPreferences: rawNotebookUiPreferences,
     researchSession: researchSessionRaw,
     researchNudge: researchNudgeRaw,
     automaticContinuationAttempt: automaticContinuationAttemptRaw,
@@ -425,6 +432,16 @@ async function handleChatRequest(
     typeof rawAgentCustomCommunicationStyle === "string"
       ? rawAgentCustomCommunicationStyle.trim()
       : "";
+  const parsedNotebookUiPreferences = NotebookUiPreferencesSchema.optional().safeParse(
+    rawNotebookUiPreferences
+  );
+  if (!parsedNotebookUiPreferences.success) {
+    return Response.json(
+      { title: "Invalid Request", message: "Notebook UI preferences are invalid." },
+      { status: 400 }
+    );
+  }
+  const notebookUiPreferences = parsedNotebookUiPreferences.data;
 
   const resolvedCredential = await resolveProviderCredentialForModel(providerId, modelId);
 
@@ -1215,6 +1232,7 @@ async function handleChatRequest(
       clientPlatformOs,
       communicationStyle: agentCommunicationStyle,
       customCommunicationStyle: agentCustomCommunicationStyle,
+      uiPreferences: notebookUiPreferences,
       businessExperienceMode,
       researchSession,
       researchNudge,

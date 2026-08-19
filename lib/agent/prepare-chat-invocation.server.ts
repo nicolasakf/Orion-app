@@ -25,7 +25,10 @@ import {
 } from "@/lib/agent/research-session";
 import type { SubagentPromptPayload } from "@/lib/agent/subagents";
 import type { JupyterServerInfo } from "@/lib/kernel/kernel-service";
-import type { AgentCommunicationStyle } from "@/lib/settings/schema";
+import type {
+  AgentCommunicationStyle,
+  NotebookUiPreferences,
+} from "@/lib/settings/schema";
 import type { PlatformOS } from "@/lib/utils";
 
 export interface PrepareChatInvocationInput {
@@ -59,6 +62,7 @@ export interface PrepareChatInvocationInput {
   clientPlatformOs?: PlatformOS;
   communicationStyle: AgentCommunicationStyle;
   customCommunicationStyle?: string;
+  uiPreferences?: NotebookUiPreferences;
   businessExperienceMode: boolean;
   researchSession?: ResearchSessionSnapshot;
   researchNudge?: ResearchNudge;
@@ -100,6 +104,7 @@ export function prepareChatInvocation(
     clientPlatformOs: input.clientPlatformOs,
     communicationStyle: input.communicationStyle,
     customCommunicationStyle: input.customCommunicationStyle,
+    uiPreferences: input.uiPreferences,
     customSystemPrompt: input.interactionMode.customSystemPrompt,
     // Capability wording is derived from the mode's real configuration, which
     // users can customize per mode — including for the built-ins.
@@ -146,6 +151,7 @@ export function prepareChatInvocation(
       forcedSkillNames: input.missingForcedSkillNames,
       rootDirectory: input.rootDirectory,
       personalContext: input.personalContext,
+      uiPreferences: input.uiPreferences,
     });
   } else if (effectiveMode === "Research") {
     agentSystemPrompt = buildResearchModeSystemPrompt(sharedPromptOptions);

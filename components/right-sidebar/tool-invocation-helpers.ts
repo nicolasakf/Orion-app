@@ -22,8 +22,10 @@ import {
   Brain,
   Bot,
   Hourglass,
+  CircleStop,
   Globe,
   Search,
+  Plug,
 } from "lucide-react";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 
@@ -129,6 +131,7 @@ export const TOOL_META: Record<OrionToolName, ToolMeta> = {
   execute_code: { labelPending: "Executing code", labelDone: "Executed code", icon: Terminal },
   bash: { labelPending: "Running command", labelDone: "Ran command", icon: Terminal },
   await_command: { labelPending: "Awaiting command", labelDone: "Awaited command", icon: Hourglass },
+  kill_command: { labelPending: "Stopping command", labelDone: "Stopped command", icon: CircleStop },
   read_file: { labelPending: "Reading file", labelDone: "Read file", icon: FileText },
   edit_file: { labelPending: "Editing file", labelDone: "Edited file", icon: PenLine },
   update_memory: { labelPending: "Updating memory", labelDone: "Updated memory", icon: Brain },
@@ -138,6 +141,7 @@ export const TOOL_META: Record<OrionToolName, ToolMeta> = {
   read_cell_output: { labelPending: "Reading output", labelDone: "Read output", icon: Eye },
   inspect_plotly_output: { labelPending: "Inspecting Plotly output", labelDone: "Inspected Plotly output", icon: Eye },
   load_skill: { labelPending: "Loading skill", labelDone: "Loaded skill", icon: Brain },
+  connections: { labelPending: "Checking connections", labelDone: "Checked connections", icon: Plug },
   delegate: { labelPending: "Running sub-agent", labelDone: "Sub-agent finished", icon: Bot },
 };
 
@@ -261,6 +265,7 @@ export function getToolLabel(
 const TOOLS_WITH_EXPANDED_ARGS_PREVIEW = new Set<OrionToolName>([
   "bash",
   "await_command",
+  "kill_command",
   "execute_code",
   "read_cell",
   "read_cell_output",
@@ -276,6 +281,7 @@ const TOOLS_WITH_EXPANDED_ARGS_PREVIEW = new Set<OrionToolName>([
   "web_fetch",
   "web_search",
   "load_skill",
+  "connections",
 ]);
 
 /** Expanded preview: filename + line delta from tool result when possible, else from args. */
@@ -375,6 +381,11 @@ export function buildExpandedArgsPreview(
         pattern ? `pattern /${pattern}/` : null,
       ].filter(Boolean);
       return { short: parts.join(" · ") };
+    }
+    case "kill_command": {
+      const term = argStr(args.terminalName);
+      const mode = argStr(args.mode).trim() || "interrupt";
+      return { short: `${term ? `terminal ${term}` : "terminal ?"} · ${mode}` };
     }
     case "execute_code": {
       const code = argStr(args.code);
@@ -497,6 +508,14 @@ export function buildExpandedArgsPreview(
       return {
         short: name ? `Loaded skill ${name}` : "Loaded skill",
       };
+    }
+    case "connections": {
+      const action = argStr(args.action);
+      const toolId = argStr(args.toolId);
+      if (action === "request") {
+        return { short: toolId ? `Requested connection: ${toolId}` : "Requested a connection" };
+      }
+      return { short: "Listed connections" };
     }
     case "edit_file":
       return buildEditFileExpandedPreview(args, leadingText, isError);

@@ -139,8 +139,7 @@ export function InferenceProviderIntroDialog({
       await reloadUserSettings();
       await completeOnboarding({
         pinnedModelIds: CHATGPT_DEFAULT_PINNED_MODEL_IDS,
-        continueToBusinessInterview:
-          effectiveSettings.appearance.experienceMode === "business",
+        continueToBusinessInterview: true,
       });
     } catch (error) {
       setSaveErrorMessage(
@@ -151,7 +150,7 @@ export function InferenceProviderIntroDialog({
     } finally {
       setIsCompleting(false);
     }
-  }, [completeOnboarding, effectiveSettings.appearance.experienceMode, reloadUserSettings]);
+  }, [completeOnboarding, reloadUserSettings]);
 
   React.useEffect(() => {
     if (browserFlow.phase !== "awaiting" || !browserFlow.flowId) return;

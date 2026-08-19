@@ -142,6 +142,15 @@ export async function startJupyterForChoice(
   return startExistingJupyter(choice.runtime, options, jupyterRoot, report);
 }
 
+/** Returns whether a resolved Python choice runs through an Orion-managed environment. */
+export function resolvePythonChoiceSource(
+  choice: PythonSelectionChoice
+): "managed" | "existing" {
+  return choice.kind === "managed" || choice.installation?.managed
+    ? "managed"
+    : "existing";
+}
+
 /** Writes the local launcher handoff file for a started Jupyter server. */
 export async function saveJupyterHandoffForChoice(
   server: StartedJupyterServer,
@@ -153,7 +162,7 @@ export async function saveJupyterHandoffForChoice(
   await saveJupyterConnectionHandoff({
     baseUrl: server.baseUrl,
     token: server.token,
-    source: choice.kind === "managed" || choice.installation?.managed ? "managed" : "existing",
+    source: resolvePythonChoiceSource(choice),
     pythonPath: server.pythonPath,
     rootDirectory: jupyterRoot,
     jupyterVersion: capabilities.jupyterVersion,

@@ -6,56 +6,48 @@ export const MAX_PERSONAL_CONTEXT_BYTES = 32 * 1024;
 /** Conservative character bound used by browser controls before byte validation. */
 export const MAX_PERSONAL_CONTEXT_CHARS = MAX_PERSONAL_CONTEXT_BYTES;
 
-/** Maximum length of one interview message. */
-export const MAX_INTERVIEW_MESSAGE_CHARS = 4_000;
-
-/** Maximum number of persisted interview messages. */
-export const MAX_INTERVIEW_MESSAGES = 200;
+/** Maximum length of one Business onboarding answer. */
+export const MAX_ONBOARDING_ANSWER_CHARS = 2_000;
 
 export const PersonalContextUpdateSchema = z.object({
   content: z.string().max(MAX_PERSONAL_CONTEXT_CHARS),
 });
 
-export const InterviewMessageSchema = z.object({
-  id: z.string().min(1).max(200),
-  role: z.enum(["user", "assistant"]),
-  content: z.string().max(MAX_INTERVIEW_MESSAGE_CHARS),
-  createdAt: z.string().datetime(),
-});
-
-export const InterviewTranscriptSchema = z.object({
+/**
+ * The three questions every Business user answers before picking their tools.
+ * Each is optional: onboarding never blocks on a blank field.
+ */
+export const OnboardingAnswersSchema = z.object({
   version: z.literal(1),
-  messages: z.array(InterviewMessageSchema).max(MAX_INTERVIEW_MESSAGES),
-  updatedAt: z.string().datetime(),
+  companyDescription: z.string().max(MAX_ONBOARDING_ANSWER_CHARS).default(""),
+  roleDescription: z.string().max(MAX_ONBOARDING_ANSWER_CHARS).default(""),
+  helpGoal: z.string().max(MAX_ONBOARDING_ANSWER_CHARS).default(""),
+  /** Absent until the user has saved the questions screen at least once. */
+  updatedAt: z.string().datetime().optional(),
 });
 
-export const InterviewChatRequestSchema = z.object({
-  messages: z
-    .array(
-      z.object({
-        id: z.string().min(1).max(200),
-        role: z.enum(["user", "assistant"]),
-        parts: z.array(
-          z.union([
-            z.object({
-              type: z.literal("text"),
-              text: z.string().max(MAX_INTERVIEW_MESSAGE_CHARS),
-            }),
-            z.object({ type: z.literal("step-start") }),
-            z.object({
-              type: z.literal("reasoning"),
-              text: z.string().max(MAX_INTERVIEW_MESSAGE_CHARS),
-            }),
-          ]),
-        ),
-      }),
-    )
-    .min(1)
-    .max(MAX_INTERVIEW_MESSAGES),
-});
+export type OnboardingAnswers = z.infer<typeof OnboardingAnswersSchema>;
 
-export type InterviewMessage = z.infer<typeof InterviewMessageSchema>;
-export type InterviewTranscript = z.infer<typeof InterviewTranscriptSchema>;
+/** Returns the blank answers a user who has not reached the questions screen has. */
+export function createEmptyOnboardingAnswers(): OnboardingAnswers {
+  return {
+    version: 1,
+    companyDescription: "",
+    roleDescription: "",
+    helpGoal: "",
+  };
+}
+
+/** Returns the answers in catalog order, skipping the ones left blank. */
+export function listAnsweredQuestions(
+  answers: OnboardingAnswers,
+): { label: string; answer: string }[] {
+  return [
+    { label: "What the user's company does", answer: answers.companyDescription },
+    { label: "The kind of work the user does", answer: answers.roleDescription },
+    { label: "What the user most wants Orion to help with", answer: answers.helpGoal },
+  ].filter((entry) => entry.answer.trim().length > 0);
+}
 
 const HIGH_CONFIDENCE_SECRET_PATTERNS: RegExp[] = [
   /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/i,

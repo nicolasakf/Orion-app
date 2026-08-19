@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  classifyUnfinishedCommand,
+  detectInteractivePrompt,
+  IDLE_STALL_MS,
   parseCommandProgress,
   stripTerminalMarkerNoise,
 } from "./terminal-command-utils";
@@ -77,5 +80,66 @@ describe("parseCommandProgress", () => {
         `before${pending.startMarker}middle${pending.endMarkerPrefix}:0after`
       )
     ).toBe("beforemiddleafter");
+  });
+});
+
+describe("detectInteractivePrompt", () => {
+  it.each([
+    ['{\n  "login": "octocat"\n}\n(END)', "pager end-of-file prompt"],
+    ["some manual text\n--More--(24%)", "pager prompt (--More--)"],
+    ["reading /etc/hosts\n:", "pager prompt (:)"],
+    ["Delete branch feature? [y/N]", "yes/no confirmation prompt"],
+    ["Enter passphrase for key '/home/u/.ssh/id_ed25519':", "password prompt"],
+    ["Press ENTER to continue", "keypress prompt"],
+  ])("flags %j as an interactive prompt", (output, expected) => {
+    expect(detectInteractivePrompt(output)).toContain(expected);
+  });
+
+  it("ignores prompt-like text that is not the final line", () => {
+    const listing = ["notes.txt", "(END)", "credits: [y/N]", "total 3 files"].join(
+      "\n"
+    );
+    expect(detectInteractivePrompt(listing)).toBeNull();
+  });
+
+  it("ignores ordinary output ending in a colon", () => {
+    expect(detectInteractivePrompt("Installed packages:")).toBeNull();
+  });
+
+  it("ignores empty output", () => {
+    expect(detectInteractivePrompt("   \n\n")).toBeNull();
+  });
+
+  it("sees through ANSI decoration around the prompt", () => {
+    expect(detectInteractivePrompt("body\n\u001b[7m(END)\u001b[0m")).not.toBeNull();
+  });
+});
+
+describe("classifyUnfinishedCommand", () => {
+  it("stalls immediately on a prompt even when output is fresh", () => {
+    const result = classifyUnfinishedCommand({
+      output: "hosts file\n(END)",
+      lastOutputAtMs: Date.now(),
+    });
+    expect(result.stalled).toBe(true);
+    expect(result.promptLabel).not.toBeNull();
+  });
+
+  it("stalls on prolonged silence with no prompt", () => {
+    const result = classifyUnfinishedCommand({
+      output: "compiling",
+      lastOutputAtMs: Date.now() - IDLE_STALL_MS - 1_000,
+    });
+    expect(result.stalled).toBe(true);
+    expect(result.promptLabel).toBeNull();
+    expect(result.idleMs).toBeGreaterThanOrEqual(IDLE_STALL_MS);
+  });
+
+  it("keeps a chatty long-running command in the running state", () => {
+    const result = classifyUnfinishedCommand({
+      output: "[42/100] building",
+      lastOutputAtMs: Date.now() - 500,
+    });
+    expect(result.stalled).toBe(false);
   });
 });

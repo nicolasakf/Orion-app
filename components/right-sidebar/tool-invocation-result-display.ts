@@ -149,6 +149,7 @@ export function cardDisplayTextForToolResult(
   switch (toolName) {
     case "bash":
     case "await_command":
+    case "kill_command":
       return extractTerminalResultOutputForDisplay(fullResultText);
     case "read_file":
       return extractReadFileCardBody(fullResultText);
@@ -176,7 +177,8 @@ export function getToolResultDisplaySegments(
 
   switch (toolName) {
     case "bash":
-    case "await_command": {
+    case "await_command":
+    case "kill_command": {
       const lines = fullResultText.split(/\r?\n/);
       const outIdx = lines.findIndex((l) => l.trim() === "output:");
       if (outIdx === -1) return single(false);

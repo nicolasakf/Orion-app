@@ -124,6 +124,17 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
   );
 }
 
+/**
+ * Non-throwing variant for callers that may render outside the provider.
+ *
+ * `AssistantProvider` uses this so the agent's `connections` tool can open the
+ * Connections tab where the dialog exists, without making the whole assistant
+ * tree depend on the settings provider being mounted.
+ */
+export function useOptionalOpenSettings(): OpenSettingsContextValue | null {
+  return React.useContext(OpenSettingsContext);
+}
+
 export function useOpenSettings(): OpenSettingsContextValue {
   const ctx = React.useContext(OpenSettingsContext);
   if (!ctx) {

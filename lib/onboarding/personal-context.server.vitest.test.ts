@@ -6,11 +6,10 @@ import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  clearInterviewTranscript,
   deletePersonalContext,
-  loadInterviewTranscript,
+  loadOnboardingAnswers,
   loadPersonalContext,
-  saveInterviewTranscript,
+  saveOnboardingAnswers,
   savePersonalContext,
 } from "@/lib/onboarding/personal-context.server";
 import {
@@ -70,24 +69,50 @@ describe("personal context storage", () => {
   });
 });
 
-describe("personal context interview storage", () => {
-  it("persists and clears the private resumable transcript", async () => {
-    const transcript = {
+describe("onboarding answers storage", () => {
+  it("persists and reloads the three answers", async () => {
+    const answers = {
       version: 1 as const,
-      messages: [
-        {
-          id: "answer-1",
-          role: "user" as const,
-          content: "Our reports live in the Finance folder.",
-          createdAt: new Date().toISOString(),
-        },
-      ],
+      companyDescription: "We sell wholesale coffee to cafés.",
+      roleDescription: "I run finance and reporting.",
+      helpGoal: "Monthly margin reporting without the spreadsheet grind.",
       updatedAt: new Date().toISOString(),
     };
-    await saveInterviewTranscript(transcript);
-    await expect(loadInterviewTranscript()).resolves.toEqual(transcript);
+    await saveOnboardingAnswers(answers);
+    await expect(loadOnboardingAnswers()).resolves.toEqual(answers);
+  });
 
-    await clearInterviewTranscript();
-    await expect(loadInterviewTranscript()).resolves.toMatchObject({ messages: [] });
+  it("returns blank answers before the questions screen is saved", async () => {
+    await expect(loadOnboardingAnswers()).resolves.toEqual({
+      version: 1,
+      companyDescription: "",
+      roleDescription: "",
+      helpGoal: "",
+    });
+  });
+
+  it("rejects answers that contain a credential", async () => {
+    await expect(
+      saveOnboardingAnswers({
+        version: 1,
+        companyDescription: "Our key is sk-proj-abcdefghijklmnopqrstuvwxyz012345",
+        roleDescription: "",
+        helpGoal: "",
+        updatedAt: new Date().toISOString(),
+      }),
+    ).rejects.toThrow(/credential/i);
+  });
+
+  it("removes the transcript left behind by the old chat interview", async () => {
+    const legacy = path.join(tempDirectory, "personal-context-interview.json");
+    await writeFile(legacy, JSON.stringify({ version: 1, messages: [] }), "utf8");
+    await saveOnboardingAnswers({
+      version: 1,
+      companyDescription: "We run a bakery.",
+      roleDescription: "",
+      helpGoal: "",
+      updatedAt: new Date().toISOString(),
+    });
+    await expect(stat(legacy)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

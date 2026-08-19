@@ -14,6 +14,8 @@ import type { KernelSidecar } from "../kernel-sidecar";
 import type { AwaitCommandParams } from "./types";
 import type { TerminalPool } from "@/lib/shell/terminal-pool";
 import {
+  buildStalledResultText,
+  classifyUnfinishedCommand,
   DEFAULT_AWAIT_BUDGET_MS,
   formatTerminalResult,
   NEXT_STEP_AWAIT_AFTER_PATTERN_MATCH,
@@ -80,6 +82,7 @@ export class AwaitCommandTool extends BaseTool {
 
     let pending = this.pool?.getPendingCommand(terminalName) ?? null;
     let accumulated = pending?.buffer ?? "";
+    let lastOutputAtMs = pending?.lastOutputAtMs ?? startedAtMs;
     const deadline = Date.now() + DEFAULT_AWAIT_BUDGET_MS;
 
     try {
@@ -93,6 +96,7 @@ export class AwaitCommandTool extends BaseTool {
         const output = this.kernelService.readTerminalBuffer(terminalName);
         if (output) {
           accumulated += output;
+          lastOutputAtMs = Date.now();
           if (pending) {
             this.pool?.appendPendingBuffer(terminalName, output);
           }
@@ -163,6 +167,28 @@ export class AwaitCommandTool extends BaseTool {
               elapsedMs: Date.now() - startedAtMs,
               exitCode: progress.exitCode,
               output: progress.output,
+            })
+          );
+        }
+
+        const classification = classifyUnfinishedCommand({
+          output: progress.output,
+          lastOutputAtMs,
+        });
+        if (classification.stalled) {
+          const stalledText = buildStalledResultText(
+            classification.promptLabel,
+            classification.idleMs
+          );
+          return this.truncateOutput(
+            formatTerminalResult({
+              status: "stalled",
+              terminalName,
+              elapsedMs: Date.now() - startedAtMs,
+              idleMs: classification.idleMs,
+              output: progress.output,
+              message: stalledText.message,
+              nextStep: stalledText.nextStep,
             })
           );
         }

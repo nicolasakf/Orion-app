@@ -34,7 +34,9 @@ import {
 import { XTermTerminal } from "./xterm-terminal";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import { useJupyterShellReady } from "@/hooks/use-jupyter-shell-ready";
+import { useOrionSettings } from "@/hooks/use-orion-settings";
 import { useAssistantChatOptional } from "@/lib/agent/assistant-provider";
+import { resolveUserTerminalCwd } from "@/lib/shell/user-terminal-cwd";
 import { TerminalType } from "@/lib/shell/types";
 
 interface TerminalInfo {
@@ -54,6 +56,8 @@ export interface TerminalPanelProps {
   kernelService: KernelService | null;
   /** Callback to open the kernel connection dropdown. */
   onOpenKernelDropdown: () => void;
+  /** Jupyter-relative workspace path used when new user terminals start in the workspace. */
+  workspaceDirectory?: string | null;
 }
 
 /**
@@ -66,9 +70,15 @@ export interface TerminalPanelProps {
 export function TerminalPanel({
   kernelService,
   onOpenKernelDropdown,
+  workspaceDirectory = null,
 }: TerminalPanelProps) {
   const assistantCtx = useAssistantChatOptional();
   const pool = assistantCtx?.terminalPool ?? null;
+  const { effectiveSettings } = useOrionSettings();
+  const userTerminalCwd = resolveUserTerminalCwd({
+    preference: effectiveSettings.shell.userTerminalWorkingDirectory,
+    workspaceDirectory,
+  });
 
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [activeTerminalName, setActiveTerminalName] = useState<string | null>(null);
@@ -211,12 +221,12 @@ export function TerminalPanel({
       if (pool) {
         // Pool registers the terminal as User type and fires onStateChanged,
         // which updates panel state via the pool subscription above.
-        const terminal = await pool.createUserTerminal();
+        const terminal = await pool.createUserTerminal(userTerminalCwd);
         setActiveTerminalName(terminal.name);
         return;
       }
 
-      const connection = await kernelService.startTerminalRaw();
+      const connection = await kernelService.startTerminalRaw(userTerminalCwd);
       setTerminals((prev) => {
         const existingIndex = prev.findIndex((terminal) => terminal.name === connection.name);
         if (existingIndex === -1) {
@@ -237,7 +247,7 @@ export function TerminalPanel({
     } catch (error) {
       console.error("Failed to create terminal:", error);
     }
-  }, [kernelService, pool]);
+  }, [kernelService, pool, userTerminalCwd]);
 
   /**
    * Stable ref holding the latest send-to-terminal implementation.
@@ -263,12 +273,12 @@ export function TerminalPanel({
       isNew = true;
       try {
         if (pool) {
-          const terminal = await pool.createUserTerminal();
+          const terminal = await pool.createUserTerminal(userTerminalCwd);
           connection = terminal.connection;
           setActiveTerminalName(terminal.name);
           // Pool's onStateChanged fires and updates the terminals list
         } else {
-          connection = await kernelService.startTerminalRaw();
+          connection = await kernelService.startTerminalRaw(userTerminalCwd);
           setTerminals((prev) => {
             const existingIndex = prev.findIndex(
               (t) => t.name === connection!.name

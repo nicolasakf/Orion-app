@@ -22,9 +22,10 @@
  * Cell Output Inspection (1):
  *   - ReadCellOutputTool: Read cell output by mime type (table/plotly/image/text)
  *
- * Terminal Management (2):
+ * Terminal Management (3):
  *   - BashTool: Run shell commands in persistent terminals
  *   - AwaitCommandTool: Await completion/patterns for running commands
+ *   - KillCommandTool: Interrupt or close a terminal stuck on an unfinished command
  *
  * File Operations (2):
  *   - ReadFileTool: Read text files (non-notebook) with optional line range
@@ -67,6 +68,7 @@ export { ExecuteCodeTool } from "./execute-code";
 export { BashTool } from "./bash";
 export type { TerminalShell } from "./bash";
 export { AwaitCommandTool } from "./await-command";
+export { KillCommandTool } from "./kill-command";
 
 // File Operations
 export { ReadFileTool } from "./read-file";
@@ -91,6 +93,7 @@ import { ExecuteCellTool } from "./execute-cell";
 import { ExecuteCodeTool } from "./execute-code";
 import { BashTool, type TerminalShell } from "./bash";
 import { AwaitCommandTool } from "./await-command";
+import { KillCommandTool } from "./kill-command";
 import { ReadFileTool } from "./read-file";
 import { EditFileTool } from "./edit-file";
 import { ReadCellOutputTool } from "./read-cell-output";
@@ -121,6 +124,7 @@ export interface JupyterToolSet {
     // Terminal Management
     bash: BashTool;
     awaitCommand: AwaitCommandTool;
+    killCommand: KillCommandTool;
     // File Operations
     readFile: ReadFileTool;
     editFile: EditFileTool;
@@ -249,6 +253,7 @@ export function createJupyterTools(
         getJupyterRootDirectory
       ),
       awaitCommand: new AwaitCommandTool(kernelService, sc, pool),
+      killCommand: new KillCommandTool(kernelService, sc, pool),
 
       // File Operations
       readFile: new ReadFileTool(

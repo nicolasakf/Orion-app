@@ -251,6 +251,7 @@ For `chat.interactionModes`, `[]` is accepted in authored JSON and is normalized
         "markdownTableMaxHeightClass": "max-h-80",
         "awaitCommandCountdownSeconds": 30
       },
+      "userTerminalWorkingDirectory": "workspace",
       "mobileBreakpointPx": 768,
       "minRefreshSpinMs": 500,
       "toastLimit": 1
@@ -464,6 +465,7 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 
 | Field | Type | Allowed values | Default | Description |
 | --- | --- | --- | --- | --- |
+| `userTerminalWorkingDirectory` | string | `workspace`, `home` | `workspace` | Working directory for terminals the user creates in the terminal panel. `workspace` is the current workspace; `home` is the Jupyter root, usually `~/`. Agent-created terminals ignore this. |
 | `mobileBreakpointPx` | integer | > 0 (px) | `768` | Viewport width at or below which mobile layout applies. |
 | `minRefreshSpinMs` | integer | > 0 (ms) | `500` | Minimum spinner duration for refresh buttons. |
 | `toastLimit` | integer | ≥ 1 | `1` | Max simultaneous toast notifications. |

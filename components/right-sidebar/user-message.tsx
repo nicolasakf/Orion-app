@@ -57,6 +57,12 @@ interface UserMessageProps {
   checkpointId?: string;
   checkpointAction?: "restore" | "redo";
   onRestoreCheckpoint?: (checkpointId: string, action: "restore" | "redo") => void;
+  /** When false, hides copy/edit/restore controls below the bubble. */
+  showActions?: boolean;
+  /** Overrides the global chat font size for this bubble. */
+  fontSize?: number;
+  /** Optional classes merged onto the message bubble surface. */
+  bubbleClassName?: string;
 }
 
 export function UserMessage({
@@ -65,9 +71,12 @@ export function UserMessage({
   checkpointId,
   checkpointAction,
   onRestoreCheckpoint,
+  showActions = true,
+  fontSize,
+  bubbleClassName,
 }: UserMessageProps) {
   const { effectiveSettings } = useOrionSettings();
-  const chatFontSize = effectiveSettings.chat.fontSize;
+  const chatFontSize = fontSize ?? effectiveSettings.chat.fontSize;
   const { checked: isCopied, showCheckmark } = useCheckmarkedFeedback();
   const contentRef = useRef<HTMLDivElement>(null);
   const [hasOverflow, setHasOverflow] = useState(false);
@@ -166,6 +175,7 @@ export function UserMessage({
         ref={contentRef}
         className={cn(
           "corner-squircle relative max-w-full min-w-0 overflow-hidden rounded-l-lg rounded-tr-lg bg-primary px-3 py-1 text-primary-foreground",
+          bubbleClassName,
           isExpanded ? "max-h-none" : "max-h-[8rem]",
           hasOverflow && "pb-7",
           hasOverflow && !isExpanded && "cursor-pointer",
@@ -249,7 +259,7 @@ export function UserMessage({
         )}
       </div>
 
-      {/* Action buttons */}
+      {showActions ? (
       <TooltipProvider delayDuration={300}>
         <div className="mt-0.5 flex items-center gap-0.5">
           {canRestoreCheckpoint && (
@@ -308,6 +318,7 @@ export function UserMessage({
           </Tooltip>
         </div>
       </TooltipProvider>
+      ) : null}
     </div>
   );
 }

@@ -6,6 +6,7 @@ export type SettingsTab =
   | "agent"
   | "models"
   | "providers"
+  | "connections"
   | "settings-file";
 
 /** Subsections shown in the sidebar when the Agent tab is active. */

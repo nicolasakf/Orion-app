@@ -1,11 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, MessageCircle, Pencil, Save, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Save, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 
-import { PersonalContextInterview } from "@/components/personal-context-interview";
 import { SettingsInfoSectionTitle } from "@/components/settings-dialog/settings-info-label";
 import { SettingsSectionLayout } from "@/components/settings-dialog/settings-section-layout";
 import { Button } from "@/components/ui/button";
@@ -22,7 +21,7 @@ const ProfileResponseSchema = z.object({
 
 const ErrorResponseSchema = z.object({ message: z.string().optional() });
 
-type PersonalContextView = "summary" | "edit" | "interview";
+type PersonalContextView = "summary" | "edit";
 
 /** Reads a useful message from a failed personal-context API response. */
 async function readError(response: Response, fallback: string): Promise<string> {
@@ -30,7 +29,7 @@ async function readError(response: Response, fallback: string): Promise<string> 
   return parsed.success && parsed.data.message ? parsed.data.message : fallback;
 }
 
-/** Settings surface for editing `ORION.md` or resuming its guided interview. */
+/** Settings surface for reading, editing, or deleting `ORION.md`. */
 export function PersonalContextTab() {
   const [view, setView] = React.useState<PersonalContextView>("summary");
   const [content, setContent] = React.useState("");
@@ -100,39 +99,12 @@ export function PersonalContextTab() {
     await loadProfile();
   }, [loadProfile]);
 
-  /** Deletes only the resumable conversation after an explicit confirmation. */
-  const clearHistory = React.useCallback(async () => {
-    if (!window.confirm("Clear the personal context interview history? ORION.md will be kept.")) {
-      return;
-    }
-    const response = await fetch("/api/onboarding/interview", { method: "DELETE" });
-    if (!response.ok) {
-      toast.error(await readError(response, "Could not clear interview history."));
-      return;
-    }
-    toast.success("Interview history cleared");
-  }, []);
-
-  if (view === "interview") {
-    return (
-      <SettingsSectionLayout title="Personal context">
-        <PersonalContextInterview
-          className="min-h-[34rem]"
-          onDone={() => {
-            setView("summary");
-            void loadProfile();
-          }}
-        />
-      </SettingsSectionLayout>
-    );
-  }
-
   return (
     <SettingsSectionLayout title="Personal context">
       <div className="space-y-4">
         <SettingsInfoSectionTitle
           title="ORION.md"
-          description="Local background Orion includes in agent conversations. It does not grant access or override safety and workspace rules."
+          description="Local background Orion includes in agent conversations. Ask Orion in chat to remember something and it updates this file itself. It does not grant access or override safety and workspace rules."
         />
 
         {isLoading ? (
@@ -188,22 +160,15 @@ export function PersonalContextTab() {
                 <>
                   <p className="text-sm font-medium">No personal context saved yet</p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Continue the guided interview or create ORION.md manually.
+                    Create ORION.md here, or ask Orion in chat to remember something.
                   </p>
                 </>
               )}
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button type="button" onClick={() => setView("interview")}>
-                <MessageCircle className="mr-2 size-4" />
-                Continue interview
-              </Button>
-              <Button type="button" variant="outline" onClick={() => setView("edit")}>
+              <Button type="button" onClick={() => setView("edit")}>
                 <Pencil className="mr-2 size-4" />
                 {exists ? "Edit ORION.md" : "Create ORION.md"}
-              </Button>
-              <Button type="button" variant="outline" onClick={() => void clearHistory()}>
-                Clear interview history
               </Button>
               {exists ? (
                 <Button type="button" variant="destructive" onClick={() => void deleteProfile()}>

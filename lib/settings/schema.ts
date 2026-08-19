@@ -162,6 +162,13 @@ export const NotebookEditorSettingsSchema = z.object({
   doublePressTimeoutMs: z.number().int().positive(),
 });
 
+/** Preferred libraries for agent-authored notebook and App View interfaces. */
+export const NotebookUiPreferencesSchema = z.object({
+  charts: z.string().trim().min(1).max(100),
+  tables: z.string().trim().min(1).max(100),
+  otherElements: z.string().trim().min(1).max(100),
+});
+
 const panelSizeTupleRefine = (sizes: number[]) =>
   sizes.every((n) => Number.isFinite(n) && n > 0);
 
@@ -198,11 +205,25 @@ export const ShellChatSettingsSchema = z.object({
   awaitCommandCountdownSeconds: z.number().int().positive(),
 });
 
+/**
+ * Working directory for terminals the user creates in the terminal panel.
+ * Agent-created terminals are not affected.
+ * - "workspace": current workspace (Jupyter-relative)
+ * - "home": Jupyter root, typically `~/`
+ */
+export const UserTerminalWorkingDirectorySchema = z
+  .enum(["workspace", "home"])
+  .catch("workspace");
+
 export const ShellSettingsSchema = z.object({
   panelVisibility: ShellPanelVisibilitySettingsSchema,
   panelLayout: ShellPanelLayoutSettingsSchema,
   sidebar: ShellSidebarSettingsSchema,
   chat: ShellChatSettingsSchema,
+  /** Where user-created terminals start. Agent terminals ignore this. */
+  userTerminalWorkingDirectory: UserTerminalWorkingDirectorySchema.default(
+    "workspace"
+  ),
   mobileBreakpointPx: z.number().int().positive(),
   minRefreshSpinMs: z.number().int().positive(),
   toastLimit: z.number().int().min(1),
@@ -256,7 +277,7 @@ const SettingsDataSchema = z.object({
   onboarding: z.object({
     /** False until a new user completes the required account sign-in step. */
     signInStepCompleted: z.boolean().default(true),
-    /** False until an eligible Business user saves or skips the personal-context interview. */
+    /** False until the user completes or skips first-run personal-context setup. */
     businessProfileStepCompleted: z.boolean().default(true),
   }).default({ signInStepCompleted: true, businessProfileStepCompleted: true }),
   appearance: z.object({
@@ -324,6 +345,7 @@ const SettingsDataSchema = z.object({
     output: NotebookOutputSettingsSchema,
     export: NotebookExportSettingsSchema,
     editor: NotebookEditorSettingsSchema,
+    uiPreferences: NotebookUiPreferencesSchema,
   }),
   workspace: z.object({
     /** Jupyter-relative directory paths pinned in the workspace picker (order preserved). */
@@ -383,12 +405,16 @@ export type AgentSettings = z.infer<typeof AgentSettingsSchema>;
 export type NotebookOutputSettings = z.infer<typeof NotebookOutputSettingsSchema>;
 export type NotebookExportSettings = z.infer<typeof NotebookExportSettingsSchema>;
 export type NotebookEditorSettings = z.infer<typeof NotebookEditorSettingsSchema>;
+export type NotebookUiPreferences = z.infer<typeof NotebookUiPreferencesSchema>;
 export type ShellPanelVisibilitySettings = z.infer<
   typeof ShellPanelVisibilitySettingsSchema
 >;
 export type ShellPanelLayoutSettings = z.infer<typeof ShellPanelLayoutSettingsSchema>;
 export type ShellSidebarSettings = z.infer<typeof ShellSidebarSettingsSchema>;
 export type ShellChatSettings = z.infer<typeof ShellChatSettingsSchema>;
+export type UserTerminalWorkingDirectory = z.infer<
+  typeof UserTerminalWorkingDirectorySchema
+>;
 export type ShellSettings = z.infer<typeof ShellSettingsSchema>;
 export type SettingsData = z.infer<typeof SettingsDataSchema>;
 export type NotebookSettings = SettingsData["notebook"];

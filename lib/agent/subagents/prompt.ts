@@ -3,6 +3,8 @@ import { buildRequiredSkillsPromptSection } from "@/lib/agent/implicit-skills";
 import { isAbsoluteAgentPath, toAgentAbsolutePath } from "@/lib/agent/path-resolver";
 import { PARALLEL_TOOL_CALLS_PROMPT_SECTION } from "@/lib/agent/tool-execution-policy";
 import { buildPersonalContextPromptSection } from "@/lib/agent/personal-context-prompt";
+import { buildUiPreferencesPromptSection } from "@/lib/agent/ui-preferences-prompt";
+import type { NotebookUiPreferences } from "@/lib/settings/schema";
 import type { SubagentPromptPayload } from "./types";
 
 export function buildSubagentSystemPrompt(options: {
@@ -12,6 +14,7 @@ export function buildSubagentSystemPrompt(options: {
   forcedSkillNames?: string[];
   rootDirectory?: string;
   personalContext?: string;
+  uiPreferences?: NotebookUiPreferences;
 }): string {
   const {
     subagent,
@@ -20,6 +23,7 @@ export function buildSubagentSystemPrompt(options: {
     forcedSkillNames,
     rootDirectory,
     personalContext,
+    uiPreferences,
   } = options;
   const toPromptPath = (path: string): string =>
     isAbsoluteAgentPath(path) ? path : toAgentAbsolutePath(path, { rootDirectory }) ?? path;
@@ -55,6 +59,7 @@ ${fencedSystemPrompt}`,
     PARALLEL_TOOL_CALLS_PROMPT_SECTION,
     rulesSection,
     buildPersonalContextPromptSection(personalContext),
+    buildUiPreferencesPromptSection(uiPreferences),
     buildRequiredSkillsPromptSection(forcedSkillNames ?? []),
     `## Runtime Instructions
 

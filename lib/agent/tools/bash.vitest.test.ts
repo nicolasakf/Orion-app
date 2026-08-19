@@ -13,6 +13,7 @@ import { TerminalPool } from "@/lib/shell/terminal-pool";
 
 import { AwaitCommandTool } from "./await-command";
 import { BashTool, buildShellWrappedCommand } from "./bash";
+import { KillCommandTool } from "./kill-command";
 
 interface ProcessResult {
   code: number | null;
@@ -223,6 +224,7 @@ describe("persistent terminal lifecycle", () => {
       endMarkerPrefix: "ORION_CMD_END_existing",
       startMarker: "ORION_CMD_START_existing",
       startedAtMs: 1,
+      lastOutputAtMs: Date.now(),
     });
     const tool = new BashTool(kernelService, null, pool, () => "chat-1");
 
@@ -282,6 +284,7 @@ describe("persistent terminal lifecycle", () => {
       endMarkerPrefix: "ORION_CMD_END_resume",
       startMarker: "ORION_CMD_START_resume",
       startedAtMs: 1,
+      lastOutputAtMs: Date.now(),
     });
     const tool = new AwaitCommandTool(kernelService, null, pool);
     const controller = new AbortController();
@@ -315,6 +318,7 @@ describe("persistent terminal lifecycle", () => {
       endMarkerPrefix: "ORION_CMD_END_ready",
       startMarker: "ORION_CMD_START_ready",
       startedAtMs: 1,
+      lastOutputAtMs: Date.now(),
     });
     const tool = new AwaitCommandTool(kernelService, null, pool);
 
@@ -326,4 +330,247 @@ describe("persistent terminal lifecycle", () => {
       pool.dispose();
     }
   });
+});
+
+/**
+ * Terminal mock that answers kill_command's shell-responsiveness probe, so a
+ * test can simulate a shell that recovers (or one that stays wedged).
+ */
+function createProbeHarness(options: { respondToProbe: boolean }): {
+  kernelService: KernelService;
+  reads: string[];
+  sent: string[];
+  closed: string[];
+} {
+  const reads: string[] = [];
+  const sent: string[] = [];
+  const closed: string[] = [];
+  const kernelService = {
+    closeTerminal: async (name: string) => {
+      closed.push(name);
+    },
+    getTerminalConnection: () => ({}),
+    listTerminals: () => ["1"],
+    onTerminalsChanged: () => () => undefined,
+    readTerminalBuffer: () => reads.shift() ?? "",
+    refreshTerminalsFromServer: async () => ["1"],
+    sendToTerminal: (_name: string, text: string) => {
+      sent.push(text);
+      const probe = /'(ORION_KILL_OK_)' '([a-z0-9]+)'/.exec(text);
+      if (probe && options.respondToProbe) {
+        reads.push(`\n${probe[1]}${probe[2]}\n$ `);
+      }
+    },
+    startTerminal: async () => "1",
+  } as unknown as KernelService;
+  return { kernelService, reads, sent, closed };
+}
+
+/** Poll a predicate until it holds, so tests can observe async tool state. */
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("waitFor timed out");
+}
+
+describe("non-interactive command environment", () => {
+  it.skipIf(!hasPosixShell)("disables pagers for POSIX commands", async () => {
+    const result = await runPersistentShell("/bin/bash", ["-s"], [
+      wrapper('printf "%s|%s|%s\\n" "$PAGER" "$GH_PAGER" "$LESS"', "env", "posix"),
+    ]);
+
+    expect(result.stdout).toContain("cat|cat|FRX");
+    expect(result.stdout).toContain("ORION_CMD_END_env:0");
+  });
+
+  it.skipIf(!hasPowerShell)("disables pagers for PowerShell commands", async () => {
+    const result = await runPersistentShell(
+      "pwsh",
+      ["-NoLogo", "-NoProfile", "-Command", "-"],
+      [wrapper("Write-Output \"$env:PAGER|$env:GIT_PAGER\"", "psenv", "powershell")]
+    );
+
+    expect(result.stdout).toContain("cat|cat");
+    expect(result.stdout).toContain("ORION_CMD_END_psenv:0");
+  });
+});
+
+describe("stalled terminal detection", () => {
+  it("reports a pager prompt as stalled instead of running", async () => {
+    const { kernelService, reads } = createTerminalHarness();
+    const pool = new TerminalPool(kernelService);
+    const terminal = await pool.createAgentTerminal("chat-1");
+    const tool = new BashTool(kernelService, null, pool, () => "chat-1");
+
+    try {
+      const dispatched = tool.execute({
+        background: false,
+        command: "gh api user",
+        cwd: "",
+        description: "Fetch the authenticated GitHub user",
+        terminalName: terminal.name,
+      });
+      await waitFor(() => pool.getPendingCommand(terminal.name) !== null);
+      const pending = pool.getPendingCommand(terminal.name)!;
+      reads.push(`\n${pending.startMarker}\n{"login": "octocat"}\n(END)`);
+
+      const result = await dispatched;
+      expect(result).toContain("status: stalled");
+      expect(result).toContain("interactive pager end-of-file prompt");
+      expect(result).toContain("kill_command");
+      expect(result).toContain('{"login": "octocat"}');
+    } finally {
+      pool.dispose();
+    }
+  }, 15_000);
+});
+
+describe("kill_command recovery", () => {
+  it("frees a wedged terminal and clears its pending command", async () => {
+    const { kernelService, sent } = createProbeHarness({ respondToProbe: true });
+    const pool = new TerminalPool(kernelService);
+    const terminal = await pool.createAgentTerminal("chat-1");
+    pool.setPendingCommand(terminal.name, {
+      buffer: "ORION_CMD_START_stuck\nhosts file\n(END)",
+      endMarkerPrefix: "ORION_CMD_END_stuck",
+      startMarker: "ORION_CMD_START_stuck",
+      startedAtMs: 1,
+      lastOutputAtMs: 1,
+    });
+    const tool = new KillCommandTool(kernelService, null, pool);
+
+    try {
+      const result = await tool.execute({
+        mode: "interrupt",
+        terminalName: terminal.name,
+      });
+
+      expect(result).toContain("status: killed");
+      expect(result).toContain("hosts file");
+      expect(sent[0]).toBe("\u0003");
+      expect(pool.getPendingCommand(terminal.name)).toBeNull();
+    } finally {
+      pool.dispose();
+    }
+  }, 15_000);
+
+  it("escalates to a pager quit and then asks for the terminal to be closed", async () => {
+    const { kernelService, sent } = createProbeHarness({ respondToProbe: false });
+    const pool = new TerminalPool(kernelService);
+    const terminal = await pool.createAgentTerminal("chat-1");
+    pool.setPendingCommand(terminal.name, {
+      buffer: "ORION_CMD_START_stuck\n",
+      endMarkerPrefix: "ORION_CMD_END_stuck",
+      startMarker: "ORION_CMD_START_stuck",
+      startedAtMs: 1,
+      lastOutputAtMs: 1,
+    });
+    const tool = new KillCommandTool(kernelService, null, pool);
+
+    try {
+      const result = await tool.execute({
+        mode: "interrupt",
+        terminalName: terminal.name,
+      });
+
+      expect(result).toContain("status: stalled");
+      expect(result).toContain('mode: "close"');
+      expect(sent).toContain("q");
+      expect(sent).toContain("\u0015");
+      expect(sent).toContain("\u0004");
+      expect(pool.getPendingCommand(terminal.name)).not.toBeNull();
+    } finally {
+      pool.dispose();
+    }
+  }, 15_000);
+
+  it("reports a terminal that disappeared mid-interrupt as killed", async () => {
+    const { kernelService } = createProbeHarness({ respondToProbe: false });
+    const failing = {
+      ...kernelService,
+      readTerminalBuffer: () => {
+        throw new Error('Terminal "1" not found');
+      },
+    } as unknown as KernelService;
+    const pool = new TerminalPool(kernelService);
+    const terminal = await pool.createAgentTerminal("chat-1");
+    pool.setPendingCommand(terminal.name, {
+      buffer: "",
+      endMarkerPrefix: "ORION_CMD_END_gone",
+      startMarker: "ORION_CMD_START_gone",
+      startedAtMs: 1,
+      lastOutputAtMs: 1,
+    });
+    const tool = new KillCommandTool(failing, null, pool);
+
+    try {
+      const result = await tool.execute({
+        mode: "interrupt",
+        terminalName: terminal.name,
+      });
+
+      expect(result).toContain("status: killed");
+      expect(result).toContain('terminalName ""');
+      expect(pool.getPendingCommand(terminal.name)).toBeNull();
+    } finally {
+      pool.dispose();
+    }
+  });
+
+  it("closes the terminal and drops it from the pool", async () => {
+    const { kernelService, closed } = createProbeHarness({ respondToProbe: false });
+    const pool = new TerminalPool(kernelService);
+    const terminal = await pool.createAgentTerminal("chat-1");
+    pool.setPendingCommand(terminal.name, {
+      buffer: "",
+      endMarkerPrefix: "ORION_CMD_END_stuck",
+      startMarker: "ORION_CMD_START_stuck",
+      startedAtMs: 1,
+      lastOutputAtMs: 1,
+    });
+    const tool = new KillCommandTool(kernelService, null, pool);
+
+    try {
+      const result = await tool.execute({
+        mode: "close",
+        terminalName: terminal.name,
+      });
+
+      expect(result).toContain("status: killed");
+      expect(closed).toEqual([terminal.name]);
+      expect(pool.getTerminal(terminal.name)).toBeUndefined();
+    } finally {
+      pool.dispose();
+    }
+  });
+
+  it("reports a command that completed before it could be stopped", async () => {
+    const { kernelService } = createProbeHarness({ respondToProbe: true });
+    const pool = new TerminalPool(kernelService);
+    const terminal = await pool.createAgentTerminal("chat-1");
+    pool.setPendingCommand(terminal.name, {
+      buffer: "ORION_CMD_START_done\nfinished\nORION_CMD_END_done:0\n",
+      endMarkerPrefix: "ORION_CMD_END_done",
+      startMarker: "ORION_CMD_START_done",
+      startedAtMs: 1,
+      lastOutputAtMs: 1,
+    });
+    const tool = new KillCommandTool(kernelService, null, pool);
+
+    try {
+      const result = await tool.execute({
+        mode: "interrupt",
+        terminalName: terminal.name,
+      });
+
+      expect(result).toContain("status: completed");
+      expect(result).toContain("exit_code: 0");
+      expect(pool.getPendingCommand(terminal.name)).toBeNull();
+    } finally {
+      pool.dispose();
+    }
+  }, 15_000);
 });

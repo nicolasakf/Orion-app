@@ -13,6 +13,7 @@ import {
   FolderSearch,
   FileText,
   SquareArrowOutUpRight,
+  ExternalLink,
   AtSign,
   Pin,
   Copy,
@@ -98,6 +99,11 @@ type FileTreeProps = {
    * Receives the path of the item to reveal.
    */
   onRevealInFinder?: (path: string) => void;
+  /**
+   * Called when the user requests opening a file with the operating system's
+   * default application (Orion Desktop + local runtime only).
+   */
+  onOpenExternally?: (path: string) => void;
   /** Called when the user requests a Jupyter-relative path be copied. */
   onCopyPath?: (path: string) => void;
   /**
@@ -140,6 +146,7 @@ export function FileTree({
   onTreeChange,
   onFetchChildren,
   onRevealInFinder,
+  onOpenExternally,
   onCopyPath,
   onPathRenamed,
   onPathDeleted,
@@ -171,6 +178,7 @@ export function FileTree({
               onTreeChange={onTreeChange}
               onFetchChildren={onFetchChildren}
               onRevealInFinder={onRevealInFinder}
+              onOpenExternally={onOpenExternally}
               onCopyPath={onCopyPath}
               onPathRenamed={onPathRenamed}
               onPathDeleted={onPathDeleted}
@@ -196,6 +204,7 @@ function FileTreeNode({
   onTreeChange,
   onFetchChildren,
   onRevealInFinder,
+  onOpenExternally,
   onCopyPath,
   onPathRenamed,
   onPathDeleted,
@@ -213,6 +222,7 @@ function FileTreeNode({
   onTreeChange?: (parentPath: string) => void;
   onFetchChildren?: (path: string) => Promise<FileTreeItem[]>;
   onRevealInFinder?: (path: string) => void;
+  onOpenExternally?: (path: string) => void;
   onCopyPath?: (path: string) => void;
   onPathRenamed?: FileTreeProps["onPathRenamed"];
   onPathDeleted?: FileTreeProps["onPathDeleted"];
@@ -752,6 +762,16 @@ function FileTreeNode({
             </ContextMenuItem>
           )}
 
+          {item.type === "file" && onOpenExternally && (
+            <ContextMenuItem
+              className="outline-none ring-0 focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0"
+              onSelect={() => onOpenExternally(item.path)}
+            >
+              <ExternalLink className="mr-2 h-4 w-4" />
+              Open externally
+            </ContextMenuItem>
+          )}
+
           {isNotebookFile && onFileSelect && (
             <ContextMenuItem
               className="outline-none ring-0 focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0"
@@ -834,6 +854,7 @@ function FileTreeNode({
               onTreeChange={onTreeChange}
               onFetchChildren={onFetchChildren}
               onRevealInFinder={onRevealInFinder}
+              onOpenExternally={onOpenExternally}
               onCopyPath={onCopyPath}
               onPathRenamed={onPathRenamed}
               onPathDeleted={onPathDeleted}

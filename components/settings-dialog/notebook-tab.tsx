@@ -72,6 +72,22 @@ export function NotebookTab() {
     }));
   };
 
+  /** Persists agent-facing UI library preferences. */
+  const updateUiPreferences = (
+    patch: Partial<typeof notebook.uiPreferences>
+  ) => {
+    void setUserSettings((current) => ({
+      ...current,
+      notebook: {
+        ...current.notebook,
+        uiPreferences: {
+          ...current.notebook.uiPreferences,
+          ...patch,
+        },
+      },
+    }));
+  };
+
   return (
     <SettingsSectionLayout
       title="Notebook"
@@ -87,6 +103,47 @@ export function NotebookTab() {
               description="Shows the scrollbar when scrolling in the notebook editor."
               checked={notebook.scrollbarVisible}
               onCheckedChange={(checked) => updateNotebook({ scrollbarVisible: checked })}
+            />
+          </div>
+        </section>
+
+        <Separator />
+
+        <section className="space-y-4">
+          <h3 className="text-sm font-bold">UI generation</h3>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SettingsTextField
+              id="notebook-preferred-chart-library"
+              label="Preferred chart library"
+              description="Library the agent should use when creating charts in notebooks and App View. A request-specific choice still takes priority."
+              value={notebook.uiPreferences.charts}
+              placeholder="Plotly"
+              onChange={(value) => {
+                if (!value.trim()) return;
+                updateUiPreferences({ charts: value });
+              }}
+            />
+            <SettingsTextField
+              id="notebook-preferred-table-library"
+              label="Preferred table library"
+              description="Library or component system the agent should use for generated tables."
+              value={notebook.uiPreferences.tables}
+              placeholder="Orion UI"
+              onChange={(value) => {
+                if (!value.trim()) return;
+                updateUiPreferences({ tables: value });
+              }}
+            />
+            <SettingsTextField
+              id="notebook-preferred-ui-library"
+              label="Preferred UI element library"
+              description="Library or component system the agent should use for buttons, inputs, cards, layouts, and other generated UI elements."
+              value={notebook.uiPreferences.otherElements}
+              placeholder="Orion UI"
+              onChange={(value) => {
+                if (!value.trim()) return;
+                updateUiPreferences({ otherElements: value });
+              }}
             />
           </div>
         </section>

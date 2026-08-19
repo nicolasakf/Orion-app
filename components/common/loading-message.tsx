@@ -6,15 +6,17 @@ import { useOrionSettings } from "@/hooks/use-orion-settings";
 
 interface LoadingMessageProps {
   className?: string;
+  /** Overrides the global chat font size for the loading indicator. */
+  fontSize?: number;
 }
 
-export function LoadingMessage(props: LoadingMessageProps) {
+export function LoadingMessage({ className, fontSize }: LoadingMessageProps) {
   const { effectiveSettings } = useOrionSettings();
-  const chatFontSize = effectiveSettings.chat.fontSize;
+  const chatFontSize = fontSize ?? effectiveSettings.chat.fontSize;
   return (
     <div className="flex justify-start">
       <div
-        className={`corner-squircle max-w-[80%] p-3 rounded-lg bg-accent ${props.className}`}
+        className={`corner-squircle max-w-[80%] p-3 rounded-lg bg-accent ${className ?? ""}`}
         style={{ fontSize: chatFontSize }}
       >
         <div className="flex items-center gap-2">

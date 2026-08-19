@@ -55,6 +55,50 @@ describe("parallel tool call guidance", () => {
   });
 });
 
+describe("UI generation preferences", () => {
+  const uiPreferences = {
+    charts: "Altair",
+    tables: "Great Tables",
+    otherElements: "Orion UI",
+  };
+
+  it("injects configured libraries into every main interaction mode", () => {
+    for (const prompt of [
+      buildAgentSystemPrompt({ uiPreferences }),
+      buildResearchModeSystemPrompt({ uiPreferences }),
+      buildAskModeSystemPrompt({ uiPreferences }),
+      buildEditModeSystemPrompt({ uiPreferences }),
+    ]) {
+      expect(prompt).toContain("## UI Generation Preferences");
+      expect(prompt).toContain('Charts: "Altair"');
+      expect(prompt).toContain('Tables: "Great Tables"');
+      expect(prompt).toContain('Other UI elements');
+      expect(prompt).toContain('"Orion UI"');
+    }
+  });
+
+  it("passes configured libraries to notebook-defined sub-agents", () => {
+    const prompt = buildSubagentSystemPrompt({
+      subagent: {
+        name: "analyst",
+        label: "Analyst",
+        originalNotebookPath: ".agents/subagents/analyst.agent.ipynb",
+        tmpNotebookPath: ".agents/subagents/tmp/analyst/run.ipynb",
+        systemPrompt: "Analyze carefully.",
+      },
+      uiPreferences,
+    });
+
+    expect(prompt).toContain("## UI Generation Preferences");
+    expect(prompt).toContain('Charts: "Altair"');
+    expect(prompt).toContain('Tables: "Great Tables"');
+  });
+
+  it("omits the section when no preferences are supplied", () => {
+    expect(buildAgentSystemPrompt()).not.toContain("## UI Generation Preferences");
+  });
+});
+
 describe("user-facing terminology", () => {
   it("injects Orion notebook terminology only in Business View mode", () => {
     const businessPrompt = buildAgentSystemPrompt({ businessExperienceMode: true });
@@ -215,16 +259,21 @@ describe("Research mode prompt", () => {
 });
 
 describe("Business View mode prompt", () => {
-  it("injects App View requirements when businessExperienceMode is true", () => {
+  it("injects business audience and App View requirements when businessExperienceMode is true", () => {
     const prompt = buildAgentSystemPrompt({ businessExperienceMode: true });
 
+    expect(prompt).toContain("## Business Audience");
+    expect(prompt).toContain("business owner, manager, or operator");
+    expect(prompt).toContain("full technical rigor");
     expect(prompt).toContain("## Business View Mode");
     expect(prompt).toContain("Load the `create-app` skill");
     expect(prompt).toContain("included in App View");
   });
 
   it("omits Business View mode guidance in the default experience", () => {
+    expect(buildAgentSystemPrompt()).not.toContain("## Business Audience");
     expect(buildAgentSystemPrompt()).not.toContain("## Business View Mode");
+    expect(buildResearchModeSystemPrompt()).not.toContain("## Business Audience");
     expect(buildResearchModeSystemPrompt()).not.toContain("## Business View Mode");
   });
 });

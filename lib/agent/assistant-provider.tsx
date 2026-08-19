@@ -27,6 +27,8 @@ import { KernelSidecar, type VariableSummary, type TrafficLightState } from "./k
 import { RuntimeContextStore, type RuntimeSnapshot } from "./runtime-store";
 import { createJupyterTools, type JupyterToolSet, type TerminalShell } from "./tools";
 import type { OrionToolName } from "./tool-schemas";
+import { useOptionalOpenSettings } from "@/contexts/open-settings-context";
+import { renderConnectionRequest } from "@/lib/connections/agent-view";
 import { TerminalPool } from "@/lib/shell/terminal-pool";
 import { guardToolResult } from "./tool-output-guard";
 import {
@@ -351,6 +353,11 @@ export function AssistantProvider({
   const ruleRegistryRef = useRef<RuleRegistry>(new RuleRegistry());
   const subagentRegistryRef = useRef<SubagentRegistry>(new SubagentRegistry());
   const checkpointRecorderRef = useRef(new ApiEditCheckpointRecorder());
+  // Read through a ref so `executeToolCall` does not re-create on every
+  // settings-dialog state change.
+  const openSettings = useOptionalOpenSettings();
+  const openSettingsRef = useRef(openSettings);
+  openSettingsRef.current = openSettings;
 
   // State
   const [isReady, setIsReady] = useState(false);
@@ -872,6 +879,68 @@ export function AssistantProvider({
         return skill.content;
       }
 
+      if (toolName === "connections") {
+        const sanitizedParams = (sanitizeToolParams(params) ?? {}) as {
+          action?: string;
+          toolId?: string;
+          reason?: string;
+        };
+
+        // `request` opens the Connections settings and never reaches the server.
+        if (sanitizedParams.action === "request") {
+          const settings = openSettingsRef.current;
+          if (!settings) {
+            return "[ERROR] The Connections settings are not available in this window. Ask the user to open Settings → Connections themselves.";
+          }
+          settings.openWithTab("connections");
+          return renderConnectionRequest(sanitizedParams.toolId, sanitizedParams.reason);
+        }
+
+        const requestId = typeof crypto !== "undefined" ? crypto.randomUUID() : `tool-${Date.now()}`;
+        const startMs = Date.now();
+        logToolDispatch({ requestId, toolName, params }, chatIdRef.current);
+
+        try {
+          const response = await fetch("/api/tools/connections", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "list" }),
+            signal: executionContext?.abortSignal,
+          });
+          const data = (await response.json().catch(() => ({}))) as {
+            output?: unknown;
+            error?: unknown;
+          };
+          throwIfToolExecutionAborted(executionContext?.abortSignal);
+          if (!response.ok) {
+            throw new Error(
+              typeof data.error === "string"
+                ? data.error
+                : `Request failed with status ${response.status}`
+            );
+          }
+
+          const finalResult = guardToolResult(
+            typeof data.output === "string" ? data.output : JSON.stringify(data.output ?? "")
+          ) as string;
+          logToolResult(
+            { requestId, toolName, params, result: finalResult, durationMs: Date.now() - startMs },
+            chatIdRef.current
+          );
+          return finalResult;
+        } catch (err) {
+          if (err instanceof DOMException && err.name === "AbortError") {
+            throw err;
+          }
+          const message = err instanceof Error ? err.message : String(err);
+          logToolError(
+            { requestId, toolName, params, error: message, durationMs: Date.now() - startMs },
+            chatIdRef.current
+          );
+          return guardToolResult({ error: `Tool execution failed: ${message}` });
+        }
+      }
+
       if (toolName === "reload_page") {
         window.setTimeout(() => {
           window.location.reload();
@@ -1108,6 +1177,12 @@ export function AssistantProvider({
             break;
           case "await_command":
             result = await toolSet.tools.awaitCommand.execute(
+              sanitizedParams as any,
+              executionContext?.abortSignal
+            );
+            break;
+          case "kill_command":
+            result = await toolSet.tools.killCommand.execute(
               sanitizedParams as any,
               executionContext?.abortSignal
             );

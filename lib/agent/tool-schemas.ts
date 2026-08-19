@@ -418,7 +418,7 @@ export const orionTools = {
 
   bash: tool({
     description:
-      'Run a shell command in a persistent PTY-backed Jupyter terminal (PowerShell on Windows; POSIX shell on macOS/Linux). Use terminalName="" to create a fresh chat-scoped terminal. Only pass a non-empty terminalName when intentionally reusing the exact value returned by bash or await_command; never invent a terminal name. Foreground calls block until completion or the built-in wait budget elapses. If status is running, call await_command with the same terminalName; do NOT resend the command. Set background=true for commands likely to run longer than about 15 seconds (servers, watchers, long builds, long installs).',
+      'Run a shell command in a persistent PTY-backed Jupyter terminal (PowerShell on Windows; POSIX shell on macOS/Linux). Use terminalName="" to create a fresh chat-scoped terminal. Only pass a non-empty terminalName when intentionally reusing the exact value returned by bash or await_command; never invent a terminal name. Foreground calls block until completion or the built-in wait budget elapses. If status is running, call await_command with the same terminalName; do NOT resend the command. Set background=true for commands likely to run longer than about 15 seconds (servers, watchers, long builds, long installs). Commands must be non-interactive: one that waits for input is reported as status: stalled, and kill_command recovers the terminal.',
     inputSchema: z.object({
       command: z
         .string()
@@ -450,7 +450,7 @@ export const orionTools = {
 
   await_command: tool({
     description:
-      "Continue waiting on output from a prior bash call that returned status=running. This tool blocks until completion marker, optional pattern match, or the built-in wait budget elapses. Returns structured status (completed/matched/running/error).",
+      "Continue waiting on output from a prior bash call that returned status=running. This tool blocks until completion marker, optional pattern match, or the built-in wait budget elapses. Returns structured status (completed/matched/running/stalled/error). status=stalled means the command is waiting for input or has gone silent — recover it with kill_command instead of awaiting again.",
     inputSchema: z.object({
       terminalName: z
         .string()
@@ -461,6 +461,23 @@ export const orionTools = {
         .string()
         .describe(
           "Optional regular expression used for early return when matched in output. Pass empty string \"\" to disable pattern matching."
+        ),
+    }),
+  }),
+
+  kill_command: tool({
+    description:
+      "Stop a command that is holding a terminal and cannot finish on its own — typically one that stalled at a pager or an interactive prompt. mode=\"interrupt\" sends Ctrl-C, quits a pager if one is holding the terminal, and hands the terminal back for reuse. mode=\"close\" shuts the terminal down when interrupting did not free it. After killing, re-run the command non-interactively (for example --no-pager, pipe through cat, or the flag that skips confirmation).",
+    inputSchema: z.object({
+      terminalName: z
+        .string()
+        .describe(
+          "Exact terminalName returned by a prior bash or await_command result. Copy it verbatim; never invent or rename it."
+        ),
+      mode: z
+        .enum(["interrupt", "close"])
+        .describe(
+          'Use "interrupt" first: it stops the command and keeps the terminal usable. Use "close" only when a prior interrupt reported status: stalled.'
         ),
     }),
   }),
@@ -559,6 +576,35 @@ export const orionTools = {
   }),
 
   // ============================================================================
+  // Connections
+  // ============================================================================
+
+  connections: tool({
+    description:
+      "Inspect and request access to the user's third-party systems (Google Sheets, Slack, a Postgres warehouse, and so on). Call this BEFORE claiming a system is unreachable, and before describing any way for the user to connect one — it is the only accurate source for what Orion can currently reach. Action 'list' returns every stored connection with its id, tool, auth kind, the NAMES of its stored secrets, and its non-secret settings; secret values are never returned. Action 'request' opens Orion's Connections settings so the user can add or repair a connection. Notebook code reads a connection with `orion_ui.connections.get(\"<id>\")`, which resolves the secret in-process without printing it.",
+    inputSchema: z.object({
+      action: z
+        .enum(["list", "request"])
+        .describe(
+          "'list' to see what is already connected; 'request' to ask the user to add or repair a connection.",
+        ),
+      toolId: z
+        .string()
+        .optional()
+        .describe(
+          "For 'request': the system to connect, as a catalog id when known (e.g. 'google-sheets', 'slack') or the product name otherwise. Ignored by 'list'.",
+        ),
+      reason: z
+        .string()
+        .max(300)
+        .optional()
+        .describe(
+          "For 'request': one short sentence telling the user why this connection is needed, shown alongside the prompt.",
+        ),
+    }),
+  }),
+
+  // ============================================================================
   // Web Access
   // ============================================================================
 
@@ -641,6 +687,7 @@ export function isOrionToolName(value: unknown): value is OrionToolName {
  */
 export const NO_DEPENDENCY_TOOLS: ReadonlySet<OrionToolName> = new Set<OrionToolName>([
   "load_skill",
+  "connections",
   "update_memory",
   "reload_page",
   "inspect_plotly_output",
@@ -671,6 +718,7 @@ export const SERVER_ONLY_TOOLS: ReadonlySet<OrionToolName> = new Set<OrionToolNa
   "shutdown_kernel",
   "bash",
   "await_command",
+  "kill_command",
 ]);
 
 // Tools not in either set above (execute_cell, execute_code, restart_notebook) require
@@ -690,9 +738,11 @@ export const ASK_MODE_TOOLS: Pick<
   | "inspect_plotly_output"
   | "bash"
   | "await_command"
+  | "kill_command"
   | "web_fetch"
   | "web_search"
   | "load_skill"
+  | "connections"
 > = {
   list_kernels: orionTools.list_kernels,
   read_file: orionTools.read_file,
@@ -702,9 +752,11 @@ export const ASK_MODE_TOOLS: Pick<
   inspect_plotly_output: orionTools.inspect_plotly_output,
   bash: orionTools.bash,
   await_command: orionTools.await_command,
+  kill_command: orionTools.kill_command,
   web_fetch: orionTools.web_fetch,
   web_search: orionTools.web_search,
   load_skill: orionTools.load_skill,
+  connections: orionTools.connections,
 };
 
 /** Tool names excluded from Edit mode (notebook cell execution). */
