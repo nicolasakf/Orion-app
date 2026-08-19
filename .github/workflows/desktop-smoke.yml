@@ -83,7 +83,9 @@ jobs:
           set -euo pipefail
           app_path="$(find dist/electron -name Orion.app -type d -print -quit)"
           "$app_path/Contents/MacOS/Orion" --smoke 2>"$RUNNER_TEMP/desktop-smoke.stderr" > "$RUNNER_TEMP/desktop-smoke.json"
-          python -c 'import json, os; report=json.load(open(os.environ["RUNNER_TEMP"] + "/desktop-smoke.json", encoding="utf-8")); assert report["ok"], report; assert report["app"]["url"].startswith("http://127.0.0.1:"), report; assert report["cloud"]["configured"], report; assert report["jupyter"]["source"] == "managed", report'
+          # The Jupyter Python must live in the persistent runtime directory, not inside
+          # the app bundle, or user package installs are wiped by the next update.
+          python -c 'import json, os; report=json.load(open(os.environ["RUNNER_TEMP"] + "/desktop-smoke.json", encoding="utf-8")); assert report["ok"], report; assert report["app"]["url"].startswith("http://127.0.0.1:"), report; assert report["cloud"]["configured"], report; assert report["jupyter"]["source"] == "managed", report; assert report["jupyter"]["pythonPath"].startswith(os.environ["ORION_HOME_DIR"]), report'
 
       - name: Smoke packaged Windows app
         if: matrix.builder == 'win'
@@ -96,3 +98,9 @@ jobs:
           if (-not $report.app.url.StartsWith("http://127.0.0.1:")) { throw ($report | ConvertTo-Json -Depth 20) }
           if (-not $report.cloud.configured) { throw ($report | ConvertTo-Json -Depth 20) }
           if ($report.jupyter.source -ne "managed") { throw ($report | ConvertTo-Json -Depth 20) }
+          # The Jupyter Python must live in the persistent runtime directory, not inside
+          # the installation, or user package installs are wiped by the next update.
+          # ORION_HOME_DIR is set with a forward slash, so normalize before comparing.
+          $expectedHome = $env:ORION_HOME_DIR.Replace('/', '\')
+          $actualPython = $report.jupyter.pythonPath.Replace('/', '\')
+          if (-not $actualPython.StartsWith($expectedHome)) { throw ($report | ConvertTo-Json -Depth 20) }

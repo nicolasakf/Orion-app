@@ -2,6 +2,7 @@ import { existsSync } from "fs";
 
 import {
   resolveJupyterRootDirectory,
+  resolvePythonChoiceSource,
   saveJupyterHandoffForChoice,
   startJupyterForChoice,
 } from "../cli/bootstrap-jupyter";
@@ -23,9 +24,14 @@ import {
   type PythonSelectionChoice,
 } from "../cli/python-selection";
 import type { PythonInstallationReport } from "../cli/python";
+import { resolveManagedVenvDirectory } from "../cli/paths";
 import type { LauncherJupyterConnection } from "../kernel/launcher-connection";
 import { isOrionCloudConfiguredInAppBundle } from "./cloud-bundle";
 import type { DesktopOptions } from "./options";
+import {
+  ensureDesktopManagedVenv,
+  recordVenvPackageSnapshot,
+} from "./python-runtime";
 import {
   assertDesktopRuntimePresent,
   resolveDesktopRuntimePaths,
@@ -35,9 +41,18 @@ import {
 
 export type DesktopJupyterMode = "bundled" | "pick-python" | "saved-existing";
 
+export type DesktopPythonSource = "managed" | "existing";
+
+export interface DesktopJupyterStartup {
+  server: StartedJupyterServer;
+  source: DesktopPythonSource;
+}
+
 export interface DesktopSession {
   app: StartedOrionApp | null;
   jupyter: StartedJupyterServer | null;
+  /** How the running Jupyter's Python was resolved, or null when Jupyter is disabled. */
+  pythonSource: DesktopPythonSource | null;
   /** Absolute directory Jupyter was launched from. Native folder picks must stay under this root. */
   jupyterRootDirectory: string;
   url: string;
@@ -147,6 +162,36 @@ async function resolveSavedExistingPythonChoice(
   };
 }
 
+/**
+ * Resolves the Python that bundled-mode Jupyter should run.
+ *
+ * Prefers the persistent environment under `~/.orion/runtime/venv` so user
+ * package installs survive app updates instead of being written into (and wiped
+ * with) the signed application bundle. Falling back to the bundled interpreter
+ * keeps notebooks openable when the environment cannot be provisioned, which
+ * matters more than the storage location.
+ */
+export async function resolveBundledDesktopPython(
+  basePythonPath: string,
+  ensureVenv: typeof ensureDesktopManagedVenv = ensureDesktopManagedVenv
+): Promise<{ pythonPath: string; persistent: boolean }> {
+  try {
+    const result = await ensureVenv(basePythonPath);
+    if (result.failedPackages.length > 0) {
+      console.warn(
+        `Rebuilt Orion's Python environment but could not reinstall: ${result.failedPackages.join(", ")}. Reinstall these packages from a notebook.`
+      );
+    }
+    return { pythonPath: result.pythonPath, persistent: true };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `Could not prepare Orion's persistent Python environment at ${resolveManagedVenvDirectory()}; falling back to the bundled interpreter. Packages installed this session will be lost on the next Orion update. Cause: ${reason}`
+    );
+    return { pythonPath: basePythonPath, persistent: false };
+  }
+}
+
 /** Starts Jupyter from the bundled desktop Python runtime and writes the standard handoff. */
 export async function startBundledDesktopJupyter(
   paths: DesktopRuntimePaths,
@@ -158,8 +203,9 @@ export async function startBundledDesktopJupyter(
     );
   }
 
+  const runtime = await resolveBundledDesktopPython(paths.pythonExecutable);
   const server = await startJupyterServer(
-    paths.pythonExecutable,
+    runtime.pythonPath,
     [],
     jupyterRoot,
     90_000,
@@ -176,6 +222,12 @@ export async function startBundledDesktopJupyter(
   await saveJupyterConnectionHandoff(
     createBundledDesktopJupyterHandoff(server, capabilities, jupyterRoot)
   );
+
+  // Records what the user has installed so a later rebuild can restore it. The
+  // running session does not depend on this, so failures stay non-fatal.
+  if (runtime.persistent) {
+    void recordVenvPackageSnapshot(runtime.pythonPath).catch(() => undefined);
+  }
   return server;
 }
 
@@ -184,12 +236,15 @@ export async function startDesktopJupyter(
   options: DesktopOptions,
   paths: DesktopRuntimePaths,
   jupyterRoot: string
-): Promise<StartedJupyterServer> {
+): Promise<DesktopJupyterStartup> {
   await ensureRuntimeDirectory();
 
   if (options.useBundled) {
     await clearPythonPreference();
-    return startBundledDesktopJupyter(paths, jupyterRoot);
+    return {
+      server: await startBundledDesktopJupyter(paths, jupyterRoot),
+      source: "managed",
+    };
   }
 
   const report = await buildPythonInstallationReport();
@@ -208,7 +263,7 @@ export async function startDesktopJupyter(
       report
     );
     await saveJupyterHandoffForChoice(server, choice, jupyterRoot);
-    return server;
+    return { server, source: resolvePythonChoiceSource(choice) };
   }
 
   if (mode === "saved-existing" && savedExistingChoice) {
@@ -219,10 +274,13 @@ export async function startDesktopJupyter(
       report
     );
     await saveJupyterHandoffForChoice(server, savedExistingChoice, jupyterRoot);
-    return server;
+    return { server, source: resolvePythonChoiceSource(savedExistingChoice) };
   }
 
-  return startBundledDesktopJupyter(paths, jupyterRoot);
+  return {
+    server: await startBundledDesktopJupyter(paths, jupyterRoot),
+    source: "managed",
+  };
 }
 
 /** Starts the desktop session services and returns a disposer for app shutdown. */
@@ -238,14 +296,16 @@ export async function startDesktopSession(
   }
 
   const jupyterRoot = resolveJupyterRootDirectory(launchOptions.argvOptions.here);
-  const jupyter = launchOptions.argvOptions.appOnly
+  const startup = launchOptions.argvOptions.appOnly
     ? null
     : await startDesktopJupyter(launchOptions.argvOptions, paths, jupyterRoot);
+  const jupyter = startup?.server ?? null;
 
   if (devUrl) {
     return {
       app: null,
       jupyter,
+      pythonSource: startup?.source ?? null,
       jupyterRootDirectory: jupyterRoot,
       url: devUrl,
       dispose: () => {
@@ -269,6 +329,7 @@ export async function startDesktopSession(
   return {
     app,
     jupyter,
+    pythonSource: startup?.source ?? null,
     jupyterRootDirectory: jupyterRoot,
     url: app.url,
     dispose: () => {
@@ -299,9 +360,7 @@ export async function runDesktopSmoke(
         ? {
             baseUrl: session.jupyter.baseUrl,
             pythonPath: session.jupyter.pythonPath,
-            source: session.jupyter.pythonPath === paths.pythonExecutable
-              ? "managed"
-              : "existing",
+            source: session.pythonSource ?? "existing",
           }
         : null,
     };

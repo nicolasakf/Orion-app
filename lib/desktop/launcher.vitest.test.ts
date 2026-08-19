@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   chooseDesktopJupyterMode,
@@ -8,6 +8,7 @@ import {
   createBundledDesktopJupyterHandoff,
   normalizeDesktopDevUrl,
   requiresPackagedAppRuntime,
+  resolveBundledDesktopPython,
 } from "@/lib/desktop/launcher";
 import type { CapabilityCheckResult, StartedJupyterServer } from "@/lib/cli/jupyter";
 
@@ -84,6 +85,36 @@ describe("desktop launcher policy", () => {
       rootDirectory: "/Users/taylor",
       jupyterVersion: "2.17.0",
     });
+  });
+
+  it("runs bundled Jupyter from the persistent environment outside the app bundle", async () => {
+    const ensureVenv = vi.fn().mockResolvedValue({
+      pythonPath: "/Users/taylor/.orion/runtime/venv/bin/python",
+      created: false,
+      restoredPackages: [],
+      failedPackages: [],
+    });
+
+    await expect(
+      resolveBundledDesktopPython("/Applications/Orion.app/python3", ensureVenv)
+    ).resolves.toEqual({
+      pythonPath: "/Users/taylor/.orion/runtime/venv/bin/python",
+      persistent: true,
+    });
+  });
+
+  it("falls back to the bundled interpreter rather than blocking launch", async () => {
+    const ensureVenv = vi.fn().mockRejectedValue(new Error("read-only volume"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(
+      resolveBundledDesktopPython("/Applications/Orion.app/python3", ensureVenv)
+    ).resolves.toEqual({
+      pythonPath: "/Applications/Orion.app/python3",
+      persistent: false,
+    });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("read-only volume"));
+    warn.mockRestore();
   });
 
   it("normalizes valid Electron dev URLs", () => {
