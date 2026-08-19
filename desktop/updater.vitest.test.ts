@@ -34,6 +34,7 @@ import {
   checkForDesktopUpdates,
   configureDesktopAutoUpdates,
   DAILY_UPDATE_CHECK_INTERVAL_MS,
+  describeUpdatePayload,
   restartAndInstallDesktopUpdate,
   resolveDesktopUpdateChannel,
   shouldCheckForDesktopUpdates,
@@ -63,6 +64,24 @@ describe("desktop updater policy", () => {
 
   it("uses the signed Windows x64 update channel", () => {
     expect(resolveDesktopUpdateChannel("win32", "x64")).toBe("latest-win-x64");
+  });
+
+  it("reports the bytes an update actually transferred", () => {
+    expect(
+      describeUpdatePayload("0.20.0", {
+        percent: 100,
+        transferred: 12 * 1024 * 1024,
+        total: 130 * 1024 * 1024,
+        delta: 0,
+        bytesPerSecond: 1024,
+      })
+    ).toBe("Orion update 0.20.0 downloaded: 12.0 MiB transferred of 130.0 MiB.");
+  });
+
+  it("still reports a downloaded update when no progress was observed", () => {
+    expect(describeUpdatePayload("0.20.0", null)).toBe(
+      "Orion update 0.20.0 downloaded (payload size unavailable)."
+    );
   });
 
   it("only checks for updates in packaged builds unless disabled", () => {

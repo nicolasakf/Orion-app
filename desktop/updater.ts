@@ -10,6 +10,7 @@ export const DAILY_UPDATE_CHECK_INTERVAL_MS = 86_400_000;
 let configured = false;
 let checkInFlight: Promise<unknown> | null = null;
 let dailyInterval: NodeJS.Timeout | null = null;
+let lastProgress: ProgressInfo | null = null;
 let state: OrionUpdateState = {
   supported: false,
   source: "desktop",
@@ -46,6 +47,25 @@ export function resolveDesktopUpdateChannel(
   if (platform === "darwin") return arch === "arm64" ? "latest-arm64" : "latest-x64";
   if (platform === "win32") return "latest-win-x64";
   return "latest";
+}
+
+/**
+ * Describes how much an update actually cost to download.
+ *
+ * Blockmap-based differential downloads mean the bytes on the wire can be far
+ * smaller than the published artifact, so this reports the real payload rather
+ * than the release asset size.
+ */
+export function describeUpdatePayload(
+  version: string,
+  progress: ProgressInfo | null
+): string {
+  if (!progress || progress.total <= 0) {
+    return `Orion update ${version} downloaded (payload size unavailable).`;
+  }
+
+  const toMiB = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
+  return `Orion update ${version} downloaded: ${toMiB(progress.transferred)} MiB transferred of ${toMiB(progress.total)} MiB.`;
 }
 
 /** Returns whether update checks should run for this desktop process. */
@@ -139,12 +159,15 @@ export function configureDesktopAutoUpdates(): void {
     setState({ status: "error", error: error.message });
   });
   autoUpdater.on("update-available", (info: UpdateInfo) => {
+    lastProgress = null;
     setState({ status: "available", latestVersion: info.version, progress: undefined });
   });
   autoUpdater.on("download-progress", (progress: ProgressInfo) => {
+    lastProgress = progress;
     setState({ status: "downloading", progress: Math.max(0, Math.min(100, progress.percent)) });
   });
   autoUpdater.on("update-downloaded", (info: UpdateInfo) => {
+    console.log(describeUpdatePayload(info.version, lastProgress));
     setState({ status: "downloaded", latestVersion: info.version, progress: 100 });
   });
 
