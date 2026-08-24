@@ -23,8 +23,6 @@ import {
   type ExecFileLike,
 } from "@/lib/desktop/python-runtime";
 
-const BASE_PYTHON_DIRECTORY = "/Applications/Orion.app/Contents/Resources/runtime/python";
-
 let tempDirectory: string;
 let basePython: string;
 
@@ -131,7 +129,9 @@ function createdVenv(calls: ExecCall[]): boolean {
 beforeEach(async () => {
   tempDirectory = await mkdtemp(path.join(os.tmpdir(), "orion-python-runtime-"));
   process.env.ORION_HOME_DIR = tempDirectory;
-  basePython = path.join(BASE_PYTHON_DIRECTORY, "bin", "python3");
+  basePython = path.join(tempDirectory, "bundled-python", "bin", "python3");
+  await mkdir(path.dirname(basePython), { recursive: true });
+  await writeFile(basePython, "#!/bin/sh\n", "utf8");
 });
 
 afterEach(async () => {
