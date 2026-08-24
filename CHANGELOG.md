@@ -4,6 +4,32 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.20.0] - 2026-08-24
+
+### Added
+
+- Agent: Goal mode with contract proposals, evaluator loop, and status UI
+- Agent: `ask_question` tool with questionnaire UI for structured user input
+- Agent: queued messages bar and searchable model combobox in chat
+- Agent: chained notebook cell execution from tool calls
+- Agent: interaction mode selector colors and Research renamed to Explore
+- Agent: mode capabilities derived from the resolved tool list
+- Onboarding: business stack picker, connections step, and agent shell recovery
+- Onboarding: open and edit `ORION.md` from Settings → Personal context
+- Notifications: alert when an agent run completes
+- Desktop: persist Jupyter Python in the managed venv outside the app bundle
+
+### Changed
+
+- Agent: simplify `read_notebook` and tighten tool guidance
+- Desktop: log actual update download payload size during auto-update
+
+### Fixed
+
+- Publish: drop empty hidden-input cells from published notebook pages
+
+[0.20.0]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.20.0
+
 ## [0.19.0] - 2026-08-17
 
 ### Added
