@@ -63,7 +63,12 @@ async function writePrivateFile(filePath: string, content: string): Promise<void
   await operation;
 }
 
-/** Loads the personal context file without creating it when absent. */
+/** Loads the personal context file without creating it when absent.
+ *
+ * Returns the full file contents. `truncated` is true when that content exceeds
+ * the model prompt budget; callers that inject into prompts should use
+ * `loadPersonalContextForModel` instead.
+ */
 export async function loadPersonalContext(): Promise<{
   content: string;
   exists: boolean;
@@ -75,7 +80,7 @@ export async function loadPersonalContext(): Promise<{
     const [raw, metadata] = await Promise.all([readFile(filePath, "utf8"), stat(filePath)]);
     const truncated = Buffer.byteLength(raw, "utf8") > MAX_PERSONAL_CONTEXT_BYTES;
     return {
-      content: truncateToUtf8Bytes(raw, MAX_PERSONAL_CONTEXT_BYTES),
+      content: raw,
       exists: true,
       updatedAt: metadata.mtime.toISOString(),
       truncated,
@@ -91,7 +96,10 @@ export async function loadPersonalContext(): Promise<{
 /** Loads personal context for model submission, omitting manually inserted credentials. */
 export async function loadPersonalContextForModel(): Promise<string> {
   const result = await loadPersonalContext();
-  return containsHighConfidenceSecret(result.content) ? "" : result.content;
+  if (containsHighConfidenceSecret(result.content)) return "";
+  return result.truncated
+    ? truncateToUtf8Bytes(result.content, MAX_PERSONAL_CONTEXT_BYTES)
+    : result.content;
 }
 
 /** Validates and atomically replaces `~/.orion/ORION.md`. */

@@ -251,6 +251,56 @@ describe("NotebookEditor business markdown saves", () => {
 });
 
 describe("NotebookEditor App View source navigation", () => {
+  it("marks only the currently active notebook pane as active", async () => {
+    const contentsManager = {
+      get: vi.fn().mockResolvedValue({ content: makeNotebook() }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    const kernelService = makeKernelService(contentsManager);
+    const { container, rerender } = render(
+      <NotebookEditor
+        filepath="/workspace/report.ipynb"
+        activeNotebookView="app"
+        kernelService={kernelService}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        container.querySelector('[data-testid="notebook-app-view"]'),
+      ).toBeInTheDocument();
+    });
+    const appPane = container.querySelector<HTMLElement>(
+      '[data-orion-notebook-view="app"]',
+    );
+    const notebookPane = container.querySelector<HTMLElement>(
+      '[data-orion-notebook-view="notebook"]',
+    );
+    expect(appPane).toHaveAttribute("data-orion-notebook-view-active", "true");
+    expect(appPane).toHaveAttribute("aria-hidden", "false");
+    expect(notebookPane).toHaveAttribute(
+      "data-orion-notebook-view-active",
+      "false",
+    );
+    expect(notebookPane).toHaveAttribute("aria-hidden", "true");
+
+    rerender(
+      <NotebookEditor
+        filepath="/workspace/report.ipynb"
+        activeNotebookView="notebook"
+        kernelService={kernelService}
+      />,
+    );
+
+    expect(appPane).toHaveAttribute("data-orion-notebook-view-active", "false");
+    expect(appPane).toHaveAttribute("aria-hidden", "true");
+    expect(notebookPane).toHaveAttribute(
+      "data-orion-notebook-view-active",
+      "true",
+    );
+    expect(notebookPane).toHaveAttribute("aria-hidden", "false");
+  });
+
   it("switches Pro App View to Notebook View for the selected source cell", async () => {
     const onActiveNotebookViewChange = vi.fn();
     const contentsManager = {

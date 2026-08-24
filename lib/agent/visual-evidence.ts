@@ -14,7 +14,7 @@ export interface AgentVisualOutput {
   visualId: string;
   mimeType: InspectableRasterMimeType;
   data?: string;
-  source: "execute_cell" | "execute_code" | "inspect_plotly_output";
+  source: "execute_cell" | "execute_code" | "inspect_output";
   cellIndex?: number;
   outputIndex: number;
   byteLength: number;

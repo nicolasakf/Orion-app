@@ -120,18 +120,18 @@ test -n "$latest" && cp "$latest" "$ORION_HOME/settings.json"
 **User settings** — full `settings` object:
 
 ```json
-{ "version": 1, "settings": { } }
+{ "version": 2, "settings": { } }
 ```
 
-`version`: integer, minimum `1`. Use `1` today.
+`version`: integer, minimum `1`. Use `2` today.
 
 **Workspace settings** — partial overrides:
 
 ```json
-{ "version": 1, "overrides": { } }
+{ "version": 2, "overrides": { } }
 ```
 
-Workspace files may also use `{ "version": 1, "settings": { ... } }`; Orion treats `settings` as overrides for compatibility. Prefer `overrides` when authoring.
+Workspace files may also use `{ "version": 2, "settings": { ... } }`; Orion treats `settings` as overrides for compatibility. Prefer `overrides` when authoring.
 
 ## Default user settings document
 
@@ -140,7 +140,7 @@ For `chat.interactionModes`, `[]` is accepted in authored JSON and is normalized
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "settings": {
     "appearance": { "theme": "system" },
     "chat": {
@@ -198,11 +198,12 @@ For `chat.interactionModes`, `[]` is accepted in authored JSON and is normalized
       },
       "toolOutput": {
         "textCharBudget": 40000,
-        "imageBase64CharBudget": 100000,
+        "imageBase64CharBudget": 1000000,
         "maxOmittedRatio": 0.3333333333333333
       },
       "execution": {
-        "maxParallelReadOnlyCalls": 10
+        "maxParallelReadOnlyCalls": 10,
+        "maxQuestionsPerAsk": 5
       },
       "terminal": {
         "pollIntervalMs": 150,
@@ -285,7 +286,7 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | `customCommunicationStyle` | string | Any string | `""` | Optional custom communication instructions. When non-empty, overrides `communicationStyle`. |
 | `notifyOnAgentFinish` | boolean | `true`, `false` | `true` | Show a desktop or browser notification when a full agent run completes while Orion is in the background. |
 | `playSoundOnAgentFinish` | boolean | `true`, `false` | `true` | Play a short chime when a full agent run completes. |
-| `interactionModes` | object[] | Interaction mode objects (see below) | Built-in `Agent`, `Research`, `Edit`, `Ask` modes | Configurable built-in and custom chat modes shown in Settings → Interaction Modes. Missing or empty built-ins are repaired on load. |
+| `interactionModes` | object[] | Interaction mode objects (see below) | Built-in `Agent`, `Explore`, `Edit`, `Ask` modes | Configurable built-in and custom chat modes shown in Settings → Interaction Modes. Missing or empty built-ins are repaired on load. |
 
 #### `chat.interactionModes[]`
 
@@ -294,13 +295,13 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | `id` | string | Non-empty; custom IDs must not duplicate built-ins | Built-in mode ID | Stable mode identifier. |
 | `label` | string | Non-empty | Built-in mode label | Display name in settings and selector. |
 | `description` | string | Any string | Built-in description or `""` | Description shown in settings. |
-| `baseMode` | string | `Agent`, `Research`, `Edit`, `Ask` | Same as built-in mode | Base behavior to inherit for prompts and defaults. |
+| `baseMode` | string | `Agent`, `Explore`, `Edit`, `Ask` | Same as built-in mode | Base behavior to inherit for prompts and defaults. |
 | `toolNames` | string[] | Orion tool names | Built-in tool list | Tools enabled for the mode. Invalid names are removed during normalization. |
 | `customSystemPrompt` | string | Any string | `""` | Mode-specific custom system prompt text. |
 | `builtIn` | boolean | `true`, `false` | `true` for built-ins, `false` for custom modes | Whether this is a protected built-in mode. |
 | `bashPolicy` | string | `read_only`, `full` | `full` except built-in `Ask` = `read_only` | Bash capability policy for the mode. |
-| `hiddenInSelector` | boolean | `true`, `false` | `false` except built-in `Research` = `true` | Whether the mode is editable in settings but hidden from the chat selector. |
-| `beta` | boolean | `true`, `false` | `false` except built-in `Research` = `true` | Marks experimental built-in modes in settings. |
+| `hiddenInSelector` | boolean | `true`, `false` | `false` | Whether the mode is editable in settings but hidden from the chat selector. |
+| `beta` | boolean | `true`, `false` | `false` | Marks experimental built-in modes in settings. |
 
 ### `fileTree`
 
@@ -383,7 +384,7 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | Field | Type | Allowed values | Default | Description |
 | --- | --- | --- | --- | --- |
 | `textCharBudget` | integer | > 0 | `40000` | Max characters returned from text tool outputs (~10k tokens × 4). |
-| `imageBase64CharBudget` | integer | > 0 | `100000` | Max base64 characters for image tool outputs. |
+| `imageBase64CharBudget` | integer | > 0 | `1000000` | Max base64 characters for model-facing image previews before resizing or omission. |
 | `maxOmittedRatio` | number | 0–1 | `≈0.333` (1/3) | Max fraction of content that may be omitted when truncating. |
 
 ### `agent.execution`
@@ -391,6 +392,7 @@ Paths are under `settings` for user files, or under `overrides` for workspace fi
 | Field | Type | Allowed values | Default | Description |
 | --- | --- | --- | --- | --- |
 | `maxParallelReadOnlyCalls` | integer | > 0 | `10` | Maximum independent read-only tool calls Orion may execute at once. Use `1` for sequential execution. |
+| `maxQuestionsPerAsk` | integer | 1–10 | `5` | Maximum questions Orion may put in one `ask_question` questionnaire in the chat. |
 
 ### `agent.terminal`
 
@@ -507,7 +509,7 @@ Set workspace chat font size:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "overrides": {
     "chat": { "fontSize": 14 }
   }
@@ -518,7 +520,7 @@ Set workspace title generation model and model pins:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "overrides": {
     "chat": {
       "titleGenerationModelId": "gemini-3-flash-preview",

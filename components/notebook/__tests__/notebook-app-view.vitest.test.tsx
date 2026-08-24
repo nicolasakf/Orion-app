@@ -200,11 +200,16 @@ function makeNotebook(metadata: NotebookType["metadata"] = {}): NotebookType {
 
 describe("NotebookAppView", () => {
   it("renders selected markdown and outputs in notebook order", () => {
-    render(<NotebookAppView notebook={makeNotebook()} />);
+    const { container } = render(<NotebookAppView notebook={makeNotebook()} />);
 
     expect(screen.getByTestId("markdown")).toHaveTextContent("# Intro");
     expect(screen.getByTestId("output")).toHaveTextContent("output 1:0");
     expect(screen.queryByText("# Hidden")).not.toBeInTheDocument();
+    expect(
+      container.querySelector(
+        '[data-orion-output-cell-index="1"][data-orion-output-index="0"][data-orion-output-view="app"]',
+      ),
+    ).toBeInTheDocument();
     expect(outputRendererMock).toHaveBeenCalledWith(
       expect.objectContaining({ cellIndex: 1, outputIndex: 0 }),
     );

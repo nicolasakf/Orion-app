@@ -760,6 +760,9 @@ export function NotebookAppView({
                   )}
                   data-app-view-cell-index={item.cellIndex}
                   data-app-view-output-index={item.outputIndex}
+                  data-orion-output-cell-index={item.cellIndex}
+                  data-orion-output-index={item.outputIndex}
+                  data-orion-output-view="app"
                   onClickCapture={
                     canMentionOutput
                       ? (event) => {

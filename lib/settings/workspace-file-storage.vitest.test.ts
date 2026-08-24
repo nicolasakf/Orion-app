@@ -57,7 +57,7 @@ describe("workspace file settings storage", () => {
     );
 
     await expect(loadWorkspaceSettingsDocument(contentsManager, "")).resolves.toEqual({
-      version: 1,
+      version: 2,
       overrides: {},
     });
     expect(requestedPaths).toEqual([]);
@@ -156,6 +156,6 @@ describe("workspace file settings storage", () => {
 
     await expect(
       loadWorkspaceSettingsDocument(contentsManager, "project")
-    ).resolves.toEqual({ version: 1, overrides: {} });
+    ).resolves.toEqual({ version: 2, overrides: {} });
   });
 });

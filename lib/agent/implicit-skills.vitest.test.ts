@@ -43,9 +43,9 @@ describe("buildRequiredSkillsPromptSection", () => {
   });
 
   it("lists each required load_skill call", () => {
-    const section = buildRequiredSkillsPromptSection([ORION_UI_SKILL_NAME, "deep-eda"]);
+    const section = buildRequiredSkillsPromptSection([ORION_UI_SKILL_NAME, "explore"]);
     expect(section).toContain("## Required Skills");
     expect(section).toContain("`orion-ui`");
-    expect(section).toContain('load_skill` with `name: "deep-eda"');
+    expect(section).toContain('load_skill` with `name: "explore"');
   });
 });

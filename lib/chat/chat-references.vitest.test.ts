@@ -9,7 +9,12 @@ import {
   normalizeChatMessageMetadata,
   parseChatMessageContextUsage,
 } from "./chat-references";
-import { ChatWireSchema, deserializeChat, serializeChat, type Chat } from "./chat-types";
+import {
+  ChatWireSchema,
+  deserializeChat,
+  serializeChat,
+  type Chat,
+} from "./chat-types";
 
 function makeMeasurement(): ContextMeasurement {
   return {
@@ -17,7 +22,13 @@ function makeMeasurement(): ContextMeasurement {
     kind: "provider",
     rawInputTokens: 18_000,
     inputTokens: 21_400,
-    buckets: { system: 4000, messages: 9000, tools: 3000, images: 1500, framing: 500 },
+    buckets: {
+      system: 4000,
+      messages: 9000,
+      tools: 3000,
+      images: 1500,
+      framing: 500,
+    },
     calibrationDelta: 3_400,
     confidence: "exact",
     calibrationSampleCount: 4,
@@ -50,7 +61,9 @@ describe("normalizeChatMessageMetadata", () => {
    * on references and slash commands silently discards it on persist.
    */
   it("preserves context usage when it is the only field present", () => {
-    const normalized = normalizeChatMessageMetadata({ contextUsage: makeMeasurement() });
+    const normalized = normalizeChatMessageMetadata({
+      contextUsage: makeMeasurement(),
+    });
 
     expect(normalized?.contextUsage?.inputTokens).toBe(21_400);
   });
@@ -67,7 +80,15 @@ describe("normalizeChatMessageMetadata", () => {
 
   it("still returns undefined for genuinely empty metadata", () => {
     expect(normalizeChatMessageMetadata({})).toBeUndefined();
-    expect(normalizeChatMessageMetadata({ references: [], slashCommands: [] })).toBeUndefined();
+    expect(
+      normalizeChatMessageMetadata({ references: [], slashCommands: [] }),
+    ).toBeUndefined();
+  });
+
+  it("preserves a goal draft marker without adding visible slash metadata", () => {
+    expect(normalizeChatMessageMetadata({ goalContractDraft: true })).toEqual({
+      goalContractDraft: true,
+    });
   });
 
   it("drops malformed context usage rather than persisting it", () => {
@@ -81,14 +102,17 @@ describe("normalizeChatMessageMetadata", () => {
 
 describe("parseChatMessageContextUsage", () => {
   it("returns the measurement from valid metadata", () => {
-    expect(parseChatMessageContextUsage({ contextUsage: makeMeasurement() })?.inputTokens).toBe(
-      21_400
-    );
+    expect(
+      parseChatMessageContextUsage({ contextUsage: makeMeasurement() })
+        ?.inputTokens,
+    ).toBe(21_400);
   });
 
   it("returns null rather than throwing on unknown input", () => {
     expect(parseChatMessageContextUsage(undefined)).toBeNull();
-    expect(parseChatMessageContextUsage({ contextUsage: { nope: true } })).toBeNull();
+    expect(
+      parseChatMessageContextUsage({ contextUsage: { nope: true } }),
+    ).toBeNull();
     expect(parseChatMessageContextUsage({ references: [] })).toBeNull();
   });
 });

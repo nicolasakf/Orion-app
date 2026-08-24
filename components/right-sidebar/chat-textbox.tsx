@@ -12,7 +12,6 @@ import {
   Terminal,
   ChevronDown,
   X,
-  GripVertical,
   Bot,
   Search,
   MessageCircle,
@@ -20,19 +19,8 @@ import {
   Pencil,
   Boxes,
   Image,
-  Brain,
-  CircleCheck,
-  CircleX,
-  Code2,
-  Database,
-  DollarSign,
-  Hash,
-  KeyRound,
-  Lock,
-  Maximize2,
-  Wrench,
-  Zap,
   RefreshCw,
+  Target,
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
@@ -42,7 +30,6 @@ import {
   findModelBySelectionKey,
   formatModelSelectionKey,
 } from "@/lib/agent/model-selection-key";
-import { PINNED_MODELS_CHANGED_EVENT } from "@/lib/chat/model-selector-events";
 import {
   SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME,
   type ScrollToNotebookCellEventDetail,
@@ -51,14 +38,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
-import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandItem,
-  CommandInput,
-  CommandList,
-} from "@/components/ui/command";
 import {
   Popover,
   PopoverAnchor,
@@ -71,8 +50,8 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { ProviderLogo } from "@/components/provider-logo";
 import { getAdjacentIntelligenceSettings } from "./model-intelligence";
+import { ModelCombobox, selectPinnedModels } from "./model-combobox";
 import { ModelSettingsPopover } from "./model-settings-popover";
 import type {
   ChatDraftAttachment,
@@ -82,12 +61,18 @@ import type {
   ModelSettings,
   QueuedMessage,
 } from "./types";
+import { getInteractionModeColors } from "@/lib/agent/interaction-mode-colors";
 import type {
   InteractionModeBase,
   InteractionModeConfig,
 } from "@/lib/agent/interaction-modes";
-import { isImmediateSlashCommand, SLASH_COMMANDS, type SlashCommand } from "./slash-commands";
+import {
+  isImmediateSlashCommand,
+  SLASH_COMMANDS,
+  type SlashCommand,
+} from "./slash-commands";
 import { ContextUsagePill } from "./context-usage-pill";
+import { QueuedMessagesBar } from "./queued-messages-bar";
 import type { ContextUsagePhase } from "./use-context-usage";
 import type { ProviderId } from "@/lib/agent/model-gateway-types";
 import type { ContextUsageView } from "@/lib/agent/context-usage";
@@ -110,22 +95,29 @@ const REFERENCE_TABS: Array<{
   label: string;
   icon?: React.ComponentType<{ className?: string }>;
 }> = [
-    { value: "all", label: "All" },
-    { value: "files", label: "Files", icon: Folder },
-    { value: "cells", label: "Cells", icon: StretchHorizontal },
-    { value: "variables", label: "Variables", icon: Boxes },
-    { value: "terminal", label: "Terminal", icon: Terminal },
-  ];
+  { value: "all", label: "All" },
+  { value: "files", label: "Files", icon: Folder },
+  { value: "cells", label: "Cells", icon: StretchHorizontal },
+  { value: "variables", label: "Variables", icon: Boxes },
+  { value: "terminal", label: "Terminal", icon: Terminal },
+];
 
 const MODE_ICONS: Record<
   InteractionModeBase,
   React.ComponentType<{ className?: string }>
 > = {
-  Research: Search,
+  Explore: Search,
   Agent: Bot,
   Ask: MessageCircle,
   Edit: PenLine,
 };
+
+/** Returns the lifecycle-specific icon before falling back to the base mode. */
+function getInteractionModeIcon(mode: InteractionModeConfig | undefined) {
+  return mode?.orchestration === "goal"
+    ? Target
+    : MODE_ICONS[mode?.baseMode ?? "Agent"];
+}
 
 const DESCRIPTION_PREVIEW_VIEWPORT_GUTTER_PX = 12;
 
@@ -134,7 +126,7 @@ export interface ChatTextboxProps {
   handleInputChange: (
     e:
       | React.ChangeEvent<HTMLInputElement>
-      | React.ChangeEvent<HTMLTextAreaElement>
+      | React.ChangeEvent<HTMLTextAreaElement>,
   ) => void;
   handleSubmit: (e: React.FormEvent<HTMLFormElement>) => void;
   onStop: () => void;
@@ -230,186 +222,9 @@ function formatAttachmentSize(size: number): string {
 
 /** Returns a compact display label for a loaded rule file. */
 function formatRuleLabel(rule: AgentRule): string {
-  return rule.scope === "workspace" ? rule.filename : `${rule.filename} (${rule.scope})`;
-}
-
-/** Formats token limits for tight selector metadata rows. */
-function formatTokenLimit(value: number | undefined): string {
-  if (value === undefined) return "Unknown";
-  if (value >= 1_000_000) {
-    const millions = value / 1_000_000;
-    return `${Number.isInteger(millions) ? millions.toFixed(0) : millions.toFixed(1)}M`;
-  }
-  if (value >= 1_000) {
-    const thousands = value / 1_000;
-    return `${Number.isInteger(thousands) ? thousands.toFixed(0) : thousands.toFixed(1)}K`;
-  }
-  return value.toLocaleString();
-}
-
-/** Formats per-million token prices without expanding the model card. */
-function formatTokenPrice(value: number | undefined): string {
-  if (value === undefined) return "Unknown";
-  if (value === 0) return "Free";
-  return `$${value.toLocaleString(undefined, { maximumFractionDigits: 4 })}/1M`;
-}
-
-/** Converts a catalog timestamp into a compact month/year label. */
-function formatCatalogDate(value: string | undefined): string {
-  if (!value) return "Unknown";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Unknown";
-  return date.toLocaleDateString(undefined, { month: "short", year: "numeric" });
-}
-
-/** Normalizes catalog source labels for the selector detail card. */
-function formatCatalogSource(value: LLM["catalogSource"]): string {
-  if (!value) return "Unknown";
-  if (value === "models_dev") return "models.dev";
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-interface ModelInfoMetricProps {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  value: string;
-  muted?: boolean;
-}
-
-/** Compact icon/value metric used inside the model selector detail card. */
-function ModelInfoMetric({ icon: Icon, label, value, muted = false }: ModelInfoMetricProps) {
-  return (
-    <div className="flex min-w-0 items-center gap-1.5">
-      <Icon className={cn("h-3 w-3 shrink-0", muted ? "opacity-35" : "opacity-60")} />
-      <div className="min-w-0">
-        <div className="text-[10px] leading-none text-muted-foreground/70">{label}</div>
-        <div className={cn("truncate text-[11px] font-medium leading-snug", muted && "text-muted-foreground")}>
-          {value}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-interface ModelCapabilityPillProps {
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-  enabled: boolean | undefined;
-}
-
-/** Tiny status pill for model inputs and capabilities. */
-function ModelCapabilityPill({ icon: Icon, label, enabled }: ModelCapabilityPillProps) {
-  const isEnabled = enabled === true;
-  return (
-    <span
-      className={cn(
-        "inline-flex min-w-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium leading-none",
-        isEnabled
-          ? "border-border/70 bg-muted/60 text-foreground"
-          : "border-border/40 bg-transparent text-muted-foreground/55"
-      )}
-    >
-      <Icon className="h-2.5 w-2.5 shrink-0" />
-      <span className="truncate">{label}</span>
-    </span>
-  );
-}
-
-interface ModelDetailCardProps {
-  model: LLM;
-}
-
-/** Left-side metadata card for the highlighted model selector row. */
-function ModelDetailCard({ model }: ModelDetailCardProps) {
-  const hasLongContextPricing =
-    model.longContextThreshold !== undefined ||
-    model.longContextInputPrice !== undefined ||
-    model.longContextOutputPrice !== undefined;
-  const apiModelId = model.apiModelId && model.apiModelId !== model.value ? model.apiModelId : model.value;
-
-  return (
-    <div className="corner-squircle pointer-events-none absolute right-full top-0 mr-2 w-64 rounded-md border border-border/50 bg-popover px-2.5 py-2 text-inherit shadow-sm">
-      <div className="mb-2 flex min-w-0 items-start gap-2">
-        <ProviderLogo
-          providerId={model.provider}
-          className="mt-0.5 h-4 w-4 shrink-0 text-current opacity-70"
-        />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-inherit font-medium leading-snug text-foreground">{model.label}</p>
-          <p className="truncate text-[10px] leading-snug text-muted-foreground">
-            {model.provider} · {formatCatalogSource(model.catalogSource)}
-          </p>
-        </div>
-        {model.isAccessible === false ? (
-          <Lock className="mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
-        ) : null}
-      </div>
-
-      <div className="mb-2 flex flex-wrap gap-1">
-        <ModelCapabilityPill icon={FileText} label="Text" enabled />
-        <ModelCapabilityPill icon={Image} label="Images" enabled={model.supportsImageInput} />
-        <ModelCapabilityPill icon={Wrench} label="Tools" enabled={model.supportsToolCalling} />
-        <ModelCapabilityPill icon={Brain} label="Reasoning" enabled={model.supportsReasoning} />
-      </div>
-
-      <div className="grid grid-cols-2 gap-x-2 gap-y-1.5">
-        <ModelInfoMetric icon={Database} label="Context" value={formatTokenLimit(model.contextWindow)} />
-        <ModelInfoMetric icon={Maximize2} label="Max output" value={formatTokenLimit(model.maxOutputTokens)} />
-        <ModelInfoMetric icon={DollarSign} label="Input" value={formatTokenPrice(model.inputPrice)} />
-        <ModelInfoMetric icon={DollarSign} label="Output" value={formatTokenPrice(model.outputPrice)} />
-        <ModelInfoMetric icon={Zap} label="Cached" value={formatTokenPrice(model.cachedPrice)} />
-        <ModelInfoMetric
-          icon={KeyRound}
-          label="Force tools"
-          value={model.supportsForcedToolChoice ? "Yes" : "No"}
-          muted={!model.supportsForcedToolChoice}
-        />
-      </div>
-
-      {hasLongContextPricing ? (
-        <div className="mt-2 rounded border border-border/40 bg-muted/30 p-1.5">
-          <div className="mb-1 flex items-center gap-1 text-[10px] font-medium leading-none text-muted-foreground">
-            <Code2 className="h-2.5 w-2.5" />
-            Long context
-          </div>
-          <div className="grid grid-cols-3 gap-1 text-[10px] leading-tight">
-            <div>
-              <div className="text-muted-foreground/70">From</div>
-              <div className="truncate font-medium">{formatTokenLimit(model.longContextThreshold)}</div>
-            </div>
-            <div>
-              <div className="text-muted-foreground/70">In</div>
-              <div className="truncate font-medium">{formatTokenPrice(model.longContextInputPrice)}</div>
-            </div>
-            <div>
-              <div className="text-muted-foreground/70">Out</div>
-              <div className="truncate font-medium">{formatTokenPrice(model.longContextOutputPrice)}</div>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      <div className="mt-2 grid gap-1 text-[10px] leading-snug text-muted-foreground">
-        <div className="flex min-w-0 items-center gap-1">
-          <Hash className="h-2.5 w-2.5 shrink-0 opacity-60" />
-          <span className="truncate">{apiModelId}</span>
-        </div>
-        <div className="flex min-w-0 items-center gap-1">
-          {model.clientAvailable === false ? (
-            <CircleX className="h-2.5 w-2.5 shrink-0 opacity-60" />
-          ) : (
-            <CircleCheck className="h-2.5 w-2.5 shrink-0 opacity-60" />
-          )}
-          <span className="truncate">
-            {model.clientAvailable === false ? "Hidden from client catalog" : "Client available"}
-            {model.pinnedByDefault ? " · Default pin" : ""}
-            {" · "}
-            {formatCatalogDate(model.catalogCreatedAt)}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
+  return rule.scope === "workspace"
+    ? rule.filename
+    : `${rule.filename} (${rule.scope})`;
 }
 
 /** Returns true when a drag payload contains operating-system files. */
@@ -425,13 +240,15 @@ function getClipboardImageFiles(dataTransfer: DataTransfer): File[] {
     .filter((file): file is File => file !== null);
   if (itemFiles.length > 0) return itemFiles;
 
-  return Array.from(dataTransfer.files ?? []).filter((file) => file.type.startsWith("image/"));
+  return Array.from(dataTransfer.files ?? []).filter((file) =>
+    file.type.startsWith("image/"),
+  );
 }
 
 /** Merges pasted references with existing chips while preserving order. */
 function mergeReferences(
   current: readonly ResolvedChatReference[],
-  pasted: readonly ResolvedChatReference[]
+  pasted: readonly ResolvedChatReference[],
 ): ResolvedChatReference[] {
   const seen = new Set(current.map((reference) => reference.id));
   const merged = [...current];
@@ -486,7 +303,7 @@ function ComposerSlashChip({
       className={cn(
         "corner-squircle inline-flex h-5 shrink-0 max-w-[55%] items-center gap-1 rounded-md border px-1.5 text-inherit font-medium leading-none",
         SLASH_CHIP_CLASS_BY_CATEGORY[category],
-        canOpen && "cursor-pointer"
+        canOpen && "cursor-pointer",
       )}
     >
       {canOpen && definitionPath ? (
@@ -522,8 +339,10 @@ function ComposerSlashChip({
 type SlashCommandCategory = NonNullable<SlashCommand["category"]>;
 
 const SLASH_CHIP_CLASS_BY_CATEGORY: Record<SlashCommandCategory, string> = {
-  builtin: "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-200",
-  subagent: "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-950 dark:text-blue-200",
+  builtin:
+    "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950 dark:text-emerald-200",
+  subagent:
+    "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-950 dark:text-blue-200",
   skill: "border-slash-border bg-slash text-slash-foreground",
 };
 
@@ -565,44 +384,57 @@ function getDescriptionPreviewMaxHeight({
   const cardChromeHeight = Math.max(0, cardHeight - descriptionHeight);
   return Math.max(
     0,
-    viewportHeight - cardTop - DESCRIPTION_PREVIEW_VIEWPORT_GUTTER_PX - cardChromeHeight
+    viewportHeight -
+      cardTop -
+      DESCRIPTION_PREVIEW_VIEWPORT_GUTTER_PX -
+      cardChromeHeight,
   );
 }
 
 /** Pulls selected skill command tokens out of the editable message body. */
 function extractSelectedSkillChips(
   value: string,
-  skillCommands: SlashCommand[]
+  skillCommands: SlashCommand[],
 ): { chips: SelectedSkillChip[]; message: string } {
   if (skillCommands.length === 0 || !value.includes("/")) {
     return { chips: [], message: value };
   }
 
-  const labelToCommand = new Map(skillCommands.map((command) => [command.label, command]));
+  const labelToCommand = new Map(
+    skillCommands.map((command) => [command.label, command]),
+  );
   const seen = new Set<string>();
   const chips: SelectedSkillChip[] = [];
   const message = value
-    .replace(/(^|\s)(\/[\w-]+)(?=\s|$)/g, (match, leading: string, label: string) => {
-      const command = labelToCommand.get(label);
-      if (!command) return match;
-      const name = command.name.slice("skill:".length);
-      if (!seen.has(name)) {
-        seen.add(name);
-        chips.push({
-          name,
-          label: command.label,
-          ...(command.definitionPath ? { definitionPath: command.definitionPath } : {}),
-        });
-      }
-      return leading;
-    })
+    .replace(
+      /(^|\s)(\/[\w-]+)(?=\s|$)/g,
+      (match, leading: string, label: string) => {
+        const command = labelToCommand.get(label);
+        if (!command) return match;
+        const name = command.name.slice("skill:".length);
+        if (!seen.has(name)) {
+          seen.add(name);
+          chips.push({
+            name,
+            label: command.label,
+            ...(command.definitionPath
+              ? { definitionPath: command.definitionPath }
+              : {}),
+          });
+        }
+        return leading;
+      },
+    )
     .replace(/[ \t]{2,}/g, " ");
 
   return { chips, message };
 }
 
 /** Keeps skill-chip tokens in the hidden input while showing only prose in the textarea. */
-function composeMessageWithSkillChips(message: string, chips: SelectedSkillChip[]): string {
+function composeMessageWithSkillChips(
+  message: string,
+  chips: SelectedSkillChip[],
+): string {
   if (chips.length === 0) return message;
   const chipText = chips.map((chip) => chip.label).join(" ");
   return message.length > 0 ? `${chipText} ${message}` : `${chipText} `;
@@ -663,13 +495,13 @@ export function ChatTextbox({
   const [isModelComboboxOpen, setIsModelComboboxOpen] = useState(false);
   const [isModePopoverOpen, setIsModePopoverOpen] = useState(false);
   const [highlightedModeIndex, setHighlightedModeIndex] = useState(0);
-  const [highlightedModelIndex, setHighlightedModelIndex] = useState(0);
-  const [modelSearchQuery, setModelSearchQuery] = useState("");
-  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [isFileDragActive, setIsFileDragActive] = useState(false);
   const [isCardFocused, setIsCardFocused] = useState(false);
-  const [isRefreshingSlashCommands, setIsRefreshingSlashCommands] = useState(false);
-  const [slashDescriptionMaxHeight, setSlashDescriptionMaxHeight] = useState<number | null>(null);
+  const [isRefreshingSlashCommands, setIsRefreshingSlashCommands] =
+    useState(false);
+  const [slashDescriptionMaxHeight, setSlashDescriptionMaxHeight] = useState<
+    number | null
+  >(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const fileDragDepthRef = React.useRef(0);
   const slashDescriptionCardRef = React.useRef<HTMLDivElement>(null);
@@ -680,32 +512,36 @@ export function ChatTextbox({
   /** Match chat body: shadcn Button/Input/Select set explicit text sizes that override Card inheritance. */
   const chatBoxFont = React.useMemo(
     () => ({ fontSize: chatFontSize }) as const,
-    [chatFontSize]
+    [chatFontSize],
   );
 
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const [highlightedReferenceIndex, setHighlightedReferenceIndex] = useState(0);
-  const [activeReferenceTab, setActiveReferenceTab] = useState<ReferenceTab>("all");
+  const [activeReferenceTab, setActiveReferenceTab] =
+    useState<ReferenceTab>("all");
   const disabledReferenceTabSet = React.useMemo(
     () => new Set(disabledReferenceTabs),
-    [disabledReferenceTabs]
+    [disabledReferenceTabs],
   );
 
   const getNextEnabledReferenceTab = React.useCallback(
     (current: ReferenceTab, direction: 1 | -1): ReferenceTab => {
-      const currentIndex = REFERENCE_TABS.findIndex((tab) => tab.value === current);
+      const currentIndex = REFERENCE_TABS.findIndex(
+        (tab) => tab.value === current,
+      );
       const startIndex = currentIndex >= 0 ? currentIndex : 0;
 
       for (let offset = 1; offset <= REFERENCE_TABS.length; offset += 1) {
         const nextIndex =
-          (startIndex + direction * offset + REFERENCE_TABS.length) % REFERENCE_TABS.length;
+          (startIndex + direction * offset + REFERENCE_TABS.length) %
+          REFERENCE_TABS.length;
         const nextTab = REFERENCE_TABS[nextIndex]?.value ?? "all";
         if (!disabledReferenceTabSet.has(nextTab)) return nextTab;
       }
 
       return "all";
     },
-    [disabledReferenceTabSet]
+    [disabledReferenceTabSet],
   );
 
   /**
@@ -719,11 +555,11 @@ export function ChatTextbox({
   /** All available slash commands — static built-ins plus any dynamic extras (e.g. skills). */
   const allSlashCommands = React.useMemo(
     () => [...SLASH_COMMANDS, ...extraSlashCommands],
-    [extraSlashCommands]
+    [extraSlashCommands],
   );
   const skillSlashCommands = React.useMemo(
     () => allSlashCommands.filter((cmd) => cmd.category === "skill"),
-    [allSlashCommands]
+    [allSlashCommands],
   );
 
   /**
@@ -733,7 +569,9 @@ export function ChatTextbox({
   const slashChip = React.useMemo(() => {
     if (!activeSlashCommand) return null;
 
-    const activeCommand = allSlashCommands.find((cmd) => cmd.name === activeSlashCommand);
+    const activeCommand = allSlashCommands.find(
+      (cmd) => cmd.name === activeSlashCommand,
+    );
     if (!activeCommand) return null;
 
     const leadingWhitespace = input.match(/^\s*/)?.[0] ?? "";
@@ -743,7 +581,9 @@ export function ChatTextbox({
     const nextChar = trimmed.charAt(activeCommand.label.length);
     if (nextChar && !/\s/.test(nextChar)) return null;
 
-    const message = nextChar ? trimmed.slice(activeCommand.label.length + 1) : "";
+    const message = nextChar
+      ? trimmed.slice(activeCommand.label.length + 1)
+      : "";
     return {
       name: activeCommand.name,
       label: activeCommand.label,
@@ -755,21 +595,25 @@ export function ChatTextbox({
         : {}),
     };
   }, [activeSlashCommand, allSlashCommands, input]);
-  const selectedSubagentName = slashChip?.category === "subagent" ? slashChip.name : null;
+  const selectedSubagentName =
+    slashChip?.category === "subagent" ? slashChip.name : null;
   const activeSlashCommandDef = React.useMemo(
     () =>
       slashChip
-        ? allSlashCommands.find((command) => command.name === slashChip.name) ?? null
+        ? (allSlashCommands.find(
+            (command) => command.name === slashChip.name,
+          ) ?? null)
         : null,
-    [allSlashCommands, slashChip]
+    [allSlashCommands, slashChip],
   );
   const isImmediateSlashChipActive =
-    activeSlashCommandDef != null && isImmediateSlashCommand(activeSlashCommandDef);
+    activeSlashCommandDef != null &&
+    isImmediateSlashCommand(activeSlashCommandDef);
 
   const bodyInputValue = slashChip ? slashChip.message : input;
   const selectedSkillProjection = React.useMemo(
     () => extractSelectedSkillChips(bodyInputValue, skillSlashCommands),
-    [bodyInputValue, skillSlashCommands]
+    [bodyInputValue, skillSlashCommands],
   );
   const selectedSkillChips = selectedSkillProjection.chips;
   const textareaValue = selectedSkillProjection.message;
@@ -790,7 +634,9 @@ export function ChatTextbox({
       return regex.test(key);
     });
     return {
-      builtin: filtered.filter((c) => c.category !== "skill" && c.category !== "subagent"),
+      builtin: filtered.filter(
+        (c) => c.category !== "skill" && c.category !== "subagent",
+      ),
       subagent: filtered.filter((c) => c.category === "subagent"),
       skill: filtered.filter((c) => c.category === "skill"),
     };
@@ -802,7 +648,7 @@ export function ChatTextbox({
       ...slashMatchesByGroup.subagent,
       ...slashMatchesByGroup.skill,
     ],
-    [slashMatchesByGroup]
+    [slashMatchesByGroup],
   );
 
   const isTypeaheadOpen = !readOnly && orderedSlashMatches.length > 0;
@@ -810,10 +656,11 @@ export function ChatTextbox({
     const match = input.match(/(^|\s)@([\w./#-]*)$/);
     return match ? match[2] : null;
   }, [input]);
-  const isMentioning = !readOnly && slashQuery === null && mentionQuery !== null;
+  const isMentioning =
+    !readOnly && slashQuery === null && mentionQuery !== null;
   const selectedReferenceIds = React.useMemo(
     () => new Set(references.map((reference) => reference.id)),
-    [references]
+    [references],
   );
   const orderedReferenceMatches = React.useMemo(() => {
     if (!isMentioning) return [];
@@ -824,15 +671,17 @@ export function ChatTextbox({
       .filter((option) => !selectedReferenceIds.has(option.reference.id))
       .filter((option) => {
         if (activeReferenceTab === "all") return true;
-        if (activeReferenceTab === "files") return option.type === "file" || option.type === "folder";
+        if (activeReferenceTab === "files")
+          return option.type === "file" || option.type === "folder";
         if (activeReferenceTab === "cells") return option.type === "cell";
-        if (activeReferenceTab === "variables") return option.type === "variable";
+        if (activeReferenceTab === "variables")
+          return option.type === "variable";
         return option.type === "terminal";
       })
       .filter((option) => {
         if (!query) return true;
         const normalizedHaystack = normalizeReferenceSearchText(
-          `${option.label} ${option.description} ${option.type}`
+          `${option.label} ${option.description} ${option.type}`,
         );
         return (
           option.label.toLowerCase().includes(query) ||
@@ -842,7 +691,13 @@ export function ChatTextbox({
         );
       })
       .slice(0, 80);
-  }, [activeReferenceTab, isMentioning, mentionQuery, referenceOptions, selectedReferenceIds]);
+  }, [
+    activeReferenceTab,
+    isMentioning,
+    mentionQuery,
+    referenceOptions,
+    selectedReferenceIds,
+  ]);
   const hasReferenceMatches = orderedReferenceMatches.length > 0;
   const isReferenceTypeaheadOpen = isMentioning;
   const hasDraftContent =
@@ -850,7 +705,9 @@ export function ChatTextbox({
 
   /** Refs for slash list rows so keyboard navigation can scroll the popover. */
   const slashMatchItemRefs = React.useRef<Map<number, HTMLElement>>(new Map());
-  const referenceMatchItemRefs = React.useRef<Map<number, HTMLButtonElement>>(new Map());
+  const referenceMatchItemRefs = React.useRef<Map<number, HTMLButtonElement>>(
+    new Map(),
+  );
   /** Refs for mode rows so keyboard navigation mirrors the slash popover behavior. */
   const modeItemRefs = React.useRef<Map<number, HTMLDivElement>>(new Map());
 
@@ -873,7 +730,13 @@ export function ChatTextbox({
       onReferencePickerOpen?.();
       onReferenceSearch?.(mentionQuery ?? "", activeReferenceTab);
     }
-  }, [activeReferenceTab, isMentioning, mentionQuery, onReferencePickerOpen, onReferenceSearch]);
+  }, [
+    activeReferenceTab,
+    isMentioning,
+    mentionQuery,
+    onReferencePickerOpen,
+    onReferenceSearch,
+  ]);
 
   React.useLayoutEffect(() => {
     if (!isTypeaheadOpen) return;
@@ -885,7 +748,11 @@ export function ChatTextbox({
     if (!isReferenceTypeaheadOpen || !hasReferenceMatches) return;
     const el = referenceMatchItemRefs.current.get(highlightedReferenceIndex);
     el?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [hasReferenceMatches, highlightedReferenceIndex, isReferenceTypeaheadOpen]);
+  }, [
+    hasReferenceMatches,
+    highlightedReferenceIndex,
+    isReferenceTypeaheadOpen,
+  ]);
 
   /** Let the description preview fill the remaining viewport height before it begins scrolling. */
   React.useLayoutEffect(() => {
@@ -906,7 +773,9 @@ export function ChatTextbox({
         descriptionHeight: description.offsetHeight,
       });
       setSlashDescriptionMaxHeight((current) =>
-        current !== null && Math.abs(current - maxHeight) < 1 ? current : maxHeight
+        current !== null && Math.abs(current - maxHeight) < 1
+          ? current
+          : maxHeight,
       );
     };
 
@@ -919,25 +788,23 @@ export function ChatTextbox({
   }, [highlightedIndex, isTypeaheadOpen, orderedSlashMatches]);
 
   /** Refresh the dynamic slash-command sources without moving focus out of the composer. */
-  const handleRefreshSlashCommands = React.useCallback(async (): Promise<void> => {
-    if (!onRefreshSlashCommands || isRefreshingSlashCommands) return;
+  const handleRefreshSlashCommands =
+    React.useCallback(async (): Promise<void> => {
+      if (!onRefreshSlashCommands || isRefreshingSlashCommands) return;
 
-    setIsRefreshingSlashCommands(true);
-    try {
-      await onRefreshSlashCommands();
-    } finally {
-      setIsRefreshingSlashCommands(false);
-      textareaRef.current?.focus();
-    }
-  }, [isRefreshingSlashCommands, onRefreshSlashCommands, textareaRef]);
+      setIsRefreshingSlashCommands(true);
+      try {
+        await onRefreshSlashCommands();
+      } finally {
+        setIsRefreshingSlashCommands(false);
+        textareaRef.current?.focus();
+      }
+    }, [isRefreshingSlashCommands, onRefreshSlashCommands, textareaRef]);
 
   /** Commit a slash command by replacing the active trailing slash token. */
   const selectSlashCommand = React.useCallback(
     (cmd: SlashCommand) => {
-      if (
-        cmd.category === "subagent" &&
-        selectedSubagentName !== null
-      ) {
+      if (cmd.category === "subagent" && selectedSubagentName !== null) {
         return;
       }
 
@@ -946,14 +813,16 @@ export function ChatTextbox({
         const clearedValue = slashToken
           ? input.slice(0, slashToken.start).trimEnd()
           : (() => {
-            const leadingWhitespace = input.match(/^\s*/)?.[0] ?? "";
-            const trimmed = input.slice(leadingWhitespace.length);
-            if (!trimmed.startsWith(cmd.label)) return input;
-            const trailingMessage = trimmed.slice(cmd.label.length).trimStart();
-            return trailingMessage.length > 0
-              ? `${leadingWhitespace}${trailingMessage}`
-              : leadingWhitespace;
-          })();
+              const leadingWhitespace = input.match(/^\s*/)?.[0] ?? "";
+              const trimmed = input.slice(leadingWhitespace.length);
+              if (!trimmed.startsWith(cmd.label)) return input;
+              const trailingMessage = trimmed
+                .slice(cmd.label.length)
+                .trimStart();
+              return trailingMessage.length > 0
+                ? `${leadingWhitespace}${trailingMessage}`
+                : leadingWhitespace;
+            })();
         if (clearedValue !== input) {
           const syntheticEvent = {
             target: { value: clearedValue },
@@ -985,11 +854,13 @@ export function ChatTextbox({
       // Synthesize a change event so useChat's handleInputChange updates internal state
       const nativeSet = Object.getOwnPropertyDescriptor(
         window.HTMLTextAreaElement.prototype,
-        "value"
+        "value",
       )?.set;
       if (textareaRef.current && nativeSet) {
         nativeSet.call(textareaRef.current, newValue);
-        textareaRef.current.dispatchEvent(new Event("input", { bubbles: true }));
+        textareaRef.current.dispatchEvent(
+          new Event("input", { bubbles: true }),
+        );
       }
       // Also fire the React handler so the controlled value stays in sync
       const syntheticEvent = {
@@ -1005,7 +876,7 @@ export function ChatTextbox({
       onImmediateSlashCommand,
       selectedSubagentName,
       textareaRef,
-    ]
+    ],
   );
 
   /** Auto-resize textarea to fit content while keeping a max height. */
@@ -1024,13 +895,25 @@ export function ChatTextbox({
 
   const selectorInteractionModes = React.useMemo(
     () => interactionModes.filter((mode) => !mode.hiddenInSelector),
-    [interactionModes]
+    [interactionModes],
   );
 
   const selectedModeIndex = React.useMemo(() => {
-    const index = selectorInteractionModes.findIndex((mode) => mode.id === interactionMode);
+    const index = selectorInteractionModes.findIndex(
+      (mode) => mode.id === interactionMode,
+    );
     return index >= 0 ? index : 0;
   }, [interactionMode, selectorInteractionModes]);
+
+  const selectedInteractionModeConfig = React.useMemo(
+    () =>
+      interactionModes.find((mode) => mode.id === interactionMode) ??
+      interactionModes[0],
+    [interactionMode, interactionModes],
+  );
+  const selectedModeColors = getInteractionModeColors(
+    selectedInteractionModeConfig,
+  );
 
   /** Selects an interaction mode and returns keyboard focus to the composer. */
   const selectInteractionMode = React.useCallback(
@@ -1039,7 +922,7 @@ export function ChatTextbox({
       setIsModePopoverOpen(false);
       focusTextareaAfterPopoverSelect();
     },
-    [focusTextareaAfterPopoverSelect, onInteractionModeChange]
+    [focusTextareaAfterPopoverSelect, onInteractionModeChange],
   );
 
   /**
@@ -1053,28 +936,32 @@ export function ChatTextbox({
       } as React.ChangeEvent<HTMLTextAreaElement>;
       handleInputChange(syntheticEvent);
     },
-    [handleInputChange]
+    [handleInputChange],
   );
 
   const updateComposerText = React.useCallback(
     (message: string, chips: SelectedSkillChip[] = selectedSkillChips) => {
       const nextBody = composeMessageWithSkillChips(message, chips);
       if (slashChip) {
-        updateInputValue(`${slashChip.leadingWhitespace}${slashChip.label} ${nextBody}`);
+        updateInputValue(
+          `${slashChip.leadingWhitespace}${slashChip.label} ${nextBody}`,
+        );
       } else {
         updateInputValue(nextBody);
       }
     },
-    [selectedSkillChips, slashChip, updateInputValue]
+    [selectedSkillChips, slashChip, updateInputValue],
   );
 
   const removeSelectedSkillChip = React.useCallback(
     (chipName: string) => {
-      const nextChips = selectedSkillChips.filter((chip) => chip.name !== chipName);
+      const nextChips = selectedSkillChips.filter(
+        (chip) => chip.name !== chipName,
+      );
       updateComposerText(textareaValue, nextChips);
       textareaRef.current?.focus();
     },
-    [selectedSkillChips, textareaRef, textareaValue, updateComposerText]
+    [selectedSkillChips, textareaRef, textareaValue, updateComposerText],
   );
 
   const selectReference = React.useCallback(
@@ -1084,19 +971,26 @@ export function ChatTextbox({
       updateInputValue(nextInput);
       textareaRef.current?.focus();
     },
-    [input, onReferencesChange, references, textareaRef, updateInputValue]
+    [input, onReferencesChange, references, textareaRef, updateInputValue],
   );
 
-  const cycleReferenceTab = React.useCallback((direction: 1 | -1) => {
-    setActiveReferenceTab((current) => getNextEnabledReferenceTab(current, direction));
-  }, [getNextEnabledReferenceTab]);
+  const cycleReferenceTab = React.useCallback(
+    (direction: 1 | -1) => {
+      setActiveReferenceTab((current) =>
+        getNextEnabledReferenceTab(current, direction),
+      );
+    },
+    [getNextEnabledReferenceTab],
+  );
 
   const removeReference = React.useCallback(
     (referenceId: string) => {
-      onReferencesChange?.(references.filter((reference) => reference.id !== referenceId));
+      onReferencesChange?.(
+        references.filter((reference) => reference.id !== referenceId),
+      );
       textareaRef.current?.focus();
     },
-    [onReferencesChange, references, textareaRef]
+    [onReferencesChange, references, textareaRef],
   );
 
   /** Reveals the cell or output targeted by a notebook reference chip. */
@@ -1126,10 +1020,12 @@ export function ChatTextbox({
 
   const removeAttachment = React.useCallback(
     (attachmentId: string) => {
-      onAttachmentsChange?.(attachments.filter((attachment) => attachment.id !== attachmentId));
+      onAttachmentsChange?.(
+        attachments.filter((attachment) => attachment.id !== attachmentId),
+      );
       textareaRef.current?.focus();
     },
-    [attachments, onAttachmentsChange, textareaRef]
+    [attachments, onAttachmentsChange, textareaRef],
   );
 
   const openFilePicker = React.useCallback(() => {
@@ -1161,7 +1057,9 @@ export function ChatTextbox({
           const start = target.selectionStart;
           const end = target.selectionEnd;
           const nextValue =
-            textareaValue.slice(0, start) + pastedText + textareaValue.slice(end);
+            textareaValue.slice(0, start) +
+            pastedText +
+            textareaValue.slice(end);
           updateComposerText(nextValue);
           window.setTimeout(resizeTextarea, 0);
         }
@@ -1185,26 +1083,28 @@ export function ChatTextbox({
       resizeTextarea,
       textareaValue,
       updateComposerText,
-    ]
+    ],
   );
 
   /** Shows the drop affordance only for real external file drags. */
   const handleFileDragEnter = React.useCallback(
     (e: React.DragEvent) => {
-      if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer)) return;
+      if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer))
+        return;
       e.preventDefault();
       e.stopPropagation();
       if (isAttachmentUploadActive) return;
       fileDragDepthRef.current += 1;
       setIsFileDragActive(true);
     },
-    [isAttachmentUploadActive, onAttachFiles, readOnly]
+    [isAttachmentUploadActive, onAttachFiles, readOnly],
   );
 
   /** Keeps the browser from opening dropped files while the composer is the target. */
   const handleFileDragOver = React.useCallback(
     (e: React.DragEvent) => {
-      if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer)) return;
+      if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer))
+        return;
       e.preventDefault();
       e.stopPropagation();
       if (isAttachmentUploadActive) {
@@ -1214,13 +1114,14 @@ export function ChatTextbox({
       e.dataTransfer.dropEffect = "copy";
       setIsFileDragActive(true);
     },
-    [isAttachmentUploadActive, onAttachFiles, readOnly]
+    [isAttachmentUploadActive, onAttachFiles, readOnly],
   );
 
   /** Clears drop state once the external file drag leaves the composer. */
   const handleFileDragLeave = React.useCallback(
     (e: React.DragEvent) => {
-      if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer)) return;
+      if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer))
+        return;
       e.preventDefault();
       e.stopPropagation();
       if (isAttachmentUploadActive) {
@@ -1233,13 +1134,14 @@ export function ChatTextbox({
         setIsFileDragActive(false);
       }
     },
-    [isAttachmentUploadActive, onAttachFiles, readOnly]
+    [isAttachmentUploadActive, onAttachFiles, readOnly],
   );
 
   /** Adds dropped files through the same attachment pipeline as the file picker. */
   const handleFileDrop = React.useCallback(
     (e: React.DragEvent) => {
-      if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer)) return;
+      if (readOnly || !onAttachFiles || !hasDraggedFiles(e.dataTransfer))
+        return;
       e.preventDefault();
       e.stopPropagation();
       fileDragDepthRef.current = 0;
@@ -1250,7 +1152,7 @@ export function ChatTextbox({
         onAttachFiles(e.dataTransfer.files);
       }
     },
-    [isAttachmentUploadActive, onAttachFiles, readOnly]
+    [isAttachmentUploadActive, onAttachFiles, readOnly],
   );
 
   /**
@@ -1281,14 +1183,6 @@ export function ChatTextbox({
           : "Type a message · / for commands · @ for mentions";
 
   React.useEffect(() => {
-    if (!isModelComboboxOpen) {
-      setModelSearchQuery("");
-      setDragOverIndex(null);
-      setHighlightedModelIndex(0);
-    }
-  }, [isModelComboboxOpen]);
-
-  React.useEffect(() => {
     if (isModePopoverOpen) {
       setHighlightedModeIndex(selectedModeIndex);
     }
@@ -1300,60 +1194,15 @@ export function ChatTextbox({
     el?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [highlightedModeIndex, isModePopoverOpen]);
 
-  const getModel = (modelKey: string) => findModelBySelectionKey(models, modelKey);
+  const getModel = (modelKey: string) =>
+    findModelBySelectionKey(models, modelKey);
   const selectedLlm = getModel(selectedModel);
 
-  /** Pinned models in user pin order (selector shows only these). */
-  const pinnedModels = React.useMemo(() => {
-    const pinned: LLM[] = [];
-    for (const pinKey of pinnedModelIds) {
-      const model = findModelBySelectionKey(models, pinKey);
-      if (model) pinned.push(model);
-    }
-    return pinned;
-  }, [models, pinnedModelIds]);
-
-  /** Bumps when pins change so cmdk remounts and drops stale filter/list state. */
-  const pinnedModelsListKey = React.useMemo(
-    () => pinnedModelIds.join("\0"),
-    [pinnedModelIds]
+  /** Pinned models in user pin order; shared with the selector's own list. */
+  const pinnedModels = React.useMemo(
+    () => selectPinnedModels(models, pinnedModelIds),
+    [models, pinnedModelIds],
   );
-
-  React.useEffect(() => {
-    setModelSearchQuery("");
-    setDragOverIndex(null);
-    setHighlightedModelIndex(0);
-  }, [pinnedModelsListKey]);
-
-  React.useEffect(() => {
-    const refreshPinnedModelsList = () => {
-      setModelSearchQuery("");
-      setDragOverIndex(null);
-      setHighlightedModelIndex(0);
-    };
-
-    window.addEventListener(PINNED_MODELS_CHANGED_EVENT, refreshPinnedModelsList);
-    return () => {
-      window.removeEventListener(PINNED_MODELS_CHANGED_EVENT, refreshPinnedModelsList);
-    };
-  }, []);
-
-  const visiblePinnedModels = React.useMemo(() => {
-    const query = modelSearchQuery.trim().toLowerCase();
-    if (query.length === 0) return pinnedModels;
-
-    return pinnedModels.filter((model) =>
-      [
-        model.label,
-        model.value,
-        model.apiModelId,
-        model.provider,
-        formatCatalogSource(model.catalogSource),
-      ]
-        .filter((value): value is string => typeof value === "string")
-        .some((value) => value.toLowerCase().includes(query))
-    );
-  }, [modelSearchQuery, pinnedModels]);
 
   /** Applies empty-textbox arrow shortcuts without interfering with text editing or pickers. */
   const handleEmptyComposerArrowKey = React.useCallback(
@@ -1381,12 +1230,12 @@ export function ChatTextbox({
 
       if (event.key === "ArrowUp" || event.key === "ArrowDown") {
         const selectableModels = pinnedModels.filter(
-          (model) => model.isAccessible !== false
+          (model) => model.isAccessible !== false,
         );
         const selectedIndex = selectableModels.findIndex(
           (model) =>
             model.provider === selectedLlm?.provider &&
-            model.value === selectedLlm?.value
+            model.value === selectedLlm?.value,
         );
         const direction = event.key === "ArrowDown" ? 1 : -1;
         const nextModel = selectableModels[selectedIndex + direction];
@@ -1394,7 +1243,9 @@ export function ChatTextbox({
 
         event.preventDefault();
         event.stopPropagation();
-        onModelChange(formatModelSelectionKey(nextModel.provider, nextModel.value));
+        onModelChange(
+          formatModelSelectionKey(nextModel.provider, nextModel.value),
+        );
         return true;
       }
 
@@ -1406,7 +1257,7 @@ export function ChatTextbox({
           provider,
           selectedLlm,
           modelSettings,
-          event.key === "ArrowRight" ? 1 : -1
+          event.key === "ArrowRight" ? 1 : -1,
         );
         if (!nextSettings) return false;
 
@@ -1435,49 +1286,8 @@ export function ChatTextbox({
       selectedSkillChips.length,
       slashChip,
       textareaValue.length,
-    ]
+    ],
   );
-
-  const highlightedModel = visiblePinnedModels[highlightedModelIndex] ?? null;
-
-  React.useEffect(() => {
-    if (!isModelComboboxOpen) return;
-
-    const selectedIndex = visiblePinnedModels.findIndex(
-      (model) => formatModelSelectionKey(model.provider, model.value) === selectedModel
-    );
-    setHighlightedModelIndex(selectedIndex >= 0 ? selectedIndex : 0);
-  }, [isModelComboboxOpen, selectedModel, visiblePinnedModels]);
-
-  const listMaxHeight =
-    modelSearchQuery.trim().length > 0 || pinnedModels.length > 0 ? 300 : 120;
-
-  const handlePinnedDragStart = (e: React.DragEvent, index: number) => {
-    e.dataTransfer.setData("text/plain", index.toString());
-    e.dataTransfer.effectAllowed = "move";
-  };
-
-  const handlePinnedDragOver = (e: React.DragEvent, index: number) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    setDragOverIndex(index);
-  };
-
-  const handlePinnedDragLeave = () => {
-    setDragOverIndex(null);
-  };
-
-  const handlePinnedDrop = (e: React.DragEvent, dropIndex: number) => {
-    e.preventDefault();
-    setDragOverIndex(null);
-    const dragIndex = parseInt(e.dataTransfer.getData("text/plain"), 10);
-    if (isNaN(dragIndex) || dragIndex === dropIndex || !onReorderPinned) return;
-    const newOrder = [...pinnedModelIds];
-    const [moved] = newOrder.splice(dragIndex, 1);
-    newOrder.splice(dropIndex, 0, moved);
-    onReorderPinned(newOrder);
-  };
-
 
   const onFormSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -1513,7 +1323,7 @@ export function ChatTextbox({
       e.preventDefault();
       e.stopPropagation();
       setHighlightedModeIndex((index) =>
-        Math.min(index + 1, Math.max(selectorInteractionModes.length - 1, 0))
+        Math.min(index + 1, Math.max(selectorInteractionModes.length - 1, 0)),
       );
       return;
     }
@@ -1531,7 +1341,7 @@ export function ChatTextbox({
       selectInteractionMode(
         selectorInteractionModes[highlightedModeIndex]?.id ??
           selectorInteractionModes[0]?.id ??
-          "Agent"
+          "Agent",
       );
       return;
     }
@@ -1546,45 +1356,10 @@ export function ChatTextbox({
 
   return (
     <div className="mx-auto mb-2 w-full max-w-2xl px-1.5">
-      {queuedMessages.length > 0 && (
-        <div className="relative z-0 mx-3 mb-[-10px]">
-          <Card className="border-border/50 bg-muted/50 px-2.5 pb-3 pt-2 shadow-none">
-            <div className="flex flex-col gap-1.5">
-              {queuedMessages.map((queued, index) => (
-                <div
-                  key={queued.id}
-                  className={cn(
-                    "flex items-start gap-2 rounded-md px-1 py-0.5",
-                    index > 0 && "border-t border-border/40 pt-1.5"
-                  )}
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-inherit text-xs text-muted-foreground">
-                      {queued.text || "Attached external file(s)."}
-                    </p>
-                    {queued.references.length + queued.attachments.length > 0 && (
-                      <p className="mt-0.5 text-[10px] text-muted-foreground/70">
-                        {queued.references.length + queued.attachments.length} attachment
-                        {queued.references.length + queued.attachments.length === 1 ? "" : "s"}
-                      </p>
-                    )}
-                  </div>
-                  {onRemoveQueuedMessage && (
-                    <button
-                      type="button"
-                      aria-label="Remove queued message"
-                      onClick={() => onRemoveQueuedMessage(queued.id)}
-                      className="shrink-0 rounded-sm p-0.5 text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
-      )}
+      <QueuedMessagesBar
+        messages={queuedMessages}
+        onRemove={onRemoveQueuedMessage}
+      />
       {activeRules.length > 0 && (
         <div className="flex min-h-4 flex-wrap items-center gap-1 px-1.5 pb-1 text-[11px] leading-none text-muted-foreground/60">
           <span>Rules:</span>
@@ -1607,17 +1382,17 @@ export function ChatTextbox({
         className={cn(
           "relative z-10 p-1 flex flex-col gap-2 text-inherit transition-colors",
           isFileDragActive && "border-primary/70 bg-primary/5",
-          queuedMessages.length > 0 && "shadow-md"
+          queuedMessages.length > 0 && "shadow-md",
         )}
         style={
           isCardFocused
             ? {
-              ...chatBoxFont,
-              boxShadow:
-                theme === "dark"
-                  ? "0 0 8px rgba(0, 0, 0, 1)"
-                  : "0 0 8px rgba(0, 0, 0, 0.3)",
-            }
+                ...chatBoxFont,
+                boxShadow:
+                  theme === "dark"
+                    ? "0 0 8px rgba(0, 0, 0, 1)"
+                    : "0 0 8px rgba(0, 0, 0, 0.3)",
+              }
             : chatBoxFont
         }
         onFocus={() => setIsCardFocused(true)}
@@ -1637,10 +1412,7 @@ export function ChatTextbox({
             Editing message - Esc to cancel
           </div>
         )}
-        <form
-          onSubmit={onFormSubmit}
-          onKeyDownCapture={onFormKeyDownCapture}
-        >
+        <form onSubmit={onFormSubmit} onKeyDownCapture={onFormKeyDownCapture}>
           <input
             ref={fileInputRef}
             type="file"
@@ -1703,16 +1475,22 @@ export function ChatTextbox({
                             <button
                               type="button"
                               className="flex min-w-0 items-center gap-1 text-left hover:text-foreground focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                              onClick={() => navigateToNotebookReference(reference)}
+                              onClick={() =>
+                                navigateToNotebookReference(reference)
+                              }
                               aria-label={`Go to ${reference.label}`}
                             >
                               <Icon className="h-2.5 w-2.5 shrink-0 opacity-70" />
-                              <span className="truncate">{reference.label}</span>
+                              <span className="truncate">
+                                {reference.label}
+                              </span>
                             </button>
                           ) : (
                             <>
                               <Icon className="h-2.5 w-2.5 shrink-0 opacity-70" />
-                              <span className="truncate">{reference.label}</span>
+                              <span className="truncate">
+                                {reference.label}
+                              </span>
                             </>
                           )}
                           <button
@@ -1734,7 +1512,9 @@ export function ChatTextbox({
                 {attachments.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1 px-3 pt-2 pb-0">
                     {attachments.map((attachment) => {
-                      const Icon = attachment.mediaType.startsWith("image/") ? Image : FileText;
+                      const Icon = attachment.mediaType.startsWith("image/")
+                        ? Image
+                        : FileText;
                       return (
                         <span
                           key={attachment.id}
@@ -1742,7 +1522,9 @@ export function ChatTextbox({
                           title={`${attachment.fileName} · ${attachment.mediaType} · ${formatAttachmentSize(attachment.size)}`}
                         >
                           <Icon className="h-2.5 w-2.5 shrink-0 opacity-70" />
-                          <span className="truncate">{attachment.fileName}</span>
+                          <span className="truncate">
+                            {attachment.fileName}
+                          </span>
                           <span className="shrink-0 text-[0.7em] opacity-60">
                             {formatAttachmentSize(attachment.size)}
                           </span>
@@ -1781,7 +1563,7 @@ export function ChatTextbox({
                           e.preventDefault();
                           e.stopPropagation();
                           setHighlightedIndex((i) =>
-                            Math.min(i + 1, orderedSlashMatches.length - 1)
+                            Math.min(i + 1, orderedSlashMatches.length - 1),
                           );
                           return;
                         }
@@ -1819,7 +1601,7 @@ export function ChatTextbox({
                           e.stopPropagation();
                           if (!hasReferenceMatches) return;
                           setHighlightedReferenceIndex((i) =>
-                            Math.min(i + 1, orderedReferenceMatches.length - 1)
+                            Math.min(i + 1, orderedReferenceMatches.length - 1),
                           );
                           return;
                         }
@@ -1827,14 +1609,17 @@ export function ChatTextbox({
                           e.preventDefault();
                           e.stopPropagation();
                           if (!hasReferenceMatches) return;
-                          setHighlightedReferenceIndex((i) => Math.max(i - 1, 0));
+                          setHighlightedReferenceIndex((i) =>
+                            Math.max(i - 1, 0),
+                          );
                           return;
                         }
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
                           e.stopPropagation();
                           if (!hasReferenceMatches) return;
-                          const option = orderedReferenceMatches[highlightedReferenceIndex];
+                          const option =
+                            orderedReferenceMatches[highlightedReferenceIndex];
                           if (option) selectReference(option);
                           return;
                         }
@@ -1847,14 +1632,19 @@ export function ChatTextbox({
                         if (e.key === "Escape") {
                           e.preventDefault();
                           e.stopPropagation();
-                          updateInputValue(input.replace(/(^|\s)@([\w./#-]*)$/, "$1"));
+                          updateInputValue(
+                            input.replace(/(^|\s)@([\w./#-]*)$/, "$1"),
+                          );
                           return;
                         }
                       }
 
                       if (handleEmptyComposerArrowKey(e)) return;
 
-                      if (selectedSkillChips.length > 0 && e.key === "Backspace") {
+                      if (
+                        selectedSkillChips.length > 0 &&
+                        e.key === "Backspace"
+                      ) {
                         const target = e.target as HTMLTextAreaElement;
                         const isEmptyComposer =
                           textareaValue.length === 0 &&
@@ -1863,7 +1653,8 @@ export function ChatTextbox({
                         if (isEmptyComposer) {
                           e.preventDefault();
                           e.stopPropagation();
-                          const lastChip = selectedSkillChips[selectedSkillChips.length - 1];
+                          const lastChip =
+                            selectedSkillChips[selectedSkillChips.length - 1];
                           if (lastChip) removeSelectedSkillChip(lastChip.name);
                           return;
                         }
@@ -1872,16 +1663,23 @@ export function ChatTextbox({
                       if (slashChip && e.key === "Backspace") {
                         const target = e.target as HTMLTextAreaElement;
                         const isCursorAtStart =
-                          target.selectionStart === 0 && target.selectionEnd === 0;
+                          target.selectionStart === 0 &&
+                          target.selectionEnd === 0;
                         if (isCursorAtStart) {
                           e.preventDefault();
                           e.stopPropagation();
-                          updateInputValue(`${slashChip.leadingWhitespace}${slashChip.message}`);
+                          updateInputValue(
+                            `${slashChip.leadingWhitespace}${slashChip.message}`,
+                          );
                           return;
                         }
                       }
 
-                      if (!slashChip && e.key === "Backspace" && attachments.length > 0) {
+                      if (
+                        !slashChip &&
+                        e.key === "Backspace" &&
+                        attachments.length > 0
+                      ) {
                         const target = e.target as HTMLTextAreaElement;
                         const isEmptyComposer =
                           textareaValue.length === 0 &&
@@ -1896,7 +1694,11 @@ export function ChatTextbox({
                         }
                       }
 
-                      if (!slashChip && e.key === "Backspace" && references.length > 0) {
+                      if (
+                        !slashChip &&
+                        e.key === "Backspace" &&
+                        references.length > 0
+                      ) {
                         const target = e.target as HTMLTextAreaElement;
                         const isEmptyComposer =
                           textareaValue.length === 0 &&
@@ -1917,7 +1719,10 @@ export function ChatTextbox({
                       } else if (e.key === "Enter" && !e.shiftKey) {
                         e.preventDefault();
                         e.stopPropagation();
-                        if (isImmediateSlashChipActive && activeSlashCommandDef) {
+                        if (
+                          isImmediateSlashChipActive &&
+                          activeSlashCommandDef
+                        ) {
                           selectSlashCommand(activeSlashCommandDef);
                           return;
                         }
@@ -1951,40 +1756,45 @@ export function ChatTextbox({
               {/* Description popup shown to the left for the highlighted item */}
               {isReferenceTypeaheadOpen && hasReferenceMatches
                 ? (() => {
-                  const highlighted = orderedReferenceMatches[highlightedReferenceIndex];
-                  if (!highlighted?.description) return null;
-                  return (
-                    <div className="corner-squircle absolute right-full top-0 mr-2 w-56 rounded-md border border-border/50 bg-popover px-2.5 py-2 shadow-sm">
-                      <p className="text-inherit font-medium text-foreground leading-snug mb-0.5">{highlighted.label}</p>
-                      <p className="text-inherit text-muted-foreground leading-snug">{highlighted.description}</p>
-                    </div>
-                  );
-                })()
+                    const highlighted =
+                      orderedReferenceMatches[highlightedReferenceIndex];
+                    if (!highlighted?.description) return null;
+                    return (
+                      <div className="corner-squircle absolute right-full top-0 mr-2 w-56 rounded-md border border-border/50 bg-popover px-2.5 py-2 shadow-sm">
+                        <p className="text-inherit font-medium text-foreground leading-snug mb-0.5">
+                          {highlighted.label}
+                        </p>
+                        <p className="text-inherit text-muted-foreground leading-snug">
+                          {highlighted.description}
+                        </p>
+                      </div>
+                    );
+                  })()
                 : (() => {
-                  const highlighted = orderedSlashMatches[highlightedIndex];
-                  if (!highlighted?.description) return null;
-                  return (
-                    <div
-                      ref={slashDescriptionCardRef}
-                      className="corner-squircle absolute right-full top-0 mr-2 w-52 overflow-hidden rounded-md border border-border/50 bg-popover px-2.5 py-2 shadow-sm"
-                    >
-                      <p className="break-words text-inherit font-medium text-foreground leading-snug mb-0.5">
-                        {highlighted.label}
-                      </p>
-                      <p
-                        ref={slashDescriptionRef}
-                        className="scrollbar-hide overflow-y-auto overscroll-contain break-words pr-1 text-inherit text-muted-foreground leading-snug"
-                        style={
-                          slashDescriptionMaxHeight === null
-                            ? undefined
-                            : { maxHeight: `${slashDescriptionMaxHeight}px` }
-                        }
+                    const highlighted = orderedSlashMatches[highlightedIndex];
+                    if (!highlighted?.description) return null;
+                    return (
+                      <div
+                        ref={slashDescriptionCardRef}
+                        className="corner-squircle absolute right-full top-0 mr-2 w-52 overflow-hidden rounded-md border border-border/50 bg-popover px-2.5 py-2 shadow-sm"
                       >
-                        {highlighted.description}
-                      </p>
-                    </div>
-                  );
-                })()}
+                        <p className="break-words text-inherit font-medium text-foreground leading-snug mb-0.5">
+                          {highlighted.label}
+                        </p>
+                        <p
+                          ref={slashDescriptionRef}
+                          className="scrollbar-hide overflow-y-auto overscroll-contain break-words pr-1 text-inherit text-muted-foreground leading-snug"
+                          style={
+                            slashDescriptionMaxHeight === null
+                              ? undefined
+                              : { maxHeight: `${slashDescriptionMaxHeight}px` }
+                          }
+                        >
+                          {highlighted.description}
+                        </p>
+                      </div>
+                    );
+                  })()}
               <div className="flex h-[20vh] min-h-0 flex-col gap-0">
                 {isReferenceTypeaheadOpen ? (
                   <>
@@ -1993,7 +1803,9 @@ export function ChatTextbox({
                         {REFERENCE_TABS.map((tab) => {
                           const Icon = tab.icon;
                           const selected = activeReferenceTab === tab.value;
-                          const isDisabled = disabledReferenceTabSet.has(tab.value);
+                          const isDisabled = disabledReferenceTabSet.has(
+                            tab.value,
+                          );
                           const button = (
                             <button
                               type="button"
@@ -2015,7 +1827,7 @@ export function ChatTextbox({
                                   ? "cursor-not-allowed text-muted-foreground/30"
                                   : selected
                                     ? "bg-muted text-foreground"
-                                    : "text-muted-foreground hover:bg-muted/60"
+                                    : "text-muted-foreground hover:bg-muted/60",
                               )}
                             >
                               {Icon ? (
@@ -2034,14 +1846,22 @@ export function ChatTextbox({
                           );
 
                           if (!Icon) {
-                            return <React.Fragment key={tab.value}>{button}</React.Fragment>;
+                            return (
+                              <React.Fragment key={tab.value}>
+                                {button}
+                              </React.Fragment>
+                            );
                           }
 
                           return (
                             <Tooltip key={tab.value}>
                               <TooltipTrigger asChild>{button}</TooltipTrigger>
                               <TooltipContent side="top">
-                                <p>{isDisabled ? `${tab.label} unavailable` : tab.label}</p>
+                                <p>
+                                  {isDisabled
+                                    ? `${tab.label} unavailable`
+                                    : tab.label}
+                                </p>
                               </TooltipContent>
                             </Tooltip>
                           );
@@ -2049,33 +1869,40 @@ export function ChatTextbox({
                       </div>
                     </TooltipProvider>
                     <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain">
-                      {hasReferenceMatches ? orderedReferenceMatches.map((option, i) => {
-                        const Icon = CHAT_REFERENCE_TYPE_ICONS[option.type];
-                        return (
-                          <button
-                            key={option.id}
-                            type="button"
-                            ref={(el) => {
-                              if (el) referenceMatchItemRefs.current.set(i, el);
-                              else referenceMatchItemRefs.current.delete(i);
-                            }}
-                            onMouseDown={(e) => {
-                              e.preventDefault();
-                              selectReference(option);
-                            }}
-                            onMouseEnter={() => setHighlightedReferenceIndex(i)}
-                            className={cn(
-                              "corner-squircle flex w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-inherit transition-colors",
-                              i === highlightedReferenceIndex
-                                ? "bg-muted text-foreground"
-                                : "text-muted-foreground hover:bg-muted/60"
-                            )}
-                          >
-                            <Icon className="h-3 w-3 shrink-0 opacity-60" />
-                            <span className="font-medium truncate">{option.label}</span>
-                          </button>
-                        );
-                      }) : (
+                      {hasReferenceMatches ? (
+                        orderedReferenceMatches.map((option, i) => {
+                          const Icon = CHAT_REFERENCE_TYPE_ICONS[option.type];
+                          return (
+                            <button
+                              key={option.id}
+                              type="button"
+                              ref={(el) => {
+                                if (el)
+                                  referenceMatchItemRefs.current.set(i, el);
+                                else referenceMatchItemRefs.current.delete(i);
+                              }}
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                selectReference(option);
+                              }}
+                              onMouseEnter={() =>
+                                setHighlightedReferenceIndex(i)
+                              }
+                              className={cn(
+                                "corner-squircle flex w-full min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-inherit transition-colors",
+                                i === highlightedReferenceIndex
+                                  ? "bg-muted text-foreground"
+                                  : "text-muted-foreground hover:bg-muted/60",
+                              )}
+                            >
+                              <Icon className="h-3 w-3 shrink-0 opacity-60" />
+                              <span className="font-medium truncate">
+                                {option.label}
+                              </span>
+                            </button>
+                          );
+                        })
+                      ) : (
                         <div className="px-2 py-1.5 text-inherit text-muted-foreground">
                           No references found
                         </div>
@@ -2085,7 +1912,8 @@ export function ChatTextbox({
                 ) : (
                   <div className="scrollbar-hide min-h-0 flex-1 overflow-y-auto overscroll-contain">
                     {orderedSlashMatches.map((cmd, i) => {
-                      const prev = i > 0 ? orderedSlashMatches[i - 1] : undefined;
+                      const prev =
+                        i > 0 ? orderedSlashMatches[i - 1] : undefined;
                       const group: "builtin" | "subagent" | "skill" =
                         cmd.category === "skill"
                           ? "skill"
@@ -2105,7 +1933,8 @@ export function ChatTextbox({
                           ? cmd.definitionPath
                           : undefined;
                       const showDefinitionEdit =
-                        Boolean(definitionPath) && typeof onOpenSlashDefinition === "function";
+                        Boolean(definitionPath) &&
+                        typeof onOpenSlashDefinition === "function";
                       const isDisabledSubagent =
                         group === "subagent" && selectedSubagentName !== null;
                       const commandButton = (
@@ -2120,11 +1949,13 @@ export function ChatTextbox({
                           className={cn(
                             "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-inherit",
                             showDefinitionEdit && !isDisabledSubagent && "pr-7",
-                            isDisabledSubagent && "cursor-not-allowed"
+                            isDisabledSubagent && "cursor-not-allowed",
                           )}
                         >
                           <Icon className="h-3 w-3 shrink-0 opacity-60" />
-                          <span className="font-medium truncate">{cmd.label}</span>
+                          <span className="font-medium truncate">
+                            {cmd.label}
+                          </span>
                         </button>
                       );
                       return (
@@ -2133,7 +1964,7 @@ export function ChatTextbox({
                             <div
                               className={cn(
                                 "flex items-center justify-between px-1.5 pb-0.5 text-inherit font-medium tracking-wide text-muted-foreground/60",
-                                i === 0 ? "pt-1" : "pt-1.5"
+                                i === 0 ? "pt-1" : "pt-1.5",
                               )}
                               role="presentation"
                             >
@@ -2160,7 +1991,8 @@ export function ChatTextbox({
                                   <RefreshCw
                                     className={cn(
                                       "h-3.5 w-3.5",
-                                      isRefreshingSlashCommands && "animate-spin"
+                                      isRefreshingSlashCommands &&
+                                        "animate-spin",
                                     )}
                                   />
                                 </button>
@@ -2180,13 +2012,15 @@ export function ChatTextbox({
                                 ? "cursor-not-allowed text-muted-foreground/35"
                                 : i === highlightedIndex
                                   ? "bg-muted text-foreground"
-                                  : "text-muted-foreground hover:bg-muted/60"
+                                  : "text-muted-foreground hover:bg-muted/60",
                             )}
                           >
                             {isDisabledSubagent ? (
                               <TooltipProvider delayDuration={250}>
                                 <Tooltip>
-                                  <TooltipTrigger asChild>{commandButton}</TooltipTrigger>
+                                  <TooltipTrigger asChild>
+                                    {commandButton}
+                                  </TooltipTrigger>
                                   <TooltipContent side="left">
                                     <p>Only one subagent at a time</p>
                                   </TooltipContent>
@@ -2195,7 +2029,9 @@ export function ChatTextbox({
                             ) : (
                               commandButton
                             )}
-                            {showDefinitionEdit && definitionPath && !isDisabledSubagent ? (
+                            {showDefinitionEdit &&
+                            definitionPath &&
+                            !isDisabledSubagent ? (
                               <button
                                 type="button"
                                 onMouseDown={(e) => {
@@ -2230,21 +2066,37 @@ export function ChatTextbox({
             {/* Bottom left - Mode and Model selectors */}
             <div className="flex items-center gap-1">
               {/* Interaction Mode selector */}
-              <Popover open={isModePopoverOpen} onOpenChange={setIsModePopoverOpen}>
+              <Popover
+                open={isModePopoverOpen}
+                onOpenChange={setIsModePopoverOpen}
+              >
                 <PopoverTrigger asChild>
                   <Button
                     variant="ghost"
                     disabled={readOnly}
-                    className="h-7 px-1.5 text-inherit bg-muted hover:bg-accent gap-0.5 [&_svg]:!size-3"
-                    style={chatBoxFont}
+                    className={cn(
+                      "h-7 gap-0.5 px-1.5 text-inherit [&_svg]:!size-3",
+                      selectedModeColors.triggerClassName,
+                    )}
+                    style={{
+                      ...chatBoxFont,
+                      ...selectedModeColors.triggerStyle,
+                    }}
                     aria-label={`Interaction mode: ${interactionMode}`}
                   >
                     {(() => {
-                      const m =
-                        interactionModes.find((mode) => mode.id === interactionMode) ??
-                        interactionModes[0];
-                      const Icon = MODE_ICONS[m?.baseMode ?? "Agent"];
-                      return <Icon className="shrink-0 opacity-70" />;
+                      const Icon = getInteractionModeIcon(
+                        selectedInteractionModeConfig,
+                      );
+                      return (
+                        <Icon
+                          className={cn(
+                            "shrink-0",
+                            selectedModeColors.iconClassName,
+                          )}
+                          style={selectedModeColors.iconStyle}
+                        />
+                      );
                     })()}
                     <ChevronDown className="shrink-0 opacity-60" />
                   </Button>
@@ -2267,19 +2119,24 @@ export function ChatTextbox({
                   }}
                 >
                   {/* Hovercard shown to the right for the highlighted mode */}
-                    {(() => {
+                  {(() => {
                     const m = selectorInteractionModes[highlightedModeIndex];
                     if (!m) return null;
                     return (
                       <div className="corner-squircle absolute right-full top-0 mr-2 w-56 rounded-md border border-border/50 bg-popover px-2.5 py-2 shadow-sm pointer-events-none">
-                        <p className="text-inherit font-medium text-foreground leading-snug mb-0.5">{m.label}</p>
-                        <p className="text-inherit text-muted-foreground leading-snug">{m.description}</p>
+                        <p className="text-inherit font-medium text-foreground leading-snug mb-0.5">
+                          {m.label}
+                        </p>
+                        <p className="text-inherit text-muted-foreground leading-snug">
+                          {m.description}
+                        </p>
                       </div>
                     );
                   })()}
                   <div className="flex flex-col gap-1">
                     {selectorInteractionModes.map((m, i) => {
-                      const Icon = MODE_ICONS[m.baseMode];
+                      const Icon = getInteractionModeIcon(m);
+                      const modeColors = getInteractionModeColors(m);
                       const isSelected = interactionMode === m.id;
                       const isHighlighted = i === highlightedModeIndex;
                       return (
@@ -2293,11 +2150,12 @@ export function ChatTextbox({
                           className={cn(
                             "corner-squircle group flex w-full items-center gap-1 rounded-md px-1 py-1 text-inherit transition-colors [&_svg]:!size-3",
                             isHighlighted
-                              ? "bg-muted text-foreground"
+                              ? cn("text-foreground", modeColors.triggerClassName)
                               : isSelected
                                 ? "text-foreground"
-                                : "text-muted-foreground hover:bg-muted/60"
+                                : "text-muted-foreground hover:bg-muted/60",
                           )}
+                          style={isHighlighted ? modeColors.triggerStyle : undefined}
                         >
                           <button
                             type="button"
@@ -2307,8 +2165,17 @@ export function ChatTextbox({
                             }}
                             className="flex min-w-0 flex-1 items-center gap-1.5 rounded-sm px-0.5 text-left"
                           >
-                            <Icon className="shrink-0 opacity-60" />
-                            <span className="truncate font-medium">{m.label}</span>
+                            <Icon
+                              className={cn(
+                                "shrink-0",
+                                modeColors.iconClassName,
+                                !isSelected && modeColors.color && "opacity-80",
+                              )}
+                              style={modeColors.iconStyle}
+                            />
+                            <span className="truncate font-medium">
+                              {m.label}
+                            </span>
                           </button>
                           <button
                             type="button"
@@ -2320,7 +2187,9 @@ export function ChatTextbox({
                             }}
                             className={cn(
                               "corner-squircle flex h-6 w-6 shrink-0 items-center justify-center rounded-md opacity-60 transition-opacity hover:bg-transparent hover:opacity-100",
-                              onOpenInteractionModesSettings ? "" : "pointer-events-none opacity-30"
+                              onOpenInteractionModesSettings
+                                ? ""
+                                : "pointer-events-none opacity-30",
                             )}
                             aria-label={`Edit ${m.label} interaction mode`}
                           >
@@ -2334,184 +2203,20 @@ export function ChatTextbox({
               </Popover>
 
               {/* Model Combobox */}
-              <Popover
+<ModelCombobox
+                models={models}
+                pinnedModelIds={pinnedModelIds}
+                selectedModel={selectedModel}
+                onModelChange={onModelChange}
                 open={isModelComboboxOpen}
                 onOpenChange={setIsModelComboboxOpen}
-              >
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    role="combobox"
-                    disabled={readOnly}
-                    className="w-auto h-7 text-inherit justify-center items-center p-1 text-muted-foreground gap-1 hover:bg-transparent [&_svg]:!size-3"
-                    style={chatBoxFont}
-                  >
-                    {selectedLlm && (
-                      <ProviderLogo
-                        providerId={selectedLlm.provider}
-                        className="h-3.5 w-3.5 shrink-0 text-current"
-                      />
-                    )}
-                    <span className="truncate">
-                      {selectedLlm?.label || "Select Model"}
-                    </span>
-                    <ChevronDown className="h-3 w-3 shrink-0" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  className="relative w-48 overflow-visible p-0 text-inherit"
-                  align="start"
-                  style={chatBoxFont}
-                  onEscapeKeyDown={(e) => {
-                    e.preventDefault();
-                    setIsModelComboboxOpen(false);
-                    focusTextareaAfterPopoverSelect();
-                  }}
-                  onKeyDownCapture={(e) => {
-                    if (e.key === "ArrowDown") {
-                      setHighlightedModelIndex((index) =>
-                        Math.min(index + 1, Math.max(visiblePinnedModels.length - 1, 0))
-                      );
-                    }
-                    if (e.key === "ArrowUp") {
-                      setHighlightedModelIndex((index) => Math.max(index - 1, 0));
-                    }
-                  }}
-                >
-                  {highlightedModel ? <ModelDetailCard model={highlightedModel} /> : null}
-                  <Command key={pinnedModelsListKey} shouldFilter={false}>
-                    <div className="flex items-center gap-0">
-                      <div className="flex-1 min-w-0">
-                        <CommandInput
-                          placeholder="Search models..."
-                          className="orion-chat-composer-mobile h-8 !text-inherit"
-                          style={chatBoxFont}
-                          onInput={(e) =>
-                            setModelSearchQuery((e.target as HTMLInputElement).value)
-                          }
-                        />
-                      </div>
-                      {onOpenModelsSettings && (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 shrink-0 hover:bg-transparent text-muted-foreground hover:text-foreground text-inherit [&_svg]:!size-3"
-                          style={chatBoxFont}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            onOpenModelsSettings();
-                            setIsModelComboboxOpen(false);
-                          }}
-                          aria-label="Add models to selector"
-                          title="Add models"
-                        >
-                          <Plus className="h-3 w-3" />
-                        </Button>
-                      )}
-                    </div>
-                    <CommandEmpty className="!text-inherit py-6 text-center text-xs">
-                      {pinnedModels.length === 0 ? (
-                        onOpenModelsSettings ? (
-                          <span className="text-muted-foreground">
-                            No models pinned.{" "}
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.preventDefault();
-                                onOpenModelsSettings();
-                                setIsModelComboboxOpen(false);
-                              }}
-                              className="text-foreground hover:underline"
-                            >
-                              Click here
-                            </button>{" "}
-                            to add a model.
-                          </span>
-                        ) : (
-                          "No models pinned."
-                        )
-                      ) : (
-                        "No model found."
-                      )}
-                    </CommandEmpty>
-                    <CommandList
-                      className="scrollbar-hide overflow-y-auto overflow-x-hidden"
-                      style={{ maxHeight: listMaxHeight }}
-                    >
-                      <CommandGroup>
-                        {visiblePinnedModels.map((model, index) => {
-                          const ProviderIcon = model.icon;
-                          const isDragOver = dragOverIndex === index;
-                          const isLocked = model.isAccessible === false;
-                          const canReorder =
-                            Boolean(onReorderPinned) &&
-                            !isLocked &&
-                            modelSearchQuery.trim().length === 0;
-                          return (
-                            <CommandItem
-                              key={`${model.provider}:${model.value}`}
-                              value={`${model.label} ${model.value} ${model.provider}`}
-                              onMouseEnter={() => setHighlightedModelIndex(index)}
-                              onSelect={() => {
-                                if (isLocked) {
-                                  onOpenProvidersSettings?.();
-                                  return;
-                                }
-                                onModelChange(
-                                  formatModelSelectionKey(model.provider, model.value)
-                                );
-                                setIsModelComboboxOpen(false);
-                                focusTextareaAfterPopoverSelect();
-                              }}
-                              className={cn(
-                                "!text-inherit",
-                                isLocked && "opacity-50 cursor-not-allowed"
-                              )}
-                              onDragOver={
-                                canReorder
-                                  ? (e: React.DragEvent) => handlePinnedDragOver(e, index)
-                                  : undefined
-                              }
-                              onDragLeave={
-                                canReorder ? handlePinnedDragLeave : undefined
-                              }
-                              onDrop={
-                                canReorder
-                                  ? (e: React.DragEvent) => handlePinnedDrop(e, index)
-                                  : undefined
-                              }
-                              style={
-                                isDragOver
-                                  ? { ...chatBoxFont, backgroundColor: "hsl(var(--accent))" }
-                                  : chatBoxFont
-                              }
-                            >
-                              {canReorder && (
-                                <div
-                                  draggable
-                                  onDragStart={(e) => handlePinnedDragStart(e, index)}
-                                  className="cursor-grab touch-none opacity-50 hover:opacity-70 -ml-0.5 mr-1"
-                                  onClick={(e) => e.stopPropagation()}
-                                  onPointerDown={(e) => e.stopPropagation()}
-                                  aria-hidden
-                                >
-                                  <GripVertical className="h-3 w-3" />
-                                </div>
-                              )}
-                              <div className="flex items-center gap-2 min-w-0 flex-1">
-                                {ProviderIcon && (
-                                  <ProviderIcon className="h-3.5 w-3.5 shrink-0 opacity-40" />
-                                )}
-                                <span className="truncate flex-1">{model.label}</span>
-                              </div>
-                            </CommandItem>
-                          );
-                        })}
-                      </CommandGroup>
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
+                disabled={readOnly}
+                onReorderPinned={onReorderPinned}
+                onOpenModelsSettings={onOpenModelsSettings}
+                onOpenProvidersSettings={onOpenProvidersSettings}
+                onSelectComplete={focusTextareaAfterPopoverSelect}
+                style={chatBoxFont}
+              />
 
               {/* Model intelligence selector, hidden when the catalog has no usable levels. */}
               {!readOnly && selectedModelProvider && (
@@ -2543,7 +2248,9 @@ export function ChatTextbox({
               <ContextUsagePill
                 usage={contextUsage}
                 phase={contextUsagePhase}
-                hasMessages={!readOnly && (hasMessages || attachments.length > 0)}
+                hasMessages={
+                  !readOnly && (hasMessages || attachments.length > 0)
+                }
                 onCompact={onCompact}
                 simple={simpleContextUsage}
               />
@@ -2574,10 +2281,10 @@ export function ChatTextbox({
                     isAttachmentUploadActive
                       ? "Wait for file uploads to finish"
                       : isOverContextBudget
-                      ? "Compaction required before sending"
-                      : isLoading
-                        ? "Add to queue"
-                        : undefined
+                        ? "Compaction required before sending"
+                        : isLoading
+                          ? "Add to queue"
+                          : undefined
                   }
                   aria-label={isLoading ? "Queue message" : "Send message"}
                 >

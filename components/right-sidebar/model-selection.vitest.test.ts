@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  loadGoalEvaluatorModelFromSession,
   loadModelSettingsMapFromSession,
   loadSelectedModelFromSession,
+  saveGoalEvaluatorModelToSession,
   saveModelSettingsMapToSession,
   saveSelectedModelToSession,
   SESSION_FALLBACK_CHAT_MODEL_ID,
@@ -131,5 +133,20 @@ describe("resolveSelectedModelFallback", () => {
     });
 
     expect(fallback).toBeNull();
+  });
+});
+
+describe("goal evaluator model selection", () => {
+  beforeEach(() => {
+    window.sessionStorage.clear();
+  });
+
+  it("returns null until a reviewer is chosen so the composer model is used", () => {
+    expect(loadGoalEvaluatorModelFromSession()).toBeNull();
+  });
+
+  it("round-trips the chosen reviewer for the next goal", () => {
+    saveGoalEvaluatorModelToSession("anthropic/claude-opus-5");
+    expect(loadGoalEvaluatorModelFromSession()).toBe("anthropic/claude-opus-5");
   });
 });

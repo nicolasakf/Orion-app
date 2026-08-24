@@ -29,6 +29,7 @@ import { createJupyterTools, type JupyterToolSet, type TerminalShell } from "./t
 import type { OrionToolName } from "./tool-schemas";
 import { useOptionalOpenSettings } from "@/contexts/open-settings-context";
 import { renderConnectionRequest } from "@/lib/connections/agent-view";
+import { PERSONAL_CONTEXT_FILE_CHANGED_EVENT } from "@/lib/onboarding/personal-context-editor-path";
 import { TerminalPool } from "@/lib/shell/terminal-pool";
 import { guardToolResult } from "./tool-output-guard";
 import {
@@ -55,14 +56,21 @@ import {
   type SubagentDefinition,
 } from "@/lib/agent/subagents";
 import { detectClientPlatformOs, isJupyterServerHostLocal } from "@/lib/utils";
-import { inspectPlotlyOutput } from "@/lib/notebook/plotly-output-inspection";
+import { inspectOutput } from "@/lib/notebook/output-inspection";
 import {
   guardExecutionToolResult,
   isExecutionToolResult,
   type ExecutionToolResult,
 } from "./visual-evidence";
-import { parseInsertedRange } from "./tools/insert-cell";
-import type { InsertCellParams, ReadCellOutputParams } from "./tools/types";
+import type {
+  InsertCellParams,
+  OverwriteCellSourceParams,
+  ReadCellOutputParams,
+} from "./tools/types";
+import {
+  runEditedCellsIfRequested,
+  runInsertedCellsIfRequested,
+} from "./chained-cell-execution";
 import { throwIfToolExecutionAborted } from "./tool-execution-scheduler";
 import { resolveAgentPath } from "./path-resolver";
 import { isProtectedMemoryWriteAttempt } from "./memory-write-guard";
@@ -76,6 +84,16 @@ const UpdateMemoryResponseSchema = z.object({
 /** Request-scoped metadata and cancellation passed to local tool execution. */
 export interface ToolExecutionContext extends EditCheckpointContext {
   abortSignal?: AbortSignal;
+  /**
+   * Whether cell execution chained onto a mutation tool may reach the kernel.
+   *
+   * `insert_cell` and `overwrite_cell_source` can run the cells they just
+   * wrote, but Edit mode ships those tools while withholding `execute_cell`,
+   * so the chain would otherwise run code in a mode whose prompt promises it
+   * cannot. Omitted means allowed, which keeps sub-agent and evaluator callers
+   * (which resolve their own tool sets) on the existing behaviour.
+   */
+  executionAllowed?: boolean;
 }
 
 // ============================================================================
@@ -138,9 +156,6 @@ function resolveProviderJupyterPath(path: string, rootDirectory?: string | null)
   return resolved.ok ? resolved.jupyterPath : path;
 }
 
-/** Per-cell timeout used when `insert_cell` runs its own cells without being told one. */
-const INSERT_CELL_DEFAULT_TIMEOUT_SECONDS = 120;
-
 /** Identifies one notebook output across an execution and a later read. */
 function cellOutputKey(cellIndex: number, outputIndex: number): string {
   return `${cellIndex}:${outputIndex}`;
@@ -173,55 +188,6 @@ function appendSkippedReadNote(result: unknown, note: string): unknown {
     return { ...record, text: text ? `${text}\n${note}` : note };
   }
   return result;
-}
-
-/**
- * Run the code cells an `insert_cell` call just created, when it asked for it.
- *
- * Writing a cell and running it is one intent but was two tool calls, and with
- * one model step per tool call the second one re-sent the entire prompt to emit
- * roughly a hundred tokens. In session 1786825713795 that pattern accounted for
- * $5.53 of a $13.70 run. Chaining here keeps the step accounting unchanged —
- * the model still sees one call and one result.
- *
- * @param insertResult - Raw string returned by the insert, passed through
- *   unchanged when nothing needs to run.
- */
-async function runInsertedCellsIfRequested(
-  toolSet: JupyterToolSet,
-  params: InsertCellParams,
-  insertResult: string
-): Promise<string | ExecutionToolResult> {
-  if (!params.execute) return insertResult;
-
-  const range = parseInsertedRange(insertResult);
-  if (!range) return insertResult;
-
-  // Markdown cells have nothing to run, so only code cells reach the kernel.
-  const cellIndices = params.cells
-    .map((cell, offset) => ({ cell, index: range.startIndex + offset }))
-    .filter(({ cell }) => cell.cellType === "code")
-    .map(({ index }) => index);
-
-  if (cellIndices.length === 0) {
-    return `${insertResult}\n\nNothing to execute: all inserted cells are markdown.`;
-  }
-
-  const executionResult = await toolSet.tools.executeCell.execute({
-    cellIndices,
-    timeoutSeconds: params.timeoutSeconds ?? INSERT_CELL_DEFAULT_TIMEOUT_SECONDS,
-    stream: false,
-    progressInterval: 1000,
-  });
-
-  const executionText = isExecutionToolResult(executionResult)
-    ? executionResult.text
-    : String(executionResult);
-  const mergedText = `${insertResult}\n\n${executionText}`;
-
-  return isExecutionToolResult(executionResult)
-    ? { ...executionResult, text: mergedText }
-    : mergedText;
 }
 
 export interface AssistantContextValue {
@@ -991,6 +957,7 @@ export function AssistantProvider({
             reason: input.data.reason,
             updatedAt: data.updatedAt,
           };
+          window.dispatchEvent(new CustomEvent(PERSONAL_CONTEXT_FILE_CHANGED_EVENT));
           logToolResult(
             {
               requestId,
@@ -1015,7 +982,7 @@ export function AssistantProvider({
         }
       }
 
-      if (toolName === "inspect_plotly_output") {
+      if (toolName === "inspect_output") {
         const sanitizedParams = (sanitizeToolParams(params) ?? {}) as {
           cellIndex?: number;
           outputIndex?: number;
@@ -1025,11 +992,11 @@ export function AssistantProvider({
           !Number.isInteger(sanitizedParams.outputIndex)
         ) {
           return {
-            text: "[ERROR] inspect_plotly_output requires integer cellIndex and outputIndex arguments.",
+            text: "[ERROR] inspect_output requires integer cellIndex and outputIndex arguments.",
             visuals: [],
           };
         }
-        return inspectPlotlyOutput(
+        return inspectOutput(
           sanitizedParams.cellIndex as number,
           sanitizedParams.outputIndex as number,
         );
@@ -1148,18 +1115,29 @@ export function AssistantProvider({
               sanitizedParams
             );
             result = await runInsertedCellsIfRequested(
-              toolSet,
+              toolSet.tools.executeCell,
               sanitizedParams as unknown as InsertCellParams,
-              String(insertResult)
+              String(insertResult),
+              executionContext?.executionAllowed !== false
             );
             break;
           }
           case "delete_cell":
             result = await executeWithCheckpointContext(toolSet.tools.deleteCell, sanitizedParams);
             break;
-          case "overwrite_cell_source":
-            result = await executeWithCheckpointContext(toolSet.tools.overwriteCellSource, sanitizedParams);
+          case "overwrite_cell_source": {
+            const editResult = await executeWithCheckpointContext(
+              toolSet.tools.overwriteCellSource,
+              sanitizedParams
+            );
+            result = await runEditedCellsIfRequested(
+              toolSet.tools.executeCell,
+              sanitizedParams as unknown as OverwriteCellSourceParams,
+              String(editResult),
+              executionContext?.executionAllowed !== false
+            );
             break;
+          }
           case "edit_orion_metadata":
             result = await toolSet.tools.editOrionMetadata.execute(sanitizedParams as any);
             break;

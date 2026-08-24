@@ -17,7 +17,7 @@ import { resolveOrionEditorDefinition } from "@/components/editors/editor-defini
 import { DocumentSyncAlert } from "@/components/editors/document-sync-alert";
 import { useTextFileModel } from "@/components/editors/use-text-file-model";
 import { LARGE_FILE_WARNING_THRESHOLD_BYTES } from "@/lib/editor/large-file-warning";
-import { isUserSettingsEditorPath } from "@/lib/settings/user-settings-editor-path";
+import { isOrionHomeEditorPath } from "@/lib/local/orion-home-editor-path";
 import type { KernelStatus, KernelInfo, NotebookType } from "@/lib/types";
 import type { KernelService } from "@/lib/kernel/kernel-service";
 import type {
@@ -163,7 +163,7 @@ export function Editor({
     !!filepath &&
     !!activeEditor &&
     !!kernelService &&
-    !isUserSettingsEditorPath(filepath) &&
+    !isOrionHomeEditorPath(filepath) &&
     (activeFileKey ? !confirmedLargeFileKeys.has(activeFileKey) : false);
   const shouldBlockEditorForLargeFile =
     !!filepath && largeFileWarning?.filepath === filepath;

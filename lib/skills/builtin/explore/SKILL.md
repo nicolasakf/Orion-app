@@ -1,15 +1,15 @@
 ---
-name: deep-eda
-description: Uses the EDA research profile for exhaustive exploratory data analysis inside Orion Research mode. Use only when the user explicitly asks for deep, exhaustive, or thorough EDA.
+name: explore
+description: Uses the EDA explore profile for exhaustive exploratory data analysis inside Orion Explore mode. Use only when the user explicitly asks for deep, exhaustive, or thorough EDA.
 ---
 
-# Deep EDA research profile
+# Explore EDA profile
 
-This skill supplies the EDA-specific rubric for Orion Research mode. Research mode controls the loop; this skill only defines the EDA coverage, visualization defaults, and notebook journaling expectations.
+This skill supplies the EDA-specific rubric for Orion Explore mode. Explore mode controls the loop; this skill only defines the EDA coverage, visualization defaults, and notebook journaling expectations.
 
 ## Activation
 
-- Continue in Research mode with the EDA profile already selected by Orion.
+- Continue in Explore mode with the EDA profile already selected by Orion.
 - Use normal notebook, kernel, file, web, and terminal tools.
 
 ## EDA coverage rubric

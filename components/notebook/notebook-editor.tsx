@@ -4634,6 +4634,8 @@ export function NotebookEditor({
             <div className="relative min-h-0 flex-1 overflow-hidden">
               <div
                 aria-hidden={activeNotebookView !== "app"}
+                data-orion-notebook-view="app"
+                data-orion-notebook-view-active={activeNotebookView === "app"}
                 inert={activeNotebookView !== "app" ? true : undefined}
                 className={cn(
                   "absolute inset-0 flex min-h-0 w-full flex-col overflow-y-auto overflow-x-hidden transition-opacity duration-150",
@@ -4672,6 +4674,8 @@ export function NotebookEditor({
               </div>
               <div
                 aria-hidden={activeNotebookView !== "notebook"}
+                data-orion-notebook-view="notebook"
+                data-orion-notebook-view-active={activeNotebookView === "notebook"}
                 inert={activeNotebookView !== "notebook" ? true : undefined}
                 className={cn(
                   "notebook-editor-scroll [container-type:size] absolute inset-0 w-full overflow-y-auto overflow-x-hidden bg-sidebar transition-opacity duration-150",

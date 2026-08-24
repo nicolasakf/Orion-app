@@ -127,6 +127,13 @@ function stripRemovedTableSettings(settings: Record<string, unknown>): void {
   }
 }
 
+/** Drops retired notebook UI library preferences from saved settings. */
+function stripRemovedNotebookUiPreferences(settings: Record<string, unknown>): void {
+  const notebook = asObject(settings.notebook);
+  if (!notebook || !("uiPreferences" in notebook)) return;
+  delete notebook.uiPreferences;
+}
+
 /** Drops notebook presentation-mode UI state that belongs in browser session storage. */
 function stripSessionOnlyNotebookKeys(settings: Record<string, unknown>): void {
   const notebook = asObject(settings.notebook);
@@ -165,6 +172,25 @@ function stripRetiredSystemCommandSettings(settings: Record<string, unknown>): v
   }
 
   delete agent.search;
+}
+
+/**
+ * Applies the v2 default for user-created terminals.
+ *
+ * Some version-1 profiles persisted the previous home-directory behavior as
+ * an explicit override. Migrating it once lets existing users receive the new
+ * workspace default while preserving any Home choice made after v2.
+ */
+function migrateUserTerminalWorkingDirectory(
+  sourceVersion: number,
+  settings: Record<string, unknown>
+): void {
+  if (sourceVersion >= 2) return;
+
+  const shell = asObject(settings.shell);
+  if (!shell) return;
+
+  shell.userTerminalWorkingDirectory = "workspace";
 }
 
 function normalizeUserDocument(raw: unknown): Record<string, unknown> {
@@ -223,16 +249,20 @@ function normalizeWorkspaceDocument(raw: unknown): Record<string, unknown> {
 
 export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument {
   const normalized = normalizeUserDocument(raw);
+  const sourceVersion =
+    typeof normalized.version === "number" ? normalized.version : 1;
   const settingsObj = asObject(normalized.settings);
   if (settingsObj) {
     stripLegacyAppearanceKeys(settingsObj);
     stripSessionOnlyNotebookKeys(settingsObj);
+    stripRemovedNotebookUiPreferences(settingsObj);
     stripSessionOnlyLayoutKeys(settingsObj);
     stripRemovedTableSettings(settingsObj);
     stripRetiredSystemCommandSettings(settingsObj);
     backfillSignInStepCompletedForExistingUsers(settingsObj);
     backfillExperienceModeChosenForExistingUsers(settingsObj);
     backfillInferenceProviderChosenForExistingUsers(settingsObj);
+    migrateUserTerminalWorkingDirectory(sourceVersion, settingsObj);
   }
   const parsed = UserSettingsDocumentSchema.safeParse(normalized);
   if (parsed.success) {
@@ -267,12 +297,14 @@ export function migrateUserSettingsDocument(raw: unknown): UserSettingsDocument 
 
   stripLegacyAppearanceKeys(partialSettings);
   stripSessionOnlyNotebookKeys(partialSettings);
+  stripRemovedNotebookUiPreferences(partialSettings);
   stripSessionOnlyLayoutKeys(partialSettings);
   stripRemovedTableSettings(partialSettings);
   stripRetiredSystemCommandSettings(partialSettings);
   backfillSignInStepCompletedForExistingUsers(partialSettings);
   backfillExperienceModeChosenForExistingUsers(partialSettings);
   backfillInferenceProviderChosenForExistingUsers(partialSettings);
+  migrateUserTerminalWorkingDirectory(sourceVersion, partialSettings);
 
   const merged = mergeSettings(
     DEFAULT_SETTINGS,

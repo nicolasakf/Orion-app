@@ -143,7 +143,6 @@ async function fetchSubagentStep(
       serverInfo: options.serverInfo,
       jupyterServerIsLocal: options.jupyterServerIsLocal,
       clientPlatformOs: options.clientPlatformOs,
-      notebookUiPreferences: options.uiPreferences,
       modelSettings: options.modelSettings,
       origin: "subagent",
       subagentPrompt: promptPayload,

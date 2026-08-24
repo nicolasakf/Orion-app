@@ -18,7 +18,7 @@ import orionDocsRaw from "./builtin/orion-docs/SKILL.md";
 import orionMetadataRaw from "./builtin/orion-metadata/SKILL.md";
 import orionSettingsRaw from "./builtin/orion-settings/SKILL.md";
 import orionUiRaw from "./builtin/orion-ui/SKILL.md";
-import deepEdaRaw from "./builtin/deep-eda/SKILL.md";
+import exploreRaw from "./builtin/explore/SKILL.md";
 
 /** Converts a bundled SKILL.md file into a registry entry. */
 function parseBuiltinSkill(raw: string): SkillInfo {
@@ -45,5 +45,5 @@ export const BUILTIN_SKILLS: SkillInfo[] = [
   parseBuiltinSkill(orionDocsRaw),
   parseBuiltinSkill(orionMetadataRaw),
   parseBuiltinSkill(orionUiRaw),
-  parseBuiltinSkill(deepEdaRaw),
+  parseBuiltinSkill(exploreRaw),
 ];

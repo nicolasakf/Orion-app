@@ -129,6 +129,10 @@ export interface OverwriteCellSourceEntry {
 export interface OverwriteCellSourceParams {
   /** One or more cells to update, applied in order (last write wins if the same index appears twice). */
   cells: OverwriteCellSourceEntry[];
+  /** Re-run the edited code cells in the same tool call. Handled by the dispatcher. */
+  execute?: boolean;
+  /** Per-cell execution timeout used when `execute` is true. */
+  timeoutSeconds?: number;
 }
 
 /** Single Orion metadata edit entry. */

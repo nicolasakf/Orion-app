@@ -1,15 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { Loader2, Pencil, Save, Trash2 } from "lucide-react";
+import { Loader2, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 
 import { SettingsInfoSectionTitle } from "@/components/settings-dialog/settings-info-label";
 import { SettingsSectionLayout } from "@/components/settings-dialog/settings-section-layout";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { MAX_PERSONAL_CONTEXT_CHARS } from "@/lib/onboarding/personal-context";
+import { useOpenSettings } from "@/contexts/open-settings-context";
+import { PERSONAL_CONTEXT_FILE_CHANGED_EVENT } from "@/lib/onboarding/personal-context-editor-path";
 
 const ProfileResponseSchema = z.object({
   content: z.string(),
@@ -21,24 +21,20 @@ const ProfileResponseSchema = z.object({
 
 const ErrorResponseSchema = z.object({ message: z.string().optional() });
 
-type PersonalContextView = "summary" | "edit";
-
 /** Reads a useful message from a failed personal-context API response. */
 async function readError(response: Response, fallback: string): Promise<string> {
   const parsed = ErrorResponseSchema.safeParse(await response.json().catch(() => null));
   return parsed.success && parsed.data.message ? parsed.data.message : fallback;
 }
 
-/** Settings surface for reading, editing, or deleting `ORION.md`. */
+/** Settings surface for reviewing or deleting `ORION.md`, and opening it in the editor. */
 export function PersonalContextTab() {
-  const [view, setView] = React.useState<PersonalContextView>("summary");
-  const [content, setContent] = React.useState("");
+  const { openPersonalContextFile, onOpenChange } = useOpenSettings();
   const [exists, setExists] = React.useState(false);
   const [updatedAt, setUpdatedAt] = React.useState<string | undefined>();
   const [truncated, setTruncated] = React.useState(false);
   const [blockedForModel, setBlockedForModel] = React.useState(false);
   const [isLoading, setIsLoading] = React.useState(true);
-  const [isSaving, setIsSaving] = React.useState(false);
 
   /** Reloads the local personal-context file after interview or editor changes. */
   const loadProfile = React.useCallback(async () => {
@@ -49,7 +45,6 @@ export function PersonalContextTab() {
         throw new Error(await readError(response, "Could not load personal context."));
       }
       const result = ProfileResponseSchema.parse(await response.json());
-      setContent(result.content);
       setExists(result.exists);
       setUpdatedAt(result.updatedAt);
       setTruncated(result.truncated);
@@ -65,27 +60,11 @@ export function PersonalContextTab() {
     void loadProfile();
   }, [loadProfile]);
 
-  /** Saves direct Markdown edits to `ORION.md`. */
-  const saveProfile = React.useCallback(async () => {
-    setIsSaving(true);
-    try {
-      const response = await fetch("/api/onboarding/profile", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content }),
-      });
-      if (!response.ok) {
-        throw new Error(await readError(response, "Could not save personal context."));
-      }
-      toast.success("Personal context saved");
-      await loadProfile();
-      setView("summary");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not save personal context.");
-    } finally {
-      setIsSaving(false);
-    }
-  }, [content, loadProfile]);
+  /** Opens `ORION.md` in the main editor and closes settings. */
+  const openInEditor = React.useCallback(() => {
+    openPersonalContextFile();
+    onOpenChange(false);
+  }, [onOpenChange, openPersonalContextFile]);
 
   /** Deletes the profile after an explicit confirmation. */
   const deleteProfile = React.useCallback(async () => {
@@ -96,6 +75,7 @@ export function PersonalContextTab() {
       return;
     }
     toast.success("Personal context deleted");
+    window.dispatchEvent(new CustomEvent(PERSONAL_CONTEXT_FILE_CHANGED_EVENT));
     await loadProfile();
   }, [loadProfile]);
 
@@ -111,29 +91,6 @@ export function PersonalContextTab() {
           <div className="flex min-h-40 items-center justify-center text-sm text-muted-foreground">
             <Loader2 className="mr-2 size-4 animate-spin" />
             Loading personal context…
-          </div>
-        ) : view === "edit" ? (
-          <div className="space-y-3">
-            <Textarea
-              aria-label="Personal context Markdown"
-              value={content}
-              onChange={(event) => setContent(event.target.value)}
-              className="min-h-80 resize-y font-mono text-xs"
-              maxLength={MAX_PERSONAL_CONTEXT_CHARS}
-            />
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-              <span>{content.length.toLocaleString()} / {MAX_PERSONAL_CONTEXT_CHARS.toLocaleString()}</span>
-              <span>Never store passwords, tokens, or API keys here.</span>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Button type="button" variant="outline" disabled={isSaving} onClick={() => { setView("summary"); void loadProfile(); }}>
-                Cancel
-              </Button>
-              <Button type="button" disabled={isSaving || !content.trim()} onClick={() => void saveProfile()}>
-                {isSaving ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Save className="mr-2 size-4" />}
-                Save ORION.md
-              </Button>
-            </div>
           </div>
         ) : (
           <div className="space-y-4">
@@ -160,13 +117,13 @@ export function PersonalContextTab() {
                 <>
                   <p className="text-sm font-medium">No personal context saved yet</p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    Create ORION.md here, or ask Orion in chat to remember something.
+                    Create ORION.md in the editor, or ask Orion in chat to remember something.
                   </p>
                 </>
               )}
             </div>
             <div className="flex flex-wrap gap-2">
-              <Button type="button" onClick={() => setView("edit")}>
+              <Button type="button" onClick={openInEditor}>
                 <Pencil className="mr-2 size-4" />
                 {exists ? "Edit ORION.md" : "Create ORION.md"}
               </Button>

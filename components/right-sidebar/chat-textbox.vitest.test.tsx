@@ -1,5 +1,11 @@
 import * as React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { Brain } from "lucide-react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -35,7 +41,7 @@ const models: LLM[] = [
 ];
 
 function createTextboxProps(
-  props: Partial<React.ComponentProps<typeof ChatTextbox>> = {}
+  props: Partial<React.ComponentProps<typeof ChatTextbox>> = {},
 ): React.ComponentProps<typeof ChatTextbox> {
   const textareaRef = React.createRef<HTMLTextAreaElement>();
   return {
@@ -60,7 +66,7 @@ function createTextboxProps(
 }
 
 function renderTextbox(
-  props: Partial<React.ComponentProps<typeof ChatTextbox>> = {}
+  props: Partial<React.ComponentProps<typeof ChatTextbox>> = {},
 ) {
   return render(<ChatTextbox {...createTextboxProps(props)} />);
 }
@@ -73,10 +79,16 @@ describe("ChatTextbox attachments", () => {
   it("opens the hidden file input through the plus button", () => {
     const onAttachFiles = vi.fn();
     const { container } = renderTextbox({ onAttachFiles });
-    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
-    const clickSpy = vi.spyOn(fileInput, "click").mockImplementation(() => undefined);
+    const fileInput = container.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const clickSpy = vi
+      .spyOn(fileInput, "click")
+      .mockImplementation(() => undefined);
 
-    fireEvent.click(screen.getByRole("button", { name: "Attach external file" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Attach external file" }),
+    );
 
     expect(clickSpy).toHaveBeenCalledOnce();
   });
@@ -84,7 +96,9 @@ describe("ChatTextbox attachments", () => {
   it("passes selected files to the parent", () => {
     const onAttachFiles = vi.fn();
     const { container } = renderTextbox({ onAttachFiles });
-    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const fileInput = container.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
     const file = new File(["hello"], "notes.txt", { type: "text/plain" });
 
     fireEvent.change(fileInput, { target: { files: [file] } });
@@ -182,13 +196,17 @@ describe("ChatTextbox attachments", () => {
 
     expect(screen.getByText("chart.png")).toBeInTheDocument();
 
-    fireEvent.mouseDown(screen.getByRole("button", { name: "Remove chart.png" }));
+    fireEvent.mouseDown(
+      screen.getByRole("button", { name: "Remove chart.png" }),
+    );
 
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
   });
 
   it("blocks file selection and submission while attachments are processing", () => {
-    const handleSubmit = vi.fn((event: React.FormEvent) => event.preventDefault());
+    const handleSubmit = vi.fn((event: React.FormEvent) =>
+      event.preventDefault(),
+    );
     const onAttachFiles = vi.fn();
     const { container } = renderTextbox({
       input: "Analyze this file",
@@ -196,15 +214,23 @@ describe("ChatTextbox attachments", () => {
       onAttachFiles,
       isAttachmentUploadActive: true,
     });
-    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
-    const clickSpy = vi.spyOn(fileInput, "click").mockImplementation(() => undefined);
+    const fileInput = container.querySelector(
+      'input[type="file"]',
+    ) as HTMLInputElement;
+    const clickSpy = vi
+      .spyOn(fileInput, "click")
+      .mockImplementation(() => undefined);
     const form = container.querySelector("form") as HTMLFormElement;
 
     expect(fileInput).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Attach external file" })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Attach external file" }),
+    ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Send message" })).toBeDisabled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Attach external file" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Attach external file" }),
+    );
     fireEvent.submit(form);
     const droppedFile = new File(["next"], "next.txt", { type: "text/plain" });
     const dropHandled = fireEvent.drop(form, {
@@ -218,6 +244,20 @@ describe("ChatTextbox attachments", () => {
     expect(handleSubmit).not.toHaveBeenCalled();
     expect(onAttachFiles).not.toHaveBeenCalled();
     expect(dropHandled).toBe(false);
+  });
+});
+
+describe("ChatTextbox interaction modes", () => {
+  it("shows Goal in the selector and selects it like another interaction mode", () => {
+    const onInteractionModeChange = vi.fn();
+    renderTextbox({ onInteractionModeChange });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Interaction mode: Agent" }),
+    );
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Goal" }));
+
+    expect(onInteractionModeChange).toHaveBeenCalledWith("Goal");
   });
 });
 
@@ -262,9 +302,7 @@ describe("ChatTextbox generation state", () => {
     const props = createTextboxProps({ isLoading: true, onStop });
     const { rerender } = render(<ChatTextbox {...props} />);
 
-    expect(
-      screen.getByPlaceholderText("Queue a message")
-    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Queue a message")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Stop generation" }));
     expect(onStop).toHaveBeenCalledOnce();
@@ -272,9 +310,13 @@ describe("ChatTextbox generation state", () => {
     rerender(<ChatTextbox {...props} isLoading={false} />);
 
     expect(
-      screen.getByPlaceholderText("Type a message · / for commands · @ for mentions")
+      screen.getByPlaceholderText(
+        "Type a message · / for commands · @ for mentions",
+      ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Send message" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Send message" }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -287,10 +329,14 @@ describe("ChatTextbox model intelligence settings", () => {
       onModelSettingsChange,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Intelligence level: Low" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Intelligence level: Low" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "High" }));
 
-    expect(onModelSettingsChange).toHaveBeenCalledWith({ reasoningEffort: "high" });
+    expect(onModelSettingsChange).toHaveBeenCalledWith({
+      reasoningEffort: "high",
+    });
   });
 
   it("uses OpenAI's xhigh API value for the Extra High level", () => {
@@ -301,10 +347,14 @@ describe("ChatTextbox model intelligence settings", () => {
       onModelSettingsChange,
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Intelligence level: High" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Intelligence level: High" }),
+    );
     fireEvent.click(screen.getByRole("button", { name: "Extra High" }));
 
-    expect(onModelSettingsChange).toHaveBeenCalledWith({ reasoningEffort: "xhigh" });
+    expect(onModelSettingsChange).toHaveBeenCalledWith({
+      reasoningEffort: "xhigh",
+    });
   });
 
   it("uses the exact model's catalog levels instead of name heuristics", () => {
@@ -323,58 +373,83 @@ describe("ChatTextbox model intelligence settings", () => {
       ],
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Intelligence level: Medium" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Intelligence level: Medium" }),
+    );
 
     expect(screen.getByRole("button", { name: "High" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Extra High" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Extra High" }),
+    ).not.toBeInTheDocument();
   });
 
   it("hides Intelligence for budget-only and unverified Vercel models", () => {
     const { rerender } = renderTextbox({
       selectedModelProvider: "google",
       selectedModel: "gemini-budget",
-      models: [{
-        value: "gemini-budget",
-        label: "Gemini Budget",
-        provider: "google",
-        reasoningOptions: [{ type: "budget_tokens", min: 0, max: 24_576 }],
-      }],
+      models: [
+        {
+          value: "gemini-budget",
+          label: "Gemini Budget",
+          provider: "google",
+          reasoningOptions: [{ type: "budget_tokens", min: 0, max: 24_576 }],
+        },
+      ],
     });
 
-    expect(screen.queryByRole("button", { name: /Intelligence level:/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Intelligence level:/ }),
+    ).not.toBeInTheDocument();
 
-    rerender(<ChatTextbox {...createTextboxProps({
-      selectedModelProvider: "vercel",
-      selectedModel: "moonshotai/kimi-test",
-      models: [{
-        value: "moonshotai/kimi-test",
-        label: "Kimi Test",
-        provider: "vercel",
-        reasoningOptions: [{ type: "effort", values: ["low", "high"] }],
-      }],
-    })} />);
+    rerender(
+      <ChatTextbox
+        {...createTextboxProps({
+          selectedModelProvider: "vercel",
+          selectedModel: "moonshotai/kimi-test",
+          models: [
+            {
+              value: "moonshotai/kimi-test",
+              label: "Kimi Test",
+              provider: "vercel",
+              reasoningOptions: [{ type: "effort", values: ["low", "high"] }],
+            },
+          ],
+        })}
+      />,
+    );
 
-    expect(screen.queryByRole("button", { name: /Intelligence level:/ })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Intelligence level:/ }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows catalog-driven levels for a verified Vercel model", () => {
     renderTextbox({
       selectedModelProvider: "vercel",
       selectedModel: "google/gemini-test",
-      models: [{
-        value: "google/gemini-test",
-        label: "Gemini Test",
-        provider: "vercel",
-        reasoningOptions: [
-          { type: "effort", values: ["minimal", "low", "medium", "high", "xhigh"] },
-        ],
-      }],
+      models: [
+        {
+          value: "google/gemini-test",
+          label: "Gemini Test",
+          provider: "vercel",
+          reasoningOptions: [
+            {
+              type: "effort",
+              values: ["minimal", "low", "medium", "high", "xhigh"],
+            },
+          ],
+        },
+      ],
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Intelligence level: Medium" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Intelligence level: Medium" }),
+    );
     expect(screen.getByRole("button", { name: "Minimal" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "High" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Extra High" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Extra High" }),
+    ).not.toBeInTheDocument();
   });
 
   it("changes intelligence with left and right arrows in an empty chat", () => {
@@ -389,10 +464,7 @@ describe("ChatTextbox model intelligence settings", () => {
     const textarea = screen.getByRole("textbox");
     fireEvent.keyDown(textarea, { key: "ArrowRight" });
     rerender(
-      <ChatTextbox
-        {...props}
-        modelSettings={{ reasoningEffort: "high" }}
-      />
+      <ChatTextbox {...props} modelSettings={{ reasoningEffort: "high" }} />,
     );
     fireEvent.keyDown(textarea, { key: "ArrowLeft" });
 
@@ -538,13 +610,10 @@ describe("ChatTextbox slash commands", () => {
 
     const descriptionCard = screen.getByText(
       (content, element) =>
-        element?.tagName === "P" && content.trim() === description.trim()
+        element?.tagName === "P" && content.trim() === description.trim(),
     );
 
-    expect(descriptionCard).toHaveClass(
-      "overflow-y-auto",
-      "break-words"
-    );
+    expect(descriptionCard).toHaveClass("overflow-y-auto", "break-words");
     await waitFor(() => {
       expect(descriptionCard.style.maxHeight).toMatch(/px$/);
     });

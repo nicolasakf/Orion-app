@@ -14,7 +14,7 @@ import {
   buildAgentSystemPrompt,
   buildAskModeSystemPrompt,
   buildEditModeSystemPrompt,
-  buildResearchModeSystemPrompt,
+  buildExploreModeSystemPrompt,
 } from "./agent-system-prompt";
 import { buildSubagentSystemPrompt } from "./subagents";
 import type { AgentRule } from "./rules";
@@ -34,7 +34,7 @@ describe("parallel tool call guidance", () => {
       buildAgentSystemPrompt(),
       buildAskModeSystemPrompt(),
       buildEditModeSystemPrompt(),
-      buildResearchModeSystemPrompt(),
+      buildExploreModeSystemPrompt(),
       buildSubagentSystemPrompt({
         subagent: {
           name: "analyst",
@@ -55,55 +55,11 @@ describe("parallel tool call guidance", () => {
   });
 });
 
-describe("UI generation preferences", () => {
-  const uiPreferences = {
-    charts: "Altair",
-    tables: "Great Tables",
-    otherElements: "Orion UI",
-  };
-
-  it("injects configured libraries into every main interaction mode", () => {
-    for (const prompt of [
-      buildAgentSystemPrompt({ uiPreferences }),
-      buildResearchModeSystemPrompt({ uiPreferences }),
-      buildAskModeSystemPrompt({ uiPreferences }),
-      buildEditModeSystemPrompt({ uiPreferences }),
-    ]) {
-      expect(prompt).toContain("## UI Generation Preferences");
-      expect(prompt).toContain('Charts: "Altair"');
-      expect(prompt).toContain('Tables: "Great Tables"');
-      expect(prompt).toContain('Other UI elements');
-      expect(prompt).toContain('"Orion UI"');
-    }
-  });
-
-  it("passes configured libraries to notebook-defined sub-agents", () => {
-    const prompt = buildSubagentSystemPrompt({
-      subagent: {
-        name: "analyst",
-        label: "Analyst",
-        originalNotebookPath: ".agents/subagents/analyst.agent.ipynb",
-        tmpNotebookPath: ".agents/subagents/tmp/analyst/run.ipynb",
-        systemPrompt: "Analyze carefully.",
-      },
-      uiPreferences,
-    });
-
-    expect(prompt).toContain("## UI Generation Preferences");
-    expect(prompt).toContain('Charts: "Altair"');
-    expect(prompt).toContain('Tables: "Great Tables"');
-  });
-
-  it("omits the section when no preferences are supplied", () => {
-    expect(buildAgentSystemPrompt()).not.toContain("## UI Generation Preferences");
-  });
-});
-
 describe("user-facing terminology", () => {
   it("injects Orion notebook terminology only in Business View mode", () => {
     const businessPrompt = buildAgentSystemPrompt({ businessExperienceMode: true });
     const defaultPrompt = buildAgentSystemPrompt();
-    const researchPrompt = buildResearchModeSystemPrompt();
+    const researchPrompt = buildExploreModeSystemPrompt();
 
     expect(businessPrompt).toContain("## User-Facing Terminology");
     expect(businessPrompt).toContain("Internally, you are working with **Jupyter notebooks**");
@@ -158,7 +114,7 @@ describe("personal context prompt injection", () => {
   it("always requires the dedicated tool for agent-authored memory updates", () => {
     for (const prompt of [
       buildAgentSystemPrompt(),
-      buildResearchModeSystemPrompt(),
+      buildExploreModeSystemPrompt(),
       buildAskModeSystemPrompt(),
       buildEditModeSystemPrompt(),
     ]) {
@@ -171,7 +127,7 @@ describe("personal context prompt injection", () => {
   it("injects ORION.md into every main mode without treating it as authorization", () => {
     for (const prompt of [
       buildAgentSystemPrompt({ personalContext: "The user manages retail operations." }),
-      buildResearchModeSystemPrompt({ personalContext: "The user manages retail operations." }),
+      buildExploreModeSystemPrompt({ personalContext: "The user manages retail operations." }),
       buildAskModeSystemPrompt({ personalContext: "The user manages retail operations." }),
       buildEditModeSystemPrompt({ personalContext: "The user manages retail operations." }),
     ]) {
@@ -247,9 +203,9 @@ describe("Ask mode skills", () => {
   });
 });
 
-describe("Research mode prompt", () => {
+describe("Explore mode prompt", () => {
   it("frames research as iterative coherent steps without numeric batch limits", () => {
-    const prompt = buildResearchModeSystemPrompt();
+    const prompt = buildExploreModeSystemPrompt();
 
     expect(prompt).toContain("Do not draft the whole notebook up front");
     expect(prompt).toContain("document the observation and decision");
@@ -273,8 +229,8 @@ describe("Business View mode prompt", () => {
   it("omits Business View mode guidance in the default experience", () => {
     expect(buildAgentSystemPrompt()).not.toContain("## Business Audience");
     expect(buildAgentSystemPrompt()).not.toContain("## Business View Mode");
-    expect(buildResearchModeSystemPrompt()).not.toContain("## Business Audience");
-    expect(buildResearchModeSystemPrompt()).not.toContain("## Business View Mode");
+    expect(buildExploreModeSystemPrompt()).not.toContain("## Business Audience");
+    expect(buildExploreModeSystemPrompt()).not.toContain("## Business View Mode");
   });
 });
 

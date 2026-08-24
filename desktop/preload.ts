@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld("orionDesktopShell", {
     ipcRenderer.invoke("orion:shell:open-workspace-path", request),
   reloadIgnoringCache: (): Promise<void> =>
     ipcRenderer.invoke("orion:shell:reload-ignoring-cache"),
+  capturePageRegion: (request: { x: number; y: number; width: number; height: number }) =>
+    ipcRenderer.invoke("orion:shell:capture-page-region", request),
   onOpenSettings: (listener: () => void) => {
     const handler = () => listener();
     ipcRenderer.on("orion:settings:open", handler);

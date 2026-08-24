@@ -1,13 +1,14 @@
 import "server-only";
 
 import type { ModelMessage } from "@ai-sdk/provider-utils";
+import type { ToolSet } from "ai";
 
 import {
   buildAgentEnvironmentContextPrompt,
   buildAgentSystemPrompt,
   buildAskModeSystemPrompt,
   buildEditModeSystemPrompt,
-  buildResearchModeSystemPrompt,
+  buildExploreModeSystemPrompt,
   buildSubagentSystemPrompt,
 } from "@/lib/agent/agent-system-prompt";
 import type { InteractionModeConfig } from "@/lib/agent/interaction-modes";
@@ -25,11 +26,22 @@ import {
 } from "@/lib/agent/research-session";
 import type { SubagentPromptPayload } from "@/lib/agent/subagents";
 import type { JupyterServerInfo } from "@/lib/kernel/kernel-service";
-import type {
-  AgentCommunicationStyle,
-  NotebookUiPreferences,
-} from "@/lib/settings/schema";
+import type { AgentCommunicationStyle } from "@/lib/settings/schema";
 import type { PlatformOS } from "@/lib/utils";
+import { orionTools } from "@/lib/agent/tool-schemas";
+import { buildAskQuestionTool } from "@/lib/agent/ask-question";
+import type { GoalContinuation, GoalEvaluationRequest } from "@/lib/agent/goals/types";
+import {
+  GOAL_CONTRACT_AUTHOR_MAX_INVESTIGATION_STEPS,
+  GOAL_CONTRACT_AUTHOR_ORION_TOOL_NAMES,
+  GOAL_CONTRACT_PROPOSAL_TOOL_NAME,
+  goalContractAuthorTools,
+} from "@/lib/agent/goals/contract-author";
+import {
+  buildGoalContractAuthorPrompt,
+  buildGoalEvaluatorPrompt,
+  buildGoalWorkerContinuationPrompt,
+} from "@/lib/agent/goals/prompts";
 
 export interface PrepareChatInvocationInput {
   messages: ModelMessage[];
@@ -62,22 +74,50 @@ export interface PrepareChatInvocationInput {
   clientPlatformOs?: PlatformOS;
   communicationStyle: AgentCommunicationStyle;
   customCommunicationStyle?: string;
-  uiPreferences?: NotebookUiPreferences;
   businessExperienceMode: boolean;
   researchSession?: ResearchSessionSnapshot;
   researchNudge?: ResearchNudge;
   automaticContinuationAttempt: number;
   automaticContinuationReason: string;
   canForceToolChoice: boolean;
+  /** Effective `agent.execution.maxQuestionsPerAsk`; sizes the `ask_question` schema. */
+  maxQuestionsPerAsk?: number;
   hasDelegatedForcedSubagent: boolean;
+  goalContractDraft?: boolean;
+  goalEvaluation?: GoalEvaluationRequest;
+  goalContinuation?: GoalContinuation;
 }
 
 export interface PreparedChatInvocation extends GatewayResponse {
   agentSystemPrompt?: string;
-  tools: ReturnType<typeof getToolsForInteractionMode>;
+  tools: ToolSet;
   toolChoice:
     | "auto"
-    | { type: "tool"; toolName: "delegate" | "load_skill" };
+    | {
+        type: "tool";
+        toolName:
+          | "delegate"
+          | "load_skill"
+          | typeof GOAL_CONTRACT_PROPOSAL_TOOL_NAME;
+      };
+}
+
+/**
+ * Rebuilds `ask_question` for the user's configured per-call question limit.
+ *
+ * `orionTools` is a static registry, so it can only carry the default limit.
+ * The setting has to reach the model as a real schema bound and a real number in
+ * the description, which means substituting the tool per request.
+ *
+ * @param tools - Tools resolved for the active interaction mode
+ * @param maxQuestions - Effective limit, or undefined to keep the default tool
+ */
+function withAskQuestionLimit(
+  tools: Partial<typeof orionTools>,
+  maxQuestions: number | undefined
+): Partial<typeof orionTools> {
+  if (maxQuestions === undefined || !("ask_question" in tools)) return tools;
+  return { ...tools, ask_question: buildAskQuestionTool(maxQuestions) };
 }
 
 /**
@@ -104,7 +144,6 @@ export function prepareChatInvocation(
     clientPlatformOs: input.clientPlatformOs,
     communicationStyle: input.communicationStyle,
     customCommunicationStyle: input.customCommunicationStyle,
-    uiPreferences: input.uiPreferences,
     customSystemPrompt: input.interactionMode.customSystemPrompt,
     // Capability wording is derived from the mode's real configuration, which
     // users can customize per mode — including for the built-ins.
@@ -119,8 +158,33 @@ export function prepareChatInvocation(
     enableSubagents,
   };
 
+  // Authoring must terminate: once the author has spent its investigation budget
+  // the proposal tool is both demanded in prose and forced through tool choice.
+  const goalContractInvestigationBudgetSpent =
+    input.goalContractDraft === true &&
+    input.automaticContinuationReason === "goal_contract_investigation_budget_spent";
+
   let agentSystemPrompt: string | undefined;
-  if ((effectiveMode === "Research" || effectiveMode === "Agent") &&
+  if (input.origin === "goal_evaluation" && input.goalEvaluation) {
+    agentSystemPrompt = buildGoalEvaluatorPrompt({
+      ...input.goalEvaluation,
+      workspaceDirectory: input.workspaceDirectory,
+    });
+  } else if (input.goalContractDraft) {
+    agentSystemPrompt = buildGoalContractAuthorPrompt({
+      agentPrompt: buildAgentSystemPrompt({
+        ...sharedPromptOptions,
+        modeToolNames: GOAL_CONTRACT_AUTHOR_ORION_TOOL_NAMES,
+        bashPolicy: "read_only",
+        availableSubagents: [],
+        enableSubagents: false,
+      }),
+      investigationBudget: GOAL_CONTRACT_AUTHOR_MAX_INVESTIGATION_STEPS,
+      requireStructuredRetry:
+        input.automaticContinuationReason === "goal_contract_proposal_required",
+      investigationBudgetSpent: goalContractInvestigationBudgetSpent,
+    });
+  } else if ((effectiveMode === "Explore" || effectiveMode === "Agent") &&
       input.origin === "subagent" && input.subagentPrompt) {
     // A sub-agent must work only in its temporary notebook copy. The parent's
     // editor context describes the user's GUI, so passing it through would add
@@ -151,10 +215,9 @@ export function prepareChatInvocation(
       forcedSkillNames: input.missingForcedSkillNames,
       rootDirectory: input.rootDirectory,
       personalContext: input.personalContext,
-      uiPreferences: input.uiPreferences,
     });
-  } else if (effectiveMode === "Research") {
-    agentSystemPrompt = buildResearchModeSystemPrompt(sharedPromptOptions);
+  } else if (effectiveMode === "Explore") {
+    agentSystemPrompt = buildExploreModeSystemPrompt(sharedPromptOptions);
   } else if (effectiveMode === "Agent") {
     agentSystemPrompt = buildAgentSystemPrompt(sharedPromptOptions);
   } else if (effectiveMode === "Ask") {
@@ -163,7 +226,7 @@ export function prepareChatInvocation(
     agentSystemPrompt = buildEditModeSystemPrompt(sharedPromptOptions);
   }
 
-  if (effectiveMode === "Research" && input.researchSession && agentSystemPrompt) {
+  if (effectiveMode === "Explore" && input.researchSession && agentSystemPrompt) {
     const sessionPrompt = summarizeResearchSessionForPrompt({
       session: input.researchSession,
       nudge: input.researchNudge,
@@ -174,6 +237,15 @@ export function prepareChatInvocation(
       }.`
       : "";
     agentSystemPrompt += `\n\n${sessionPrompt}${continuationNote}`;
+  }
+
+  if (
+    input.goalContinuation &&
+    input.origin !== "goal_evaluation" &&
+    input.origin !== "subagent" &&
+    agentSystemPrompt
+  ) {
+    agentSystemPrompt += `\n\n${buildGoalWorkerContinuationPrompt(input.goalContinuation)}`;
   }
 
   const gateway = getModelGateway();
@@ -197,6 +269,9 @@ export function prepareChatInvocation(
   if (input.origin === "subagent") {
     unusableTools.add("update_memory");
     unusableTools.add("delegate");
+    // A sub-agent runs without a chat transcript of its own, so nothing would
+    // ever render its questionnaire or answer it.
+    unusableTools.add("ask_question");
   } else if (!hasDelegationTarget) {
     unusableTools.add("delegate");
   }
@@ -210,13 +285,28 @@ export function prepareChatInvocation(
       (toolName) => !unusableTools.has(toolName)
     ),
   };
-  const tools = getToolsForInteractionMode(toolMode);
+  const tools: ToolSet = input.origin === "goal_evaluation"
+    ? {
+        read_file: orionTools.read_file,
+        read_notebook: orionTools.read_notebook,
+        read_cell: orionTools.read_cell,
+        read_cell_output: orionTools.read_cell_output,
+        inspect_output: orionTools.inspect_output,
+      }
+    : input.goalContractDraft
+      ? goalContractAuthorTools
+      : withAskQuestionLimit(
+          getToolsForInteractionMode(toolMode),
+          input.maxQuestionsPerAsk
+        );
   const requestedToolChoice: PreparedChatInvocation["toolChoice"] =
-    enableSubagents && input.forcedSubagentName && !input.hasDelegatedForcedSubagent
-      ? { type: "tool", toolName: "delegate" }
-      : input.missingForcedSkillNames.length > 0
-        ? { type: "tool", toolName: "load_skill" }
-        : "auto";
+    goalContractInvestigationBudgetSpent
+      ? { type: "tool", toolName: GOAL_CONTRACT_PROPOSAL_TOOL_NAME }
+      : enableSubagents && input.forcedSubagentName && !input.hasDelegatedForcedSubagent
+        ? { type: "tool", toolName: "delegate" }
+        : input.missingForcedSkillNames.length > 0
+          ? { type: "tool", toolName: "load_skill" }
+          : "auto";
 
   return {
     ...prepared,

@@ -1,15 +1,17 @@
 "use client";
 
 import * as React from "react";
-import { useState, useEffect, useLayoutEffect, useRef, useCallback } from "react";
+import {
+  useState,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useCallback,
+} from "react";
 import { flushSync } from "react-dom";
 import { useChat } from "@ai-sdk/react";
-import {
-  type UIMessage,
-  type FileUIPart,
-  DefaultChatTransport,
-} from "ai";
-import { Bot, ChevronLeft } from "lucide-react";
+import { type UIMessage, type FileUIPart, DefaultChatTransport } from "ai";
+import { Bot, ChevronLeft, Target } from "lucide-react";
 
 import { toast } from "sonner";
 import {
@@ -62,7 +64,10 @@ import {
   runContextRecoveryAttempt,
 } from "@/lib/chat/context-recovery";
 import { compactConversation } from "@/lib/agent/context-manager";
-import { buildWirePayload, stripAllRasterData } from "@/lib/agent/context-optimizer";
+import {
+  buildWirePayload,
+  stripAllRasterData,
+} from "@/lib/agent/context-optimizer";
 import { resolveModelDisplayLabel } from "@/lib/agent/model-display-label";
 import { getLocalModelLabel } from "@/lib/agent/local-model-labels";
 import {
@@ -82,12 +87,16 @@ import { useAssistantChatOptional } from "@/lib/agent";
 import type { AgentRule } from "@/lib/agent/rules";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import { getMissingToolRuntimeDependency } from "@/lib/agent/tool-runtime-readiness";
-import { isAbsoluteAgentPath, toAgentAbsolutePath } from "@/lib/agent/path-resolver";
+import {
+  isAbsoluteAgentPath,
+  toAgentAbsolutePath,
+} from "@/lib/agent/path-resolver";
 import {
   normalizeInteractionModeConfigs,
   resolveInteractionModeConfig,
   resolveSelectorInteractionModeId,
 } from "@/lib/agent/interaction-modes";
+import { modeAllowsChainedCellExecution } from "@/lib/agent/mode-capabilities";
 import { isReadOnlyBashBlocked } from "@/lib/agent/read-only-bash-guard";
 import { restoreEditCheckpoint } from "@/lib/agent/edit-checkpoint-restore";
 import { prepareToolResultForModel } from "@/lib/agent/visual-evidence";
@@ -103,6 +112,7 @@ import {
 } from "@/lib/agent/research-session";
 import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
 import { needsApproval } from "@/lib/agent/tool-approval";
+import type { AskQuestionResult } from "@/lib/agent/ask-question";
 import {
   OrderedToolExecutionScheduler,
   throwIfToolExecutionAborted,
@@ -137,6 +147,44 @@ import {
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import {
+  createGoalSession,
+  endGoalSupervision,
+  failGoalEvaluation,
+  finishGoalEvaluation,
+  pauseGoalSupervision,
+  startGoalEvaluation,
+} from "@/lib/agent/goals/controller";
+import {
+  buildGoalArtifactManifest,
+  scanGoalWorkspace,
+} from "@/lib/agent/goals/manifest";
+import {
+  isRecoverableGoalEvaluationError,
+  runGoalEvaluation,
+  trimGoalEvaluatorTranscript,
+} from "@/lib/agent/goals/evaluator-runner";
+import {
+  GoalContractSchema,
+  type GoalContinuation,
+  type GoalSession,
+} from "@/lib/agent/goals/types";
+import {
+  GOAL_CONTRACT_AUTHOR_MAX_INVESTIGATION_STEPS,
+  GOAL_CONTRACT_PROPOSAL_TOOL_NAME,
+  applyGoalContractProposalResult,
+  countGoalContractAuthorInvestigationSteps,
+  deriveGoalContractDraftState,
+  findGoalContractProposal,
+  findGoalContractProposalPart,
+  lastAssistantTurnHasGoalContractProposal,
+} from "@/lib/agent/goals/contract-author";
+import {
+  loadGoalSession,
+  removeGoalSession,
+  persistGoalSession,
+} from "@/lib/agent/goals/storage.client";
+import { buildGoalSupervisorMessages } from "@/lib/agent/goals/supervisor-transcript";
 
 import { runSubagent } from "@/lib/agent/subagents/client-runner";
 import { getSubagentStepDescription } from "./tool-invocation-helpers";
@@ -155,6 +203,7 @@ import {
 } from "./assistant-activity-grouping";
 import {
   getCompletedToolContinuationKey,
+  getTranscriptProgressCount,
   shouldContinueAfterToolCalls,
 } from "./assistant-turn-state";
 import { useContextUsage } from "./use-context-usage";
@@ -179,13 +228,20 @@ import type {
 
 import type { SettingsTab } from "@/components/settings-dialog/types";
 import {
+  loadGoalEvaluatorModelFromSession,
   loadModelSettingsMapFromSession,
   loadSelectedModelFromSession,
   resolveSelectedModelFallback,
+  saveGoalEvaluatorModelToSession,
   saveModelSettingsMapToSession,
   saveSelectedModelToSession,
 } from "./model-selection";
 import { resolveTitleGenerationModel } from "./title-generation-model";
+import { GoalStatusBar } from "./goal-status-bar";
+import {
+  resolveGoalModeSubmission,
+  type GoalModeActivation,
+} from "./goal-mode-submission";
 import {
   findModelBySelectionKey,
   formatModelSelectionKey,
@@ -199,9 +255,10 @@ function appendDraftForPreflight(
   messages: UIMessage[],
   text: string,
   files: FileUIPart[],
-  references: ResolvedChatReference[]
+  references: ResolvedChatReference[],
 ): UIMessage[] {
-  if (!text.trim() && files.length === 0 && references.length === 0) return messages;
+  if (!text.trim() && files.length === 0 && references.length === 0)
+    return messages;
   return [
     ...messages,
     {
@@ -217,6 +274,19 @@ function appendDraftForPreflight(
 }
 
 const MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS = 1;
+const MAX_GOAL_CONTRACT_PROPOSAL_RETRIES = 2;
+const CANCELLED_TOOL_RESULT = { error: "cancelled_by_user" } as const;
+const REJECTED_TOOL_RESULT = { error: "rejected_by_user" } as const;
+
+/** Stable retry key shared by every prose-only response to one contract instruction. */
+function getGoalContractProposalRetryKey(messages: UIMessage[]): string | null {
+  const latestUserMessage = messages.findLast(
+    (message) => message.role === "user",
+  );
+  return latestUserMessage
+    ? `goal-contract:proposal:${latestUserMessage.id}`
+    : null;
+}
 
 /**
  * Extract assistant text from `/api/chat` stream responses for title generation.
@@ -259,7 +329,8 @@ function parseTitleFromChatStreamResponse(raw: string): string {
           textDelta?: string;
         };
         if (data.type === "text" && data.text) out += data.text;
-        else if (data.type === "text-delta" && data.textDelta) out += data.textDelta;
+        else if (data.type === "text-delta" && data.textDelta)
+          out += data.textDelta;
       } catch {
         // skip
       }
@@ -310,14 +381,22 @@ function truncatePreview(text: string, maxLength = 900): string {
   return `${compact.slice(0, maxLength - 1)}…`;
 }
 
-function notebookCellSourcePreview(cell: NotebookType["cells"][number], maxLength = 900): string {
+function notebookCellSourcePreview(
+  cell: NotebookType["cells"][number],
+  maxLength = 900,
+): string {
   const source = cell.source.join("");
   return truncatePreview(source || "(empty cell)", maxLength);
 }
 
-function notebookCellDescription(cell: NotebookType["cells"][number], index: number): string {
+function notebookCellDescription(
+  cell: NotebookType["cells"][number],
+  index: number,
+): string {
   const firstLine = cell.source.join("").trim().split(/\r?\n/).find(Boolean);
-  const sourceSummary = firstLine ? truncatePreview(firstLine, 160) : "empty cell";
+  const sourceSummary = firstLine
+    ? truncatePreview(firstLine, 160)
+    : "empty cell";
   return `${cell.cell_type} cell #${index + 1}: ${sourceSummary}`;
 }
 
@@ -330,7 +409,7 @@ function formatLineRange(lineStart: number, lineEnd: number): string {
 function formatFileSelectionReferenceLabel(
   path: string,
   lineStart: number,
-  lineEnd: number
+  lineEnd: number,
 ): string {
   return `${fileNameFromPath(path)}:${formatLineRange(lineStart, lineEnd)}`;
 }
@@ -339,7 +418,7 @@ function formatFileSelectionReferenceLabel(
 function formatCellSelectionReferenceLabel(
   cellIndex: number,
   lineStart: number,
-  lineEnd: number
+  lineEnd: number,
 ): string {
   return `${formatCellReferenceLabel([cellIndex])}:${formatLineRange(lineStart, lineEnd)}`;
 }
@@ -357,7 +436,7 @@ function hashConversationSelection(value: string): string {
 function formatConversationSelectionReferenceLabel(
   source: "assistant" | "tool",
   messageIndex: number,
-  toolName?: string
+  toolName?: string,
 ): string {
   if (source === "tool") {
     return toolName
@@ -372,7 +451,7 @@ function makeReference(
   label: string,
   locator: ResolvedChatReference["locator"],
   preview: string,
-  toolHint?: string
+  toolHint?: string,
 ): ResolvedChatReference {
   return {
     id: `${type}:${JSON.stringify(locator)}`,
@@ -396,7 +475,8 @@ function fileToDataUrl(file: File): Promise<string> {
         reject(new Error("File reader returned a non-string result."));
       }
     };
-    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file."));
+    reader.onerror = () =>
+      reject(reader.error ?? new Error("Failed to read file."));
     reader.readAsDataURL(file);
   });
 }
@@ -416,12 +496,15 @@ function makeExternalFileReference(file: File): ResolvedChatReference {
     file.name,
     locator,
     `${kind === "image" ? "Image" : "External file"}: ${file.name} (${mediaType}, ${file.size} bytes).`,
-    "This external file is pointer-only unless a separate image input is present in the message; no file contents are available through workspace tools."
+    "This external file is pointer-only unless a separate image input is present in the message; no file contents are available through workspace tools.",
   );
 }
 
 function stripSessionOnlyFileParts(message: UIMessage): UIMessage {
-  if (!Array.isArray(message.parts) || !message.parts.some((part) => part.type === "file")) {
+  if (
+    !Array.isArray(message.parts) ||
+    !message.parts.some((part) => part.type === "file")
+  ) {
     return message;
   }
   return {
@@ -449,12 +532,15 @@ const TERMINAL_TOOL_STATES = new Set([
 ]);
 
 /** True when a tool part is still awaiting execution, approval, or output. */
-function isPendingToolPart(part: UIMessage["parts"][number]): part is UIMessage["parts"][number] & {
+function isPendingToolPart(
+  part: UIMessage["parts"][number],
+): part is UIMessage["parts"][number] & {
   toolCallId: string;
   state: string;
 } {
   return (
     part.type.startsWith("tool-") &&
+    part.type !== `tool-${GOAL_CONTRACT_PROPOSAL_TOOL_NAME}` &&
     "toolCallId" in part &&
     typeof part.toolCallId === "string" &&
     "state" in part &&
@@ -468,8 +554,11 @@ function cancelPendingToolParts<T extends UIMessage>(
   messages: T[],
   options: {
     getCancelledOutput: (toolCallId: string) => CancelledToolOutput;
-    onCancelledToolCall?: (toolCallId: string, result: CancelledToolOutput) => void;
-  }
+    onCancelledToolCall?: (
+      toolCallId: string,
+      result: CancelledToolOutput,
+    ) => void;
+  },
 ): { messages: T[]; changed: boolean } {
   let changed = false;
   const nextMessages = messages.map((msg) => {
@@ -496,7 +585,10 @@ function cancelPendingToolParts<T extends UIMessage>(
 }
 
 /** Repair persisted chats whose browser session ended with pending tool calls. */
-function cancelStalePendingToolsInChat(chat: Chat): { chat: Chat; changed: boolean } {
+function cancelStalePendingToolsInChat(chat: Chat): {
+  chat: Chat;
+  changed: boolean;
+} {
   const result = cancelPendingToolParts(chat.messages, {
     getCancelledOutput: () => ({ error: "cancelled_by_user" }),
   });
@@ -511,7 +603,10 @@ function cancelStalePendingToolsInChat(chat: Chat): { chat: Chat; changed: boole
 }
 
 /** Repair repeated AI SDK message snapshots left by an overlapping-send race. */
-function deduplicateMessagesInChat(chat: Chat): { chat: Chat; changed: boolean } {
+function deduplicateMessagesInChat(chat: Chat): {
+  chat: Chat;
+  changed: boolean;
+} {
   const result = deduplicateMessagesById(chat.messages);
   if (!result.changed) return { chat, changed: false };
   return {
@@ -551,27 +646,33 @@ type SerializedAgentRule = AgentRule;
 /** Pulls selected skill slash tokens out of a user message while preserving message text. */
 function extractSkillSlashCommands(
   value: string,
-  skillCommands: SlashCommand[]
+  skillCommands: SlashCommand[],
 ): { skillNames: string[]; message: string } {
   if (skillCommands.length === 0 || !value.includes("/")) {
     return { skillNames: [], message: value.trim() };
   }
 
   const labelToName = new Map(
-    skillCommands.map((command) => [command.label, command.name.slice("skill:".length)])
+    skillCommands.map((command) => [
+      command.label,
+      command.name.slice("skill:".length),
+    ]),
   );
   const skillNames: string[] = [];
   const seen = new Set<string>();
   const message = value
-    .replace(/(^|\s)(\/[\w-]+)(?=\s|$)/g, (match, leading: string, label: string) => {
-      const skillName = labelToName.get(label);
-      if (!skillName) return match;
-      if (!seen.has(skillName)) {
-        seen.add(skillName);
-        skillNames.push(skillName);
-      }
-      return leading;
-    })
+    .replace(
+      /(^|\s)(\/[\w-]+)(?=\s|$)/g,
+      (match, leading: string, label: string) => {
+        const skillName = labelToName.get(label);
+        if (!skillName) return match;
+        if (!seen.has(skillName)) {
+          seen.add(skillName);
+          skillNames.push(skillName);
+        }
+        return leading;
+      },
+    )
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 
@@ -623,7 +724,11 @@ type ConversationSelectionMentionEventDetail = {
 
 /** Preserve skill invocation metadata in the request body while omitting client-only fields. */
 function serializeAvailableSkills(
-  skills: Array<{ name: string; description: string; disableModelInvocation?: boolean }>
+  skills: Array<{
+    name: string;
+    description: string;
+    disableModelInvocation?: boolean;
+  }>,
 ): SerializedSkill[] {
   return skills.map((skill) => ({
     name: skill.name,
@@ -640,7 +745,7 @@ function serializeAvailableSubagents(
     label?: string;
     description: string;
     options?: { model?: string; disableModelInvocation: boolean };
-  }>
+  }>,
 ): SerializedSubagent[] {
   return subagents.map((subagent) => ({
     name: subagent.name,
@@ -660,7 +765,9 @@ function serializeAgentRules(rules: AgentRule[]): SerializedAgentRule[] {
 }
 
 function formatRuleDisplayName(rule: AgentRule): string {
-  return rule.scope === "workspace" ? rule.filename : `${rule.filename} (${rule.scope})`;
+  return rule.scope === "workspace"
+    ? rule.filename
+    : `${rule.filename} (${rule.scope})`;
 }
 
 interface DelegateToolOutput {
@@ -774,25 +881,31 @@ export function RightSidebar({
   const [isGeneratingTitle, setIsGeneratingTitle] = useState(false);
   const [isHistoryPopoverOpen, setIsHistoryPopoverOpen] = useState(false);
   const SESSION_MODE_KEY = "orion:interactionMode";
-  const [interactionMode, setInteractionMode] = useState<InteractionMode>(() => {
-    if (typeof window !== "undefined") {
-      const stored = sessionStorage.getItem(SESSION_MODE_KEY);
-      if (stored && stored.trim().length > 0) return stored;
-    }
-    return "Agent";
-  });
-  const [selectedModel, setSelectedModel] = useState(loadSelectedModelFromSession);
+  const [interactionMode, setInteractionMode] = useState<InteractionMode>(
+    () => {
+      if (typeof window !== "undefined") {
+        const stored = sessionStorage.getItem(SESSION_MODE_KEY);
+        if (stored && stored.trim().length > 0) return stored;
+      }
+      return "Agent";
+    },
+  );
+  const [selectedModel, setSelectedModel] = useState(
+    loadSelectedModelFromSession,
+  );
   const [editingState, setEditingState] = useState<EditingState | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sidebarRootRef = useRef<HTMLDivElement>(null);
-  const createNewChatRef = useRef<() => void>(() => { });
+  const createNewChatRef = useRef<() => void>(() => {});
   const [models, setModels] = useState<LLM[]>([]);
   const [modelRows, setModelRows] = useState<ModelCatalogEntry[]>([]);
   const [modelsCatalogLoaded, setModelsCatalogLoaded] = useState(false);
   const settingsUrlHandledRef = useRef(false);
   const [autoRunConfirmOpen, setAutoRunConfirmOpen] = useState(false);
   const [showKernelPrompt, setShowKernelPrompt] = useState(false);
-  const [activeSubagentToolCallId, setActiveSubagentToolCallId] = useState<string | null>(null);
+  const [activeSubagentToolCallId, setActiveSubagentToolCallId] = useState<
+    string | null
+  >(null);
   const isBusinessExperience =
     effectiveSettings.appearance.experienceMode === "business";
   const isDesktopApp = useIsDesktopApp();
@@ -800,11 +913,14 @@ export function RightSidebar({
     ? "auto_run"
     : effectiveSettings.chat.toolApprovalMode;
   const [modelSettingsMap, setModelSettingsMap] = useState<ModelSettingsMap>(
-    loadModelSettingsMapFromSession
+    loadModelSettingsMapFromSession,
   );
   const [isCompacting, setIsCompacting] = useState(false);
-  const [checkpointStatuses, setCheckpointStatuses] = useState<Map<string, EditCheckpointStatus>>(new Map());
-  const [checkpointRequestByMessageId, setCheckpointRequestByMessageId] = useState<Map<string, string>>(new Map());
+  const [checkpointStatuses, setCheckpointStatuses] = useState<
+    Map<string, EditCheckpointStatus>
+  >(new Map());
+  const [checkpointRequestByMessageId, setCheckpointRequestByMessageId] =
+    useState<Map<string, string>>(new Map());
   const [ephemeralCostMessage, setEphemeralCostMessage] = useState<{
     chatId: string;
     message: UIMessage;
@@ -812,7 +928,40 @@ export function RightSidebar({
     modelLabels: Record<string, string>;
   } | null>(null);
   const [isRefreshingCostSummary, setIsRefreshingCostSummary] = useState(false);
-  const [emptyPromptLibraryResetCount, setEmptyPromptLibraryResetCount] = useState(0);
+  const [emptyPromptLibraryResetCount, setEmptyPromptLibraryResetCount] =
+    useState(0);
+  const [goalSession, setGoalSession] = useState<GoalSession | null>(null);
+  const goalSessionRef = useRef<GoalSession | null>(null);
+  goalSessionRef.current = goalSession;
+  const [goalSupervisorOpen, setGoalSupervisorOpen] = useState(false);
+  // Reviewer model, chosen per goal but remembered across them. Null until the
+  // user picks one, so the composer's model stays the default.
+  const [goalEvaluatorModelChoice, setGoalEvaluatorModelChoice] = useState<
+    string | null
+  >(loadGoalEvaluatorModelFromSession);
+  const [isGoalStarting, setIsGoalStarting] = useState(false);
+  const [isGoalContractDraftActive, setIsGoalContractDraftActive] =
+    useState(false);
+  const goalContractDraftActiveRef = useRef(false);
+  goalContractDraftActiveRef.current = isGoalContractDraftActive;
+  const [goalContractActionIds, setGoalContractActionIds] = useState<
+    Set<string>
+  >(new Set());
+  const [goalContractErrors, setGoalContractErrors] = useState<
+    Map<string, string>
+  >(new Map());
+  const goalContractFailureToastIdsRef = useRef<Set<string>>(new Set());
+  const goalStartAbortRef = useRef<AbortController | null>(null);
+  const goalEvaluationAbortRef = useRef<AbortController | null>(null);
+  const goalEvaluationRunningRef = useRef(false);
+  const goalWorkerStartProgressRef = useRef<number | null>(null);
+  // Live reviewer transcript, so the supervisor panel shows the evaluator
+  // working instead of staying blank until its verdict lands.
+  const [liveEvaluatorTranscript, setLiveEvaluatorTranscript] = useState<
+    UIMessage[] | null
+  >(null);
+  const liveEvaluatorTranscriptRef = useRef<UIMessage[] | null>(null);
+  const goalContinuationRef = useRef<GoalContinuation | undefined>(undefined);
   /** Shared request id for model calls triggered by the current user turn. */
   const modelRequestIdRef = useRef<string | undefined>(undefined);
   /** Ref holding the latest compaction summary for the transport interceptor. */
@@ -835,6 +984,8 @@ export function RightSidebar({
 
   // Fetch available models from the static OSS catalog.
   useEffect(() => {
+    goalStartAbortRef.current?.abort();
+    goalStartAbortRef.current = null;
     setModelsCatalogLoaded(false);
 
     const fetchModels = async () => {
@@ -845,7 +996,7 @@ export function RightSidebar({
           throw new Error("Failed to fetch models");
         }
 
-        const json = await response.json() as { models: ModelCatalogEntry[] };
+        const json = (await response.json()) as { models: ModelCatalogEntry[] };
         const data = json.models;
 
         setModelRows(data);
@@ -873,8 +1024,10 @@ export function RightSidebar({
             supportsReasoning: m.supports_reasoning,
             reasoningOptions: m.reasoning_options,
             longContextThreshold: m.long_context_threshold ?? undefined,
-            longContextInputPrice: m.long_context_input_price_per_1m ?? undefined,
-            longContextOutputPrice: m.long_context_output_price_per_1m ?? undefined,
+            longContextInputPrice:
+              m.long_context_input_price_per_1m ?? undefined,
+            longContextOutputPrice:
+              m.long_context_output_price_per_1m ?? undefined,
             catalogSource: m.source,
             pinnedByDefault: m.pinned_by_default,
             catalogCreatedAt: m.created_at,
@@ -895,7 +1048,11 @@ export function RightSidebar({
 
   // Auto-open settings when the URL contains ?settings=<tab> (e.g. OAuth return).
   useEffect(() => {
-    if (typeof window === "undefined" || !modelsCatalogLoaded || settingsUrlHandledRef.current) {
+    if (
+      typeof window === "undefined" ||
+      !modelsCatalogLoaded ||
+      settingsUrlHandledRef.current
+    ) {
       return;
     }
     const params = new URLSearchParams(window.location.search);
@@ -921,8 +1078,8 @@ export function RightSidebar({
       userPinned.length > 0
         ? userPinned
         : modelRows
-          .filter((m) => m.pinned_by_default)
-          .map((m) => formatModelSelectionKey(m.provider_id, m.model_id));
+            .filter((m) => m.pinned_by_default)
+            .map((m) => formatModelSelectionKey(m.provider_id, m.model_id));
     return normalizePinnedModelKeys(base, modelRows);
   }, [effectiveSettings.chat.pinnedModelIds, modelRows]);
 
@@ -936,13 +1093,13 @@ export function RightSidebar({
       const endpointModels = isLocalProvider(providerId)
         ? normalizeLocalEndpointModels(providerId, credential)
         : [
-          {
-            modelId: credential.modelId,
-            label: credential.label ?? credential.modelId,
-            enabled: true,
-          },
-          ...(credential.models ?? []),
-        ];
+            {
+              modelId: credential.modelId,
+              label: credential.label ?? credential.modelId,
+              enabled: true,
+            },
+            ...(credential.models ?? []),
+          ];
 
       for (const model of endpointModels) {
         if (model.enabled === false) continue;
@@ -951,7 +1108,10 @@ export function RightSidebar({
           : model.modelId;
         rows.push({
           value,
-          label: model.label ?? getLocalModelLabel(providerId, model.modelId) ?? model.modelId,
+          label:
+            model.label ??
+            getLocalModelLabel(providerId, model.modelId) ??
+            model.modelId,
           provider: providerId,
           inputPrice: 0,
           outputPrice: 0,
@@ -978,10 +1138,14 @@ export function RightSidebar({
 
   const allModels = React.useMemo<LLM[]>(() => {
     const configuredLocalProviders = new Set(
-      configuredLocalProviderModels.map((model) => model.provider)
+      configuredLocalProviderModels.map((model) => model.provider),
     );
     const staticModels = models.filter(
-      (model) => !(isLocalProvider(model.provider) && configuredLocalProviders.has(model.provider))
+      (model) =>
+        !(
+          isLocalProvider(model.provider) &&
+          configuredLocalProviders.has(model.provider)
+        ),
     );
 
     return [...staticModels, ...configuredLocalProviderModels];
@@ -989,7 +1153,7 @@ export function RightSidebar({
 
   const getModel = useCallback(
     (modelKey: string) => findModelBySelectionKey(allModels, modelKey),
-    [allModels]
+    [allModels],
   );
 
   /**
@@ -999,31 +1163,44 @@ export function RightSidebar({
   const modelsWithAccess = React.useMemo<LLM[]>(() => {
     const credentials = effectiveSettings.providers?.credentials ?? {};
     const modelLabels = effectiveSettings.chat.modelLabels ?? {};
-    const hasByokForProvider = (providerId: string) => !!credentials[providerId];
+    const hasByokForProvider = (providerId: string) =>
+      !!credentials[providerId];
 
     return allModels.map((m) => {
       const credential = credentials[m.provider];
       const localLabel =
         credential?.type === "local_endpoint" && isLocalProvider(m.provider)
-          ? credential.label ?? getLocalModelLabel(m.provider, credential.modelId) ?? credential.modelId
+          ? (credential.label ??
+            getLocalModelLabel(m.provider, credential.modelId) ??
+            credential.modelId)
           : undefined;
       const baseLabel =
         localLabel && isStaticLocalModelValue(m.value) ? localLabel : m.label;
 
       return {
         ...m,
-        label: resolveModelDisplayLabel(m.provider, m.value, baseLabel, modelLabels),
+        label: resolveModelDisplayLabel(
+          m.provider,
+          m.value,
+          baseLabel,
+          modelLabels,
+        ),
         isAccessible: hasByokForProvider(m.provider),
       };
     });
-  }, [allModels, effectiveSettings.chat.modelLabels, effectiveSettings.providers?.credentials]);
+  }, [
+    allModels,
+    effectiveSettings.chat.modelLabels,
+    effectiveSettings.providers?.credentials,
+  ]);
 
   useEffect(() => {
     const pinnedSelectionForStoredModel =
       parseModelSelectionKey(selectedModel) === null
         ? pinnedModelIds.find(
-          (pinKey) => parseModelSelectionKey(pinKey)?.modelId === selectedModel
-        )
+            (pinKey) =>
+              parseModelSelectionKey(pinKey)?.modelId === selectedModel,
+          )
         : undefined;
     if (pinnedSelectionForStoredModel) {
       setSelectedModel(pinnedSelectionForStoredModel);
@@ -1055,8 +1232,19 @@ export function RightSidebar({
       setInteractionMode(nextMode);
       sessionStorage.setItem(SESSION_MODE_KEY, nextMode);
     },
-    []
+    [],
   );
+
+  /**
+   * Model that will review the goal. Falls back to the composer's model until the
+   * user picks a reviewer, and degrades the same way when a remembered choice
+   * loses its credential.
+   */
+  const goalEvaluatorModel = React.useMemo(() => {
+    const preferred = goalEvaluatorModelChoice ?? selectedModel;
+    const resolved = findModelBySelectionKey(modelsWithAccess, preferred);
+    return resolved && resolved.isAccessible !== false ? preferred : selectedModel;
+  }, [goalEvaluatorModelChoice, modelsWithAccess, selectedModel]);
 
   const handleReorderPinned = useCallback(
     (newOrder: string[]) => {
@@ -1068,21 +1256,42 @@ export function RightSidebar({
         },
       }));
     },
-    [setUserSettings]
+    [setUserSettings],
   );
 
-  const handleModelChange = useCallback(
-    (nextModel: string) => {
-      setSelectedModel(nextModel);
-      saveSelectedModelToSession(nextModel);
-    },
-    []
-  );
+  const handleModelChange = useCallback((nextModel: string) => {
+    setSelectedModel(nextModel);
+    saveSelectedModelToSession(nextModel);
+  }, []);
+
+  const handleGoalEvaluatorModelChange = useCallback((nextModel: string) => {
+    setGoalEvaluatorModelChoice(nextModel);
+    saveGoalEvaluatorModelToSession(nextModel);
+  }, []);
 
   /** Opens settings directly on Providers for BYOK setup. */
   const handleOpenProvidersSettings = useCallback(() => {
     openWithTab("providers");
   }, [openWithTab]);
+
+  const goalEvaluatorPicker = React.useMemo(
+    () => ({
+      models: modelsWithAccess,
+      pinnedModelIds,
+      selectedModel: goalEvaluatorModel,
+      onSelectedModelChange: handleGoalEvaluatorModelChange,
+      onOpenModelsSettings: () => openWithTab("models"),
+      onOpenProvidersSettings: handleOpenProvidersSettings,
+    }),
+    [
+      goalEvaluatorModel,
+      handleGoalEvaluatorModelChange,
+      handleOpenProvidersSettings,
+      modelsWithAccess,
+      openWithTab,
+      pinnedModelIds,
+    ],
+  );
 
   /** Opens Settings on Providers so the user can add local credentials. */
   const handleConfigureProvider = useCallback(() => {
@@ -1098,7 +1307,7 @@ export function RightSidebar({
         return next;
       });
     },
-    []
+    [],
   );
 
   /** Approve a pending tool call */
@@ -1127,6 +1336,53 @@ export function RightSidebar({
     });
   }, []);
 
+  /**
+   * Resolves one parked `ask_question` call and reports whether it existed.
+   *
+   * Every teardown path (stop, chat switch, regenerate) has to release these
+   * promises too, or the scheduler keeps the turn's tool slot forever.
+   */
+  const resolveAskQuestion = useCallback(
+    (toolCallId: string, result: AskQuestionResult): boolean => {
+      const pending = pendingAskQuestionsRef.current.get(toolCallId);
+      if (!pending) return false;
+      pendingAskQuestionsRef.current.delete(toolCallId);
+      pending.resolve(result);
+      return true;
+    },
+    [],
+  );
+
+  /** Submit the user's questionnaire answers as the tool result. */
+  const handleAnswerQuestions = useCallback(
+    (toolCallId: string, result: AskQuestionResult) => {
+      if (!resolveAskQuestion(toolCallId, result)) return;
+      setAnsweredAskQuestionIds((prev) => new Set(prev).add(toolCallId));
+    },
+    [resolveAskQuestion],
+  );
+
+  /** Dismiss the questionnaire and let the agent continue on its own judgement. */
+  const handleDismissQuestions = useCallback(
+    (toolCallId: string) => {
+      if (!resolveAskQuestion(toolCallId, { answers: [], cancelled: true })) {
+        return;
+      }
+      setAnsweredAskQuestionIds((prev) => new Set(prev).add(toolCallId));
+    },
+    [resolveAskQuestion],
+  );
+
+  /** Releases every parked questionnaire when the turn or chat goes away. */
+  const cancelPendingAskQuestions = useCallback(() => {
+    if (pendingAskQuestionsRef.current.size === 0) return;
+    for (const [, pending] of pendingAskQuestionsRef.current) {
+      pending.resolve({ answers: [], cancelled: true });
+    }
+    pendingAskQuestionsRef.current.clear();
+    setAnsweredAskQuestionIds(new Set());
+  }, []);
+
   /** Change tool approval mode and persist to settings */
   const handleToolApprovalModeChange = useCallback(
     (mode: ToolApprovalMode) => {
@@ -1143,7 +1399,7 @@ export function RightSidebar({
         },
       }));
     },
-    [setUserSettings, toolApprovalMode]
+    [setUserSettings, toolApprovalMode],
   );
 
   /** Apply auto_run mode after user confirms the warning dialog */
@@ -1177,7 +1433,7 @@ export function RightSidebar({
   /** Generate a short title from the first user and assistant messages in a chat. */
   const generateChatTitle = async (
     chatMessages: ChatMessage[],
-    chatId: string
+    chatId: string,
   ): Promise<string | null> => {
     const userMessage = chatMessages.find((m) => m.role === "user");
     const assistantMessage = chatMessages.find((m) => m.role === "assistant");
@@ -1254,15 +1510,15 @@ export function RightSidebar({
   /** Generate and persist a short title for a newly created chat. */
   const generateAndSetTitle = async (
     chatMessages: ChatMessage[],
-    chatId: string
+    chatId: string,
   ) => {
     const newTitle = await generateChatTitle(chatMessages, chatId);
     if (!newTitle) return;
 
     setChats((prev) =>
       prev.map((chat) =>
-        chat.id === chatId ? { ...chat, title: newTitle } : chat
-      )
+        chat.id === chatId ? { ...chat, title: newTitle } : chat,
+      ),
     );
   };
 
@@ -1275,7 +1531,16 @@ export function RightSidebar({
   const activeSubagentSession = activeSubagentToolCallId
     ? currentChat?.subagentSessions?.[activeSubagentToolCallId]
     : undefined;
-  const isSubagentChatView = !!activeSubagentToolCallId && !!activeSubagentSession;
+  const isSubagentChatView =
+    !!activeSubagentToolCallId && !!activeSubagentSession;
+  const isGoalSupervisorView = goalSupervisorOpen && goalSession !== null;
+  const goalSupervisorMessages = React.useMemo(
+    () =>
+      goalSession
+        ? buildGoalSupervisorMessages(goalSession, liveEvaluatorTranscript)
+        : [],
+    [goalSession, liveEvaluatorTranscript],
+  );
   const subagentReportPaths = React.useMemo(() => {
     const sessions = currentChat?.subagentSessions;
     if (!sessions) return undefined;
@@ -1299,7 +1564,7 @@ export function RightSidebar({
 
     try {
       const response = await fetch(
-        `/api/chats/${encodeURIComponent(effectiveChatId)}/checkpoints`
+        `/api/chats/${encodeURIComponent(effectiveChatId)}/checkpoints`,
       );
       if (!response.ok) {
         throw new Error(`Checkpoint list failed with ${response.status}`);
@@ -1315,12 +1580,10 @@ export function RightSidebar({
       for (const checkpoint of data.checkpoints ?? []) {
         if (
           typeof checkpoint.requestId === "string" &&
-          (
-            checkpoint.status === "open" ||
+          (checkpoint.status === "open" ||
             checkpoint.status === "completed" ||
             checkpoint.status === "interrupted" ||
-            checkpoint.status === "reverted"
-          ) &&
+            checkpoint.status === "reverted") &&
           Array.isArray(checkpoint.targets) &&
           checkpoint.targets.length > 0
         ) {
@@ -1343,7 +1606,7 @@ export function RightSidebar({
       if (!path) return;
       onOpenFile?.({ name: fileNameFromPath(path), path });
     },
-    [onOpenFile]
+    [onOpenFile],
   );
 
   /** Opens a skill/subagent Jupyter definition path selected from the slash command palette. */
@@ -1352,7 +1615,7 @@ export function RightSidebar({
       if (!path) return;
       onOpenFile?.({ name: fileNameFromPath(path), path });
     },
-    [onOpenFile]
+    [onOpenFile],
   );
 
   /** Latest id for persisting chat in `useChat` `onFinish` (avoids stale/null `currentChatId`). */
@@ -1361,12 +1624,65 @@ export function RightSidebar({
 
   // AI Assistant context (optional — may not be in provider)
   const assistant = useAssistantChatOptional();
+  useEffect(() => {
+    goalEvaluationAbortRef.current?.abort();
+    goalEvaluationAbortRef.current = null;
+    goalEvaluationRunningRef.current = false;
+    goalWorkerStartProgressRef.current = null;
+    goalContinuationRef.current = undefined;
+    liveEvaluatorTranscriptRef.current = null;
+    setLiveEvaluatorTranscript(null);
+    setGoalSupervisorOpen(false);
+    setIsGoalStarting(false);
+    goalContractDraftActiveRef.current = false;
+    setIsGoalContractDraftActive(false);
+    setGoalContractActionIds(new Set());
+    setGoalContractErrors(new Map());
+    goalContractFailureToastIdsRef.current.clear();
+    goalSessionRef.current = null;
+    setGoalSession(null);
+    if (!effectiveChatId) {
+      return;
+    }
+    let cancelled = false;
+    void loadGoalSession(effectiveChatId)
+      .then(async (stored) => {
+        if (cancelled) return;
+        if (stored?.status === "active") {
+          const paused: GoalSession = {
+            ...stored,
+            status: "paused",
+            phase: "paused",
+            updatedAt: new Date().toISOString(),
+          };
+          setGoalSession(paused);
+          await persistGoalSession(paused).catch((error) => {
+            console.warn("Failed to pause restored goal session:", error);
+          });
+          return;
+        }
+        setGoalSession(stored);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          console.warn("Failed to load goal session:", error);
+          setGoalSession(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveChatId]);
+
   /** Re-scan skills and subagents so the slash palette reflects workspace changes immediately. */
   const handleRefreshSlashCommands = useCallback(async (): Promise<void> => {
     if (!assistant) return;
 
     try {
-      await Promise.all([assistant.refreshSkills(), assistant.refreshSubagents()]);
+      await Promise.all([
+        assistant.refreshSkills(),
+        assistant.refreshSubagents(),
+      ]);
       toast.success("Skills and subagents refreshed.");
     } catch (error) {
       console.error("Failed to refresh slash commands:", error);
@@ -1377,30 +1693,46 @@ export function RightSidebar({
     (path: string): string =>
       isAbsoluteAgentPath(path)
         ? path
-        : toAgentAbsolutePath(path, { rootDirectory: assistant?.rootDirectory }) ?? path,
-    [assistant?.rootDirectory]
+        : (toAgentAbsolutePath(path, {
+            rootDirectory: assistant?.rootDirectory,
+          }) ?? path),
+    [assistant?.rootDirectory],
   );
   const clientPlatformOs = usePlatformOs();
   const { variables: kernelVariables, refresh: refreshKernelVariables } =
     useKernelVariables(kernelService ?? null);
-  const [selectedNotebookCellIndex, setSelectedNotebookCellIndex] = useState<number | null>(null);
-  const [workspaceReferenceEntries, setWorkspaceReferenceEntries] = useState<ReferenceWorkspaceEntry[]>([]);
+  const [selectedNotebookCellIndex, setSelectedNotebookCellIndex] = useState<
+    number | null
+  >(null);
+  const [workspaceReferenceEntries, setWorkspaceReferenceEntries] = useState<
+    ReferenceWorkspaceEntry[]
+  >([]);
   const [referenceSearchQuery, setReferenceSearchQuery] = useState("");
-  const [referenceSearchTab, setReferenceSearchTab] = useState<ReferenceTab>("all");
+  const [referenceSearchTab, setReferenceSearchTab] =
+    useState<ReferenceTab>("all");
   const referenceSearchSeqRef = useRef(0);
 
   useEffect(() => {
     const handleNotebookSelection = (event: Event) => {
-      const detail = (event as CustomEvent<{ selectedCellIndex?: unknown }>).detail;
+      const detail = (event as CustomEvent<{ selectedCellIndex?: unknown }>)
+        .detail;
       const nextIndex = detail?.selectedCellIndex;
       setSelectedNotebookCellIndex(
-        typeof nextIndex === "number" && Number.isInteger(nextIndex) ? nextIndex : null
+        typeof nextIndex === "number" && Number.isInteger(nextIndex)
+          ? nextIndex
+          : null,
       );
     };
 
-    window.addEventListener("notebookMinimapSelectionUpdate", handleNotebookSelection);
+    window.addEventListener(
+      "notebookMinimapSelectionUpdate",
+      handleNotebookSelection,
+    );
     return () => {
-      window.removeEventListener("notebookMinimapSelectionUpdate", handleNotebookSelection);
+      window.removeEventListener(
+        "notebookMinimapSelectionUpdate",
+        handleNotebookSelection,
+      );
     };
   }, []);
 
@@ -1421,19 +1753,28 @@ export function RightSidebar({
             const visitedFolders = new Set<string>();
             const matches: ReferenceWorkspaceEntry[] = [];
 
-            while (queuedFolders.length > 0 && visitedFolders.size < 20 && matches.length < 80) {
+            while (
+              queuedFolders.length > 0 &&
+              visitedFolders.size < 20 &&
+              matches.length < 80
+            ) {
               const folderPath = queuedFolders.shift() ?? "";
               if (visitedFolders.has(folderPath)) continue;
               visitedFolders.add(folderPath);
 
               const entries = await assistant.listDirectoryEntries(folderPath);
               for (const entry of entries) {
-                const haystack = `${entry.name} ${entry.path} ${entry.type}`.toLowerCase();
+                const haystack =
+                  `${entry.name} ${entry.path} ${entry.type}`.toLowerCase();
                 if (!normalizedQuery || haystack.includes(normalizedQuery)) {
                   matches.push(entry);
                 }
 
-                if (normalizedQuery && entry.type === "folder" && queuedFolders.length < 40) {
+                if (
+                  normalizedQuery &&
+                  entry.type === "folder" &&
+                  queuedFolders.length < 40
+                ) {
                   queuedFolders.push(entry.path);
                 }
 
@@ -1459,12 +1800,15 @@ export function RightSidebar({
         void refreshKernelVariables();
       }
     },
-    [assistant, refreshKernelVariables, workspaceDirectory]
+    [assistant, refreshKernelVariables, workspaceDirectory],
   );
 
   const referenceOptions = React.useMemo<ChatReferenceOption[]>(() => {
     const options: ChatReferenceOption[] = [];
-    const addOption = (reference: ResolvedChatReference, description: string) => {
+    const addOption = (
+      reference: ResolvedChatReference,
+      description: string,
+    ) => {
       if (options.some((option) => option.id === reference.id)) return;
       options.push({
         id: reference.id,
@@ -1487,9 +1831,9 @@ export function RightSidebar({
           `Active file: ${activeNotebookPath}`,
           isNotebook
             ? `Use use_notebook with notebookPath="${promptPath}", then read_notebook or read_cell for exact cells.`
-            : `Use read_file with path="${promptPath}" for exact contents.`
+            : `Use read_file with path="${promptPath}" for exact contents.`,
         ),
-        "Active file"
+        "Active file",
       );
     }
 
@@ -1499,11 +1843,15 @@ export function RightSidebar({
         makeReference(
           "cell",
           formatCellReferenceLabel([selectedNotebookCellIndex]),
-          { type: "cell", notebookPath, cellIndices: [selectedNotebookCellIndex] },
+          {
+            type: "cell",
+            notebookPath,
+            cellIndices: [selectedNotebookCellIndex],
+          },
           `Selected notebook cell ${selectedNotebookCellIndex} in ${notebookPath}.`,
-          `Use use_notebook with notebookPath="${promptPath}", then read_cell for cell index ${selectedNotebookCellIndex}.`
+          `Use use_notebook with notebookPath="${promptPath}", then read_cell for cell index ${selectedNotebookCellIndex}.`,
         ),
-        "Selected cell"
+        "Selected cell",
       );
     }
 
@@ -1521,9 +1869,9 @@ export function RightSidebar({
             formatCellReferenceLabel([index]),
             { type: "cell", notebookPath, cellIndices: [index] },
             notebookCellSourcePreview(cell),
-            `Use use_notebook with notebookPath="${promptPath}", then read_cell for cell index ${index}.`
+            `Use use_notebook with notebookPath="${promptPath}", then read_cell for cell index ${index}.`,
           ),
-          notebookCellDescription(cell, index)
+          notebookCellDescription(cell, index),
         );
       });
     }
@@ -1541,9 +1889,9 @@ export function RightSidebar({
           `Recent file: ${file.path}`,
           file.path.endsWith(".ipynb")
             ? `Use use_notebook with notebookPath="${promptPath}", then read_notebook or read_cell for exact cells.`
-            : `Use read_file with path="${promptPath}" for exact contents.`
+            : `Use read_file with path="${promptPath}" for exact contents.`,
         ),
-        "Recent file"
+        "Recent file",
       );
     }
 
@@ -1556,9 +1904,9 @@ export function RightSidebar({
           label,
           { type: "folder", path: workspaceDirectory },
           `Current workspace folder: ${label}`,
-          `Use file and shell tools with absolute paths under "${promptPath}" when exact contents are needed.`
+          `Use file and shell tools with absolute paths under "${promptPath}" when exact contents are needed.`,
         ),
-        "Current workspace"
+        "Current workspace",
       );
     }
 
@@ -1572,9 +1920,9 @@ export function RightSidebar({
           `${entry.type === "folder" ? "Folder" : "File"}: ${entry.path}`,
           entry.type === "folder"
             ? `Use bash with safe read-only commands scoped to "${promptPath}" when exact folder contents are needed.`
-            : `Use read_file with path="${promptPath}" for exact contents.`
+            : `Use read_file with path="${promptPath}" for exact contents.`,
         ),
-        entry.path
+        entry.path,
       );
     }
 
@@ -1587,41 +1935,61 @@ export function RightSidebar({
       })
       .slice(0, 80);
     for (const variable of matchingVariables) {
-      const shape = variable.shape?.length ? `shape=${variable.shape.join("x")}` : null;
-      const length = typeof variable.length === "number" ? `length=${variable.length}` : null;
+      const shape = variable.shape?.length
+        ? `shape=${variable.shape.join("x")}`
+        : null;
+      const length =
+        typeof variable.length === "number"
+          ? `length=${variable.length}`
+          : null;
       const previewLines = [
         `Variable ${variable.name}: ${variable.type}`,
         shape,
         length,
         variable.repr ? truncatePreview(variable.repr, 700) : null,
-      ].filter((line): line is string => typeof line === "string" && line.length > 0);
+      ].filter(
+        (line): line is string => typeof line === "string" && line.length > 0,
+      );
 
       addOption(
         makeReference(
           "variable",
           variable.name,
-          { type: "variable", name: variable.name, notebookPath: notebookPath ?? undefined },
+          {
+            type: "variable",
+            name: variable.name,
+            notebookPath: notebookPath ?? undefined,
+          },
           previewLines.join("\n"),
-          `Use notebook execution or variable inspection plumbing with name="${variable.name}" for fresh detail.`
+          `Use notebook execution or variable inspection plumbing with name="${variable.name}" for fresh detail.`,
         ),
-        [variable.type, shape, length].filter(Boolean).join(" · ")
+        [variable.type, shape, length].filter(Boolean).join(" · "),
       );
     }
 
     const terminals = assistant?.terminalPool?.getState().terminals ?? [];
     for (const terminal of terminals) {
-      if (terminal.type === "agent" && effectiveChatId && terminal.chatId !== effectiveChatId) continue;
+      if (
+        terminal.type === "agent" &&
+        effectiveChatId &&
+        terminal.chatId !== effectiveChatId
+      )
+        continue;
       addOption(
         makeReference(
           "terminal",
           terminal.name,
-          { type: "terminal", terminalName: terminal.name, chatId: terminal.chatId ?? undefined },
+          {
+            type: "terminal",
+            terminalName: terminal.name,
+            chatId: terminal.chatId ?? undefined,
+          },
           terminal.pendingCommand?.buffer
             ? truncatePreview(terminal.pendingCommand.buffer, 900)
             : `Terminal ${terminal.name} (${terminal.type})`,
-          `Use await_command with terminalName="${terminal.name}" if a command is still running.`
+          `Use await_command with terminalName="${terminal.name}" if a command is still running.`,
         ),
-        terminal.type === "agent" ? "Chat terminal" : "User terminal"
+        terminal.type === "agent" ? "Chat terminal" : "User terminal",
       );
     }
 
@@ -1676,9 +2044,6 @@ export function RightSidebar({
     lastResubmittedAt?: number;
   };
 
-  const CANCELLED_TOOL_RESULT = { error: "cancelled_by_user" } as const;
-  const REJECTED_TOOL_RESULT = { error: "rejected_by_user" } as const;
-
   // Track tool calls across rerenders:
   // - running: dispatched/queued, avoid duplicate execution
   // - completed: result available; can be re-submitted if provider keeps call state unresolved
@@ -1689,19 +2054,26 @@ export function RightSidebar({
   // re-running the full LLM turn. useChat will resume naturally once all
   // pending tool results are submitted.
   const pendingKernelToolCallsRef = useRef<
-    Array<{ toolCallId: string; toolName: OrionToolName; args: Record<string, unknown> }>
+    Array<{
+      toolCallId: string;
+      toolName: OrionToolName;
+      args: Record<string, unknown>;
+    }>
   >([]);
   // Tool calls that only need a Jupyter server connection (no kernel required).
   // Flushed as soon as assistant.toolsReady becomes true.
   const pendingServerToolCallsRef = useRef<
-    Array<{ toolCallId: string; toolName: OrionToolName; args: Record<string, unknown> }>
+    Array<{
+      toolCallId: string;
+      toolName: OrionToolName;
+      args: Record<string, unknown>;
+    }>
   >([]);
   const isToolServerReady = Boolean(
-    kernelService && assistant?.toolsReady && serverAvailable
+    kernelService && assistant?.toolsReady && serverAvailable,
   );
-  const toolExecutionSchedulerRef = useRef<OrderedToolExecutionScheduler | null>(
-    null
-  );
+  const toolExecutionSchedulerRef =
+    useRef<OrderedToolExecutionScheduler | null>(null);
   const toolExecutionAbortControllerRef = useRef<AbortController | null>(null);
   const toolExecutionHandoffRef = useRef<Promise<void>>(Promise.resolve());
   const toolExecutionTurnIdRef = useRef(0);
@@ -1723,7 +2095,8 @@ export function RightSidebar({
   };
   const [pendingInPlaceEditAction, setPendingInPlaceEditAction] =
     useState<PendingInPlaceEditAction | null>(null);
-  const [isRestoringEditWorkspace, setIsRestoringEditWorkspace] = useState(false);
+  const [isRestoringEditWorkspace, setIsRestoringEditWorkspace] =
+    useState(false);
 
   // Guard against calling generateAndSetTitle more than once per chat session.
   // A ref is used so the check is synchronous and not subject to stale closure
@@ -1737,12 +2110,49 @@ export function RightSidebar({
     args: Record<string, unknown>;
     resolve: (action: "approve" | "reject") => void;
   };
-  const pendingApprovalToolCallsRef = useRef<Map<string, PendingApproval>>(new Map());
-  const [pendingApprovalIds, setPendingApprovalIds] = useState<Set<string>>(new Set());
+  const pendingApprovalToolCallsRef = useRef<Map<string, PendingApproval>>(
+    new Map(),
+  );
+  const [pendingApprovalIds, setPendingApprovalIds] = useState<Set<string>>(
+    new Set(),
+  );
+
+  // `ask_question`: tool calls parked until the user answers the embedded
+  // questionnaire. The resolver is the tool's result.
+  type PendingAskQuestion = {
+    toolCallId: string;
+    resolve: (result: AskQuestionResult) => void;
+  };
+  const pendingAskQuestionsRef = useRef<Map<string, PendingAskQuestion>>(
+    new Map(),
+  );
+  const [answeredAskQuestionIds, setAnsweredAskQuestionIds] = useState<
+    Set<string>
+  >(new Set());
+
+  /** Chat-scoped bundle handed to the embedded questionnaire cards. */
+  const askQuestionHandlers = React.useMemo(
+    () => ({
+      maxQuestions: effectiveSettings.agent.execution.maxQuestionsPerAsk,
+      busyToolCallIds: answeredAskQuestionIds,
+      onSubmit: handleAnswerQuestions,
+      onDismiss: handleDismissQuestions,
+    }),
+    [
+      answeredAskQuestionIds,
+      effectiveSettings.agent.execution.maxQuestionsPerAsk,
+      handleAnswerQuestions,
+      handleDismissQuestions,
+    ],
+  );
 
   /** Live progress descriptions for running sub-agent tool calls, keyed by toolCallId. */
-  const [subagentProgress, setSubagentProgress] = useState<Map<string, string>>(new Map());
-  const [toolTimings, setToolTimings] = useState<Map<string, ToolTiming>>(new Map());
+  const [subagentProgress, setSubagentProgress] = useState<Map<string, string>>(
+    new Map(),
+  );
+  const [toolTimings, setToolTimings] = useState<Map<string, ToolTiming>>(
+    new Map(),
+  );
   const toolTimingsRef = useRef<Map<string, ToolTiming>>(new Map());
 
   /** Record the first moment a tool call entered the client execution loop. */
@@ -1776,18 +2186,27 @@ export function RightSidebar({
    */
   const subagentRunIndexRef = useRef<Map<string, number>>(new Map());
   const activeSubagentRunToolCallsRef = useRef<Set<string>>(new Set());
-  const researchSessionRef = useRef<ResearchSessionSnapshot>(createInactiveResearchSession());
+  const researchSessionRef = useRef<ResearchSessionSnapshot>(
+    createInactiveResearchSession(),
+  );
   const researchNudgeRef = useRef<ResearchNudge | undefined>(undefined);
   const lastAutomaticContinuationKeyRef = useRef<string | null>(null);
-  const automaticContinuationAttemptsRef = useRef<Map<string, number>>(new Map());
+  const automaticContinuationAttemptsRef = useRef<Map<string, number>>(
+    new Map(),
+  );
   const automaticContinuationPendingRef = useRef(false);
   const forcedSubagentForCurrentTurnRef = useRef<string | null>(null);
 
   // Manual input state — v6 useChat no longer manages input
   const [input, setInput] = useState("");
-  const [draftReferences, setDraftReferences] = useState<ResolvedChatReference[]>([]);
-  const [draftAttachments, setDraftAttachments] = useState<ChatDraftAttachment[]>([]);
-  const [pendingAttachmentUploadCount, setPendingAttachmentUploadCount] = useState(0);
+  const [draftReferences, setDraftReferences] = useState<
+    ResolvedChatReference[]
+  >([]);
+  const [draftAttachments, setDraftAttachments] = useState<
+    ChatDraftAttachment[]
+  >([]);
+  const [pendingAttachmentUploadCount, setPendingAttachmentUploadCount] =
+    useState(0);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
   const pendingSubmitRef = useRef<{
     text: string;
@@ -1796,7 +2215,7 @@ export function RightSidebar({
   } | null>(null);
   const customHandleSubmitRef = useRef<
     (event: React.FormEvent<HTMLFormElement>) => unknown
-  >(() => { });
+  >(() => {});
   const queueProcessingRef = useRef(false);
   const prevAgentTurnActiveRef = useRef(false);
   const attachmentCleanupInFlightRef = useRef(false);
@@ -1814,7 +2233,7 @@ export function RightSidebar({
     toolExecutionSchedulerRef.current = new OrderedToolExecutionScheduler(
       effectiveSettings.agent.execution.maxParallelReadOnlyCalls,
       abortController.signal,
-      toolExecutionHandoffRef.current
+      toolExecutionHandoffRef.current,
     );
     stopRequestedRef.current = false;
     automaticContinuationPendingRef.current = false;
@@ -1828,11 +2247,12 @@ export function RightSidebar({
     () => () => {
       toolExecutionAbortControllerRef.current?.abort();
     },
-    []
+    [],
   );
   const handleInputChange = useCallback(
-    (e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) => setInput(e.target.value),
-    []
+    (e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) =>
+      setInput(e.target.value),
+    [],
   );
 
   /** Adds a reference chip to the active draft and returns focus to the composer. */
@@ -1853,99 +2273,111 @@ export function RightSidebar({
    * Converts images into model file parts and copies non-images into managed
    * Jupyter storage before exposing them to the composer.
    */
-  const handleAttachFiles = useCallback(async (files: FileList | readonly File[]) => {
-    const selectedFiles = Array.from(files);
-    if (selectedFiles.length === 0) return;
+  const handleAttachFiles = useCallback(
+    async (files: FileList | readonly File[]) => {
+      const selectedFiles = Array.from(files);
+      if (selectedFiles.length === 0) return;
 
-    const supportsImageInput = getModel(selectedModel)?.supportsImageInput === true;
-    const nextAttachments: ChatDraftAttachment[] = [];
-    let unsupportedImageCount = 0;
+      const supportsImageInput =
+        getModel(selectedModel)?.supportsImageInput === true;
+      const nextAttachments: ChatDraftAttachment[] = [];
+      let unsupportedImageCount = 0;
 
-    setPendingAttachmentUploadCount((current) => current + 1);
+      setPendingAttachmentUploadCount((current) => current + 1);
 
-    try {
-      for (const file of selectedFiles) {
-        const mediaType = file.type || "application/octet-stream";
-        let reference: ResolvedChatReference;
-        let imageFilePart: FileUIPart | undefined;
+      try {
+        for (const file of selectedFiles) {
+          const mediaType = file.type || "application/octet-stream";
+          let reference: ResolvedChatReference;
+          let imageFilePart: FileUIPart | undefined;
 
-        if (mediaType.startsWith("image/")) {
-          reference = makeExternalFileReference(file);
-          if (supportsImageInput) {
-            try {
-              imageFilePart = {
-                type: "file",
-                mediaType,
-                filename: file.name,
-                url: await fileToDataUrl(file),
-              };
-            } catch (error) {
-              console.error("Failed to read image attachment:", error);
-              toast.error(`Could not attach ${file.name}.`);
-              continue;
+          if (mediaType.startsWith("image/")) {
+            reference = makeExternalFileReference(file);
+            if (supportsImageInput) {
+              try {
+                imageFilePart = {
+                  type: "file",
+                  mediaType,
+                  filename: file.name,
+                  url: await fileToDataUrl(file),
+                };
+              } catch (error) {
+                console.error("Failed to read image attachment:", error);
+                toast.error(`Could not attach ${file.name}.`);
+                continue;
+              }
+            } else {
+              unsupportedImageCount += 1;
             }
           } else {
-            unsupportedImageCount += 1;
-          }
-        } else {
-          if (!kernelService || !effectiveChatId) {
-            toast.error(`Could not attach ${file.name}: connect to a Jupyter server first.`);
-            continue;
+            if (!kernelService || !effectiveChatId) {
+              toast.error(
+                `Could not attach ${file.name}: connect to a Jupyter server first.`,
+              );
+              continue;
+            }
+
+            const uploadToastId = toast.loading(`Uploading ${file.name}…`);
+            try {
+              const attachmentId = crypto.randomUUID();
+              const manifest = await storeChatAttachment(
+                kernelService.getContentsManager(),
+                effectiveChatId,
+                file,
+                { attachmentId },
+              );
+              reference = buildManagedExternalFileReference(file, manifest);
+              toast.success(`${file.name} attached.`, { id: uploadToastId });
+            } catch (error) {
+              console.error("Failed to store managed chat attachment:", error);
+              const message =
+                error instanceof Error ? error.message : String(error);
+              toast.error(`Could not attach ${file.name}: ${message}`, {
+                id: uploadToastId,
+              });
+              continue;
+            }
           }
 
-          const uploadToastId = toast.loading(`Uploading ${file.name}…`);
-          try {
-            const attachmentId = crypto.randomUUID();
-            const manifest = await storeChatAttachment(
-              kernelService.getContentsManager(),
-              effectiveChatId,
-              file,
-              { attachmentId }
-            );
-            reference = buildManagedExternalFileReference(file, manifest);
-            toast.success(`${file.name} attached.`, { id: uploadToastId });
-          } catch (error) {
-            console.error("Failed to store managed chat attachment:", error);
-            const message = error instanceof Error ? error.message : String(error);
-            toast.error(`Could not attach ${file.name}: ${message}`, {
-              id: uploadToastId,
-            });
-            continue;
-          }
+          nextAttachments.push({
+            id: `${reference.id}:${crypto.randomUUID()}`,
+            fileName: file.name,
+            mediaType,
+            size: file.size,
+            ...(file.lastModified > 0
+              ? { lastModified: file.lastModified }
+              : {}),
+            reference,
+            ...(imageFilePart ? { imageFilePart } : {}),
+          });
         }
-
-        nextAttachments.push({
-          id: `${reference.id}:${crypto.randomUUID()}`,
-          fileName: file.name,
-          mediaType,
-          size: file.size,
-          ...(file.lastModified > 0 ? { lastModified: file.lastModified } : {}),
-          reference,
-          ...(imageFilePart ? { imageFilePart } : {}),
-        });
+      } finally {
+        setPendingAttachmentUploadCount((current) => Math.max(0, current - 1));
       }
-    } finally {
-      setPendingAttachmentUploadCount((current) => Math.max(0, current - 1));
-    }
 
-    if (unsupportedImageCount > 0) {
-      toast.warning(
-        unsupportedImageCount === 1
-          ? "This model cannot see image attachments, so the image was attached as a pointer."
-          : "This model cannot see image attachments, so the images were attached as pointers."
+      if (unsupportedImageCount > 0) {
+        toast.warning(
+          unsupportedImageCount === 1
+            ? "This model cannot see image attachments, so the image was attached as a pointer."
+            : "This model cannot see image attachments, so the images were attached as pointers.",
+        );
+      }
+
+      if (nextAttachments.length === 0) return;
+      setDraftAttachments((current) =>
+        [...current, ...nextAttachments].slice(-20),
       );
-    }
-
-    if (nextAttachments.length === 0) return;
-    setDraftAttachments((current) => [...current, ...nextAttachments].slice(-20));
-    window.setTimeout(() => {
-      textareaRef.current?.focus();
-    }, 0);
-  }, [effectiveChatId, getModel, kernelService, selectedModel, textareaRef]);
+      window.setTimeout(() => {
+        textareaRef.current?.focus();
+      }, 0);
+    },
+    [effectiveChatId, getModel, kernelService, selectedModel, textareaRef],
+  );
 
   useEffect(() => {
     const handleMentionNotebookCell = (event: Event) => {
-      const detail = (event as CustomEvent<NotebookCellMentionEventDetail>).detail;
+      const detail = (event as CustomEvent<NotebookCellMentionEventDetail>)
+        .detail;
       if (
         typeof detail?.notebookPath !== "string" ||
         typeof detail.cellIndex !== "number" ||
@@ -1966,21 +2398,28 @@ export function RightSidebar({
           typeof detail.preview === "string"
             ? detail.preview
             : `Notebook cell ${detail.cellIndex} in ${detail.notebookPath}.`,
-          `Use use_notebook with notebookPath="${agentPromptPath(detail.notebookPath)}", then read_cell for cell index ${detail.cellIndex}.`
-        )
+          `Use use_notebook with notebookPath="${agentPromptPath(detail.notebookPath)}", then read_cell for cell index ${detail.cellIndex}.`,
+        ),
       );
     };
 
-    window.addEventListener("orion:mention-notebook-cell", handleMentionNotebookCell);
+    window.addEventListener(
+      "orion:mention-notebook-cell",
+      handleMentionNotebookCell,
+    );
     return () => {
-      window.removeEventListener("orion:mention-notebook-cell", handleMentionNotebookCell);
+      window.removeEventListener(
+        "orion:mention-notebook-cell",
+        handleMentionNotebookCell,
+      );
     };
   }, [addDraftReference, agentPromptPath]);
 
   useEffect(() => {
     /** Converts output mention events from notebook surfaces into composer chips. */
     const handleMentionNotebookOutput = (event: Event) => {
-      const detail = (event as CustomEvent<NotebookOutputMentionEventDetail>).detail;
+      const detail = (event as CustomEvent<NotebookOutputMentionEventDetail>)
+        .detail;
       if (
         typeof detail?.notebookPath !== "string" ||
         typeof detail.cellIndex !== "number" ||
@@ -2006,20 +2445,27 @@ export function RightSidebar({
           typeof detail.preview === "string"
             ? detail.preview
             : `Notebook cell ${detail.cellIndex}, output ${detail.outputIndex} in ${detail.notebookPath}.`,
-          `Use use_notebook with notebookPath="${agentPromptPath(detail.notebookPath)}", then read_cell_output with reads=[{cellIndex:${detail.cellIndex},outputIndex:${detail.outputIndex}}].`
-        )
+          `Use use_notebook with notebookPath="${agentPromptPath(detail.notebookPath)}", then read_cell_output with reads=[{cellIndex:${detail.cellIndex},outputIndex:${detail.outputIndex}}].`,
+        ),
       );
     };
 
-    window.addEventListener("orion:mention-notebook-output", handleMentionNotebookOutput);
+    window.addEventListener(
+      "orion:mention-notebook-output",
+      handleMentionNotebookOutput,
+    );
     return () => {
-      window.removeEventListener("orion:mention-notebook-output", handleMentionNotebookOutput);
+      window.removeEventListener(
+        "orion:mention-notebook-output",
+        handleMentionNotebookOutput,
+      );
     };
   }, [addDraftReference, agentPromptPath]);
 
   useEffect(() => {
     const handleMentionWorkspacePath = (event: Event) => {
-      const detail = (event as CustomEvent<WorkspacePathMentionEventDetail>).detail;
+      const detail = (event as CustomEvent<WorkspacePathMentionEventDetail>)
+        .detail;
       if (typeof detail?.path !== "string" || detail.path.length === 0) {
         return;
       }
@@ -2040,8 +2486,8 @@ export function RightSidebar({
             label,
             { type: "folder", path: detail.path },
             `Folder: ${detail.path}`,
-            `Use bash with safe read-only commands scoped to "${promptPath}" when exact folder contents are needed.`
-          )
+            `Use bash with safe read-only commands scoped to "${promptPath}" when exact folder contents are needed.`,
+          ),
         );
         return;
       }
@@ -2056,20 +2502,27 @@ export function RightSidebar({
           `File: ${detail.path}`,
           isNotebook
             ? `Use use_notebook with notebookPath="${promptPath}", then read_notebook or read_cell for exact cells.`
-            : `Use read_file with path="${promptPath}" for exact contents.`
-        )
+            : `Use read_file with path="${promptPath}" for exact contents.`,
+        ),
       );
     };
 
-    window.addEventListener("orion:mention-workspace-path", handleMentionWorkspacePath);
+    window.addEventListener(
+      "orion:mention-workspace-path",
+      handleMentionWorkspacePath,
+    );
     return () => {
-      window.removeEventListener("orion:mention-workspace-path", handleMentionWorkspacePath);
+      window.removeEventListener(
+        "orion:mention-workspace-path",
+        handleMentionWorkspacePath,
+      );
     };
   }, [addDraftReference, agentPromptPath]);
 
   useEffect(() => {
     const handleAttachEditorSelection = (event: Event) => {
-      const detail = (event as CustomEvent<EditorSelectionAttachEventDetail>).detail;
+      const detail = (event as CustomEvent<EditorSelectionAttachEventDetail>)
+        .detail;
       if (
         typeof detail?.path !== "string" ||
         typeof detail.lineStart !== "number" ||
@@ -2085,21 +2538,21 @@ export function RightSidebar({
 
       const notebookCellIndex =
         typeof detail.notebookCellIndex === "number" &&
-          Number.isInteger(detail.notebookCellIndex)
+        Number.isInteger(detail.notebookCellIndex)
           ? detail.notebookCellIndex
           : undefined;
       const label =
         notebookCellIndex !== undefined
           ? formatCellSelectionReferenceLabel(
-            notebookCellIndex,
-            detail.lineStart,
-            detail.lineEnd
-          )
+              notebookCellIndex,
+              detail.lineStart,
+              detail.lineEnd,
+            )
           : formatFileSelectionReferenceLabel(
-            detail.path,
-            detail.lineStart,
-            detail.lineEnd
-          );
+              detail.path,
+              detail.lineStart,
+              detail.lineEnd,
+            );
       const range = formatLineRange(detail.lineStart, detail.lineEnd);
       const toolHint =
         typeof notebookCellIndex === "number"
@@ -2112,33 +2565,41 @@ export function RightSidebar({
           label,
           notebookCellIndex !== undefined
             ? {
-              type: "cell",
-              notebookPath: detail.path,
-              cellIndices: [notebookCellIndex],
-              lineStart: detail.lineStart,
-              lineEnd: detail.lineEnd,
-            }
+                type: "cell",
+                notebookPath: detail.path,
+                cellIndices: [notebookCellIndex],
+                lineStart: detail.lineStart,
+                lineEnd: detail.lineEnd,
+              }
             : {
-              type: "file",
-              path: detail.path,
-              lineStart: detail.lineStart,
-              lineEnd: detail.lineEnd,
-            },
+                type: "file",
+                path: detail.path,
+                lineStart: detail.lineStart,
+                lineEnd: detail.lineEnd,
+              },
           detail.selectedText,
-          toolHint
-        )
+          toolHint,
+        ),
       );
     };
 
-    window.addEventListener("orion:attach-editor-selection", handleAttachEditorSelection);
+    window.addEventListener(
+      "orion:attach-editor-selection",
+      handleAttachEditorSelection,
+    );
     return () => {
-      window.removeEventListener("orion:attach-editor-selection", handleAttachEditorSelection);
+      window.removeEventListener(
+        "orion:attach-editor-selection",
+        handleAttachEditorSelection,
+      );
     };
   }, [addDraftReference, agentPromptPath]);
 
   useEffect(() => {
     const handleMentionConversationSelection = (event: Event) => {
-      const detail = (event as CustomEvent<ConversationSelectionMentionEventDetail>).detail;
+      const detail = (
+        event as CustomEvent<ConversationSelectionMentionEventDetail>
+      ).detail;
       if (
         typeof detail?.selectedText !== "string" ||
         typeof detail.messageId !== "string" ||
@@ -2153,12 +2614,14 @@ export function RightSidebar({
         return;
       }
 
-      const toolName = typeof detail.toolName === "string" ? detail.toolName : undefined;
-      const toolCallId = typeof detail.toolCallId === "string" ? detail.toolCallId : undefined;
+      const toolName =
+        typeof detail.toolName === "string" ? detail.toolName : undefined;
+      const toolCallId =
+        typeof detail.toolCallId === "string" ? detail.toolCallId : undefined;
       const label = formatConversationSelectionReferenceLabel(
         detail.source,
         detail.messageIndex,
-        toolName
+        toolName,
       );
 
       addDraftReference(
@@ -2176,34 +2639,36 @@ export function RightSidebar({
             selectionHash: hashConversationSelection(detail.selectedText),
           },
           detail.selectedText,
-          "Use the selected conversation text included inline as context from this chat."
-        )
+          "Use the selected conversation text included inline as context from this chat.",
+        ),
       );
     };
 
     window.addEventListener(
       "orion:mention-conversation-selection",
-      handleMentionConversationSelection
+      handleMentionConversationSelection,
     );
     return () => {
       window.removeEventListener(
         "orion:mention-conversation-selection",
-        handleMentionConversationSelection
+        handleMentionConversationSelection,
       );
     };
   }, [addDraftReference]);
 
   const agentCommunicationStyle = effectiveSettings.chat.communicationStyle;
-  const agentCustomCommunicationStyle = effectiveSettings.chat.customCommunicationStyle;
+  const agentCustomCommunicationStyle =
+    effectiveSettings.chat.customCommunicationStyle;
   const interactionModeConfigs = React.useMemo(
-    () => normalizeInteractionModeConfigs(effectiveSettings.chat.interactionModes),
-    [effectiveSettings.chat.interactionModes]
+    () =>
+      normalizeInteractionModeConfigs(effectiveSettings.chat.interactionModes),
+    [effectiveSettings.chat.interactionModes],
   );
 
   React.useEffect(() => {
     const visibleModeId = resolveSelectorInteractionModeId(
       interactionMode,
-      interactionModeConfigs
+      interactionModeConfigs,
     );
     if (visibleModeId === interactionMode) return;
     setInteractionMode(visibleModeId);
@@ -2219,28 +2684,46 @@ export function RightSidebar({
         modeId: interactionMode,
         modes: interactionModeConfigs,
       }),
-    [interactionMode, interactionModeConfigs]
+    [interactionMode, interactionModeConfigs],
+  );
+
+  // Edit mode ships the cell mutation tools without `execute_cell`, so the
+  // execution chained onto insert_cell / overwrite_cell_source has to answer to
+  // the mode's tool list rather than run regardless.
+  const chainedCellExecutionAllowed = React.useMemo(
+    () => modeAllowsChainedCellExecution(resolvedInteractionModeConfig.toolNames),
+    [resolvedInteractionModeConfig.toolNames],
   );
 
   useEffect(() => {
     if (resolvedInteractionModeConfig.id === interactionMode) return;
     setInteractionMode(resolvedInteractionModeConfig.id);
     if (typeof window !== "undefined") {
-      sessionStorage.setItem(SESSION_MODE_KEY, resolvedInteractionModeConfig.id);
+      sessionStorage.setItem(
+        SESSION_MODE_KEY,
+        resolvedInteractionModeConfig.id,
+      );
     }
   }, [interactionMode, resolvedInteractionModeConfig.id]);
 
   const buildChatRequestBody = useCallback(
     (overrides?: Record<string, unknown>) => {
-      const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
+      const { notebookPath, activeFilePath } =
+        agentEditorContext(activeNotebookPath);
+      const requestInteractionMode =
+        goalContractDraftActiveRef.current ||
+        goalSessionRef.current?.status === "active"
+          ? (interactionModeConfigs.find((mode) => mode.id === "Agent") ??
+            resolvedInteractionModeConfig)
+          : resolvedInteractionModeConfig;
       return {
         provider: modelInfo?.provider,
         model: apiModelId,
-        interactionMode: resolvedInteractionModeConfig.id,
-        interactionModeConfig: resolvedInteractionModeConfig,
+        interactionMode: requestInteractionMode.id,
+        interactionModeConfig: requestInteractionMode,
         agentMode:
-          resolvedInteractionModeConfig.baseMode === "Research" ||
-          resolvedInteractionModeConfig.baseMode === "Agent",
+          requestInteractionMode.baseMode === "Explore" ||
+          requestInteractionMode.baseMode === "Agent",
         chatId: effectiveChatId ?? undefined,
         modelRequestId: modelRequestIdRef.current,
         modelSettings: modelSettingsMap[selectedModel],
@@ -2249,8 +2732,12 @@ export function RightSidebar({
         connectedNotebookPath:
           assistant?.getCurrentConnectedNotebookPath() ?? undefined,
         workspaceDirectory: workspaceDirectory ?? undefined,
-        availableSkills: serializeAvailableSkills(assistant?.availableSkills ?? []),
-        availableSubagents: serializeAvailableSubagents(assistant?.availableSubagents ?? []),
+        availableSkills: serializeAvailableSkills(
+          assistant?.availableSkills ?? [],
+        ),
+        availableSubagents: serializeAvailableSubagents(
+          assistant?.availableSubagents ?? [],
+        ),
         agentRules: serializeAgentRules(assistant?.availableRules ?? []),
         serverInfo: assistant?.serverInfo ?? undefined,
         jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
@@ -2258,11 +2745,15 @@ export function RightSidebar({
         clientPlatformOs,
         agentCommunicationStyle,
         agentCustomCommunicationStyle,
-        notebookUiPreferences: effectiveSettings.notebook.uiPreferences,
-        researchSession: researchSessionRef.current.active ? researchSessionRef.current : undefined,
+        researchSession: researchSessionRef.current.active
+          ? researchSessionRef.current
+          : undefined,
         researchNudge: researchNudgeRef.current,
+        goalContractDraft: goalContractDraftActiveRef.current || undefined,
+        goalContinuation: goalContinuationRef.current,
         businessExperienceMode: isBusinessExperience,
         contextSettings: effectiveSettings.agent.context,
+        maxQuestionsPerAsk: effectiveSettings.agent.execution.maxQuestionsPerAsk,
         ...overrides,
       };
     },
@@ -2271,13 +2762,7 @@ export function RightSidebar({
       agentCommunicationStyle,
       agentCustomCommunicationStyle,
       apiModelId,
-      assistant?.availableRules,
-      assistant?.availableSkills,
-      assistant?.availableSubagents,
-      assistant?.getCurrentConnectedNotebookPath,
-      assistant?.jupyterServerIsLocal,
-      assistant?.rootDirectory,
-      assistant?.serverInfo,
+      assistant,
       clientPlatformOs,
       effectiveChatId,
       modelInfo?.provider,
@@ -2287,17 +2772,21 @@ export function RightSidebar({
       workspaceDirectory,
       isBusinessExperience,
       effectiveSettings.agent.context,
-      effectiveSettings.notebook.uiPreferences,
-    ]
+      effectiveSettings.agent.execution.maxQuestionsPerAsk,
+      interactionModeConfigs,
+    ],
   );
 
   /** Runs the server-side context measurement against the real prepared prompt. */
   const requestContextPreflight = useCallback(
-    async (candidateMessages: UIMessage[], signal?: AbortSignal): Promise<ContextMeasurement> => {
+    async (
+      candidateMessages: UIMessage[],
+      signal?: AbortSignal,
+    ): Promise<ContextMeasurement> => {
       const wireMessages = buildWirePayload(
         candidateMessages,
         compactionSummaryRef.current,
-        { retentionTurns: contextSettingsRef.current.optimizerRetentionTurns }
+        { retentionTurns: contextSettingsRef.current.optimizerRetentionTurns },
       );
       const response = await fetch("/api/chat/context/preflight", {
         method: "POST",
@@ -2313,12 +2802,17 @@ export function RightSidebar({
       }
       return ContextMeasurementSchema.parse(await response.json());
     },
-    [buildChatRequestBody]
+    [buildChatRequestBody],
   );
 
   // Ref for dynamic body values — read by the transport function at send time
   const bodyRef = useRef<Record<string, unknown>>(buildChatRequestBody());
-  const setMessagesRef = useRef<((updater: UIMessage[] | ((messages: UIMessage[]) => UIMessage[])) => void) | null>(null);
+  const setMessagesRef = useRef<
+    | ((
+        updater: UIMessage[] | ((messages: UIMessage[]) => UIMessage[]),
+      ) => void)
+    | null
+  >(null);
 
   /** Clear automatic follow-up retry bookkeeping after durable research progress. */
   const resetAutomaticContinuationGuards = useCallback(() => {
@@ -2336,7 +2830,9 @@ export function RightSidebar({
   const syncAgentLoopRequestBody = useCallback(() => {
     bodyRef.current = {
       ...bodyRef.current,
-      researchSession: researchSessionRef.current.active ? researchSessionRef.current : undefined,
+      researchSession: researchSessionRef.current.active
+        ? researchSessionRef.current
+        : undefined,
       researchNudge: researchNudgeRef.current,
     };
   }, []);
@@ -2344,10 +2840,10 @@ export function RightSidebar({
   /** Starts a notebook-native research session for the current model turn. */
   const activateResearchSession = useCallback(
     (
-      activation: "research-mode" | "slash",
+      activation: "explore-mode" | "slash",
       objective: string,
       profile = "general",
-      intensity: ResearchSessionIntensity = "standard"
+      intensity: ResearchSessionIntensity = "standard",
     ) => {
       researchSessionRef.current = createResearchSession({
         activation,
@@ -2358,7 +2854,7 @@ export function RightSidebar({
       resetAutomaticContinuationGuards();
       syncAgentLoopRequestBody();
     },
-    [resetAutomaticContinuationGuards, syncAgentLoopRequestBody]
+    [resetAutomaticContinuationGuards, syncAgentLoopRequestBody],
   );
 
   /** Ends the active research session without altering durable notebook work. */
@@ -2369,18 +2865,20 @@ export function RightSidebar({
     syncAgentLoopRequestBody();
   }, [resetAutomaticContinuationGuards, syncAgentLoopRequestBody]);
 
-  /** Research mode activates the notebook-native research loop before sending. */
+  /** Explore mode activates the notebook-native research loop before sending. */
   const ensureResearchSessionActive = useCallback(
     (objective: string) => {
-      if (resolvedInteractionModeConfig.baseMode !== "Research") return;
+      if (goalContractDraftActiveRef.current) return;
+      if (goalSessionRef.current?.status === "active") return;
+      if (resolvedInteractionModeConfig.baseMode !== "Explore") return;
       activateResearchSession(
-        "research-mode",
-        objective.trim() || "Research mode task",
+        "explore-mode",
+        objective.trim() || "Explore mode task",
         "general",
-        "standard"
+        "standard",
       );
     },
-    [activateResearchSession, resolvedInteractionModeConfig.baseMode]
+    [activateResearchSession, resolvedInteractionModeConfig.baseMode],
   );
 
   // Keep bodyRef in sync with latest values
@@ -2402,12 +2900,13 @@ export function RightSidebar({
           body: {
             ...body,
             messages: buildWirePayload(messages, compactionSummaryRef.current, {
-              retentionTurns: contextSettingsRef.current.optimizerRetentionTurns,
+              retentionTurns:
+                contextSettingsRef.current.optimizerRetentionTurns,
             }),
           },
         };
       },
-    })
+    }),
   );
 
   /** Allow automatic model follow-ups while preventing the same stalled key from looping forever. */
@@ -2417,10 +2916,11 @@ export function RightSidebar({
       options?: {
         maxAttempts?: number;
         reason?: string;
-      }
+      },
     ): boolean => {
       if (!key) return false;
-      const maxAttempts = options?.maxAttempts ?? MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS;
+      const maxAttempts =
+        options?.maxAttempts ?? MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS;
       const attempts = automaticContinuationAttemptsRef.current.get(key) ?? 0;
       if (attempts >= maxAttempts) return false;
       const nextAttempt = attempts + 1;
@@ -2434,17 +2934,24 @@ export function RightSidebar({
       };
       return true;
     },
-    []
+    [],
   );
 
   const allowResearchContinuation = useCallback(
-    (key: string | null, reason: string, currentMessages: UIMessage[]): boolean => {
-      if (!researchSessionRef.current.active || stopRequestedRef.current) return false;
+    (
+      key: string | null,
+      reason: string,
+      currentMessages: UIMessage[],
+    ): boolean => {
+      if (!researchSessionRef.current.active || stopRequestedRef.current)
+        return false;
 
-      const lastAssistantMessage = currentMessages.findLast((message) => message.role === "assistant");
+      const lastAssistantMessage = currentMessages.findLast(
+        (message) => message.role === "assistant",
+      );
       const decision = advanceResearchSessionForContinuation(
         researchSessionRef.current,
-        getResearchTurnActivity(lastAssistantMessage)
+        getResearchTurnActivity(lastAssistantMessage),
       );
       researchSessionRef.current = decision.session;
       researchNudgeRef.current = decision.nudge;
@@ -2452,26 +2959,36 @@ export function RightSidebar({
 
       if (!decision.continue) {
         if (decision.terminal) {
-          toast.info(`Research session ended after ${decision.session.stepCount} steps.`);
+          toast.info(
+            `Explore session ended after ${decision.session.stepCount} steps.`,
+          );
         }
         return false;
       }
 
-      return allowAutomaticContinuation(`research:${reason}:${decision.reason}:${key ?? "unknown"}`, {
-        maxAttempts: RESEARCH_SESSION_MAX_STEPS,
-        reason: decision.nudge ?? reason,
-      });
+      return allowAutomaticContinuation(
+        `research:${reason}:${decision.reason}:${key ?? "unknown"}`,
+        {
+          maxAttempts: RESEARCH_SESSION_MAX_STEPS,
+          reason: decision.nudge ?? reason,
+        },
+      );
     },
-    [allowAutomaticContinuation, syncAgentLoopRequestBody]
+    [allowAutomaticContinuation, syncAgentLoopRequestBody],
   );
 
   /** Check whether the UI should still consider a pending follow-up turn active. */
   const hasAutomaticContinuationAttemptsRemaining = useCallback(
-    (key: string | null, maxAttempts = MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS): boolean => {
+    (
+      key: string | null,
+      maxAttempts = MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS,
+    ): boolean => {
       if (!key) return false;
-      return (automaticContinuationAttemptsRef.current.get(key) ?? 0) < maxAttempts;
+      return (
+        (automaticContinuationAttemptsRef.current.get(key) ?? 0) < maxAttempts
+      );
     },
-    []
+    [],
   );
 
   const {
@@ -2490,41 +3007,83 @@ export function RightSidebar({
     sendAutomaticallyWhen: ({ messages: currentMessages }) => {
       if (shouldContinueAfterToolCalls(currentMessages)) {
         const continuationKey = `tool:${getCompletedToolContinuationKey(currentMessages) ?? "unknown"}`;
+        if (goalContractDraftActiveRef.current) {
+          // Contract authoring is scoping, not working: once the author has
+          // spent its investigation budget the next turn forces the proposal.
+          const draftState = deriveGoalContractDraftState(
+            currentMessages,
+            goalSessionRef.current,
+          );
+          const investigationSteps =
+            draftState.goalMessageIndex == null
+              ? 0
+              : countGoalContractAuthorInvestigationSteps(
+                  currentMessages,
+                  draftState.goalMessageIndex,
+                );
+          return allowAutomaticContinuation(continuationKey, {
+            maxAttempts: MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS,
+            reason:
+              investigationSteps >= GOAL_CONTRACT_AUTHOR_MAX_INVESTIGATION_STEPS
+                ? "goal_contract_investigation_budget_spent"
+                : undefined,
+          });
+        }
         if (researchSessionRef.current.active) {
           return allowResearchContinuation(
             continuationKey,
             "research_tool_result",
-            currentMessages
+            currentMessages,
           );
         }
-        return allowAutomaticContinuation(
-          continuationKey,
-          {
-            maxAttempts: MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS,
-          }
-        );
+        return allowAutomaticContinuation(continuationKey, {
+          maxAttempts: MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS,
+        });
       }
-      if (!researchSessionRef.current.active || stopRequestedRef.current) return false;
+      if (goalContractDraftActiveRef.current && !stopRequestedRef.current) {
+        const lastMessage = currentMessages.at(-1);
+        if (
+          lastMessage?.role === "assistant" &&
+          !lastAssistantTurnHasGoalContractProposal(currentMessages) &&
+          !lastMessage.parts.some((part) => part.type.startsWith("tool-"))
+        ) {
+          return allowAutomaticContinuation(
+            getGoalContractProposalRetryKey(currentMessages),
+            {
+              maxAttempts: MAX_GOAL_CONTRACT_PROPOSAL_RETRIES,
+              reason: "goal_contract_proposal_required",
+            },
+          );
+        }
+      }
+      if (goalSessionRef.current?.status === "active") return false;
+      if (!researchSessionRef.current.active || stopRequestedRef.current)
+        return false;
       const lastMessage = currentMessages.at(-1);
       if (lastMessage?.role !== "assistant") return false;
-      const hasToolPart = lastMessage.parts.some((part) => part.type.startsWith("tool-"));
+      const hasToolPart = lastMessage.parts.some((part) =>
+        part.type.startsWith("tool-"),
+      );
       if (hasToolPart) return false;
       return allowResearchContinuation(
         `prose:${lastMessage.id}`,
         "research_prose_only",
-        currentMessages
+        currentMessages,
       );
     },
     onFinish: ({ messages: finalMessages }) => {
       const persistId = effectiveChatIdRef.current;
       if (!persistId) return;
 
-      const normalizedFinalMessages = deduplicateMessagesById(finalMessages).messages;
+      const normalizedFinalMessages =
+        deduplicateMessagesById(finalMessages).messages;
       const latestChats = chatsRef.current;
       const chatForPersist = latestChats.find((c) => c.id === persistId);
       const checkpointRequestId = modelRequestIdRef.current;
       const checkpointUserMessageIndex = checkpointRequestId
-        ? normalizedFinalMessages.findLastIndex((candidate) => candidate.role === "user")
+        ? normalizedFinalMessages.findLastIndex(
+            (candidate) => candidate.role === "user",
+          )
         : -1;
       const checkpointUserMessageId =
         checkpointUserMessageIndex >= 0
@@ -2532,28 +3091,37 @@ export function RightSidebar({
           : undefined;
       const persistedMessages = attachPersistedToolTimings(
         stripAllRasterData(normalizedFinalMessages),
-        toolTimingsRef.current
+        toolTimingsRef.current,
       );
-      const newChatMessages: ChatMessage[] = persistedMessages.map((m, messageIndex) => {
-        const messageForStorage = stripSessionOnlyFileParts(m);
-        const existing = chatForPersist?.messages.find((msg) => msg.id === m.id);
-        return {
-          ...messageForStorage,
-          metadata: normalizeChatMessageMetadata(m.metadata),
-          timestamp: existing?.timestamp || new Date(),
-          modelUsed: selectedModel,
-          checkpointId:
-            existing?.checkpointId ??
-            (messageIndex === checkpointUserMessageIndex ? checkpointRequestId : undefined),
-        };
-      });
+      const newChatMessages: ChatMessage[] = persistedMessages.map(
+        (m, messageIndex) => {
+          const messageForStorage = stripSessionOnlyFileParts(m);
+          const existing = chatForPersist?.messages.find(
+            (msg) => msg.id === m.id,
+          );
+          return {
+            ...messageForStorage,
+            metadata: normalizeChatMessageMetadata(m.metadata),
+            timestamp: existing?.timestamp || new Date(),
+            modelUsed: selectedModel,
+            checkpointId:
+              existing?.checkpointId ??
+              (messageIndex === checkpointUserMessageIndex
+                ? checkpointRequestId
+                : undefined),
+          };
+        },
+      );
 
       const chatBeforeUpdate = latestChats.find((c) => c.id === persistId);
       const isFirstUserMessage =
         chatBeforeUpdate?.messages.length === 0 &&
         newChatMessages.some((m) => m.role === "user");
 
-      if (isFirstUserMessage && !titleGeneratedForChatsRef.current.has(persistId)) {
+      if (
+        isFirstUserMessage &&
+        !titleGeneratedForChatsRef.current.has(persistId)
+      ) {
         titleGeneratedForChatsRef.current.add(persistId);
         generateAndSetTitle(newChatMessages, persistId);
       }
@@ -2561,10 +3129,14 @@ export function RightSidebar({
       setChats((prev) =>
         prev.map((chat) => {
           if (chat.id === persistId) {
-            return { ...chat, messages: newChatMessages, updatedAt: new Date() };
+            return {
+              ...chat,
+              messages: newChatMessages,
+              updatedAt: new Date(),
+            };
           }
           return chat;
-        })
+        }),
       );
       if (checkpointRequestId && checkpointUserMessageId) {
         setCheckpointRequestByMessageId((current) => {
@@ -2579,6 +3151,15 @@ export function RightSidebar({
     onError: (error) => {
       console.log(error);
       const apiError = parseChatApiErrorMessage(error?.message);
+      if (goalContractDraftActiveRef.current) {
+        const contractAuthorError = apiError?.message?.trim();
+        toast.error(
+          contractAuthorError &&
+            !/^failed to fetch$/iu.test(contractAuthorError)
+            ? contractAuthorError
+            : "The goal contract author could not continue. Check the connection, then add instructions in the composer to retry.",
+        );
+      }
       const isContextError = apiError?.code === "context_budget_exceeded";
       if (isContextError && reactiveContextRetryRef.current) {
         toast.error(apiError.message);
@@ -2598,7 +3179,9 @@ export function RightSidebar({
         reactiveContextRetryRef.current = true;
         compactionInFlightRef.current = true;
         setIsCompacting(true);
-        const recoveryToastId = toast.loading("Compacting context and retrying…");
+        const recoveryToastId = toast.loading(
+          "Compacting context and retrying…",
+        );
         const outboundSnapshot = lastOutboundMessagesRef.current?.slice();
         const currentMessages = outboundSnapshot ?? messagesRef.current.slice();
         const prevSummary = compactionSummaryRef.current;
@@ -2609,9 +3192,14 @@ export function RightSidebar({
             preflight: (candidateMessages) =>
               requestContextPreflight(candidateMessages).catch(() => null),
             buildPayload: (candidateMessages) =>
-              buildWirePayload(candidateMessages, compactionSummaryRef.current, {
-                retentionTurns: contextSettingsRef.current.optimizerRetentionTurns,
-              }),
+              buildWirePayload(
+                candidateMessages,
+                compactionSummaryRef.current,
+                {
+                  retentionTurns:
+                    contextSettingsRef.current.optimizerRetentionTurns,
+                },
+              ),
             compact: async () =>
               (
                 await compactConversation(currentMessages, {
@@ -2627,8 +3215,10 @@ export function RightSidebar({
               await chatStorage.updateCompactionSummary(chatId, summary);
               setChats((prev) =>
                 prev.map((chat) =>
-                  chat.id === chatId ? { ...chat, compactionSummary: summary } : chat
-                )
+                  chat.id === chatId
+                    ? { ...chat, compactionSummary: summary }
+                    : chat,
+                ),
               );
             },
             applySummary: (summary) => {
@@ -2665,13 +3255,18 @@ export function RightSidebar({
   // Derived isLoading for backward compat with child components
   const isLoading = status === "streaming" || status === "submitted";
   useEffect(() => {
-    if (status === "streaming" || status === "submitted" || status === "error") {
+    if (
+      status === "streaming" ||
+      status === "submitted" ||
+      status === "error"
+    ) {
       automaticContinuationPendingRef.current = false;
     }
   }, [status]);
   const draftImageAttachmentCount = React.useMemo(
-    () => draftAttachments.filter((attachment) => attachment.imageFilePart).length,
-    [draftAttachments]
+    () =>
+      draftAttachments.filter((attachment) => attachment.imageFilePart).length,
+    [draftAttachments],
   );
   const deferredMessagesForContext = React.useDeferredValue(messages);
 
@@ -2686,7 +3281,7 @@ export function RightSidebar({
       // The server inlines exactly this block, so price its real length.
       referenceBlockChars: formatReferencesForMessage(draftReferences).length,
     }),
-    [input, draftImageAttachmentCount, draftReferences]
+    [input, draftImageAttachmentCount, draftReferences],
   );
 
   const {
@@ -2710,8 +3305,9 @@ export function RightSidebar({
 
   const hasPendingToolCalls = React.useMemo(() => {
     const modeUsesTools =
+      isGoalContractDraftActive ||
       resolvedInteractionModeConfig.toolNames.length > 0 ||
-      resolvedInteractionModeConfig.baseMode === "Research" ||
+      resolvedInteractionModeConfig.baseMode === "Explore" ||
       resolvedInteractionModeConfig.baseMode === "Agent";
     if (!modeUsesTools) return false;
 
@@ -2720,10 +3316,15 @@ export function RightSidebar({
         (part) =>
           part.type.startsWith("tool-") &&
           "state" in part &&
-          part.state === "input-available"
-      )
+          part.state === "input-available",
+      ),
     );
-  }, [messages, resolvedInteractionModeConfig.baseMode, resolvedInteractionModeConfig.toolNames.length]);
+  }, [
+    isGoalContractDraftActive,
+    messages,
+    resolvedInteractionModeConfig.baseMode,
+    resolvedInteractionModeConfig.toolNames.length,
+  ]);
 
   /**
    * True while the agent is mid-turn: streaming, executing tools, or waiting for
@@ -2737,10 +3338,27 @@ export function RightSidebar({
     if (hasPendingToolCalls) return true;
     if (pendingApprovalIds.size > 0) return true;
     if (researchSessionRef.current.active) {
-      if (researchSessionRef.current.stepCount >= RESEARCH_SESSION_MAX_STEPS) return false;
+      if (researchSessionRef.current.stepCount >= RESEARCH_SESSION_MAX_STEPS)
+        return false;
       const lastMessage = messages.at(-1);
-      if (lastMessage?.role === "assistant" && !lastMessage.parts.some((part) => part.type.startsWith("tool-"))) {
+      if (
+        lastMessage?.role === "assistant" &&
+        !lastMessage.parts.some((part) => part.type.startsWith("tool-"))
+      ) {
         return true;
+      }
+    }
+    if (goalContractDraftActiveRef.current) {
+      const lastMessage = messages.at(-1);
+      if (
+        lastMessage?.role === "assistant" &&
+        !lastAssistantTurnHasGoalContractProposal(messages) &&
+        !lastMessage.parts.some((part) => part.type.startsWith("tool-"))
+      ) {
+        return hasAutomaticContinuationAttemptsRemaining(
+          getGoalContractProposalRetryKey(messages),
+          MAX_GOAL_CONTRACT_PROPOSAL_RETRIES,
+        );
       }
     }
     if (!shouldContinueAfterToolCalls(messages)) return false;
@@ -2749,7 +3367,7 @@ export function RightSidebar({
     const continuationKey = baseContinuationKey;
     return hasAutomaticContinuationAttemptsRemaining(
       continuationKey,
-      MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS
+      MAX_STANDARD_AUTO_CONTINUATION_ATTEMPTS,
     );
   }, [
     stopRequestActive,
@@ -2760,7 +3378,7 @@ export function RightSidebar({
     hasAutomaticContinuationAttemptsRemaining,
   ]);
 
-  const isInputLocked = isAgentTurnActive;
+  const isInputLocked = isAgentTurnActive || isGoalStarting;
 
   /** Stamp terminal tool timings when a turn completes so compact rows can show duration. */
   const prevTurnActiveForTimingsRef = useRef(isAgentTurnActive);
@@ -2781,19 +3399,23 @@ export function RightSidebar({
   /** Skill slash commands built from the currently available skills. */
   const skillSlashCommands = React.useMemo(
     () => buildSkillSlashCommands(assistant?.availableSkills ?? []),
-    [assistant?.availableSkills]
+    [assistant?.availableSkills],
   );
   const subagentSlashCommands = React.useMemo(
     () => buildSubagentSlashCommands(assistant?.availableSubagents ?? []),
-    [assistant?.availableSubagents]
+    [assistant?.availableSubagents],
   );
 
   /**
    * Detect which slash command (if any) is active based on the current input.
    */
   const activeSlashCommand = React.useMemo(
-    () => detectActiveSlashCommand(input, [...subagentSlashCommands, ...skillSlashCommands]),
-    [input, subagentSlashCommands, skillSlashCommands]
+    () =>
+      detectActiveSlashCommand(input, [
+        ...subagentSlashCommands,
+        ...skillSlashCommands,
+      ]),
+    [input, subagentSlashCommands, skillSlashCommands],
   );
 
   useEffect(() => {
@@ -2829,7 +3451,7 @@ export function RightSidebar({
         };
         void Promise.resolve(
           customHandleSubmitRef.current({
-            preventDefault: () => { },
+            preventDefault: () => {},
           } as React.FormEvent<HTMLFormElement>),
         ).finally(() => {
           pendingSubmitRef.current = null;
@@ -2839,7 +3461,9 @@ export function RightSidebar({
 
       if (isInputLocked) return;
 
-      setInput((current) => insertMessageIntoComposerInput(current, detail.message));
+      setInput((current) =>
+        insertMessageIntoComposerInput(current, detail.message),
+      );
       focusComposer();
       window.setTimeout(focusComposer, 0);
       window.setTimeout(focusComposer, 120);
@@ -2858,10 +3482,16 @@ export function RightSidebar({
 
       if (detail.newChat) {
         createNewChatRef.current();
-        setInput(insertSkillIntoComposerInput("", detail.skillName, detail.message));
+        setInput(
+          insertSkillIntoComposerInput("", detail.skillName, detail.message),
+        );
       } else {
         setInput((current) =>
-          insertSkillIntoComposerInput(current, detail.skillName, detail.message),
+          insertSkillIntoComposerInput(
+            current,
+            detail.skillName,
+            detail.message,
+          ),
         );
       }
       focusComposer();
@@ -2872,8 +3502,14 @@ export function RightSidebar({
     window.addEventListener(INSERT_CHAT_MESSAGE_EVENT, handleInsertChatMessage);
     window.addEventListener(INSERT_CHAT_SKILL_EVENT, handleInsertChatSkill);
     return () => {
-      window.removeEventListener(INSERT_CHAT_MESSAGE_EVENT, handleInsertChatMessage);
-      window.removeEventListener(INSERT_CHAT_SKILL_EVENT, handleInsertChatSkill);
+      window.removeEventListener(
+        INSERT_CHAT_MESSAGE_EVENT,
+        handleInsertChatMessage,
+      );
+      window.removeEventListener(
+        INSERT_CHAT_SKILL_EVENT,
+        handleInsertChatSkill,
+      );
     };
   }, [assistant?.availableSkills, isInputLocked, textareaRef]);
 
@@ -2883,7 +3519,9 @@ export function RightSidebar({
   }, [effectiveChatId]);
 
   const handleRemoveQueuedMessage = useCallback((id: string) => {
-    setMessageQueue((current) => current.filter((message) => message.id !== id));
+    setMessageQueue((current) =>
+      current.filter((message) => message.id !== id),
+    );
   }, []);
 
   /** Opens the selected active rule file in Orion's main editor. */
@@ -2891,118 +3529,140 @@ export function RightSidebar({
     (rule: AgentRule) => {
       onOpenFile?.({ name: formatRuleDisplayName(rule), path: rule.path });
     },
-    [onOpenFile]
+    [onOpenFile],
   );
 
   /** Run compaction and update state + persisted chat. Returns the new summary on success, null on failure. */
-  const runCompaction = useCallback(async (opts?: {
-    retentionTurns?: number;
-    measurementMessages?: UIMessage[];
-  }): Promise<CompactionSummary | null> => {
-    if (compactionInFlightRef.current || !effectiveChatId) return null;
-    if (!modelInfo?.provider) return null;
-    compactionInFlightRef.current = true;
-    setIsCompacting(true);
-    const compactionToastId = toast.loading("Compacting conversation…");
+  const runCompaction = useCallback(
+    async (opts?: {
+      retentionTurns?: number;
+      measurementMessages?: UIMessage[];
+    }): Promise<CompactionSummary | null> => {
+      if (compactionInFlightRef.current || !effectiveChatId) return null;
+      if (!modelInfo?.provider) return null;
+      compactionInFlightRef.current = true;
+      setIsCompacting(true);
+      const compactionToastId = toast.loading("Compacting conversation…");
 
-    try {
-      const measurementMessages = opts?.measurementMessages ?? messagesRef.current;
-      const beforePreflight = await requestContextPreflight(measurementMessages).catch(() => null);
-      const result = await compactConversation(messagesRef.current, {
-        chatId: effectiveChatId,
-        previousSummary: currentChat?.compactionSummary,
-        model: apiModelId,
-        provider: modelInfo.provider,
-        retentionTurns:
-          opts?.retentionTurns ?? contextSettingsRef.current.compactionRetentionTurns,
-        contextSettings: contextSettingsRef.current,
-      });
+      try {
+        const measurementMessages =
+          opts?.measurementMessages ?? messagesRef.current;
+        const beforePreflight = await requestContextPreflight(
+          measurementMessages,
+        ).catch(() => null);
+        const result = await compactConversation(messagesRef.current, {
+          chatId: effectiveChatId,
+          previousSummary: currentChat?.compactionSummary,
+          model: apiModelId,
+          provider: modelInfo.provider,
+          retentionTurns:
+            opts?.retentionTurns ??
+            contextSettingsRef.current.compactionRetentionTurns,
+          contextSettings: contextSettingsRef.current,
+        });
 
-      // Install the summary before measuring so preflight builds the compacted replay.
-      compactionSummaryRef.current = result.summary;
-      const afterPreflight = await requestContextPreflight(measurementMessages).catch(() => null);
-      const measuredSummary: CompactionSummary = {
-        ...result.summary,
-        tokensSaved:
+        // Install the summary before measuring so preflight builds the compacted replay.
+        compactionSummaryRef.current = result.summary;
+        const afterPreflight = await requestContextPreflight(
+          measurementMessages,
+        ).catch(() => null);
+        const measuredSummary: CompactionSummary = {
+          ...result.summary,
+          tokensSaved:
+            beforePreflight && afterPreflight
+              ? Math.max(
+                  0,
+                  beforePreflight.inputTokens - afterPreflight.inputTokens,
+                )
+              : 0,
+        };
+        // Invalidate the pre-compaction anchor before installing the new one, so a
+        // measurement of the old transcript can never be shown against the new one.
+        setCompactionEpoch((epoch) => epoch + 1);
+        if (afterPreflight) setContextAnchor(afterPreflight);
+        await chatStorage.updateCompactionSummary(
+          effectiveChatId,
+          measuredSummary,
+        );
+        compactionSummaryRef.current = measuredSummary;
+
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id === effectiveChatId
+              ? { ...c, compactionSummary: measuredSummary }
+              : c,
+          ),
+        );
+
+        const savedK = Math.round(measuredSummary.tokensSaved / 1000);
+        toast.success(
           beforePreflight && afterPreflight
-            ? Math.max(0, beforePreflight.inputTokens - afterPreflight.inputTokens)
-            : 0,
-      };
-      // Invalidate the pre-compaction anchor before installing the new one, so a
-      // measurement of the old transcript can never be shown against the new one.
-      setCompactionEpoch((epoch) => epoch + 1);
-      if (afterPreflight) setContextAnchor(afterPreflight);
-      await chatStorage.updateCompactionSummary(effectiveChatId, measuredSummary);
-      compactionSummaryRef.current = measuredSummary;
+            ? `Compacted — freed ${savedK > 0 ? `${savedK}k` : "some"} tokens`
+            : "Compacted — token savings will be measured on the next preflight",
+          { id: compactionToastId },
+        );
 
-      setChats((prev) =>
-        prev.map((c) =>
-          c.id === effectiveChatId ? { ...c, compactionSummary: measuredSummary } : c
-        )
-      );
-
-      const savedK = Math.round(measuredSummary.tokensSaved / 1000);
-      toast.success(
-        beforePreflight && afterPreflight
-          ? `Compacted — freed ${savedK > 0 ? `${savedK}k` : "some"} tokens`
-          : "Compacted — token savings will be measured on the next preflight",
-        { id: compactionToastId }
-      );
-
-      return measuredSummary;
-    } catch (err) {
-      console.error("Compaction failed:", err);
-      toast.error("Failed to compact conversation. Please try again.", {
-        id: compactionToastId,
-      });
-      return null;
-    } finally {
-      compactionInFlightRef.current = false;
-      setIsCompacting(false);
-    }
-  }, [
-    apiModelId,
-    currentChat?.compactionSummary,
-    effectiveChatId,
-    modelInfo?.provider,
-    requestContextPreflight,
-    setContextAnchor,
-    setChats,
-  ]);
+        return measuredSummary;
+      } catch (err) {
+        console.error("Compaction failed:", err);
+        toast.error("Failed to compact conversation. Please try again.", {
+          id: compactionToastId,
+        });
+        return null;
+      } finally {
+        compactionInFlightRef.current = false;
+        setIsCompacting(false);
+      }
+    },
+    [
+      apiModelId,
+      currentChat?.compactionSummary,
+      effectiveChatId,
+      modelInfo?.provider,
+      requestContextPreflight,
+      setContextAnchor,
+      setChats,
+    ],
+  );
 
   /** Fetches recorded usage for this chat and renders it as a temporary assistant row. */
-  const showCostSummary = useCallback(async (options?: { refresh?: boolean }): Promise<void> => {
-    if (!effectiveChatId) return;
+  const showCostSummary = useCallback(
+    async (options?: { refresh?: boolean }): Promise<void> => {
+      if (!effectiveChatId) return;
 
-    setIsRefreshingCostSummary(true);
-    try {
-      const summary = await chatStorage.getChatCostSummary(effectiveChatId, {
-        refresh: options?.refresh ?? true,
-      });
-      const modelLabels = Object.fromEntries(
-        modelsWithAccess.map((model) => [model.value, model.label])
-      );
-      setEphemeralCostMessage((current) => {
-        const preserveMessageId =
-          options?.refresh === true && current?.chatId === effectiveChatId;
-        return {
-          chatId: effectiveChatId,
-          summary,
-          modelLabels,
-          message: {
-            id: preserveMessageId ? current.message.id : createCostSummaryMessageId(),
-            role: "assistant",
-            parts: [],
-          },
-        };
-      });
-    } catch (error) {
-      console.error("Failed to load cost summary:", error);
-      toast.error("Failed to load session cost summary.");
-    } finally {
-      setIsRefreshingCostSummary(false);
-    }
-  }, [effectiveChatId, modelsWithAccess]);
+      setIsRefreshingCostSummary(true);
+      try {
+        const summary = await chatStorage.getChatCostSummary(effectiveChatId, {
+          refresh: options?.refresh ?? true,
+        });
+        const modelLabels = Object.fromEntries(
+          modelsWithAccess.map((model) => [model.value, model.label]),
+        );
+        setEphemeralCostMessage((current) => {
+          const preserveMessageId =
+            options?.refresh === true && current?.chatId === effectiveChatId;
+          return {
+            chatId: effectiveChatId,
+            summary,
+            modelLabels,
+            message: {
+              id: preserveMessageId
+                ? current.message.id
+                : createCostSummaryMessageId(),
+              role: "assistant",
+              parts: [],
+            },
+          };
+        });
+      } catch (error) {
+        console.error("Failed to load cost summary:", error);
+        toast.error("Failed to load session cost summary.");
+      } finally {
+        setIsRefreshingCostSummary(false);
+      }
+    },
+    [effectiveChatId, modelsWithAccess],
+  );
 
   const visibleCostSummary =
     ephemeralCostMessage?.chatId === effectiveChatId
@@ -3043,7 +3703,7 @@ export function RightSidebar({
         window.open(ORION_GITHUB_ISSUES_URL, "_blank", "noopener,noreferrer");
       }
     },
-    [showCostSummary]
+    [showCostSummary],
   );
 
   // Keep messagesRef up to date
@@ -3051,25 +3711,75 @@ export function RightSidebar({
     messagesRef.current = messages;
   }, [messages]);
 
+  const goalContractDraftState = React.useMemo(
+    () => deriveGoalContractDraftState(messages, goalSession),
+    [goalSession, messages],
+  );
+
+  /** Restore contract-authoring state from persisted proposal tool parts. */
+  useEffect(() => {
+    goalContractDraftActiveRef.current = goalContractDraftState.active;
+    setIsGoalContractDraftActive(goalContractDraftState.active);
+    bodyRef.current = {
+      ...bodyRef.current,
+      goalContractDraft: goalContractDraftState.active || undefined,
+    };
+  }, [goalContractDraftState.active]);
+
+  /** Surface a recoverable stop when the model repeatedly omits the required proposal. */
+  useEffect(() => {
+    if (
+      !goalContractDraftState.active ||
+      goalContractDraftState.phase !== "authoring" ||
+      status !== "ready"
+    )
+      return;
+    const lastMessage = messages.at(-1);
+    if (
+      lastMessage?.role !== "assistant" ||
+      lastMessage.parts.some((part) => part.type.startsWith("tool-"))
+    )
+      return;
+    const key = getGoalContractProposalRetryKey(messages);
+    if (!key) return;
+    if (
+      (automaticContinuationAttemptsRef.current.get(key) ?? 0) <
+      MAX_GOAL_CONTRACT_PROPOSAL_RETRIES
+    ) {
+      return;
+    }
+    if (goalContractFailureToastIdsRef.current.has(lastMessage.id)) return;
+    goalContractFailureToastIdsRef.current.add(lastMessage.id);
+    toast.error(
+      "The contract author did not return a proposal. Add instructions in the composer to try again.",
+    );
+    window.setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [
+    goalContractDraftState.active,
+    goalContractDraftState.phase,
+    messages,
+    status,
+  ]);
+
   const visibleMessages = React.useMemo(
     () =>
       ephemeralCostMessage?.chatId === effectiveChatId
         ? [...messages, ephemeralCostMessage.message]
         : messages,
-    [effectiveChatId, ephemeralCostMessage, messages]
+    [effectiveChatId, ephemeralCostMessage, messages],
   );
 
   const costSummaryByMessageId = React.useMemo(
     () =>
       ephemeralCostMessage?.chatId === effectiveChatId
         ? {
-          [ephemeralCostMessage.message.id]: {
-            summary: ephemeralCostMessage.summary,
-            modelLabels: ephemeralCostMessage.modelLabels,
-          },
-        }
+            [ephemeralCostMessage.message.id]: {
+              summary: ephemeralCostMessage.summary,
+              modelLabels: ephemeralCostMessage.modelLabels,
+            },
+          }
         : undefined,
-    [effectiveChatId, ephemeralCostMessage]
+    [effectiveChatId, ephemeralCostMessage],
   );
 
   // Keep addToolOutputRef in sync so async callbacks always use the latest closure
@@ -3085,7 +3795,7 @@ export function RightSidebar({
       markToolEnded(payload.toolCallId);
       addToolOutputRef.current(payload);
     },
-    [markToolEnded]
+    [markToolEnded],
   );
 
   /** Persist the final state of the edit checkpoint for the active user turn. */
@@ -3105,7 +3815,7 @@ export function RightSidebar({
         console.warn("Failed to update edit checkpoint status:", error);
       }
     },
-    [refreshCheckpointStatuses]
+    [refreshCheckpointStatuses],
   );
 
   /** Restore or redo all clean targets recorded for a user-turn checkpoint. */
@@ -3113,7 +3823,7 @@ export function RightSidebar({
     async (checkpointId: string, action: "restore" | "redo"): Promise<void> => {
       if (!kernelService) {
         toast.error(
-          `Connect to a Jupyter server before ${action === "redo" ? "redoing" : "restoring"} a checkpoint.`
+          `Connect to a Jupyter server before ${action === "redo" ? "redoing" : "restoring"} a checkpoint.`,
         );
         return;
       }
@@ -3130,35 +3840,43 @@ export function RightSidebar({
 
         if (result.conflicts.length > 0) {
           toast.warning(
-            `${action === "redo" ? "Redid" : "Restored"} ${result.restoredCount} item${result.restoredCount === 1 ? "" : "s"}; ${result.conflicts.length} conflict${result.conflicts.length === 1 ? "" : "s"} skipped.`
+            `${action === "redo" ? "Redid" : "Restored"} ${result.restoredCount} item${result.restoredCount === 1 ? "" : "s"}; ${result.conflicts.length} conflict${result.conflicts.length === 1 ? "" : "s"} skipped.`,
           );
           return;
         }
 
         toast.success(
-          `${action === "redo" ? "Redid" : "Restored"} ${result.restoredCount} checkpoint item${result.restoredCount === 1 ? "" : "s"}.`
+          `${action === "redo" ? "Redid" : "Restored"} ${result.restoredCount} checkpoint item${result.restoredCount === 1 ? "" : "s"}.`,
         );
       } catch (error) {
         console.error(`Failed to ${action} checkpoint:`, error);
         toast.error(
           error instanceof Error
             ? error.message
-            : `Failed to ${action === "redo" ? "redo" : "restore"} checkpoint.`
+            : `Failed to ${action === "redo" ? "redo" : "restore"} checkpoint.`,
         );
       }
     },
-    [assistant?.saveOpenDocumentIfDirty, kernelService, refreshCheckpointStatuses]
+    [
+      assistant?.saveOpenDocumentIfDirty,
+      kernelService,
+      refreshCheckpointStatuses,
+    ],
   );
 
   /** Returns message state safe for useChat by removing persistence-only fields. */
-  const toChatStateMessages = useCallback((chatMessages: ChatMessage[]): UIMessage[] =>
-    chatMessages.map((message) => {
-      const { checkpointId: _checkpointId, ...messageWithoutCheckpoint } = message;
-      return {
-        ...messageWithoutCheckpoint,
-        metadata: normalizeChatMessageMetadata(message.metadata),
-      };
-    }), []);
+  const toChatStateMessages = useCallback(
+    (chatMessages: ChatMessage[]): UIMessage[] =>
+      chatMessages.map((message) => {
+        const { checkpointId: _checkpointId, ...messageWithoutCheckpoint } =
+          message;
+        return {
+          ...messageWithoutCheckpoint,
+          metadata: normalizeChatMessageMetadata(message.metadata),
+        };
+      }),
+    [],
+  );
 
   /** Finds checkpoint ids that should be undone before resending an edited user turn. */
   const getInPlaceEditRestoreCheckpointIds = useCallback(
@@ -3169,14 +3887,16 @@ export function RightSidebar({
         checkpointRequestByMessageId,
         checkpointStatuses,
       }),
-    [checkpointRequestByMessageId, checkpointStatuses]
+    [checkpointRequestByMessageId, checkpointStatuses],
   );
 
   /** Restores checkpointed workspace edits newest-to-oldest before an in-place resend. */
   const restoreWorkspaceForInPlaceEdit = useCallback(
     async (action: PendingInPlaceEditAction): Promise<void> => {
       if (!kernelService) {
-        throw new Error("Connect to a Jupyter server before restoring files to this point.");
+        throw new Error(
+          "Connect to a Jupyter server before restoring files to this point.",
+        );
       }
 
       const checkpointIds = getInPlaceEditRestoreCheckpointIds(action);
@@ -3197,13 +3917,13 @@ export function RightSidebar({
 
       if (conflictCount > 0) {
         toast.warning(
-          `Restored ${restoredCount} item${restoredCount === 1 ? "" : "s"}; ${conflictCount} conflict${conflictCount === 1 ? "" : "s"} skipped.`
+          `Restored ${restoredCount} item${restoredCount === 1 ? "" : "s"}; ${conflictCount} conflict${conflictCount === 1 ? "" : "s"} skipped.`,
         );
         return;
       }
 
       toast.success(
-        `Restored ${restoredCount} checkpoint item${restoredCount === 1 ? "" : "s"}.`
+        `Restored ${restoredCount} checkpoint item${restoredCount === 1 ? "" : "s"}.`,
       );
     },
     [
@@ -3211,7 +3931,7 @@ export function RightSidebar({
       getInPlaceEditRestoreCheckpointIds,
       kernelService,
       refreshCheckpointStatuses,
-    ]
+    ],
   );
 
   /** Applies model-specific raster preview handling to every tool result shape. */
@@ -3220,12 +3940,13 @@ export function RightSidebar({
       prepareToolResultForModel({
         result,
         supportsImageInput: modelInfo?.supportsImageInput === true,
-        imageMaxBase64Chars: effectiveSettings.agent.toolOutput.imageBase64CharBudget,
+        imageMaxBase64Chars:
+          effectiveSettings.agent.toolOutput.imageBase64CharBudget,
       }),
     [
       effectiveSettings.agent.toolOutput.imageBase64CharBudget,
       modelInfo?.supportsImageInput,
-    ]
+    ],
   );
 
   const enqueueToolExecution = useCallback(
@@ -3233,7 +3954,7 @@ export function RightSidebar({
       toolCallId: string,
       toolName: OrionToolName,
       args: Record<string, unknown>,
-      approvalPromise?: Promise<"approve" | "reject">
+      approvalPromise?: Promise<"approve" | "reject">,
     ) => {
       if (!assistant) return;
 
@@ -3246,7 +3967,7 @@ export function RightSidebar({
         scheduler = new OrderedToolExecutionScheduler(
           effectiveSettings.agent.execution.maxParallelReadOnlyCalls,
           abortController.signal,
-          toolExecutionHandoffRef.current
+          toolExecutionHandoffRef.current,
         );
         toolExecutionSchedulerRef.current = scheduler;
       }
@@ -3256,8 +3977,7 @@ export function RightSidebar({
       const modelRequestId = modelRequestIdRef.current;
       const scheduledChatId = effectiveChatIdRef.current;
       const isCurrentExecution = () =>
-        !signal.aborted &&
-        toolExecutionTurnIdRef.current === scheduledTurnId;
+        !signal.aborted && toolExecutionTurnIdRef.current === scheduledTurnId;
 
       void scheduler
         .schedule(toolName, async () => {
@@ -3291,6 +4011,36 @@ export function RightSidebar({
           trackedToolCallsRef.current.set(toolCallId, { status: "running" });
           markToolStarted(toolCallId);
 
+          // ---- ask_question: the user answers it in the chat body -------
+          // Parked on the scheduler rather than executed, so the model's turn
+          // stays blocked on the questionnaire exactly as it would on any
+          // other tool call.
+          if (toolName === "ask_question") {
+            const answers = await new Promise<AskQuestionResult>((resolve) => {
+              pendingAskQuestionsRef.current.set(toolCallId, {
+                toolCallId,
+                resolve,
+              });
+            });
+            setAnsweredAskQuestionIds((prev) => {
+              if (!prev.has(toolCallId)) return prev;
+              const next = new Set(prev);
+              next.delete(toolCallId);
+              return next;
+            });
+            if (!isCurrentExecution()) return;
+            trackedToolCallsRef.current.set(toolCallId, {
+              status: "completed",
+              result: answers,
+            });
+            addTimedToolOutput({
+              tool: toolName,
+              toolCallId,
+              output: answers,
+            });
+            return;
+          }
+
           // ---- delegate tool: run client-side subagent runner ----------
           if (toolName === "delegate") {
             const delegateArgs = args as {
@@ -3298,18 +4048,28 @@ export function RightSidebar({
               subagent?: string;
               reconnectTmpNotebookPath?: string;
             };
-            const description = typeof delegateArgs.description === "string" ? delegateArgs.description : "";
-            const subagentType = typeof delegateArgs.subagent === "string" ? delegateArgs.subagent : "";
+            const description =
+              typeof delegateArgs.description === "string"
+                ? delegateArgs.description
+                : "";
+            const subagentType =
+              typeof delegateArgs.subagent === "string"
+                ? delegateArgs.subagent
+                : "";
             const reconnectTmpNotebookPath =
               typeof delegateArgs.reconnectTmpNotebookPath === "string"
                 ? delegateArgs.reconnectTmpNotebookPath.trim()
                 : "";
-            const subagentDefinition = assistant.availableSubagents.find((candidate) => candidate.name === subagentType);
+            const subagentDefinition = assistant.availableSubagents.find(
+              (candidate) => candidate.name === subagentType,
+            );
             const runChatId = effectiveChatId;
             let latestSubagentMessages: UIMessage[] = [];
 
             const writeSubagentSession = (
-              patch: Partial<SubagentSession> & { status?: SubagentSessionStatus }
+              patch: Partial<SubagentSession> & {
+                status?: SubagentSessionStatus;
+              },
             ) => {
               if (!runChatId || !isCurrentExecution()) return;
               const timestamp = new Date();
@@ -3319,7 +4079,9 @@ export function RightSidebar({
                   const existing = chat.subagentSessions?.[toolCallId];
                   const base: SubagentSession = existing ?? {
                     subagentType,
-                    label: subagentDefinition?.label ?? (subagentType || "Sub-agent"),
+                    label:
+                      subagentDefinition?.label ??
+                      (subagentType || "Sub-agent"),
                     description,
                     status: "running",
                     messages: [],
@@ -3338,13 +4100,13 @@ export function RightSidebar({
                     },
                     updatedAt: timestamp,
                   };
-                })
+                }),
               );
             };
 
             const failDelegate = (
               errorText: string,
-              patch?: Partial<SubagentSession>
+              patch?: Partial<SubagentSession>,
             ) => {
               if (!isCurrentExecution()) return;
               trackedToolCallsRef.current.set(toolCallId, {
@@ -3356,22 +4118,28 @@ export function RightSidebar({
                 status: "error",
                 errorText,
               });
-              addTimedToolOutput({ state: "output-error", tool: toolName, toolCallId, errorText });
+              addTimedToolOutput({
+                state: "output-error",
+                tool: toolName,
+                toolCallId,
+                errorText,
+              });
             };
 
             if (!subagentDefinition) {
               failDelegate(
-                `Sub-agent "${subagentType || "(missing)"}" is not available in this session.`
+                `Sub-agent "${subagentType || "(missing)"}" is not available in this session.`,
               );
               return;
             }
 
             if (
               subagentDefinition.options?.disableModelInvocation === true &&
-              forcedSubagentForCurrentTurnRef.current !== subagentDefinition.name
+              forcedSubagentForCurrentTurnRef.current !==
+                subagentDefinition.name
             ) {
               failDelegate(
-                `Sub-agent "${subagentDefinition.name}" is disabled for model invocation. Invoke it with /${subagentDefinition.name}.`
+                `Sub-agent "${subagentDefinition.name}" is disabled for model invocation. Invoke it with /${subagentDefinition.name}.`,
               );
               return;
             }
@@ -3388,19 +4156,21 @@ export function RightSidebar({
               failDelegate(modelResolution.errorText);
               return;
             }
-            const existingSubagentSessions = currentChat?.subagentSessions ?? {};
+            const existingSubagentSessions =
+              currentChat?.subagentSessions ?? {};
             const existingMaxInstance = Object.values(existingSubagentSessions)
               .filter((session) => session.subagentType === subagentType)
               .reduce(
-                (max, session) => Math.max(max, session.subagentDevLogInstance ?? 0),
-                0
+                (max, session) =>
+                  Math.max(max, session.subagentDevLogInstance ?? 0),
+                0,
               );
             const reconnectEntry = reconnectTmpNotebookPath
               ? Object.entries(existingSubagentSessions).find(
-                ([, session]) =>
-                  session.subagentType === subagentType &&
-                  session.tmpNotebookPath === reconnectTmpNotebookPath
-              )
+                  ([, session]) =>
+                    session.subagentType === subagentType &&
+                    session.tmpNotebookPath === reconnectTmpNotebookPath,
+                )
               : undefined;
 
             if (reconnectTmpNotebookPath && !reconnectEntry) {
@@ -3415,7 +4185,12 @@ export function RightSidebar({
                 tmpNotebookPath: reconnectTmpNotebookPath,
                 errorText,
               });
-              addTimedToolOutput({ state: "output-error", tool: toolName, toolCallId, errorText });
+              addTimedToolOutput({
+                state: "output-error",
+                tool: toolName,
+                toolCallId,
+                errorText,
+              });
               return;
             }
 
@@ -3425,18 +4200,24 @@ export function RightSidebar({
             activeSubagentRunToolCallsRef.current.add(toolCallId);
 
             try {
-              const { notebookPath, activeFilePath } = agentEditorContext(activeNotebookPath);
+              const { notebookPath, activeFilePath } =
+                agentEditorContext(activeNotebookPath);
               const subagentKey = `${runChatId ?? "no-chat"}:${subagentType}`;
               const reconnectSourceToolCallId = reconnectEntry?.[0];
               const reconnectSourceSession = reconnectEntry?.[1];
               const nextSubagentInstance = reconnectSourceSession
-                ? reconnectSourceSession.subagentDevLogInstance || existingMaxInstance || 1
+                ? reconnectSourceSession.subagentDevLogInstance ||
+                  existingMaxInstance ||
+                  1
                 : Math.max(
-                  subagentRunIndexRef.current.get(subagentKey) ?? 0,
-                  existingMaxInstance
-                ) + 1;
+                    subagentRunIndexRef.current.get(subagentKey) ?? 0,
+                    existingMaxInstance,
+                  ) + 1;
               if (!reconnectSourceSession) {
-                subagentRunIndexRef.current.set(subagentKey, nextSubagentInstance);
+                subagentRunIndexRef.current.set(
+                  subagentKey,
+                  nextSubagentInstance,
+                );
               }
               latestSubagentMessages = reconnectSourceSession?.messages ?? [];
               writeSubagentSession({
@@ -3450,7 +4231,6 @@ export function RightSidebar({
               const subagentResult = await runSubagent({
                 subagentType,
                 contextSettings: contextSettingsRef.current,
-                uiPreferences: effectiveSettings.notebook.uiPreferences,
                 availableSubagents: assistant.availableSubagents,
                 agentRules: assistant.availableRules,
                 description,
@@ -3463,7 +4243,8 @@ export function RightSidebar({
                 getCurrentConnectedNotebookPath:
                   assistant.getCurrentConnectedNotebookPath,
                 serverInfo: assistant.serverInfo ?? undefined,
-                jupyterServerIsLocal: assistant.jupyterServerIsLocal ?? undefined,
+                jupyterServerIsLocal:
+                  assistant.jupyterServerIsLocal ?? undefined,
                 rootDirectory: assistant.rootDirectory ?? undefined,
                 clientPlatformOs,
                 chatId: runChatId ?? undefined,
@@ -3498,7 +4279,9 @@ export function RightSidebar({
                 },
                 onStepProgress: (step, tools) => {
                   const desc = getSubagentStepDescription(step, tools);
-                  setSubagentProgress((prev) => new Map(prev).set(toolCallId, desc));
+                  setSubagentProgress((prev) =>
+                    new Map(prev).set(toolCallId, desc),
+                  );
                 },
               });
 
@@ -3530,7 +4313,11 @@ export function RightSidebar({
                 result: delegateOutput,
               });
 
-              addTimedToolOutput({ tool: toolName, toolCallId, output: delegateOutput });
+              addTimedToolOutput({
+                tool: toolName,
+                toolCallId,
+                output: delegateOutput,
+              });
             } catch (err) {
               if (!isCurrentExecution()) return;
               // Clear live progress on error too
@@ -3543,7 +4330,9 @@ export function RightSidebar({
                 err instanceof DOMException && err.name === "AbortError";
               const errorText = isCancelled
                 ? "cancelled_by_user"
-                : err instanceof Error ? err.message : String(err);
+                : err instanceof Error
+                  ? err.message
+                  : String(err);
               writeSubagentSession({
                 status: isCancelled ? "cancelled" : "error",
                 messages: latestSubagentMessages,
@@ -3551,7 +4340,9 @@ export function RightSidebar({
               });
               trackedToolCallsRef.current.set(toolCallId, {
                 status: "completed",
-                result: isCancelled ? CANCELLED_TOOL_RESULT : { error: errorText },
+                result: isCancelled
+                  ? CANCELLED_TOOL_RESULT
+                  : { error: errorText },
               });
               addTimedToolOutput({
                 state: "output-error",
@@ -3579,10 +4370,14 @@ export function RightSidebar({
               chatId: scheduledChatId,
               toolCallId,
               abortSignal: signal,
+              executionAllowed: chainedCellExecutionAllowed,
             });
             const result = await prepareAgentToolResult(rawResult);
             if (!isCurrentExecution()) return;
-            trackedToolCallsRef.current.set(toolCallId, { status: "completed", result });
+            trackedToolCallsRef.current.set(toolCallId, {
+              status: "completed",
+              result,
+            });
             addTimedToolOutput({ tool: toolName, toolCallId, output: result });
           } catch (err) {
             if (!isCurrentExecution()) return;
@@ -3631,28 +4426,41 @@ export function RightSidebar({
       setChats,
       prepareAgentToolResult,
       effectiveSettings.agent.execution.maxParallelReadOnlyCalls,
-      effectiveSettings.notebook.uiPreferences,
-    ]
+    ],
   );
 
   // Tool execution loop — fires whenever messages update with pending tool calls
   useEffect(() => {
     const modeUsesTools =
+      isGoalContractDraftActive ||
       resolvedInteractionModeConfig.toolNames.length > 0 ||
-      resolvedInteractionModeConfig.baseMode === "Research" ||
+      resolvedInteractionModeConfig.baseMode === "Explore" ||
       resolvedInteractionModeConfig.baseMode === "Agent";
     if (!modeUsesTools || !assistant) return;
 
     for (const msg of messages) {
       for (const part of msg.parts) {
         // Only handle tool parts (type is "tool-<toolName>")
-        if (!part.type.startsWith("tool-") || !("toolCallId" in part) || !("state" in part)) continue;
-        const inv = part as { toolCallId: string; state: string; input: Record<string, unknown> };
+        if (
+          !part.type.startsWith("tool-") ||
+          !("toolCallId" in part) ||
+          !("state" in part)
+        )
+          continue;
+        const inv = part as {
+          toolCallId: string;
+          state: string;
+          input: Record<string, unknown>;
+        };
         // Extract tool name from part type ("tool-execute_code" → "execute_code")
         const toolName = part.type.slice(5);
-        const toolNameTyped = toolName as OrionToolName;
 
         if (inv.state !== "input-available") continue;
+
+        // This phase-specific tool pauses for the proposal card; it is never executable.
+        if (toolName === GOAL_CONTRACT_PROPOSAL_TOOL_NAME) continue;
+
+        const toolNameTyped = toolName as OrionToolName;
 
         if (stopRequestedRef.current) {
           continue;
@@ -3663,9 +4471,14 @@ export function RightSidebar({
           if (!isLoading) {
             const now = Date.now();
             const shouldResubmit =
-              !trackedCall.lastResubmittedAt || now - trackedCall.lastResubmittedAt > 300;
+              !trackedCall.lastResubmittedAt ||
+              now - trackedCall.lastResubmittedAt > 300;
             if (shouldResubmit) {
-              addTimedToolOutput({ tool: toolName, toolCallId: inv.toolCallId, output: trackedCall.result });
+              addTimedToolOutput({
+                tool: toolName,
+                toolCallId: inv.toolCallId,
+                output: trackedCall.result,
+              });
               trackedToolCallsRef.current.set(inv.toolCallId, {
                 ...trackedCall,
                 lastResubmittedAt: now,
@@ -3684,10 +4497,13 @@ export function RightSidebar({
         // Stop at the first unavailable dependency so later calls cannot
         // overtake it. A constructed tool set is not enough: server-only
         // tools must also wait for a verified Jupyter server connection.
-        const missingDependency = getMissingToolRuntimeDependency(toolNameTyped, {
-          serverReady: isToolServerReady,
-          kernelStatus,
-        });
+        const missingDependency = getMissingToolRuntimeDependency(
+          toolNameTyped,
+          {
+            serverReady: isToolServerReady,
+            kernelStatus,
+          },
+        );
         if (missingDependency) {
           trackedToolCallsRef.current.set(inv.toolCallId, { status: "queued" });
           const pendingToolCall = {
@@ -3699,7 +4515,9 @@ export function RightSidebar({
             missingDependency === "server"
               ? pendingServerToolCallsRef.current
               : pendingKernelToolCallsRef.current;
-          if (!pendingCalls.some((call) => call.toolCallId === inv.toolCallId)) {
+          if (
+            !pendingCalls.some((call) => call.toolCallId === inv.toolCallId)
+          ) {
             pendingCalls.push(pendingToolCall);
           }
           setShowKernelPrompt(true);
@@ -3711,9 +4529,13 @@ export function RightSidebar({
         trackedToolCallsRef.current.set(inv.toolCallId, { status: "queued" });
 
         // Read-only modes block destructive bash commands before they execute.
-        if (resolvedInteractionModeConfig.bashPolicy === "read_only" && toolNameTyped === "bash") {
+        if (
+          (isGoalContractDraftActive ||
+            resolvedInteractionModeConfig.bashPolicy === "read_only") &&
+          toolNameTyped === "bash"
+        ) {
           const blockReason = isReadOnlyBashBlocked(
-            (inv.input as { command?: string }).command ?? ""
+            (inv.input as { command?: string }).command ?? "",
           );
           if (blockReason) {
             trackedToolCallsRef.current.set(inv.toolCallId, {
@@ -3732,21 +4554,25 @@ export function RightSidebar({
 
         // Gate on user approval for dangerous tools in "always_ask" mode
         if (needsApproval(toolNameTyped, toolApprovalMode)) {
-          const approvalPromise = new Promise<"approve" | "reject">((resolve) => {
-            pendingApprovalToolCallsRef.current.set(inv.toolCallId, {
-              toolCallId: inv.toolCallId,
-              toolName: toolNameTyped,
-              args: inv.input,
-              resolve,
-            });
-            setPendingApprovalIds((prev) => new Set(prev).add(inv.toolCallId));
-          });
+          const approvalPromise = new Promise<"approve" | "reject">(
+            (resolve) => {
+              pendingApprovalToolCallsRef.current.set(inv.toolCallId, {
+                toolCallId: inv.toolCallId,
+                toolName: toolNameTyped,
+                args: inv.input,
+                resolve,
+              });
+              setPendingApprovalIds((prev) =>
+                new Set(prev).add(inv.toolCallId),
+              );
+            },
+          );
 
           enqueueToolExecution(
             inv.toolCallId,
             toolNameTyped,
             inv.input,
-            approvalPromise
+            approvalPromise,
           );
 
           continue;
@@ -3759,9 +4585,11 @@ export function RightSidebar({
     setShowKernelPrompt(false);
   }, [
     messages,
+    isGoalContractDraftActive,
     resolvedInteractionModeConfig.bashPolicy,
     resolvedInteractionModeConfig.baseMode,
     resolvedInteractionModeConfig.toolNames.length,
+    chainedCellExecutionAllowed,
     assistant,
     kernelStatus,
     isToolServerReady,
@@ -3779,10 +4607,12 @@ export function RightSidebar({
 
     const pending = pendingServerToolCallsRef.current.splice(0);
     if (stopRequestedRef.current) {
-      if (pendingKernelToolCallsRef.current.length === 0) setShowKernelPrompt(false);
+      if (pendingKernelToolCallsRef.current.length === 0)
+        setShowKernelPrompt(false);
       return;
     }
-    if (pendingKernelToolCallsRef.current.length === 0) setShowKernelPrompt(false);
+    if (pendingKernelToolCallsRef.current.length === 0)
+      setShowKernelPrompt(false);
 
     for (const { toolCallId, toolName, args } of pending) {
       enqueueToolExecution(toolCallId, toolName, args);
@@ -3798,10 +4628,12 @@ export function RightSidebar({
 
     const pending = pendingKernelToolCallsRef.current.splice(0);
     if (stopRequestedRef.current) {
-      if (pendingServerToolCallsRef.current.length === 0) setShowKernelPrompt(false);
+      if (pendingServerToolCallsRef.current.length === 0)
+        setShowKernelPrompt(false);
       return;
     }
-    if (pendingServerToolCallsRef.current.length === 0) setShowKernelPrompt(false);
+    if (pendingServerToolCallsRef.current.length === 0)
+      setShowKernelPrompt(false);
 
     for (const { toolCallId, toolName, args } of pending) {
       enqueueToolExecution(toolCallId, toolName, args);
@@ -3848,12 +4680,12 @@ export function RightSidebar({
       try {
         const cleanup = await cleanupExpiredChatAttachments(
           kernelService.getContentsManager(),
-          chatsRef.current
+          chatsRef.current,
         );
         if (cleanup.failedPaths.length > 0) {
           console.warn(
             "Failed to delete some expired managed chat attachments:",
-            cleanup.failedPaths
+            cleanup.failedPaths,
           );
         }
         if (cleanup.deletedPaths.length === 0) return;
@@ -3861,7 +4693,7 @@ export function RightSidebar({
         setChats((current) => {
           const marked = markManagedAttachmentReferencesUnavailable(
             current,
-            cleanup.deletedPaths
+            cleanup.deletedPaths,
           );
           if (marked.changed) {
             chatsRef.current = marked.chats;
@@ -3872,7 +4704,7 @@ export function RightSidebar({
         setMessages((current) => {
           const marked = markManagedAttachmentMessageReferencesUnavailable(
             current,
-            cleanup.deletedPaths
+            cleanup.deletedPaths,
           );
           return marked.changed ? marked.messages : current;
         });
@@ -3920,7 +4752,8 @@ export function RightSidebar({
     setCheckpointRequestByMessageId(nextCheckpointRequestByMessageId);
 
     const messagesToLoad = (currentChat?.messages ?? []).map((message) => {
-      const { checkpointId: _checkpointId, ...messageWithoutCheckpoint } = message;
+      const { checkpointId: _checkpointId, ...messageWithoutCheckpoint } =
+        message;
       return {
         ...messageWithoutCheckpoint,
         metadata: normalizeChatMessageMetadata(message.metadata),
@@ -3934,8 +4767,16 @@ export function RightSidebar({
     const existingTrackedToolCalls = new Map<string, ToolCallTracker>();
     for (const msg of messagesToLoad) {
       for (const part of msg.parts) {
-        if (part.type.startsWith("tool-") && "toolCallId" in part && "state" in part) {
-          const inv = part as { toolCallId: string; state: string; output?: unknown };
+        if (
+          part.type.startsWith("tool-") &&
+          "toolCallId" in part &&
+          "state" in part
+        ) {
+          const inv = part as {
+            toolCallId: string;
+            state: string;
+            output?: unknown;
+          };
           const isTerminalState = TERMINAL_TOOL_STATES.has(inv.state);
           existingTrackedToolCalls.set(inv.toolCallId, {
             status: isTerminalState ? "completed" : "running",
@@ -3956,9 +4797,10 @@ export function RightSidebar({
     }
     pendingApprovalToolCallsRef.current.clear();
     setPendingApprovalIds(new Set());
+    cancelPendingAskQuestions();
 
     setMessages(messagesToLoad);
-  }, [currentChat, currentChatId, setMessages]);
+  }, [cancelPendingAskQuestions, currentChat, currentChatId, setMessages]);
 
   // Initialize with first chat or create one if none exist (layout effect so
   // `currentChatId` is set before paint — avoids sends without `chatId`).
@@ -4008,8 +4850,8 @@ export function RightSidebar({
         prev.map((chat) =>
           chat.id === currentChatId
             ? { ...chat, messages: [], updatedAt: new Date() }
-            : chat
-        )
+            : chat,
+        ),
       );
       setEditingState(null);
       setInput("");
@@ -4046,7 +4888,7 @@ export function RightSidebar({
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.isComposing || event.defaultPrevented) return;
-      if (isSubagentChatView) return;
+      if (isSubagentChatView || isGoalSupervisorView) return;
 
       const hasModKey =
         (event.metaKey && !event.ctrlKey) || (!event.metaKey && event.ctrlKey);
@@ -4078,7 +4920,7 @@ export function RightSidebar({
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () =>
       window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [isDesktopApp, isSubagentChatView]);
+  }, [isDesktopApp, isGoalSupervisorView, isSubagentChatView]);
 
   const saveTitle = () => {
     if (!currentChatId || !editedTitle.trim()) {
@@ -4089,8 +4931,8 @@ export function RightSidebar({
       prev.map((chat) =>
         chat.id === currentChatId
           ? { ...chat, title: editedTitle.trim() }
-          : chat
-      )
+          : chat,
+      ),
     );
     setIsEditingTitle(false);
   };
@@ -4105,9 +4947,14 @@ export function RightSidebar({
     const startingDraft = editedTitleRef.current;
     setIsGeneratingTitle(true);
     try {
-      const newTitle = await generateChatTitle(currentChat.messages, currentChat.id);
+      const newTitle = await generateChatTitle(
+        currentChat.messages,
+        currentChat.id,
+      );
       if (!newTitle) {
-        toast.error("Add a user message and assistant response before generating a title.");
+        toast.error(
+          "Add a user message and assistant response before generating a title.",
+        );
         return;
       }
       if (
@@ -4165,7 +5012,7 @@ export function RightSidebar({
       setChats((prev) => {
         if (prev.some((chat) => chat.id === chatId)) return prev;
         return [chatToDelete, ...prev].sort(
-          (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime()
+          (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
         );
       });
       setCurrentChatId((prev) => prev ?? previousCurrentChatId);
@@ -4260,10 +5107,15 @@ export function RightSidebar({
         isLoading ||
         isAttachmentUploadActive ||
         !currentChat
-      ) return;
+      )
+        return;
 
       const sourceMessage = currentChat.messages[index];
-      if (sourceMessage?.id !== message.id || sourceMessage.role !== "assistant") return;
+      if (
+        sourceMessage?.id !== message.id ||
+        sourceMessage.role !== "assistant"
+      )
+        return;
 
       const now = new Date();
       const fork = createChatFork({
@@ -4303,14 +5155,14 @@ export function RightSidebar({
       isLoading,
       setMessages,
       toChatStateMessages,
-    ]
+    ],
   );
 
   /** Replaces a user message in the current chat and drops every later turn before resend. */
   const executeInPlaceEdit = useCallback(
     async (
       action: PendingInPlaceEditAction,
-      options: { restoreWorkspace: boolean }
+      options: { restoreWorkspace: boolean },
     ): Promise<void> => {
       if (effectiveChatIdRef.current !== action.sourceChat.id) {
         toast.error("Return to the edited chat before resending this message.");
@@ -4326,7 +5178,7 @@ export function RightSidebar({
           toast.error(
             error instanceof Error
               ? error.message
-              : "Failed to restore files to this point."
+              : "Failed to restore files to this point.",
           );
           return;
         } finally {
@@ -4362,7 +5214,7 @@ export function RightSidebar({
         toast.error(
           error instanceof Error
             ? error.message
-            : "Failed to prepare the edited chat history."
+            : "Failed to prepare the edited chat history.",
         );
         return;
       }
@@ -4380,18 +5232,20 @@ export function RightSidebar({
             ...retainedTarget,
             parts: [{ type: "text", text: messageText }],
             metadata: normalizeChatMessageMetadata(
-              references.length > 0 ? { references } : undefined
+              references.length > 0 ? { references } : undefined,
             ),
           },
         ],
       };
       const updatedMessages = toChatStateMessages(updatedChat.messages);
-      const retainedMessageIds = new Set(updatedChat.messages.map((message) => message.id));
+      const retainedMessageIds = new Set(
+        updatedChat.messages.map((message) => message.id),
+      );
 
       flushSync(() => {
         setChats((prev) => {
           const next = prev.map((chat) =>
-            chat.id === action.sourceChat.id ? updatedChat : chat
+            chat.id === action.sourceChat.id ? updatedChat : chat,
           );
           chatsRef.current = next;
           return next;
@@ -4400,12 +5254,15 @@ export function RightSidebar({
         setActiveSubagentToolCallId(null);
         setPendingInPlaceEditAction(null);
         clearInPlaceEditComposerState();
-        setCheckpointRequestByMessageId((current) =>
-          new Map(
-            [...current].filter(
-              ([messageId]) => messageId !== action.messageId && retainedMessageIds.has(messageId)
-            )
-          )
+        setCheckpointRequestByMessageId(
+          (current) =>
+            new Map(
+              [...current].filter(
+                ([messageId]) =>
+                  messageId !== action.messageId &&
+                  retainedMessageIds.has(messageId),
+              ),
+            ),
         );
         setSubagentProgress(new Map());
         toolTimingsRef.current = new Map();
@@ -4426,6 +5283,7 @@ export function RightSidebar({
       }
       pendingApprovalToolCallsRef.current.clear();
       setPendingApprovalIds(new Set());
+      cancelPendingAskQuestions();
 
       beginAgentTurn();
       const modelRequestId = crypto.randomUUID();
@@ -4451,19 +5309,20 @@ export function RightSidebar({
             chatId: action.sourceChat.id,
             modelRequestId,
           }),
-        }
+        },
       );
     },
     [
       beginAgentTurn,
       buildChatRequestBody,
+      cancelPendingAskQuestions,
       clearInPlaceEditComposerState,
       ensureResearchSessionActive,
       restoreWorkspaceForInPlaceEdit,
       sendMessage,
       setMessages,
       toChatStateMessages,
-    ]
+    ],
   );
 
   /** Opens the workspace choice only when the edited turn has active checkpoints to undo. */
@@ -4476,7 +5335,7 @@ export function RightSidebar({
 
       void executeInPlaceEdit(action, { restoreWorkspace: false });
     },
-    [executeInPlaceEdit, getInPlaceEditRestoreCheckpointIds]
+    [executeInPlaceEdit, getInPlaceEditRestoreCheckpointIds],
   );
 
   // ============================================================================
@@ -4489,7 +5348,8 @@ export function RightSidebar({
 
       const pendingSubmit = pendingSubmitRef.current;
       const userInput = pendingSubmit?.text ?? input;
-      const attachmentsForSubmit = pendingSubmit?.attachments ?? draftAttachments;
+      const attachmentsForSubmit =
+        pendingSubmit?.attachments ?? draftAttachments;
       const referencesForSubmit = [
         ...(pendingSubmit?.references ?? draftReferences),
         ...attachmentsForSubmit.map((attachment) => attachment.reference),
@@ -4516,6 +5376,28 @@ export function RightSidebar({
       const modelRequestId = crypto.randomUUID();
       modelRequestIdRef.current = modelRequestId;
       beginAgentTurn();
+      const activeGoal = goalSessionRef.current;
+      if (activeGoal?.status === "active") {
+        goalEvaluationAbortRef.current?.abort();
+        goalEvaluationRunningRef.current = false;
+        const workingGoal: GoalSession = {
+          ...activeGoal,
+          phase: "working",
+          updatedAt: new Date().toISOString(),
+        };
+        goalSessionRef.current = workingGoal;
+        setGoalSession(workingGoal);
+        void persistGoalSession(workingGoal).catch((error) => {
+          console.warn("Failed to persist steered goal session:", error);
+        });
+        goalContinuationRef.current = {
+          contract: workingGoal.contract,
+          contractVersion: workingGoal.contractVersion,
+        };
+        goalWorkerStartProgressRef.current = getTranscriptProgressCount(
+          messagesRef.current,
+        );
+      }
       ensureResearchSessionActive(messageText);
       forcedSubagentForCurrentTurnRef.current = null;
       if (!pendingSubmit) {
@@ -4531,28 +5413,39 @@ export function RightSidebar({
         messagesRef.current,
         messageText,
         imageFileParts,
-        referencesForSubmit
+        referencesForSubmit,
       );
       try {
         let preflight = await requestContextPreflight(candidateMessages);
         setContextAnchor(preflight);
-        if (shouldCompactBeforeSend(preflight) && !compactionInFlightRef.current) {
-          const compacted = await runCompaction({ measurementMessages: candidateMessages });
+        if (
+          shouldCompactBeforeSend(preflight) &&
+          !compactionInFlightRef.current
+        ) {
+          const compacted = await runCompaction({
+            measurementMessages: candidateMessages,
+          });
           if (compacted) {
             preflight = await requestContextPreflight(candidateMessages);
             setContextAnchor(preflight);
             // Only warn about a real overflow. Still being above the compaction
             // threshold means the request fits — warning there is a false alarm.
             if (exceedsContextBudget(preflight)) {
-              toast.warning("The prepared prompt is still above the context budget; sending anyway.");
+              toast.warning(
+                "The prepared prompt is still above the context budget; sending anyway.",
+              );
             }
           } else {
-            toast.warning("Context compaction failed; sending the request anyway.");
+            toast.warning(
+              "Context compaction failed; sending the request anyway.",
+            );
           }
         }
       } catch (error) {
         console.warn("Context preflight failed:", error);
-        toast.warning("Context measurement is unavailable; sending the request anyway.");
+        toast.warning(
+          "Context measurement is unavailable; sending the request anyway.",
+        );
       }
 
       // Update bodyRef with the request id before sending.
@@ -4571,7 +5464,7 @@ export function RightSidebar({
         },
         {
           body: buildChatRequestBody({ modelRequestId }),
-        }
+        },
       );
     },
     [
@@ -4579,17 +5472,15 @@ export function RightSidebar({
       draftReferences,
       draftAttachments,
       sendMessage,
-      modelInfo,
-      apiModelId,
-      selectedModel,
       isInputLocked,
       buildChatRequestBody,
       runCompaction,
       requestContextPreflight,
-      getModel,
       beginAgentTurn,
+      effectiveSettings.chat.notifyOnAgentFinish,
       ensureResearchSessionActive,
-    ]
+      setContextAnchor,
+    ],
   );
 
   /** Custom submit that handles message editing (replaces messages after the edited one) */
@@ -4647,7 +5538,73 @@ export function RightSidebar({
       return;
     }
 
-    // Intercept slash commands before normal chat submission.
+    // During contract authoring every subsequent non-goal command message is
+    // revision context for that same agent.
+    if (goalContractDraftActiveRef.current) {
+      if (submitSlashCommand === "goal") {
+        toast.info(
+          "Approve or revise the current goal contract before starting another goal.",
+        );
+        return;
+      }
+      await handleSubmit(e);
+      return;
+    }
+
+    const goalSubmission = resolveGoalModeSubmission({
+      input: effectiveInput,
+      slashCommand: submitSlashCommand,
+      interactionMode: resolvedInteractionModeConfig,
+    });
+    if (goalSubmission) {
+      const { activation, objective } = goalSubmission;
+      if (!objective) {
+        toast.info(
+          activation === "slash"
+            ? "Add an objective after /goal."
+            : "Describe the objective you want Agent to achieve.",
+        );
+        return;
+      }
+      const currentGoal = goalSessionRef.current;
+      if (currentGoal?.status === "active") {
+        if (activation === "slash") {
+          toast.info("Stop the current goal before starting another one.");
+          return;
+        }
+        await handleSubmit(e);
+        return;
+      }
+      if (currentGoal?.status === "paused") {
+        toast.info("Stop the current goal before starting another one.");
+        return;
+      }
+      if (isInputLocked && !fromQueue) {
+        setMessageQueue((current) => [
+          ...current,
+          {
+            id: crypto.randomUUID(),
+            text: effectiveInput,
+            references: effectiveReferences,
+            attachments: effectiveAttachments,
+          },
+        ]);
+        clearComposer();
+        return;
+      }
+      if (activation === "slash") {
+        handleInteractionModeChange("Goal");
+      }
+      clearComposer();
+      void startGoalContractDraft(
+        objective,
+        effectiveReferences,
+        effectiveAttachments,
+        activation,
+      );
+      return;
+    }
+
     if (submitSlashCommand === "compact") {
       clearComposer();
       setEphemeralCostMessage(null);
@@ -4673,14 +5630,20 @@ export function RightSidebar({
     if (submitSlashCommand?.startsWith("subagent:")) {
       const subagentName = submitSlashCommand.slice("subagent:".length);
       const commandLabel = `/${subagentName}`;
-      const userMessage = effectiveInput.trimStart().slice(commandLabel.length).trimStart();
+      const userMessage = effectiveInput
+        .trimStart()
+        .slice(commandLabel.length)
+        .trimStart();
 
-      const subagent = assistant?.availableSubagents.find((s) => s.name === subagentName);
+      const subagent = assistant?.availableSubagents.find(
+        (s) => s.name === subagentName,
+      );
       if (subagent && !isInputLocked) {
         beginAgentTurn();
         const modelRequestId = crypto.randomUUID();
         modelRequestIdRef.current = modelRequestId;
-        const plainUserText = userMessage || `Run the ${subagent.name} sub-agent.`;
+        const plainUserText =
+          userMessage || `Run the ${subagent.name} sub-agent.`;
 
         clearComposer();
         setEphemeralCostMessage(null);
@@ -4701,31 +5664,42 @@ export function RightSidebar({
             },
           },
           {
-            body: buildChatRequestBody({ modelRequestId, forcedSubagentName: subagent.name }),
-          }
+            body: buildChatRequestBody({
+              modelRequestId,
+              forcedSubagentName: subagent.name,
+            }),
+          },
         );
         return;
       }
     }
 
     // Handle skill slash commands anywhere in the message as skill mentions.
-    const selectedSkills = extractSkillSlashCommands(effectiveInput, skillSlashCommands);
+    const selectedSkills = extractSkillSlashCommands(
+      effectiveInput,
+      skillSlashCommands,
+    );
     if (selectedSkills.skillNames.length > 0) {
-      const allSelectedSkillsAvailable = selectedSkills.skillNames.every((skillName) =>
-        assistant?.availableSkills.some((skill) => skill.name === skillName)
+      const allSelectedSkillsAvailable = selectedSkills.skillNames.every(
+        (skillName) =>
+          assistant?.availableSkills.some((skill) => skill.name === skillName),
       );
       if (allSelectedSkillsAvailable && !isInputLocked) {
-        const activatesEdaProfile = selectedSkills.skillNames.includes("deep-eda");
-        const researchModeConfig = interactionModeConfigs.find((mode) => mode.id === "Research");
+        const activatesEdaProfile =
+          selectedSkills.skillNames.includes("explore");
+        const exploreModeConfig = interactionModeConfigs.find(
+          (mode) => mode.id === "Explore",
+        );
         beginAgentTurn();
         const modelRequestId = crypto.randomUUID();
         modelRequestIdRef.current = modelRequestId;
         const plainUserText =
-          selectedSkills.message || formatApplySkillsRequest(selectedSkills.skillNames);
+          selectedSkills.message ||
+          formatApplySkillsRequest(selectedSkills.skillNames);
         if (activatesEdaProfile) {
           activateResearchSession("slash", plainUserText, "eda", "deep");
-          if (researchModeConfig) {
-            handleInteractionModeChange("Research");
+          if (exploreModeConfig) {
+            handleInteractionModeChange("Explore");
           }
         } else {
           ensureResearchSessionActive(plainUserText);
@@ -4751,18 +5725,18 @@ export function RightSidebar({
             body: buildChatRequestBody({
               modelRequestId,
               forcedSkillNames: selectedSkills.skillNames,
-              ...(activatesEdaProfile && researchModeConfig
+              ...(activatesEdaProfile && exploreModeConfig
                 ? {
-                  interactionMode: researchModeConfig.id,
-                  interactionModeConfig: researchModeConfig,
-                  agentMode: true,
-                  researchSession: researchSessionRef.current,
-                }
+                    interactionMode: exploreModeConfig.id,
+                    interactionModeConfig: exploreModeConfig,
+                    agentMode: true,
+                    researchSession: researchSessionRef.current,
+                  }
                 : activatesEdaProfile
                   ? { researchSession: researchSessionRef.current }
                   : {}),
             }),
-          }
+          },
         );
         return;
       }
@@ -4790,15 +5764,703 @@ export function RightSidebar({
 
   customHandleSubmitRef.current = customHandleSubmit;
 
+  /** Runs one fresh artifact-only review and applies its deterministic controller action. */
+  const runCurrentGoalReview = useCallback(async (): Promise<void> => {
+    const storedSession = goalSessionRef.current;
+    const session =
+      storedSession &&
+      storedSession.maxReviews !== effectiveSettings.agent.goals.maxReviews
+        ? {
+            ...storedSession,
+            maxReviews: effectiveSettings.agent.goals.maxReviews,
+            updatedAt: new Date().toISOString(),
+          }
+        : storedSession;
+    if (
+      !session ||
+      session.status !== "active" ||
+      goalEvaluationRunningRef.current ||
+      !effectiveChatId ||
+      !kernelService ||
+      !assistant
+    ) {
+      return;
+    }
+
+    goalEvaluationRunningRef.current = true;
+    liveEvaluatorTranscriptRef.current = null;
+    setLiveEvaluatorTranscript(null);
+    const abortController = new AbortController();
+    goalEvaluationAbortRef.current = abortController;
+    let evaluationId: string | null = null;
+    try {
+      const scan = await scanGoalWorkspace({
+        contents: kernelService.getContentsManager(),
+        rootPath: workspaceDirectory ?? "",
+        ignoreDirectoryNames: effectiveSettings.agent.filesystem.ignoreDirs,
+      });
+      const manifest = buildGoalArtifactManifest({
+        baselineEntries: session.baselineEntries,
+        currentEntries: scan.entries,
+        deliverables: session.contract.deliverables,
+        rootPath: workspaceDirectory ?? "",
+        truncated: scan.truncated,
+      });
+      evaluationId = crypto.randomUUID();
+      const started = startGoalEvaluation(session, {
+        evaluationId,
+        modelRequestId: crypto.randomUUID(),
+        manifest,
+      });
+      goalSessionRef.current = started.session;
+      setGoalSession(started.session);
+      await persistGoalSession(started.session);
+      if (!started.evaluation) {
+        goalContinuationRef.current = undefined;
+        toast.info(
+          "Goal supervision stopped because its review budget was exhausted.",
+        );
+        return;
+      }
+
+      const { notebookPath, activeFilePath } =
+        agentEditorContext(activeNotebookPath);
+      const verdict = await runGoalEvaluation({
+        contract: session.contract,
+        manifest,
+        modelId: session.evaluatorModelId,
+        providerId: session.evaluatorProvider as ProviderId,
+        modelSettings: session.evaluatorModelSettings,
+        chatId: effectiveChatId,
+        modelRequestId: started.evaluation.modelRequestId,
+        workspaceDirectory: workspaceDirectory ?? undefined,
+        rootDirectory: assistant.rootDirectory ?? undefined,
+        notebookPath,
+        activeFilePath,
+        connectedNotebookPath: assistant.getCurrentConnectedNotebookPath(),
+        agentRules: assistant.availableRules,
+        serverInfo: assistant.serverInfo,
+        jupyterServerIsLocal: assistant.jupyterServerIsLocal,
+        clientPlatformOs,
+        contextSettings: effectiveSettings.agent.context,
+        abortSignal: abortController.signal,
+        onMessagesChange: (nextMessages) => {
+          liveEvaluatorTranscriptRef.current = nextMessages;
+          setLiveEvaluatorTranscript(nextMessages);
+        },
+        executeToolCall: (toolName, input, signal) =>
+          assistant.executeToolCall(toolName, input, {
+            chatId: effectiveChatId,
+            modelRequestId: started.evaluation?.modelRequestId,
+            abortSignal: signal,
+          }),
+      });
+
+      const latest = goalSessionRef.current;
+      if (!latest || latest.id !== session.id) return;
+      const finished = finishGoalEvaluation(latest, {
+        evaluationId,
+        contractVersion: started.evaluation.contractVersion,
+        verdict,
+        transcript: trimGoalEvaluatorTranscript(
+          liveEvaluatorTranscriptRef.current ?? [],
+        ),
+      });
+      goalSessionRef.current = finished.session;
+      setGoalSession(finished.session);
+      await persistGoalSession(finished.session);
+
+      if (finished.action.type === "complete") {
+        goalContinuationRef.current = undefined;
+        toast.success("Goal reached.");
+        return;
+      }
+      if (finished.action.type === "stop") {
+        goalContinuationRef.current = undefined;
+        toast.info(
+          finished.action.reason === "blocked"
+            ? "Goal supervision is blocked."
+            : "Goal supervision stopped after repeated unchanged revisions.",
+        );
+        return;
+      }
+      if (finished.action.type === "discard_stale_verdict") {
+        goalWorkerStartProgressRef.current = Math.max(
+          0,
+          getTranscriptProgressCount(messagesRef.current) - 1,
+        );
+        return;
+      }
+
+      goalContinuationRef.current = {
+        contract: finished.session.contract,
+        contractVersion: finished.session.contractVersion,
+        instruction: finished.action.instruction,
+      };
+      bodyRef.current = {
+        ...bodyRef.current,
+        modelRequestId: finished.session.workerRequestId,
+        goalContinuation: goalContinuationRef.current,
+      };
+      goalWorkerStartProgressRef.current = getTranscriptProgressCount(
+        messagesRef.current,
+      );
+      beginAgentTurn();
+      void sendMessage();
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return;
+      const current = goalSessionRef.current;
+      if (!current || current.id !== session.id || !evaluationId) return;
+      const recoverable = isRecoverableGoalEvaluationError(error);
+      const failed = failGoalEvaluation(
+        current,
+        evaluationId,
+        error instanceof Error ? error.message : String(error),
+        {
+          recoverable,
+          transcript: trimGoalEvaluatorTranscript(
+            liveEvaluatorTranscriptRef.current ?? [],
+          ),
+        },
+      );
+      goalContinuationRef.current = undefined;
+      goalSessionRef.current = failed;
+      setGoalSession(failed);
+      await persistGoalSession(failed).catch(() => undefined);
+      if (recoverable) {
+        toast.warning(
+          "The goal review could not finish; supervision is paused and can be resumed.",
+        );
+      } else {
+        toast.error("Goal evaluation failed; supervision has stopped.");
+      }
+    } finally {
+      goalEvaluationRunningRef.current = false;
+      liveEvaluatorTranscriptRef.current = null;
+      setLiveEvaluatorTranscript(null);
+      if (goalEvaluationAbortRef.current === abortController) {
+        goalEvaluationAbortRef.current = null;
+      }
+    }
+  }, [
+    activeNotebookPath,
+    assistant,
+    beginAgentTurn,
+    clientPlatformOs,
+    effectiveChatId,
+    effectiveSettings.agent.context,
+    effectiveSettings.agent.filesystem.ignoreDirs,
+    effectiveSettings.agent.goals.maxReviews,
+    kernelService,
+    sendMessage,
+    workspaceDirectory,
+  ]);
+
+  /** Starts the visible contract-author agent without creating a GoalSession yet. */
+  async function startGoalContractDraft(
+    objective: string,
+    references: ResolvedChatReference[],
+    attachments: ChatDraftAttachment[],
+    activation: GoalModeActivation,
+  ): Promise<void> {
+    const restoreComposer = () => {
+      setInput(activation === "slash" ? `/goal ${objective}` : objective);
+      setDraftReferences(references);
+      setDraftAttachments(attachments);
+    };
+    if (!effectiveChatId) {
+      restoreComposer();
+      toast.error("Create or select a chat before starting a goal.");
+      return;
+    }
+    const contractModel = getModel(selectedModel);
+    if (!contractModel?.provider || contractModel.isAccessible === false) {
+      restoreComposer();
+      toast.error(
+        "Select a model with an available credential before starting a goal.",
+      );
+      return;
+    }
+    if (contractModel.supportsToolCalling === false) {
+      restoreComposer();
+      toast.error(
+        "Select a model that supports tools before starting a supervised goal.",
+      );
+      return;
+    }
+
+    goalContractDraftActiveRef.current = true;
+    setIsGoalContractDraftActive(true);
+    setGoalContractErrors(new Map());
+    deactivateResearchSession();
+    const modelRequestId = crypto.randomUUID();
+    modelRequestIdRef.current = modelRequestId;
+    bodyRef.current = {
+      ...bodyRef.current,
+      modelRequestId,
+      goalContractDraft: true,
+      goalContinuation: undefined,
+    };
+
+    const effectiveReferences = [
+      ...references,
+      ...attachments.map((attachment) => attachment.reference),
+    ].slice(-20);
+    const imageFileParts = attachments
+      .map((attachment) => attachment.imageFilePart)
+      .filter((part): part is FileUIPart => part !== undefined);
+
+    try {
+      beginAgentTurn();
+      await sendMessage(
+        {
+          text: objective,
+          ...(imageFileParts.length > 0 ? { files: imageFileParts } : {}),
+          metadata: {
+            goalContractDraft: true,
+            ...(activation === "slash"
+              ? {
+                  slashCommands: [
+                    {
+                      label: "/goal",
+                      name: "goal",
+                      category: "builtin" as const,
+                    },
+                  ],
+                }
+              : {}),
+            ...(effectiveReferences.length > 0
+              ? { references: effectiveReferences }
+              : {}),
+          },
+        },
+        {
+          body: buildChatRequestBody({
+            modelRequestId,
+            goalContractDraft: true,
+            goalContinuation: undefined,
+          }),
+        },
+      );
+    } catch (error) {
+      restoreComposer();
+      goalContractDraftActiveRef.current = false;
+      setIsGoalContractDraftActive(false);
+      bodyRef.current = { ...bodyRef.current, goalContractDraft: undefined };
+      console.error("Failed to start goal contract authoring:", error);
+      toast.error(
+        "The goal contract author could not start. Your prompt was restored so you can retry.",
+      );
+    }
+  }
+
+  /** Saves proposal decisions immediately because they do not receive a normal onFinish callback. */
+  const persistGoalProposalMessages = useCallback(
+    async (nextMessages: UIMessage[]): Promise<void> => {
+      const chatId = effectiveChatIdRef.current;
+      if (!chatId) throw new Error("The active chat is unavailable.");
+      const existingChat = chatsRef.current.find((chat) => chat.id === chatId);
+      if (!existingChat) throw new Error("The active chat could not be found.");
+
+      const persistedMessages = attachPersistedToolTimings(
+        stripAllRasterData(nextMessages),
+        toolTimingsRef.current,
+      );
+      const chatMessages: ChatMessage[] = persistedMessages.map((message) => {
+        const existing = existingChat.messages.find(
+          (candidate) => candidate.id === message.id,
+        );
+        return {
+          ...stripSessionOnlyFileParts(message),
+          metadata: normalizeChatMessageMetadata(message.metadata),
+          timestamp: existing?.timestamp ?? new Date(),
+          modelUsed: existing?.modelUsed ?? selectedModel,
+          checkpointId: existing?.checkpointId,
+        };
+      });
+      const nextChat: Chat = {
+        ...existingChat,
+        messages: chatMessages,
+        updatedAt: new Date(),
+      };
+
+      await chatStorage.saveChat(nextChat);
+      const nextChats = chatsRef.current.map((chat) =>
+        chat.id === chatId ? nextChat : chat,
+      );
+      flushSync(() => {
+        messagesRef.current = nextMessages;
+        setMessages(nextMessages);
+        chatsRef.current = nextChats;
+        setChats(nextChats);
+      });
+    },
+    [selectedModel, setMessages],
+  );
+
+  /** Completes a proposal tool with a durable user decision. */
+  const commitGoalProposalDecision = useCallback(
+    async (
+      toolCallId: string,
+      result:
+        | { status: "revision_requested" }
+        | { status: "approved"; goalSessionId: string },
+    ): Promise<UIMessage[]> => {
+      const currentMessages = messagesRef.current;
+      const nextMessages = applyGoalContractProposalResult(
+        currentMessages,
+        toolCallId,
+        result,
+      );
+      if (nextMessages === currentMessages) {
+        throw new Error("This goal contract proposal is no longer available.");
+      }
+      await persistGoalProposalMessages(nextMessages);
+      trackedToolCallsRef.current.set(toolCallId, {
+        status: "completed",
+        result,
+      });
+      markToolEnded(toolCallId);
+      return nextMessages;
+    },
+    [markToolEnded, persistGoalProposalMessages],
+  );
+
+  /** Records a proposal-specific error without dismissing the actionable card. */
+  const setGoalProposalError = useCallback(
+    (toolCallId: string, message?: string) => {
+      setGoalContractErrors((current) => {
+        const next = new Map(current);
+        if (message) next.set(toolCallId, message);
+        else next.delete(toolCallId);
+        return next;
+      });
+    },
+    [],
+  );
+
+  /** Leaves contract-author mode active and focuses the composer for revision instructions. */
+  const handleRequestGoalContractRevision = useCallback(
+    async (toolCallId: string): Promise<void> => {
+      if (goalContractActionIds.has(toolCallId)) return;
+      const proposalPart = findGoalContractProposalPart(
+        messagesRef.current,
+        toolCallId,
+      );
+      if (!proposalPart || proposalPart.state !== "input-available") {
+        setGoalProposalError(
+          toolCallId,
+          "This proposal is no longer awaiting a decision.",
+        );
+        return;
+      }
+
+      setGoalContractActionIds((current) => new Set(current).add(toolCallId));
+      setGoalProposalError(toolCallId);
+      try {
+        await commitGoalProposalDecision(toolCallId, {
+          status: "revision_requested",
+        });
+        goalContractDraftActiveRef.current = true;
+        setIsGoalContractDraftActive(true);
+        bodyRef.current = {
+          ...bodyRef.current,
+          goalContractDraft: true,
+          goalContinuation: undefined,
+        };
+        window.setTimeout(() => textareaRef.current?.focus(), 0);
+      } catch (error) {
+        console.error("Failed to save goal contract revision request:", error);
+        setGoalProposalError(
+          toolCallId,
+          "The revision request could not be saved. Please try again.",
+        );
+      } finally {
+        setGoalContractActionIds((current) => {
+          const next = new Set(current);
+          next.delete(toolCallId);
+          return next;
+        });
+      }
+    },
+    [commitGoalProposalDecision, goalContractActionIds, setGoalProposalError],
+  );
+
+  /** Approves the exact proposed contract, captures a baseline, and starts the worker. */
+  const handleApproveGoalContract = useCallback(
+    async (toolCallId: string): Promise<void> => {
+      if (goalContractActionIds.has(toolCallId)) return;
+      const proposal = findGoalContractProposal(
+        messagesRef.current,
+        toolCallId,
+      );
+      if (
+        !proposal ||
+        !("state" in proposal.part) ||
+        proposal.part.state !== "input-available"
+      ) {
+        setGoalProposalError(
+          toolCallId,
+          "This proposal is no longer awaiting a decision.",
+        );
+        return;
+      }
+      const parsedContract = GoalContractSchema.safeParse(proposal.contract);
+      if (!parsedContract.success) {
+        setGoalProposalError(
+          toolCallId,
+          "The proposed contract is invalid and cannot be approved.",
+        );
+        return;
+      }
+      if (!effectiveChatId || !kernelService) {
+        setGoalProposalError(
+          toolCallId,
+          "Connect to Jupyter before approving and starting this supervised goal.",
+        );
+        return;
+      }
+      const evaluator = getModel(goalEvaluatorModel);
+      if (!evaluator?.provider || evaluator.isAccessible === false) {
+        setGoalProposalError(
+          toolCallId,
+          "Choose an evaluator model with an available credential before approving this goal.",
+        );
+        return;
+      }
+      if (evaluator.supportsToolCalling === false) {
+        setGoalProposalError(
+          toolCallId,
+          "Choose an evaluator model that supports tools before approving this goal.",
+        );
+        return;
+      }
+      const currentGoal = goalSessionRef.current;
+      if (
+        currentGoal?.status === "active" ||
+        currentGoal?.status === "paused"
+      ) {
+        setGoalProposalError(
+          toolCallId,
+          "Another supervised goal is already active in this chat.",
+        );
+        return;
+      }
+
+      setGoalContractActionIds((current) => new Set(current).add(toolCallId));
+      setGoalProposalError(toolCallId);
+      setIsGoalStarting(true);
+      const abortController = new AbortController();
+      goalStartAbortRef.current = abortController;
+      let created: GoalSession | null = null;
+      let stage: "baseline" | "session" | "decision" | "worker" = "baseline";
+
+      try {
+        const baseline = await scanGoalWorkspace({
+          contents: kernelService.getContentsManager(),
+          rootPath: workspaceDirectory ?? "",
+          ignoreDirectoryNames: effectiveSettings.agent.filesystem.ignoreDirs,
+        });
+        if (abortController.signal.aborted) {
+          throw new DOMException("Goal approval was cancelled.", "AbortError");
+        }
+
+        stage = "session";
+        const workerRequestId = crypto.randomUUID();
+        const evaluatorSelection = formatModelSelectionKey(
+          evaluator.provider,
+          evaluator.value,
+        );
+        created = createGoalSession({
+          id: crypto.randomUUID(),
+          chatId: effectiveChatId,
+          contract: parsedContract.data,
+          evaluatorModel: evaluatorSelection,
+          evaluatorProvider: evaluator.provider,
+          evaluatorModelId: resolveCatalogModelIdForApi(
+            evaluatorSelection,
+            evaluator,
+          ),
+          evaluatorModelSettings:
+            modelSettingsMap[evaluatorSelection] ??
+            modelSettingsMap[selectedModel] ??
+            modelSettingsMap[evaluator.value],
+          maxReviews: effectiveSettings.agent.goals.maxReviews,
+          baselineEntries: baseline.entries,
+          workerRequestId,
+        });
+        await persistGoalSession(created);
+
+        stage = "decision";
+        const approvedMessages = await commitGoalProposalDecision(toolCallId, {
+          status: "approved",
+          goalSessionId: created.id,
+        });
+
+        goalSessionRef.current = created;
+        setGoalSession(created);
+        goalContractDraftActiveRef.current = false;
+        setIsGoalContractDraftActive(false);
+        deactivateResearchSession();
+        goalContinuationRef.current = {
+          contract: created.contract,
+          contractVersion: created.contractVersion,
+        };
+        modelRequestIdRef.current = workerRequestId;
+        bodyRef.current = {
+          ...bodyRef.current,
+          modelRequestId: workerRequestId,
+          goalContractDraft: undefined,
+          goalContinuation: goalContinuationRef.current,
+        };
+        goalWorkerStartProgressRef.current =
+          getTranscriptProgressCount(approvedMessages);
+
+        stage = "worker";
+        beginAgentTurn();
+        await sendMessage();
+        toast.success("Goal approved and started.");
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") return;
+        if (created && stage === "decision") {
+          await removeGoalSession(created.chatId).catch((rollbackError) => {
+            console.error(
+              "Failed to roll back an uncommitted goal session:",
+              rollbackError,
+            );
+          });
+        }
+        console.error(`Failed during goal approval stage ${stage}:`, error);
+        const message =
+          stage === "baseline"
+            ? "The workspace baseline could not be captured. Check the Jupyter connection and retry."
+            : stage === "session"
+              ? "The goal session could not be saved. Please retry approval."
+              : stage === "decision"
+                ? "Approval could not be saved. The proposal remains available to retry."
+                : "The contract was approved, but the worker could not start. Send a message to continue the goal.";
+        setGoalProposalError(toolCallId, message);
+      } finally {
+        if (goalStartAbortRef.current === abortController) {
+          goalStartAbortRef.current = null;
+        }
+        setIsGoalStarting(false);
+        setGoalContractActionIds((current) => {
+          const next = new Set(current);
+          next.delete(toolCallId);
+          return next;
+        });
+      }
+    },
+    [
+      beginAgentTurn,
+      commitGoalProposalDecision,
+      deactivateResearchSession,
+      effectiveChatId,
+      effectiveSettings.agent.filesystem.ignoreDirs,
+      effectiveSettings.agent.goals.maxReviews,
+      getModel,
+      goalContractActionIds,
+      goalEvaluatorModel,
+      kernelService,
+      modelSettingsMap,
+      selectedModel,
+      sendMessage,
+      setGoalProposalError,
+      workspaceDirectory,
+    ],
+  );
+
+  /** Pauses the loop while preserving its contract, review history, and current worker turn. */
+  const handlePauseGoalSupervision = useCallback(() => {
+    const current = goalSessionRef.current;
+    if (!current || current.status !== "active") return;
+    goalEvaluationAbortRef.current?.abort();
+    goalContinuationRef.current = undefined;
+    const paused = pauseGoalSupervision(current);
+    goalSessionRef.current = paused;
+    setGoalSession(paused);
+    void persistGoalSession(paused);
+    toast.info("Goal paused. The current worker was not interrupted.");
+  }, []);
+
+  /** Permanently ends the loop after confirmation while preserving its history. */
+  const handleEndGoalSupervision = useCallback(() => {
+    const current = goalSessionRef.current;
+    if (!current || (current.status !== "active" && current.status !== "paused")) return;
+    goalEvaluationAbortRef.current?.abort();
+    goalContinuationRef.current = undefined;
+    const ended = endGoalSupervision(current);
+    goalSessionRef.current = ended;
+    setGoalSession(ended);
+    void persistGoalSession(ended);
+    toast.info("Goal ended. Its contract and review history remain available.");
+  }, []);
+
+  /** Resumes a paused goal by reviewing the current saved artifacts. */
+  const handleResumeGoalSupervision = useCallback(() => {
+    const current = goalSessionRef.current;
+    if (!current || current.status !== "paused") return;
+    const resumed: GoalSession = {
+      ...current,
+      status: "active",
+      phase: "working",
+      updatedAt: new Date().toISOString(),
+    };
+    goalSessionRef.current = resumed;
+    setGoalSession(resumed);
+    void persistGoalSession(resumed);
+    goalWorkerStartProgressRef.current = Math.max(
+      0,
+      getTranscriptProgressCount(messagesRef.current) - 1,
+    );
+  }, []);
+
+  /** Starts evaluation after the current worker and any queued steering fully finish. */
+  useEffect(() => {
+    const session = goalSessionRef.current;
+    const startProgress = goalWorkerStartProgressRef.current;
+    if (
+      !session ||
+      session.status !== "active" ||
+      session.phase !== "working" ||
+      startProgress == null ||
+      isAgentTurnActive ||
+      status !== "ready" ||
+      messageQueue.length > 0 ||
+      queueProcessingRef.current ||
+      getTranscriptProgressCount(messages) <= startProgress
+    ) {
+      return;
+    }
+    const latest = messages.at(-1);
+    if (!latest || latest.role !== "assistant") return;
+    if (latest.parts.some(isPendingToolPart)) return;
+    goalWorkerStartProgressRef.current = null;
+    const timer = window.setTimeout(() => void runCurrentGoalReview(), 0);
+    return () => window.clearTimeout(timer);
+  }, [
+    isAgentTurnActive,
+    messageQueue.length,
+    messages,
+    runCurrentGoalReview,
+    status,
+  ]);
+
   /** Sends the next queued message once the agent finishes its full turn. */
   useEffect(() => {
     const wasActive = prevAgentTurnActiveRef.current;
     prevAgentTurnActiveRef.current = isAgentTurnActive;
 
-    if (!wasActive || isAgentTurnActive || messageQueue.length === 0 || queueProcessingRef.current) {
+    if (
+      !wasActive ||
+      isAgentTurnActive ||
+      messageQueue.length === 0 ||
+      queueProcessingRef.current
+    ) {
       if (wasActive && !isAgentTurnActive) {
         void markCurrentEditCheckpointStatus(
-          stopRequestedRef.current ? "interrupted" : "completed"
+          stopRequestedRef.current ? "interrupted" : "completed",
         );
         notifyAgentTurnComplete({
           wasActive,
@@ -4808,7 +6470,8 @@ export function RightSidebar({
           chatTitle: currentChat?.title,
           settings: {
             notifyOnAgentFinish: effectiveSettings.chat.notifyOnAgentFinish,
-            playSoundOnAgentFinish: effectiveSettings.chat.playSoundOnAgentFinish,
+            playSoundOnAgentFinish:
+              effectiveSettings.chat.playSoundOnAgentFinish,
           },
         });
       }
@@ -4827,7 +6490,7 @@ export function RightSidebar({
       }
 
       void markCurrentEditCheckpointStatus(
-        stopRequestedRef.current ? "interrupted" : "completed"
+        stopRequestedRef.current ? "interrupted" : "completed",
       );
 
       const [next, ...rest] = messageQueue;
@@ -4842,7 +6505,7 @@ export function RightSidebar({
 
       void Promise.resolve(
         customHandleSubmitRef.current({
-          preventDefault: () => { },
+          preventDefault: () => {},
         } as React.FormEvent<HTMLFormElement>),
       ).finally(() => {
         pendingSubmitRef.current = null;
@@ -4862,6 +6525,12 @@ export function RightSidebar({
   ]);
 
   const handleStopGeneration = useCallback(() => {
+    if (isGoalStarting) {
+      goalStartAbortRef.current?.abort();
+      goalStartAbortRef.current = null;
+      setIsGoalStarting(false);
+      return;
+    }
     const cancelledAt = Date.now();
     const getCancelledOutput = (toolCallId: string): CancelledToolOutput => {
       const startedAt = toolTimingsRef.current.get(toolCallId)?.startedAt;
@@ -4872,7 +6541,10 @@ export function RightSidebar({
           : {}),
       };
     };
-    const onCancelledToolCall = (toolCallId: string, result: CancelledToolOutput) => {
+    const onCancelledToolCall = (
+      toolCallId: string,
+      result: CancelledToolOutput,
+    ) => {
       trackedToolCallsRef.current.set(toolCallId, {
         status: "completed",
         result,
@@ -4916,16 +6588,18 @@ export function RightSidebar({
 
       const messagesForStorage: ChatMessage[] = result.changed
         ? result.messages.map((message) => {
-          const messageForStorage = stripSessionOnlyFileParts(message);
-          const existing = chat.messages.find((candidate) => candidate.id === message.id);
-          return {
-            ...messageForStorage,
-            metadata: normalizeChatMessageMetadata(message.metadata),
-            timestamp: existing?.timestamp ?? new Date(cancelledAt),
-            modelUsed: existing?.modelUsed ?? selectedModel,
-            checkpointId: existing?.checkpointId,
-          };
-        })
+            const messageForStorage = stripSessionOnlyFileParts(message);
+            const existing = chat.messages.find(
+              (candidate) => candidate.id === message.id,
+            );
+            return {
+              ...messageForStorage,
+              metadata: normalizeChatMessageMetadata(message.metadata),
+              timestamp: existing?.timestamp ?? new Date(cancelledAt),
+              modelUsed: existing?.modelUsed ?? selectedModel,
+              checkpointId: existing?.checkpointId,
+            };
+          })
         : chat.messages;
 
       return {
@@ -4951,7 +6625,9 @@ export function RightSidebar({
     setMessageQueue([]);
     pendingSubmitRef.current = null;
     queueProcessingRef.current = false;
-    const cancellingSubagentToolCallIds = new Set(activeSubagentRunToolCallsRef.current);
+    const cancellingSubagentToolCallIds = new Set(
+      activeSubagentRunToolCallsRef.current,
+    );
     const cancellingChatId = effectiveChatIdRef.current;
 
     setMessages((prev) => {
@@ -4963,8 +6639,9 @@ export function RightSidebar({
     });
 
     if (cancellingChatId) {
-      const cancelledChatForStorage = chats
-        .find((chat) => chat.id === cancellingChatId);
+      const cancelledChatForStorage = chats.find(
+        (chat) => chat.id === cancellingChatId,
+      );
       const nextCancelledChat = cancelledChatForStorage
         ? buildCancelledChatForStorage(cancelledChatForStorage)
         : null;
@@ -4972,8 +6649,10 @@ export function RightSidebar({
       setChats((prev) =>
         prev.map((chat) => {
           if (chat.id !== cancellingChatId) return chat;
-          return nextCancelledChat ?? buildCancelledChatForStorage(chat) ?? chat;
-        })
+          return (
+            nextCancelledChat ?? buildCancelledChatForStorage(chat) ?? chat
+          );
+        }),
       );
       if (nextCancelledChat) {
         void chatStorage.saveChat(nextCancelledChat).catch((error) => {
@@ -4992,13 +6671,16 @@ export function RightSidebar({
     }
     pendingApprovalToolCallsRef.current.clear();
     setPendingApprovalIds(new Set());
+    cancelPendingAskQuestions();
 
     deactivateResearchSession();
 
     stop();
   }, [
+    cancelPendingAskQuestions,
     chats,
     deactivateResearchSession,
+    isGoalStarting,
     markToolEnded,
     selectedModel,
     setChats,
@@ -5032,8 +6714,8 @@ export function RightSidebar({
             prev.map((chat) =>
               chat.id === currentChatId
                 ? { ...chat, messages: [], updatedAt: new Date() }
-                : chat
-            )
+                : chat,
+            ),
           );
           setEditingState(null);
           setInput("");
@@ -5079,11 +6761,7 @@ export function RightSidebar({
 
   if (!isChatsLoaded) {
     return (
-      <ChatSurface
-        ref={sidebarRootRef}
-        className={className}
-        {...props}
-      >
+      <ChatSurface ref={sidebarRootRef} className={className} {...props}>
         <div className="flex items-center justify-center h-full">
           <div className="flex items-center gap-2 text-muted-foreground">
             <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current" />
@@ -5095,12 +6773,103 @@ export function RightSidebar({
   }
 
   return (
-    <ChatSurface
-      ref={sidebarRootRef}
-      className={className}
-      {...props}
-    >
-      {isSubagentChatView ? (
+    <ChatSurface ref={sidebarRootRef} className={className} {...props}>
+      {isGoalSupervisorView && goalSession ? (
+        <>
+          <div
+            className={
+              isBusinessExperience
+                ? "sticky top-0 z-10 min-h-14 bg-sidebar pb-3 pl-3 pr-2 pt-2"
+                : "sticky top-0 z-10 h-14 bg-sidebar"
+            }
+          >
+            <div className="flex h-full min-w-0 items-center gap-2 px-2">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 shrink-0"
+                onClick={() => setGoalSupervisorOpen(false)}
+                aria-label="Back to main chat"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <div className="flex min-w-0 items-center gap-1.5 text-sm">
+                <button
+                  type="button"
+                  className="corner-squircle rounded-md px-2 py-1 font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={() => setGoalSupervisorOpen(false)}
+                >
+                  Main chat
+                </button>
+                <span className="text-muted-foreground/50">/</span>
+                <div className="flex min-w-0 items-center gap-1.5 rounded-md bg-accent px-2 py-1 font-semibold">
+                  <Target className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="truncate">Goal supervisor</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className={businessChatPanelClassName}>
+            <ChatBody
+              key={`goal-supervisor-${goalSession.id}`}
+              viewKey={`goal:${goalSession.id}`}
+              messages={goalSupervisorMessages}
+              error={undefined}
+              isLoading={
+                goalSession.status === "active" &&
+                goalSession.phase === "evaluating"
+              }
+              isAgentTurnActive={
+                goalSession.status === "active" &&
+                goalSession.phase === "evaluating"
+              }
+              groupConsecutiveAssistantActivity
+              toolTimings={toolTimings}
+              onUserMessageClick={() => {}}
+              canEditUserMessages={false}
+              editingState={null}
+            />
+
+            <ChatTextbox
+              input=""
+              handleInputChange={() => {}}
+              handleSubmit={(event) => event.preventDefault()}
+              onStop={() => {}}
+              isLoading={false}
+              interactionMode={interactionMode}
+              interactionModes={interactionModeConfigs}
+              selectedModel={selectedModel}
+              editingState={null}
+              textareaRef={textareaRef}
+              onInteractionModeChange={handleInteractionModeChange}
+              onModelChange={handleModelChange}
+              onCancelEdit={() => {}}
+              models={modelsWithAccess}
+              pinnedModelIds={pinnedModelIds}
+              onReorderPinned={handleReorderPinned}
+              onOpenModelsSettings={() => openWithTab("models")}
+              onOpenInteractionModesSettings={() =>
+                openWithTab("agent", "modes")
+              }
+              onOpenProvidersSettings={handleOpenProvidersSettings}
+              onConfigureProvider={handleConfigureProvider}
+              selectedModelProvider={modelInfo?.provider}
+              modelSettings={modelSettingsMap[selectedModel] ?? {}}
+              onModelSettingsChange={(settings) =>
+                handleModelSettingsChange(selectedModel, settings)
+              }
+              hasMessages={goalSupervisorMessages.length > 0}
+              readOnly
+              readOnlyPlaceholder="Goal supervisor is read-only"
+              onOpenSlashDefinition={handleOpenSlashDefinition}
+              activeRules={assistant?.availableRules ?? []}
+              onOpenRule={handleOpenRule}
+            />
+          </div>
+        </>
+      ) : isSubagentChatView ? (
         <>
           <div
             className={
@@ -5131,7 +6900,9 @@ export function RightSidebar({
                 <span className="text-muted-foreground/50">/</span>
                 <div className="flex min-w-0 items-center gap-1.5 rounded-md bg-accent px-2 py-1 font-semibold">
                   <Bot className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span className="truncate">{activeSubagentSession.label}</span>
+                  <span className="truncate">
+                    {activeSubagentSession.label}
+                  </span>
                 </div>
               </div>
             </div>
@@ -5147,16 +6918,16 @@ export function RightSidebar({
               isAgentTurnActive={activeSubagentSession.status === "running"}
               groupConsecutiveAssistantActivity
               toolTimings={toolTimings}
-              onUserMessageClick={() => { }}
+              onUserMessageClick={() => {}}
               canEditUserMessages={false}
               editingState={null}
             />
 
             <ChatTextbox
               input=""
-              handleInputChange={() => { }}
+              handleInputChange={() => {}}
               handleSubmit={(event) => event.preventDefault()}
-              onStop={() => { }}
+              onStop={() => {}}
               isLoading={false}
               interactionMode={interactionMode}
               interactionModes={interactionModeConfigs}
@@ -5165,12 +6936,14 @@ export function RightSidebar({
               textareaRef={textareaRef}
               onInteractionModeChange={handleInteractionModeChange}
               onModelChange={handleModelChange}
-              onCancelEdit={() => { }}
+              onCancelEdit={() => {}}
               models={modelsWithAccess}
               pinnedModelIds={pinnedModelIds}
               onReorderPinned={handleReorderPinned}
               onOpenModelsSettings={() => openWithTab("models")}
-              onOpenInteractionModesSettings={() => openWithTab("agent", "modes")}
+              onOpenInteractionModesSettings={() =>
+                openWithTab("agent", "modes")
+              }
               onOpenProvidersSettings={handleOpenProvidersSettings}
               onConfigureProvider={handleConfigureProvider}
               selectedModelProvider={modelInfo?.provider}
@@ -5228,6 +7001,12 @@ export function RightSidebar({
               pendingApprovalIds={pendingApprovalIds}
               onApprove={handleApprove}
               onReject={handleReject}
+              askQuestion={askQuestionHandlers}
+              onApproveGoalContract={handleApproveGoalContract}
+              onRequestGoalContractRevision={handleRequestGoalContractRevision}
+              goalContractActionIds={goalContractActionIds}
+              goalContractErrors={goalContractErrors}
+              goalEvaluatorPicker={goalEvaluatorPicker}
               toolApprovalMode={toolApprovalMode}
               onToolApprovalModeChange={handleToolApprovalModeChange}
               subagentProgress={subagentProgress}
@@ -5250,6 +7029,16 @@ export function RightSidebar({
               emptyPromptLibraryKey={`${effectiveChatId ?? "no-chat"}:${emptyPromptLibraryResetCount}`}
             />
 
+            {goalSession && !isGoalContractDraftActive && (
+              <GoalStatusBar
+                session={goalSession}
+                onOpen={() => setGoalSupervisorOpen(true)}
+                onResume={handleResumeGoalSupervision}
+                onPause={handlePauseGoalSupervision}
+                onEnd={handleEndGoalSupervision}
+              />
+            )}
+
             <ChatTextbox
               input={input}
               handleInputChange={handleInputChange}
@@ -5268,7 +7057,9 @@ export function RightSidebar({
               pinnedModelIds={pinnedModelIds}
               onReorderPinned={handleReorderPinned}
               onOpenModelsSettings={() => openWithTab("models")}
-              onOpenInteractionModesSettings={() => openWithTab("agent", "modes")}
+              onOpenInteractionModesSettings={() =>
+                openWithTab("agent", "modes")
+              }
               onOpenProvidersSettings={handleOpenProvidersSettings}
               onConfigureProvider={handleConfigureProvider}
               selectedModelProvider={modelInfo?.provider}
@@ -5277,10 +7068,15 @@ export function RightSidebar({
                 handleModelSettingsChange(selectedModel, settings)
               }
               activeSlashCommand={activeSlashCommand}
-              extraSlashCommands={[...subagentSlashCommands, ...skillSlashCommands]}
+              extraSlashCommands={[
+                ...subagentSlashCommands,
+                ...skillSlashCommands,
+              ]}
               onOpenSlashDefinition={handleOpenSlashDefinition}
               onImmediateSlashCommand={handleImmediateSlashCommand}
-              onRefreshSlashCommands={assistant ? handleRefreshSlashCommands : undefined}
+              onRefreshSlashCommands={
+                assistant ? handleRefreshSlashCommands : undefined
+              }
               hasMessages={visibleMessages.length > 0}
               contextUsage={contextUsage}
               contextUsagePhase={contextUsagePhase}
@@ -5313,13 +7109,16 @@ export function RightSidebar({
 
       <AlertDialog
         open={stopConfirmAction !== null}
-        onOpenChange={(open) => { if (!open) setStopConfirmAction(null); }}
+        onOpenChange={(open) => {
+          if (!open) setStopConfirmAction(null);
+        }}
       >
         <AlertDialogContent className="max-w-md">
           <AlertDialogHeader>
             <AlertDialogTitle>Stop current generation?</AlertDialogTitle>
             <AlertDialogDescription>
-              A response is still being generated. Switching will stop it. Are you sure?
+              A response is still being generated. Switching will stop it. Are
+              you sure?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

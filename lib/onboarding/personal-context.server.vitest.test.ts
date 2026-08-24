@@ -9,6 +9,7 @@ import {
   deletePersonalContext,
   loadOnboardingAnswers,
   loadPersonalContext,
+  loadPersonalContextForModel,
   saveOnboardingAnswers,
   savePersonalContext,
 } from "@/lib/onboarding/personal-context.server";
@@ -57,15 +58,15 @@ describe("personal context storage", () => {
     );
   });
 
-  it("safely truncates an oversized manually edited file for prompt use", async () => {
-    await writeFile(
-      path.join(tempDirectory, "ORION.md"),
-      "z".repeat(MAX_PERSONAL_CONTEXT_CHARS + 100),
-      "utf8",
-    );
+  it("keeps oversized editor content while truncating the model prompt", async () => {
+    const oversized = "z".repeat(MAX_PERSONAL_CONTEXT_CHARS + 100);
+    await writeFile(path.join(tempDirectory, "ORION.md"), oversized, "utf8");
     const loaded = await loadPersonalContext();
     expect(loaded.truncated).toBe(true);
-    expect(loaded.content).toHaveLength(MAX_PERSONAL_CONTEXT_CHARS);
+    expect(loaded.content).toBe(oversized);
+    await expect(loadPersonalContextForModel()).resolves.toHaveLength(
+      MAX_PERSONAL_CONTEXT_CHARS,
+    );
   });
 });
 

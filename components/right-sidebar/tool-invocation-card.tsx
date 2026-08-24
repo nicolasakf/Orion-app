@@ -172,13 +172,13 @@ function resultToText(result: unknown): string {
   return JSON.stringify(result, null, 2);
 }
 
-/** Returns the PNG payload passed to the model for a completed Plotly inspection. */
-function getPlotlyInspectionImage(result: unknown): { src: string; visualId: string } | null {
+/** Returns the PNG payload passed to the model for a completed output inspection. */
+function getOutputInspectionImage(result: unknown): { src: string; visualId: string } | null {
   if (!isExecutionToolResult(result)) return null;
 
   const visual = result.visuals.find(
     (candidate) =>
-      candidate.source === "inspect_plotly_output" &&
+      candidate.source === "inspect_output" &&
       candidate.mimeType === "image/png" &&
       typeof candidate.data === "string" &&
       candidate.data.length > 0
@@ -191,19 +191,19 @@ function getPlotlyInspectionImage(result: unknown): { src: string; visualId: str
   };
 }
 
-/** Displays the model-facing Plotly raster as a compact card preview and full-screen dialog. */
-function PlotlyInspectionPreview({ src, visualId }: { src: string; visualId: string }) {
+/** Displays the model-facing output raster as a compact card preview and full-screen dialog. */
+function OutputInspectionPreview({ src, visualId }: { src: string; visualId: string }) {
   return (
     <Dialog>
       <DialogTrigger asChild>
         <button
           type="button"
           className="corner-squircle group relative mt-1 block max-w-full overflow-hidden rounded-md border border-border/50 bg-muted/20 text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-          aria-label="Open rendered Plotly preview in full screen"
+          aria-label="Open rendered output preview in full screen"
         >
           <img
             src={src}
-            alt="Rendered Plotly preview"
+            alt="Rendered output preview"
             className="block max-h-28 max-w-full object-contain"
           />
           <span className="absolute inset-0 flex items-center justify-center bg-background/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
@@ -215,11 +215,11 @@ function PlotlyInspectionPreview({ src, visualId }: { src: string; visualId: str
         aria-describedby={undefined}
         className="h-[96vh] w-[96vw] max-w-none border-0 p-3"
       >
-        <DialogTitle className="sr-only">Rendered Plotly inspection</DialogTitle>
+        <DialogTitle className="sr-only">Rendered output inspection</DialogTitle>
         <div className="flex h-full w-full items-center justify-center overflow-auto">
           <img
             src={src}
-            alt="Rendered Plotly preview in full screen"
+            alt="Rendered output preview in full screen"
             className="max-h-[90vh] max-w-[90vw] object-contain"
             data-visual-id={visualId}
           />
@@ -382,8 +382,8 @@ function ToolInvocationCardImpl({
     [result]
   );
 
-  const plotlyInspectionImage =
-    toolName === "inspect_plotly_output" ? getPlotlyInspectionImage(result) : null;
+  const outputInspectionImage =
+    toolName === "inspect_output" ? getOutputInspectionImage(result) : null;
 
   // Everything below is read only by the expanded panel — keep it out of the
   // collapsed render path entirely.
@@ -534,8 +534,8 @@ function ToolInvocationCardImpl({
 
       <NotebookCellSourceChangeRows changes={notebookCellSourceChanges} />
 
-      {plotlyInspectionImage && (
-        <PlotlyInspectionPreview {...plotlyInspectionImage} />
+      {outputInspectionImage && (
+        <OutputInspectionPreview {...outputInspectionImage} />
       )}
 
       {/* Expanded result */}

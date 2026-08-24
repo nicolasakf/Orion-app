@@ -28,7 +28,7 @@ describe("built-in skills", () => {
         "orion-docs",
         "orion-settings",
         "chat-history",
-        "deep-eda",
+        "explore",
         "analyze-my-data",
         "monthly-report",
         "margin-analysis",
@@ -53,8 +53,8 @@ describe("built-in skills", () => {
     expect(skill?.content).toContain("### `agent.execution`");
   });
 
-  it("keeps deep-EDA as an EDA research profile shortcut", () => {
-    const skill = readBuiltinSkills().find((candidate) => candidate.name === "deep-eda");
+  it("keeps explore as an EDA profile shortcut", () => {
+    const skill = readBuiltinSkills().find((candidate) => candidate.name === "explore");
     expect(skill?.content).toContain("EDA profile");
     expect(skill?.content).toContain("Use normal notebook, kernel, file, web, and terminal tools");
     expect(skill?.content).toContain("schema_integrity");

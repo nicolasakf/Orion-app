@@ -12,7 +12,6 @@ import type { JupyterServerInfo } from "@/lib/kernel/kernel-service";
 import type { AgentRule } from "@/lib/agent/rules";
 import type {
   AgentContextSettings,
-  NotebookUiPreferences,
 } from "@/lib/settings/schema";
 import type { PlatformOS } from "@/lib/utils";
 import type { NotebookType } from "@/lib/types";
@@ -88,9 +87,6 @@ export interface RunSubagentOptions {
    * the subagent's wire payload trimmed the same way the main chat's is.
    */
   contextSettings?: AgentContextSettings;
-
-  /** Preferred libraries for agent-authored notebook and App View interfaces. */
-  uiPreferences?: NotebookUiPreferences;
 
   /** All notebook-defined sub-agents available in the current session. */
   availableSubagents: SubagentDefinition[];

@@ -40,6 +40,7 @@ import type {
   AgentContextSettings,
   AgentExecutionSettings,
   AgentFilesystemSettings,
+  AgentGoalSettings,
   AgentSettings,
   AgentTerminalSettings,
   AgentToolOutputSettings,
@@ -48,13 +49,13 @@ import type {
   NotebookExportSettings,
   NotebookOutputSettings,
   NotebookSettings,
-  NotebookUiPreferences,
   ShellChatSettings,
   ShellPanelLayoutSettings,
   ShellPanelVisibilitySettings,
   ShellSettings,
   ShellSidebarSettings,
 } from "@/lib/settings/schema";
+import { DEFAULT_MAX_QUESTIONS_PER_ASK } from "@/lib/settings/schema";
 
 /** Stable list order for directory names skipped during listings. */
 export const DEFAULT_IGNORE_DIRS_LIST: readonly string[] = [
@@ -151,6 +152,12 @@ export const BUILTIN_AGENT_TOOL_OUTPUT_DEFAULTS: AgentToolOutputSettings = {
 /** Built-in agent tool execution defaults. */
 export const BUILTIN_AGENT_EXECUTION_DEFAULTS: AgentExecutionSettings = {
   maxParallelReadOnlyCalls: DEFAULT_MAX_PARALLEL_READ_ONLY_CALLS,
+  maxQuestionsPerAsk: DEFAULT_MAX_QUESTIONS_PER_ASK,
+};
+
+/** Built-in goal supervisor defaults. */
+export const BUILTIN_AGENT_GOAL_DEFAULTS: AgentGoalSettings = {
+  maxReviews: 10,
 };
 
 /** Built-in terminal tool defaults. */
@@ -187,6 +194,7 @@ export const BUILTIN_AGENT_DEFAULTS: AgentSettings = {
   context: BUILTIN_AGENT_CONTEXT_DEFAULTS,
   toolOutput: BUILTIN_AGENT_TOOL_OUTPUT_DEFAULTS,
   execution: BUILTIN_AGENT_EXECUTION_DEFAULTS,
+  goals: BUILTIN_AGENT_GOAL_DEFAULTS,
   terminal: BUILTIN_AGENT_TERMINAL_DEFAULTS,
   filesystem: BUILTIN_AGENT_FILESYSTEM_DEFAULTS,
   web: BUILTIN_AGENT_WEB_DEFAULTS,
@@ -216,13 +224,6 @@ export const BUILTIN_NOTEBOOK_EDITOR_DEFAULTS: NotebookEditorSettings = {
   doublePressTimeoutMs: NOTEBOOK_EDITOR_DOUBLE_PRESS_TIMEOUT_MS,
 };
 
-/** Default libraries for agent-authored notebook and App View interfaces. */
-export const BUILTIN_NOTEBOOK_UI_PREFERENCES: NotebookUiPreferences = {
-  charts: "Plotly",
-  tables: "Orion UI",
-  otherElements: "Orion UI",
-};
-
 /** Full built-in notebook settings (scrollbar flag filled in defaults.ts). */
 export const BUILTIN_NOTEBOOK_DEFAULTS: Omit<
   NotebookSettings,
@@ -231,7 +232,6 @@ export const BUILTIN_NOTEBOOK_DEFAULTS: Omit<
   output: BUILTIN_NOTEBOOK_OUTPUT_DEFAULTS,
   export: BUILTIN_NOTEBOOK_EXPORT_DEFAULTS,
   editor: BUILTIN_NOTEBOOK_EDITOR_DEFAULTS,
-  uiPreferences: BUILTIN_NOTEBOOK_UI_PREFERENCES,
 };
 
 /** Built-in shell panel visibility defaults. */

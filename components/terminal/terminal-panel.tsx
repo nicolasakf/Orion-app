@@ -58,6 +58,8 @@ export interface TerminalPanelProps {
   onOpenKernelDropdown: () => void;
   /** Jupyter-relative workspace path used when new user terminals start in the workspace. */
   workspaceDirectory?: string | null;
+  /** Absolute Jupyter contents root, when known for the local runtime. */
+  rootDirectory?: string | null;
 }
 
 /**
@@ -71,6 +73,7 @@ export function TerminalPanel({
   kernelService,
   onOpenKernelDropdown,
   workspaceDirectory = null,
+  rootDirectory = null,
 }: TerminalPanelProps) {
   const assistantCtx = useAssistantChatOptional();
   const pool = assistantCtx?.terminalPool ?? null;
@@ -78,6 +81,7 @@ export function TerminalPanel({
   const userTerminalCwd = resolveUserTerminalCwd({
     preference: effectiveSettings.shell.userTerminalWorkingDirectory,
     workspaceDirectory,
+    rootDirectory,
   });
 
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
@@ -306,7 +310,7 @@ export function TerminalPanel({
     if (!connection) return;
 
     if (isNew) {
-      // Give the shell a moment to initialise before sending input
+      // Give the shell a moment to initialise before sending input.
       await new Promise<void>((r) => setTimeout(r, 600));
     }
 

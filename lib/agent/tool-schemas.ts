@@ -19,6 +19,11 @@ import { z } from "zod";
 
 import { MAX_PERSONAL_CONTEXT_CHARS } from "@/lib/onboarding/personal-context";
 
+import {
+  buildAskQuestionTool,
+  DEFAULT_MAX_QUESTIONS_PER_ASK,
+} from "./ask-question";
+
 import { EditOrionMetadataParamsSchema } from "./tools/edit-orion-metadata-schema";
 import type { ExecutionToolResult } from "./visual-evidence";
 
@@ -234,9 +239,8 @@ export const orionTools = {
         ),
       execute: z
         .boolean()
-        .default(false)
         .describe(
-          "Whether to run the inserted code cells right away and return their outputs with the insert summary. Markdown cells are skipped. Use true whenever you would otherwise call execute_cell on exactly these cells next. Optional; defaults to false."
+          "Whether to run the inserted code cells right away and return their outputs with the insert summary. Markdown cells are skipped. Use true whenever you would otherwise call execute_cell on exactly these cells next. Use false for markdown-only inserts or scaffolding you deliberately want to run later."
         ),
       timeoutSeconds: executionTimeoutSecondsSchema(
         `When execute is true, maximum execution time in seconds per cell. Ignored when execute is false. Optional; defaults to ${DEFAULT_EXECUTION_TIMEOUT_SECONDS}.`
@@ -266,7 +270,7 @@ export const orionTools = {
 
   overwrite_cell_source: tool({
     description:
-      "Replace the source code of one or more existing cells. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. Each entry can also merge a JSON object into metadata.orion via orionMetadataJson, which is the easiest way to keep or add App View inclusion while editing source.",
+      "Replace the source code of one or more existing cells. If the active notebook has unsaved editor changes, Orion saves them before this mutation runs. Use this to update or fix code without reinserting cells. Entries are applied in order; if the same index appears twice, the last newSource wins. Each entry can also merge a JSON object into metadata.orion via orionMetadataJson, which is the easiest way to keep or add App View inclusion while editing source. Set execute=true to re-run the edited code cells immediately and get their output back in this same call — prefer that over a separate execute_cell call, which costs an extra model round-trip for no added control.",
     inputSchema: z.object({
       cells: z
         .array(
@@ -288,7 +292,16 @@ export const orionTools = {
         .describe(
           "Cells to update. Each item has cellIndex and newSource. Provide one object to change a single cell."
         ),
+      execute: z
+        .boolean()
+        .describe(
+          "Whether to re-run the edited code cells right away and return their outputs with the edit summary. Markdown cells are skipped. Use true whenever you would otherwise call execute_cell on exactly these cells next — fixing a cell and seeing the result is one step. Use false when the edit should not run yet."
+        ),
+      timeoutSeconds: executionTimeoutSecondsSchema(
+        `When execute is true, maximum execution time in seconds per cell. Ignored when execute is false. Optional; defaults to ${DEFAULT_EXECUTION_TIMEOUT_SECONDS}.`
+      ),
     }),
+    toModelOutput: executionResultToModelOutput,
   }),
 
   edit_orion_metadata: tool({
@@ -299,7 +312,7 @@ export const orionTools = {
 
   execute_cell: tool({
     description:
-      "Execute one or more cells in the notebook by their indices and return their outputs. If the active notebook has unsaved editor changes, Orion saves them before execution. Cells are executed sequentially in the order provided. All cells must already exist in the notebook — to run cells you are creating now, use insert_cell with execute=true instead.",
+      "Execute one or more cells in the notebook by their indices and return their outputs. If the active notebook has unsaved editor changes, Orion saves them before execution. Cells are executed sequentially in the order provided. All cells must already exist in the notebook and be unchanged — to run cells you are creating now, use insert_cell with execute=true, and to re-run cells you are editing now, use overwrite_cell_source with execute=true. Both avoid an extra model round-trip. Use this tool only to run cells you are not touching in this step.",
     inputSchema: z.object({
       cellIndices: z
         .array(z.number().int().min(0))
@@ -380,9 +393,9 @@ export const orionTools = {
     },
   }),
 
-  inspect_plotly_output: tool({
+  inspect_output: tool({
     description:
-      "Inspect one Plotly JSON output exactly as it is currently rendered in Orion. Returns the live chart image, real output/SVG/plot dimensions, and title, legend, modebar, axis-title, annotation, collision, and overflow diagnostics. Use this after creating or changing a Plotly chart, then repair and reinspect any visual problems.",
+      "Inspect any notebook output exactly as it is currently rendered in Orion. Returns a model-visible image of the complete output frame while preserving its current clipping and internal scroll positions, plus rendered dimensions and applicable visual diagnostics. Use this after creating or changing visual output, then repair and reinspect any visual problems.",
     inputSchema: z.object({
       cellIndex: z
         .number()
@@ -393,7 +406,7 @@ export const orionTools = {
         .number()
         .int()
         .min(0)
-        .describe("Zero-based Plotly output index within the cell."),
+        .describe("Zero-based output index within the cell."),
     }),
     toModelOutput: executionResultToModelOutput,
   }),
@@ -654,6 +667,17 @@ export const orionTools = {
   }),
 
   // ============================================================================
+  // User Interaction
+  // ============================================================================
+
+  /**
+   * Registered at the default per-call limit so the tool name, types, and mode
+   * tool lists stay static. `prepareChatInvocation` swaps in a tool built for
+   * the user's configured limit before the request is sent.
+   */
+  ask_question: buildAskQuestionTool(DEFAULT_MAX_QUESTIONS_PER_ASK),
+
+  // ============================================================================
   // Skills
   // ============================================================================
 
@@ -690,9 +714,12 @@ export const NO_DEPENDENCY_TOOLS: ReadonlySet<OrionToolName> = new Set<OrionTool
   "connections",
   "update_memory",
   "reload_page",
-  "inspect_plotly_output",
+  "inspect_output",
   "web_fetch",
   "web_search",
+  // ask_question is answered by the user in the chat body, so it needs no
+  // Jupyter server or kernel.
+  "ask_question",
   // delegate spawns a client-side sub-agent and does not need a Jupyter server or
   // kernel — the sub-agent itself acquires whatever tools it needs.
   "delegate",
@@ -735,7 +762,7 @@ export const ASK_MODE_TOOLS: Pick<
   | "read_notebook"
   | "read_cell"
   | "read_cell_output"
-  | "inspect_plotly_output"
+  | "inspect_output"
   | "bash"
   | "await_command"
   | "kill_command"
@@ -743,13 +770,14 @@ export const ASK_MODE_TOOLS: Pick<
   | "web_search"
   | "load_skill"
   | "connections"
+  | "ask_question"
 > = {
   list_kernels: orionTools.list_kernels,
   read_file: orionTools.read_file,
   read_notebook: orionTools.read_notebook,
   read_cell: orionTools.read_cell,
   read_cell_output: orionTools.read_cell_output,
-  inspect_plotly_output: orionTools.inspect_plotly_output,
+  inspect_output: orionTools.inspect_output,
   bash: orionTools.bash,
   await_command: orionTools.await_command,
   kill_command: orionTools.kill_command,
@@ -757,6 +785,7 @@ export const ASK_MODE_TOOLS: Pick<
   web_search: orionTools.web_search,
   load_skill: orionTools.load_skill,
   connections: orionTools.connections,
+  ask_question: orionTools.ask_question,
 };
 
 /** Tool names excluded from Edit mode (notebook cell execution). */

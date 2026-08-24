@@ -5,6 +5,7 @@ import type {
 } from "@/lib/agent/edit-checkpoints";
 import type { ChatWire } from "@/lib/chat/chat-types";
 import { ChatWireSchema } from "@/lib/chat/chat-types";
+import { GoalSessionSchema, type GoalSession } from "@/lib/agent/goals/types";
 
 export type ChatSessionStatus = "idle" | "processing" | "completed" | "error";
 
@@ -54,6 +55,7 @@ export interface ChatCostSummary {
 }
 
 const chats = new Map<string, ChatWire>();
+const goalSessions = new Map<string, GoalSession>();
 
 /** Returns whether the in-memory fallback store is active. */
 export function isFallbackChatStorageActive(): boolean {
@@ -96,11 +98,29 @@ export async function getFallbackChat(chatId: string): Promise<ChatWire | undefi
 /** Deletes one chat from the in-memory fallback store. */
 export async function deleteFallbackChat(chatId: string): Promise<void> {
   chats.delete(chatId);
+  goalSessions.delete(chatId);
 }
 
 /** Clears the in-memory fallback store. */
 export async function clearFallbackChats(): Promise<void> {
   chats.clear();
+  goalSessions.clear();
+}
+
+/** Saves the current goal session for one chat in degraded storage. */
+export async function saveFallbackGoalSession(session: GoalSession): Promise<void> {
+  const parsed = GoalSessionSchema.parse(session);
+  goalSessions.set(parsed.chatId, parsed);
+}
+
+/** Returns the current goal session for one chat in degraded storage. */
+export async function getFallbackGoalSession(chatId: string): Promise<GoalSession | null> {
+  return goalSessions.get(chatId) ?? null;
+}
+
+/** Deletes the current goal session for one chat in degraded storage. */
+export async function deleteFallbackGoalSession(chatId: string): Promise<void> {
+  goalSessions.delete(chatId);
 }
 
 /** Updates compaction summary in the in-memory fallback store. */
@@ -213,4 +233,5 @@ export async function getFallbackChatCostSummary(
 /** Clears fallback state, primarily for tests. */
 export function resetFallbackChatStorage(): void {
   chats.clear();
+  goalSessions.clear();
 }

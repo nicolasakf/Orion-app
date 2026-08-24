@@ -27,11 +27,7 @@ import {
   buildPersonalContextPromptSection,
   MEMORY_UPDATE_POLICY_PROMPT_SECTION,
 } from "@/lib/agent/personal-context-prompt";
-import type {
-  AgentCommunicationStyle,
-  NotebookUiPreferences,
-} from "@/lib/settings/schema";
-import { buildUiPreferencesPromptSection } from "@/lib/agent/ui-preferences-prompt";
+import type { AgentCommunicationStyle } from "@/lib/settings/schema";
 import { isAbsoluteAgentPath, toAgentAbsolutePath } from "./path-resolver";
 export { buildSubagentSystemPrompt } from "@/lib/agent/subagents";
 
@@ -357,9 +353,9 @@ export const ORION_AGENT_SYSTEM_PROMPT_ASK = promptContentAsk;
 /** System prompt for Edit mode (file/terminal access, no notebook execution). */
 export const ORION_AGENT_SYSTEM_PROMPT_EDIT = promptContentEdit;
 
-const RESEARCH_MODE_SECTION = `## Research Mode
+const EXPLORE_MODE_SECTION = `## Explore Mode
 
-You are in Orion Research mode. Work as an adaptive investigator: gather evidence, inspect outputs, document what you learned in the notebook, and choose the next action from what the evidence shows.
+You are in Orion Explore mode. Work as an adaptive investigator: gather evidence, inspect outputs, document what you learned in the notebook, and choose the next action from what the evidence shows.
 
 Core loop:
 - Generate or gather evidence before important conclusions.
@@ -500,7 +496,6 @@ The user explicitly selected the \`${forcedSubagentName}\` sub-agent for this tu
  * @param options.clientPlatformOs - Browser OS; used when local server and server OS unknown
  * @param options.communicationStyle - Communication style preset ("default" | "narrative" | "friendly" | "pragmatic")
  * @param options.customCommunicationStyle - Optional custom instructions; overrides preset when non-empty
- * @param options.uiPreferences - Preferred libraries for generated charts, tables, and UI elements
  * @returns Formatted system prompt string
  */
 export interface ModeSystemPromptOptions {
@@ -539,8 +534,6 @@ export interface ModeSystemPromptOptions {
   communicationStyle?: AgentCommunicationStyle;
   /** Custom communication instructions; overrides preset when non-empty */
   customCommunicationStyle?: string;
-  /** Preferred libraries for agent-authored notebook and App View interfaces. */
-  uiPreferences?: NotebookUiPreferences;
   /** User-authored instructions appended to this mode's protected base prompt. */
   customSystemPrompt?: string;
   /** Whether to advertise loadable skills in this mode. */
@@ -592,7 +585,6 @@ function buildModeSystemPrompt(
     clientPlatformOs,
     communicationStyle,
     customCommunicationStyle,
-    uiPreferences,
     customSystemPrompt,
     businessExperienceMode,
     modeToolNames,
@@ -627,9 +619,6 @@ function buildModeSystemPrompt(
 
   const personalContextSection = buildPersonalContextPromptSection(personalContext);
   if (personalContextSection) sections.push(personalContextSection);
-
-  const uiPreferencesSection = buildUiPreferencesPromptSection(uiPreferences);
-  if (uiPreferencesSection) sections.push(uiPreferencesSection);
 
   const customModeSection = buildCustomInteractionModeSection(customSystemPrompt);
   if (customModeSection) sections.push(customModeSection);
@@ -689,10 +678,10 @@ export function buildAgentSystemPrompt(options?: ModeSystemPromptOptions): strin
   return buildModeSystemPrompt(ORION_AGENT_SYSTEM_PROMPT, "Agent", options);
 }
 
-/** Builds the system prompt for Research mode, Orion's evidence-driven default mode. */
-export function buildResearchModeSystemPrompt(options?: ModeSystemPromptOptions): string {
-  const basePrompt = buildModeSystemPrompt(ORION_AGENT_SYSTEM_PROMPT, "Research", options);
-  return `${basePrompt}\n\n${RESEARCH_MODE_SECTION}`;
+/** Builds the system prompt for Explore mode, Orion's evidence-driven default mode. */
+export function buildExploreModeSystemPrompt(options?: ModeSystemPromptOptions): string {
+  const basePrompt = buildModeSystemPrompt(ORION_AGENT_SYSTEM_PROMPT, "Explore", options);
+  return `${basePrompt}\n\n${EXPLORE_MODE_SECTION}`;
 }
 
 /**

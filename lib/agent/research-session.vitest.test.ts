@@ -45,6 +45,51 @@ describe("research turn activity", () => {
     });
   });
 
+  it("counts a cell mutation that ran its own cells as evidence", () => {
+    // insert_cell / overwrite_cell_source return kernel output when execute is
+    // true, so an Explore turn that used the single-call path still produced
+    // evidence even though execute_cell never appeared.
+    const message = {
+      id: "assistant-1",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-overwrite_cell_source",
+          toolCallId: "edit-1",
+          state: "output-available",
+          input: {
+            cells: [{ cellIndex: 3, newSource: "df.describe()", orionMetadataJson: "" }],
+            execute: true,
+          },
+          output: "Cell 3 overwritten successfully!\n\n[Cell 3] summary stats",
+        },
+      ],
+    } as unknown as UIMessage;
+
+    expect(getResearchTurnActivity(message).evidenceProduced).toBe(true);
+  });
+
+  it("does not count a cell mutation that only wrote code", () => {
+    const message = {
+      id: "assistant-1",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-overwrite_cell_source",
+          toolCallId: "edit-1",
+          state: "output-available",
+          input: {
+            cells: [{ cellIndex: 3, newSource: "df.describe()", orionMetadataJson: "" }],
+            execute: false,
+          },
+          output: "Cell 3 overwritten successfully!",
+        },
+      ],
+    } as unknown as UIMessage;
+
+    expect(getResearchTurnActivity(message).evidenceProduced).toBe(false);
+  });
+
   it("treats prose-only assistant messages as prose-only turns", () => {
     const message = {
       id: "assistant-1",

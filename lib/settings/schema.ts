@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const SETTINGS_SCHEMA_VERSION = 1;
+export const SETTINGS_SCHEMA_VERSION = 2;
 
 /** Max entries for `workspace.pinnedDirectoryPaths` in user settings. */
 export const MAX_PINNED_WORKSPACE_DIRECTORY_PATHS = 50;
@@ -12,22 +12,38 @@ export const MAX_PINNED_FILE_PATHS = 50;
 export const MIN_TITLE_GENERATION_MAX_LENGTH = 10;
 export const MAX_TITLE_GENERATION_MAX_LENGTH = 100;
 
+/** Inclusive bounds for questions asked in a single `ask_question` call. */
+export const MIN_MAX_QUESTIONS_PER_ASK = 1;
+export const MAX_MAX_QUESTIONS_PER_ASK = 10;
+
+/** Questions per `ask_question` call before the user changes the setting. */
+export const DEFAULT_MAX_QUESTIONS_PER_ASK = 5;
+
 export const ThemeSettingSchema = z.enum(["light", "dark", "system"]);
 export const ExperienceModeSchema = z.enum(["pro", "business"]).catch("pro");
-export const InteractionModeSchema = z.enum(["Agent", "Research", "Edit", "Ask"]).catch("Agent");
-export const InteractionModeBaseSchema = z.enum(["Agent", "Research", "Edit", "Ask"]);
+export const InteractionModeSchema = z.preprocess(
+  (value) => (value === "Research" ? "Explore" : value),
+  z.enum(["Agent", "Goal", "Explore", "Edit", "Ask"]).catch("Agent"),
+);
+export const InteractionModeBaseSchema = z.preprocess(
+  (value) => (value === "Research" ? "Explore" : value),
+  z.enum(["Agent", "Explore", "Edit", "Ask"]),
+);
 export const InteractionModeBashPolicySchema = z.enum(["read_only", "full"]);
+export const InteractionModeOrchestrationSchema = z.enum(["normal", "goal"]);
 export const InteractionModeConfigSchema = z.object({
   id: z.string().min(1),
   label: z.string().min(1),
   description: z.string().catch(""),
   baseMode: InteractionModeBaseSchema,
+  orchestration: InteractionModeOrchestrationSchema.catch("normal"),
   toolNames: z.array(z.string()).catch([]),
   customSystemPrompt: z.string().catch(""),
   builtIn: z.boolean(),
   bashPolicy: InteractionModeBashPolicySchema,
   hiddenInSelector: z.boolean().catch(false),
   beta: z.boolean().catch(false),
+  selectorColor: z.string().nullable().catch(null),
 });
 /**
  * Communication style preset for the agent's responses.
@@ -39,18 +55,29 @@ export const InteractionModeConfigSchema = z.object({
 export const AgentCommunicationStyleSchema = z
   .enum(["default", "narrative", "friendly", "pragmatic"])
   .catch("default");
-export const ToolApprovalModeSchema = z.preprocess((value) => {
-  if (typeof value !== "string") return value;
-  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  if (normalized === "always_ask" || normalized === "alwaysask") {
-    return "always_ask";
-  }
-  if (normalized === "auto_run" || normalized === "autorun") {
-    return "auto_run";
-  }
-  return value;
-}, z.enum(["always_ask", "auto_run"]));
-export const WordWrapSchema = z.enum(["off", "on", "wordWrapColumn", "bounded"]);
+export const ToolApprovalModeSchema = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") return value;
+    const normalized = value
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, "_");
+    if (normalized === "always_ask" || normalized === "alwaysask") {
+      return "always_ask";
+    }
+    if (normalized === "auto_run" || normalized === "autorun") {
+      return "auto_run";
+    }
+    return value;
+  },
+  z.enum(["always_ask", "auto_run"]),
+);
+export const WordWrapSchema = z.enum([
+  "off",
+  "on",
+  "wordWrapColumn",
+  "bounded",
+]);
 
 /** Action when the user selects a file Orion cannot open in the editor. */
 export const UnopenableFileActionSchema = z
@@ -83,7 +110,10 @@ export const SidebarViewIdSchema = z.enum([
 ]);
 
 /** Notebook minimap output preview density. */
-export const NotebookMinimapPreviewModeSchema = z.enum(["miniature", "compact"]);
+export const NotebookMinimapPreviewModeSchema = z.enum([
+  "miniature",
+  "compact",
+]);
 
 export const AgentContextSettingsSchema = z.object({
   /** Fraction of context cap at which auto-compaction triggers (0–1). */
@@ -103,6 +133,17 @@ export const AgentToolOutputSettingsSchema = z.object({
 export const AgentExecutionSettingsSchema = z.object({
   /** Maximum number of independent read-only tool calls executed concurrently. */
   maxParallelReadOnlyCalls: z.number().int().positive(),
+  /** Maximum questions the agent may ask in a single `ask_question` call. */
+  maxQuestionsPerAsk: z
+    .number()
+    .int()
+    .min(MIN_MAX_QUESTIONS_PER_ASK)
+    .max(MAX_MAX_QUESTIONS_PER_ASK),
+});
+
+export const AgentGoalSettingsSchema = z.object({
+  /** Maximum number of supervisor reviews performed for one `/goal` run. */
+  maxReviews: z.number().int().min(1).max(50),
 });
 
 export const AgentTerminalSettingsSchema = z.object({
@@ -136,6 +177,7 @@ export const AgentSettingsSchema = z.object({
   context: AgentContextSettingsSchema,
   toolOutput: AgentToolOutputSettingsSchema,
   execution: AgentExecutionSettingsSchema,
+  goals: AgentGoalSettingsSchema,
   terminal: AgentTerminalSettingsSchema,
   filesystem: AgentFilesystemSettingsSchema,
   web: AgentWebSettingsSchema,
@@ -160,13 +202,6 @@ export const NotebookExportSettingsSchema = z.object({
 
 export const NotebookEditorSettingsSchema = z.object({
   doublePressTimeoutMs: z.number().int().positive(),
-});
-
-/** Preferred libraries for agent-authored notebook and App View interfaces. */
-export const NotebookUiPreferencesSchema = z.object({
-  charts: z.string().trim().min(1).max(100),
-  tables: z.string().trim().min(1).max(100),
-  otherElements: z.string().trim().min(1).max(100),
 });
 
 const panelSizeTupleRefine = (sizes: number[]) =>
@@ -221,9 +256,8 @@ export const ShellSettingsSchema = z.object({
   sidebar: ShellSidebarSettingsSchema,
   chat: ShellChatSettingsSchema,
   /** Where user-created terminals start. Agent terminals ignore this. */
-  userTerminalWorkingDirectory: UserTerminalWorkingDirectorySchema.default(
-    "workspace"
-  ),
+  userTerminalWorkingDirectory:
+    UserTerminalWorkingDirectorySchema.default("workspace"),
   mobileBreakpointPx: z.number().int().positive(),
   minRefreshSpinMs: z.number().int().positive(),
   toastLimit: z.number().int().min(1),
@@ -270,16 +304,20 @@ const ProviderCredentialSchema = z.discriminatedUnion("type", [
   }),
 ]);
 
-export type ProviderCredentialSummary = z.infer<typeof ProviderCredentialSchema>;
+export type ProviderCredentialSummary = z.infer<
+  typeof ProviderCredentialSchema
+>;
 export type ProviderCredential = ProviderCredentialSummary;
 
 const SettingsDataSchema = z.object({
-  onboarding: z.object({
-    /** False until a new user completes the required account sign-in step. */
-    signInStepCompleted: z.boolean().default(true),
-    /** False until the user completes or skips first-run personal-context setup. */
-    businessProfileStepCompleted: z.boolean().default(true),
-  }).default({ signInStepCompleted: true, businessProfileStepCompleted: true }),
+  onboarding: z
+    .object({
+      /** False until a new user completes the required account sign-in step. */
+      signInStepCompleted: z.boolean().default(true),
+      /** False until the user completes or skips first-run personal-context setup. */
+      businessProfileStepCompleted: z.boolean().default(true),
+    })
+    .default({ signInStepCompleted: true, businessProfileStepCompleted: true }),
   appearance: z.object({
     theme: ThemeSettingSchema,
     /** Primary product shell: full notebook IDE or simplified business workspace. */
@@ -345,7 +383,6 @@ const SettingsDataSchema = z.object({
     output: NotebookOutputSettingsSchema,
     export: NotebookExportSettingsSchema,
     editor: NotebookEditorSettingsSchema,
-    uiPreferences: NotebookUiPreferencesSchema,
   }),
   workspace: z.object({
     /** Jupyter-relative directory paths pinned in the workspace picker (order preserved). */
@@ -366,7 +403,11 @@ const SettingsDataSchema = z.object({
       /** False until a new user chooses ChatGPT sign-in or manual provider setup. */
       inferenceProviderChosen: z.boolean().default(true),
     })
-    .default({ credentials: {}, addedProviderIds: [], inferenceProviderChosen: true }),
+    .default({
+      credentials: {},
+      addedProviderIds: [],
+      inferenceProviderChosen: true,
+    }),
 });
 
 export const UserSettingsDocumentSchema = z.object({
@@ -383,33 +424,58 @@ export type ThemeSetting = z.infer<typeof ThemeSettingSchema>;
 export type ExperienceMode = z.infer<typeof ExperienceModeSchema>;
 export type InteractionModeSetting = z.infer<typeof InteractionModeSchema>;
 export type InteractionModeBase = z.infer<typeof InteractionModeBaseSchema>;
-export type InteractionModeBashPolicy = z.infer<typeof InteractionModeBashPolicySchema>;
+export type InteractionModeBashPolicy = z.infer<
+  typeof InteractionModeBashPolicySchema
+>;
+export type InteractionModeOrchestration = z.infer<
+  typeof InteractionModeOrchestrationSchema
+>;
 export type InteractionModeConfig = z.infer<typeof InteractionModeConfigSchema>;
 export type ToolApprovalMode = z.infer<typeof ToolApprovalModeSchema>;
 export type WordWrapSetting = z.infer<typeof WordWrapSchema>;
 export type UnopenableFileAction = z.infer<typeof UnopenableFileActionSchema>;
-export type EmptyEditorCardContent = z.infer<typeof EmptyEditorCardContentSchema>;
-export type EmptyEditorCardSettings = z.infer<typeof EmptyEditorCardSettingsSchema>;
-export type AgentCommunicationStyle = z.infer<typeof AgentCommunicationStyleSchema>;
+export type EmptyEditorCardContent = z.infer<
+  typeof EmptyEditorCardContentSchema
+>;
+export type EmptyEditorCardSettings = z.infer<
+  typeof EmptyEditorCardSettingsSchema
+>;
+export type AgentCommunicationStyle = z.infer<
+  typeof AgentCommunicationStyleSchema
+>;
 export type SidebarViewId = z.infer<typeof SidebarViewIdSchema>;
 export type NotebookMinimapPreviewMode = z.infer<
   typeof NotebookMinimapPreviewModeSchema
 >;
 export type AgentContextSettings = z.infer<typeof AgentContextSettingsSchema>;
-export type AgentToolOutputSettings = z.infer<typeof AgentToolOutputSettingsSchema>;
-export type AgentExecutionSettings = z.infer<typeof AgentExecutionSettingsSchema>;
+export type AgentToolOutputSettings = z.infer<
+  typeof AgentToolOutputSettingsSchema
+>;
+export type AgentExecutionSettings = z.infer<
+  typeof AgentExecutionSettingsSchema
+>;
+export type AgentGoalSettings = z.infer<typeof AgentGoalSettingsSchema>;
 export type AgentTerminalSettings = z.infer<typeof AgentTerminalSettingsSchema>;
-export type AgentFilesystemSettings = z.infer<typeof AgentFilesystemSettingsSchema>;
+export type AgentFilesystemSettings = z.infer<
+  typeof AgentFilesystemSettingsSchema
+>;
 export type AgentWebSettings = z.infer<typeof AgentWebSettingsSchema>;
 export type AgentSettings = z.infer<typeof AgentSettingsSchema>;
-export type NotebookOutputSettings = z.infer<typeof NotebookOutputSettingsSchema>;
-export type NotebookExportSettings = z.infer<typeof NotebookExportSettingsSchema>;
-export type NotebookEditorSettings = z.infer<typeof NotebookEditorSettingsSchema>;
-export type NotebookUiPreferences = z.infer<typeof NotebookUiPreferencesSchema>;
+export type NotebookOutputSettings = z.infer<
+  typeof NotebookOutputSettingsSchema
+>;
+export type NotebookExportSettings = z.infer<
+  typeof NotebookExportSettingsSchema
+>;
+export type NotebookEditorSettings = z.infer<
+  typeof NotebookEditorSettingsSchema
+>;
 export type ShellPanelVisibilitySettings = z.infer<
   typeof ShellPanelVisibilitySettingsSchema
 >;
-export type ShellPanelLayoutSettings = z.infer<typeof ShellPanelLayoutSettingsSchema>;
+export type ShellPanelLayoutSettings = z.infer<
+  typeof ShellPanelLayoutSettingsSchema
+>;
 export type ShellSidebarSettings = z.infer<typeof ShellSidebarSettingsSchema>;
 export type ShellChatSettings = z.infer<typeof ShellChatSettingsSchema>;
 export type UserTerminalWorkingDirectory = z.infer<
@@ -419,5 +485,7 @@ export type ShellSettings = z.infer<typeof ShellSettingsSchema>;
 export type SettingsData = z.infer<typeof SettingsDataSchema>;
 export type NotebookSettings = SettingsData["notebook"];
 export type UserSettingsDocument = z.infer<typeof UserSettingsDocumentSchema>;
-export type WorkspaceSettingsDocument = z.infer<typeof WorkspaceSettingsDocumentSchema>;
+export type WorkspaceSettingsDocument = z.infer<
+  typeof WorkspaceSettingsDocumentSchema
+>;
 export type WorkspaceSettingsOverrides = WorkspaceSettingsDocument["overrides"];

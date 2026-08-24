@@ -26,6 +26,7 @@ import {
   Globe,
   Search,
   Plug,
+  MessageCircleQuestion,
 } from "lucide-react";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 
@@ -139,10 +140,11 @@ export const TOOL_META: Record<OrionToolName, ToolMeta> = {
   web_fetch: { labelPending: "Fetching web page", labelDone: "Fetched web page", icon: Globe },
   web_search: { labelPending: "Searching web", labelDone: "Searched web", icon: Search },
   read_cell_output: { labelPending: "Reading output", labelDone: "Read output", icon: Eye },
-  inspect_plotly_output: { labelPending: "Inspecting Plotly output", labelDone: "Inspected Plotly output", icon: Eye },
+  inspect_output: { labelPending: "Inspecting output", labelDone: "Inspected output", icon: Eye },
   load_skill: { labelPending: "Loading skill", labelDone: "Loaded skill", icon: Brain },
   connections: { labelPending: "Checking connections", labelDone: "Checked connections", icon: Plug },
   delegate: { labelPending: "Running sub-agent", labelDone: "Sub-agent finished", icon: Bot },
+  ask_question: { labelPending: "Asking you", labelDone: "Asked you", icon: MessageCircleQuestion },
 };
 
 /** Fallback for unknown tool names */
@@ -216,14 +218,21 @@ function getCellToolRuntimeLabel(
   if (!CELL_COUNT_LABEL_TOOLS.has(toolName)) return null;
   const n = getCellOpCount(toolName, args);
   const cells = n === 1 ? "1 cell" : `${n} cells`;
+  // insert_cell / overwrite_cell_source run the cells they wrote when asked to,
+  // so the row should not read as a plain write.
+  const runsCells = args.execute === true;
 
   const labels: Record<string, [string, string]> = {
     read_cell: [`Reading ${cells}`, `Read ${cells}`],
     read_cell_output: [`Reading output (${cells})`, `Read ${cells} output`],
     execute_cell: [`Running ${cells}`, `Ran ${cells}`],
-    insert_cell: [`Inserting ${cells}`, `Inserted ${cells}`],
+    insert_cell: runsCells
+      ? [`Inserting and running ${cells}`, `Inserted and ran ${cells}`]
+      : [`Inserting ${cells}`, `Inserted ${cells}`],
     delete_cell: [`Deleting ${cells}`, `Deleted ${cells}`],
-    overwrite_cell_source: [`Editing ${cells}`, `Edited ${cells}`],
+    overwrite_cell_source: runsCells
+      ? [`Editing and running ${cells}`, `Edited and ran ${cells}`]
+      : [`Editing ${cells}`, `Edited ${cells}`],
   };
   const pair = labels[toolName];
   return pair ? pair[isPending ? 0 : 1] : null;
@@ -269,7 +278,7 @@ const TOOLS_WITH_EXPANDED_ARGS_PREVIEW = new Set<OrionToolName>([
   "execute_code",
   "read_cell",
   "read_cell_output",
-  "inspect_plotly_output",
+  "inspect_output",
   "execute_cell",
   "insert_cell",
   "overwrite_cell_source",
@@ -422,7 +431,7 @@ export function buildExpandedArgsPreview(
       const more = reads.length > 3 ? ` … +${reads.length - 3}` : "";
       return { short: `${reads.length} outputs: ${preview}${more}` };
     }
-    case "inspect_plotly_output": {
+    case "inspect_output": {
       const cellIndex = argNum(args.cellIndex);
       const outputIndex = argNum(args.outputIndex);
       return { short: `Cell ${cellIndex ?? "?"}, output ${outputIndex ?? "?"}` };
@@ -443,7 +452,12 @@ export function buildExpandedArgsPreview(
       const count = cells.length;
       const idx = argNum(args.startIndex);
       const at = idx === -1 ? "end" : idx !== undefined ? `index ${idx}` : "?";
-      return { short: count ? `Insert ${count} cell${count === 1 ? "" : "s"} at ${at}` : `Insert cells at ${at}` };
+      const run = args.execute === true ? " · run" : "";
+      return {
+        short: count
+          ? `Insert ${count} cell${count === 1 ? "" : "s"} at ${at}${run}`
+          : `Insert cells at ${at}${run}`,
+      };
     }
     case "delete_cell": {
       const indices = Array.isArray(args.cellIndices) ? (args.cellIndices as number[]) : [];
@@ -453,19 +467,20 @@ export function buildExpandedArgsPreview(
     }
     case "overwrite_cell_source": {
       const cells = Array.isArray(args.cells) ? (args.cells as { cellIndex?: number; newSource?: string }[]) : [];
-      if (cells.length === 0) return { short: "Edit cells" };
+      const run = args.execute === true ? " · run" : "";
+      if (cells.length === 0) return { short: `Edit cells${run}` };
       const first = cells[0]!;
       const idx = argNum(first.cellIndex);
       const src = argStr(first.newSource);
       if (cells.length === 1) {
-        if (!src.trim()) return { short: `Edit cell ${idx ?? "?"}` };
+        if (!src.trim()) return { short: `Edit cell ${idx ?? "?"}${run}` };
         return {
-          short: `Cell ${idx ?? "?"}: ${truncateForPreview(src, 80)}`,
+          short: `Cell ${idx ?? "?"}${run}: ${truncateForPreview(src, 80)}`,
           full: src.length > 80 ? src : undefined,
         };
       }
       return {
-        short: `${cells.length} cells from index ${idx ?? "?"}: ${truncateForPreview(src, 60)}`,
+        short: `${cells.length} cells from index ${idx ?? "?"}${run}: ${truncateForPreview(src, 60)}`,
         full: src.length > 60 ? src : undefined,
       };
     }
@@ -559,7 +574,8 @@ export function getApprovalPreview(
       const at = idx === -1 ? "end" : idx !== undefined ? `index ${idx}` : "?";
       const first = cells[0] as { cellSource?: string } | undefined;
       const src = typeof first?.cellSource === "string" ? first.cellSource : "";
-      const head = `Insert ${count} cell${count === 1 ? "" : "s"} at ${at}`;
+      const run = args.execute === true ? " and run" : "";
+      const head = `Insert${run} ${count} cell${count === 1 ? "" : "s"} at ${at}`;
       if (!src.trim()) return { short: head };
       return {
         short: `${head}: ${truncateForPreview(src, 80)}`,
@@ -580,15 +596,16 @@ export function getApprovalPreview(
       const first = cells[0]!;
       const idx = argNum(first.cellIndex);
       const src = argStr(first.newSource);
+      const run = args.execute === true ? " and run" : "";
       if (cells.length === 1) {
-        if (!src.trim()) return { short: `Edit cell ${idx ?? "?"}` };
+        if (!src.trim()) return { short: `Edit${run} cell ${idx ?? "?"}` };
         return {
-          short: `Cell ${idx ?? "?"}: ${truncateForPreview(src, 80)}`,
+          short: `Edit${run} cell ${idx ?? "?"}: ${truncateForPreview(src, 80)}`,
           full: src.length > 80 ? src : undefined,
         };
       }
       return {
-        short: `${cells.length} cells from index ${idx ?? "?"}: ${truncateForPreview(src, 60)}`,
+        short: `Edit${run} ${cells.length} cells from index ${idx ?? "?"}: ${truncateForPreview(src, 60)}`,
         full: src.length > 60 ? src : undefined,
       };
     }

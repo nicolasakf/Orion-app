@@ -3,7 +3,7 @@
  *
  * Three output shapes reach the wire today and any of them can hold hundreds of
  * kilobytes of base64:
- * - `visuals[]` — execute_cell / execute_code / inspect_plotly_output
+ * - `visuals[]` — execute_cell / execute_code / inspect_output
  * - `images[]` — read_cell_output
  * - `value[]` entries with `type: "image-data"` — AI SDK content arrays
  *

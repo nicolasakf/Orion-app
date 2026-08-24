@@ -60,12 +60,12 @@ describe("research-oriented notebook tool schemas", () => {
     return (orionTools[toolName] as { description?: string }).description ?? "";
   }
 
-  it("leaves Research-mode workflow rules to the Research prompt section", () => {
+  it("leaves Explore-mode workflow rules to the Explore prompt section", () => {
     // Tool descriptions ship in every mode, so mode-specific workflow guidance
     // belongs in the mode prompt instead — repeating it here drifts and misfires
-    // in the modes where Research is not active.
+    // in the modes where Explore is not active.
     for (const toolName of ["insert_cell", "overwrite_cell_source", "execute_cell"] as const) {
-      expect(description(toolName)).not.toContain("Research mode");
+      expect(description(toolName)).not.toContain("Explore mode");
     }
   });
 
@@ -73,9 +73,15 @@ describe("research-oriented notebook tool schemas", () => {
     expect(description("insert_cell")).not.toContain("at most 3");
   });
 
-  it("points cell execution at the cheaper insert-and-run path", () => {
+  it("points cell execution at the cheaper write-and-run paths", () => {
     expect(description("insert_cell")).toContain("prefer that over a separate execute_cell call");
-    expect(description("execute_cell")).toContain("use insert_cell with execute=true instead");
+    expect(description("overwrite_cell_source")).toContain(
+      "prefer that over a separate execute_cell call"
+    );
+    expect(description("execute_cell")).toContain("use insert_cell with execute=true");
+    expect(description("execute_cell")).toContain(
+      "use overwrite_cell_source with execute=true"
+    );
   });
 
   it("does not expose legacy investigation control tools", () => {
@@ -120,15 +126,34 @@ describe("execution knob defaults", () => {
     });
   });
 
-  it("defaults insert_cell to inserting without executing", () => {
-    const result = parseInput("insert_cell", {
+  it("makes the run-or-not choice explicit on the cell mutation tools", () => {
+    // `execute` is a decision, not a transport knob: defaulting it let models
+    // omit it, and an omission silently meant "leave the cell unrun" — the
+    // split-call pattern the chaining exists to remove.
+    const insertCell = { cellType: "code", cellSource: "1 + 1", orionMetadataJson: "" };
+    expect(parseInput("insert_cell", { cells: [insertCell], startIndex: -1 }).success).toBe(false);
+    expect(
+      parseInput("overwrite_cell_source", {
+        cells: [{ cellIndex: 0, newSource: "1 + 1", orionMetadataJson: "" }],
+      }).success
+    ).toBe(false);
+  });
+
+  it("still defaults the transport knobs around an explicit execute", () => {
+    const inserted = parseInput("insert_cell", {
       cells: [{ cellType: "code", cellSource: "1 + 1", orionMetadataJson: "" }],
       startIndex: -1,
+      execute: false,
     });
+    expect(inserted.success).toBe(true);
+    expect(inserted.data?.timeoutSeconds).toBe(120);
 
-    expect(result.success).toBe(true);
-    expect(result.data?.execute).toBe(false);
-    expect(result.data?.timeoutSeconds).toBe(120);
+    const edited = parseInput("overwrite_cell_source", {
+      cells: [{ cellIndex: 0, newSource: "1 + 1", orionMetadataJson: "" }],
+      execute: true,
+    });
+    expect(edited.success).toBe(true);
+    expect(edited.data?.timeoutSeconds).toBe(120);
   });
 
   it("defaults execute_code and delete_cell knobs", () => {
@@ -140,7 +165,8 @@ describe("execution knob defaults", () => {
     // Defaults are only for transport knobs — a missing target is still an error.
     expect(parseInput("execute_cell", { stream: false }).success).toBe(false);
     expect(parseInput("execute_code", { timeoutSeconds: 30 }).success).toBe(false);
-    expect(parseInput("insert_cell", { startIndex: 0 }).success).toBe(false);
+    expect(parseInput("insert_cell", { startIndex: 0, execute: false }).success).toBe(false);
+    expect(parseInput("overwrite_cell_source", { execute: true }).success).toBe(false);
   });
 
   it("keeps knobs inside their documented ranges", () => {

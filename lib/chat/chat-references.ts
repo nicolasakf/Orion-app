@@ -80,6 +80,8 @@ export interface ResolvedChatReference extends ChatReference {
 export interface ChatMessageMetadata {
   references?: ResolvedChatReference[];
   slashCommands?: ChatSlashCommandToken[];
+  /** Persisted marker for the user turn that began goal contract authoring. */
+  goalContractDraft?: true;
   /**
    * Context accounting for the request that produced this assistant message,
    * including the exact input-token count the provider reported. This is the only
@@ -176,25 +178,32 @@ const ChatSlashCommandTokenSchema = z.object({
 export const ChatMessageMetadataSchema = z.object({
   references: z.array(ResolvedChatReferenceSchema).max(20).optional(),
   slashCommands: z.array(ChatSlashCommandTokenSchema).max(10).optional(),
+  goalContractDraft: z.literal(true).optional(),
   contextUsage: ContextMeasurementSchema.optional(),
 });
 
 /** Returns validated references from unknown message metadata. */
-export function parseChatMessageReferences(metadata: unknown): ResolvedChatReference[] {
+export function parseChatMessageReferences(
+  metadata: unknown,
+): ResolvedChatReference[] {
   const parsed = ChatMessageMetadataSchema.safeParse(metadata);
   if (!parsed.success) return [];
   return parsed.data.references ?? [];
 }
 
 /** Returns validated slash command tokens from unknown message metadata. */
-export function parseChatMessageSlashCommands(metadata: unknown): ChatSlashCommandToken[] {
+export function parseChatMessageSlashCommands(
+  metadata: unknown,
+): ChatSlashCommandToken[] {
   const parsed = ChatMessageMetadataSchema.safeParse(metadata);
   if (!parsed.success) return [];
   return parsed.data.slashCommands ?? [];
 }
 
 /** Returns validated context accounting from unknown message metadata. */
-export function parseChatMessageContextUsage(metadata: unknown): ContextMeasurement | null {
+export function parseChatMessageContextUsage(
+  metadata: unknown,
+): ContextMeasurement | null {
   const parsed = ChatMessageMetadataSchema.safeParse(metadata);
   if (!parsed.success) return null;
   return parsed.data.contextUsage ?? null;
@@ -206,20 +215,29 @@ export function parseChatMessageContextUsage(metadata: unknown): ContextMeasurem
  * Every recognised field must be checked before returning `undefined`, or a
  * message carrying only that field is silently stripped on persist.
  */
-export function normalizeChatMessageMetadata(metadata: unknown): ChatMessageMetadata | undefined {
+export function normalizeChatMessageMetadata(
+  metadata: unknown,
+): ChatMessageMetadata | undefined {
   const parsed = ChatMessageMetadataSchema.safeParse(metadata);
   if (!parsed.success) return undefined;
 
   const references = parsed.data.references ?? [];
   const slashCommands = parsed.data.slashCommands ?? [];
+  const goalContractDraft = parsed.data.goalContractDraft;
   const contextUsage = parsed.data.contextUsage;
-  if (references.length === 0 && slashCommands.length === 0 && !contextUsage) {
+  if (
+    references.length === 0 &&
+    slashCommands.length === 0 &&
+    !goalContractDraft &&
+    !contextUsage
+  ) {
     return undefined;
   }
 
   return {
     ...(references.length > 0 ? { references } : {}),
     ...(slashCommands.length > 0 ? { slashCommands } : {}),
+    ...(goalContractDraft ? { goalContractDraft } : {}),
     ...(contextUsage ? { contextUsage } : {}),
   };
 }
@@ -262,14 +280,19 @@ function formatBytes(size: number): string {
  * Short label for cell references in the @ picker and message chips (`Cell #0`).
  * Indices are 0-based, matching notebook tool APIs.
  */
-export function formatCellReferenceLabel(cellIndices: readonly number[]): string {
+export function formatCellReferenceLabel(
+  cellIndices: readonly number[],
+): string {
   if (cellIndices.length === 0) return "Cell";
   if (cellIndices.length === 1) return `Cell #${cellIndices[0]}`;
   return `Cells #${cellIndices.join(", #")}`;
 }
 
 /** Short label for a specific notebook cell output reference. */
-export function formatOutputReferenceLabel(cellIndex: number, outputIndex: number): string {
+export function formatOutputReferenceLabel(
+  cellIndex: number,
+  outputIndex: number,
+): string {
   return `Cell #${cellIndex} output #${outputIndex}`;
 }
 
@@ -299,7 +322,9 @@ function formatLocator(reference: ResolvedChatReference): string {
     case "output":
       return `${locator.notebookPath} cell ${locator.cellIndex} output ${locator.outputIndex}`;
     case "variable":
-      return locator.notebookPath ? `${locator.name} in ${locator.notebookPath}` : locator.name;
+      return locator.notebookPath
+        ? `${locator.name} in ${locator.notebookPath}`
+        : locator.name;
     case "terminal":
       return locator.terminalName;
     case "conversation":
@@ -320,14 +345,17 @@ function formatLocator(reference: ResolvedChatReference): string {
 function hasSelectedTextPayload(reference: ResolvedChatReference): boolean {
   const locator = reference.locator;
   return (
-    (locator.type === "file" || locator.type === "cell") &&
-    !!locator.lineStart &&
-    !!locator.lineEnd
-  ) || locator.type === "conversation";
+    ((locator.type === "file" || locator.type === "cell") &&
+      !!locator.lineStart &&
+      !!locator.lineEnd) ||
+    locator.type === "conversation"
+  );
 }
 
 /** Builds compact context for a single user message's attached references. */
-export function formatReferencesForMessage(references: ResolvedChatReference[]): string {
+export function formatReferencesForMessage(
+  references: ResolvedChatReference[],
+): string {
   if (references.length === 0) return "";
 
   const blocks = references.map((reference, index) => {

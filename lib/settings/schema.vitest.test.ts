@@ -32,7 +32,9 @@ describe("ToolApprovalModeSchema", () => {
 
 describe("UserTerminalWorkingDirectorySchema", () => {
   it("accepts workspace and home", () => {
-    expect(UserTerminalWorkingDirectorySchema.parse("workspace")).toBe("workspace");
+    expect(UserTerminalWorkingDirectorySchema.parse("workspace")).toBe(
+      "workspace",
+    );
     expect(UserTerminalWorkingDirectorySchema.parse("home")).toBe("home");
   });
 
@@ -46,31 +48,29 @@ describe("UserSettingsDocumentSchema", () => {
     const doc = createDefaultUserSettingsDocument();
     expect(() => UserSettingsDocumentSchema.parse(doc)).not.toThrow();
     expect(doc.settings.agent.context.compactionAutoThreshold).toBe(0.92);
+    expect(doc.settings.agent.goals.maxReviews).toBe(10);
     expect(doc.settings.onboarding.signInStepCompleted).toBe(false);
     expect(doc.settings.onboarding.businessProfileStepCompleted).toBe(false);
     expect(doc.settings.appearance.experienceMode).toBe("business");
     expect(doc.settings.appearance.experienceModeChosen).toBe(false);
     expect(doc.settings.providers.inferenceProviderChosen).toBe(false);
     expect(doc.settings.chat.titleGenerationMaxLength).toBe(
-      DEFAULT_TITLE_GENERATION_MAX_LENGTH
+      DEFAULT_TITLE_GENERATION_MAX_LENGTH,
     );
     expect(doc.settings.shell.panelLayout.horizontal).toEqual([15, 50, 20]);
     expect(doc.settings.notebook.output.chartColors).toHaveLength(10);
-    expect(doc.settings.notebook.uiPreferences).toEqual({
-      charts: "Plotly",
-      tables: "Orion UI",
-      otherElements: "Orion UI",
-    });
     expect(doc.settings.shell.userTerminalWorkingDirectory).toBe("workspace");
     expect(doc.settings.chat.interactionModes.map((mode) => mode.id)).toEqual([
       "Agent",
-      "Research",
+      "Goal",
+      "Explore",
       "Edit",
       "Ask",
     ]);
     expect(
-      doc.settings.chat.interactionModes.find((mode) => mode.id === "Research")?.hiddenInSelector
-    ).toBe(true);
+      doc.settings.chat.interactionModes.find((mode) => mode.id === "Explore")
+        ?.hiddenInSelector,
+    ).toBe(false);
   });
 
   it("rejects compaction threshold above 1 on a full document", () => {
@@ -94,40 +94,83 @@ describe("settings migrations", () => {
             fontSize: 12,
           },
         },
-      })
+      }),
     );
 
     expect(migrated.settings.chat.titleGenerationModelId).toBe(
-      DEFAULT_TITLE_GENERATION_MODEL_ID
+      DEFAULT_TITLE_GENERATION_MODEL_ID,
     );
     expect(migrated.settings.chat.titleGenerationMaxLength).toBe(
-      DEFAULT_TITLE_GENERATION_MAX_LENGTH
+      DEFAULT_TITLE_GENERATION_MAX_LENGTH,
     );
     expect(migrated.settings.appearance.experienceMode).toBe("business");
     expect(migrated.settings.onboarding.signInStepCompleted).toBe(true);
-    expect(migrated.settings.onboarding.businessProfileStepCompleted).toBe(true);
+    expect(migrated.settings.onboarding.businessProfileStepCompleted).toBe(
+      true,
+    );
     expect(migrated.settings.appearance.experienceModeChosen).toBe(true);
     expect(migrated.settings.providers.inferenceProviderChosen).toBe(true);
     expect(migrated.settings.agent.context.compactionAutoThreshold).toBe(0.92);
     expect(migrated.settings.agent.toolOutput.textCharBudget).toBe(40_000);
     expect(migrated.settings.agent.execution.maxParallelReadOnlyCalls).toBe(10);
+    expect(migrated.settings.agent.goals.maxReviews).toBe(10);
     expect(migrated.settings.shell.mobileBreakpointPx).toBe(768);
     expect(migrated.settings.shell.userTerminalWorkingDirectory).toBe(
-      "workspace"
+      "workspace",
     );
-    expect(migrated.settings.notebook.uiPreferences).toEqual({
-      charts: "Plotly",
-      tables: "Orion UI",
-      otherElements: "Orion UI",
-    });
-    expect(migrated.settings.chat.interactionModes.map((mode) => mode.id)).toEqual([
-      "Agent",
-      "Research",
-      "Edit",
-      "Ask",
-    ]);
+    expect(
+      migrated.settings.chat.interactionModes.map((mode) => mode.id),
+    ).toEqual(["Agent", "Goal", "Explore", "Edit", "Ask"]);
     expect(migrated.settings.chat.notifyOnAgentFinish).toBe(true);
     expect(migrated.settings.chat.playSoundOnAgentFinish).toBe(true);
+  });
+
+  it("moves version-1 terminal settings to the workspace default once", () => {
+    const migrated = parseUserSettingsDocumentFromJson(
+      JSON.stringify({
+        version: 1,
+        settings: {
+          shell: { userTerminalWorkingDirectory: "home" },
+        },
+      }),
+    );
+
+    expect(migrated.version).toBe(2);
+    expect(migrated.settings.shell.userTerminalWorkingDirectory).toBe(
+      "workspace",
+    );
+  });
+
+  it("preserves a Home terminal choice made after the v2 migration", () => {
+    const migrated = parseUserSettingsDocumentFromJson(
+      JSON.stringify({
+        version: 2,
+        settings: {
+          shell: { userTerminalWorkingDirectory: "home" },
+        },
+      }),
+    );
+
+    expect(migrated.settings.shell.userTerminalWorkingDirectory).toBe("home");
+  });
+
+  it("strips retired notebook UI library preferences from saved settings", () => {
+    const migrated = parseUserSettingsDocumentFromJson(
+      JSON.stringify({
+        version: 2,
+        settings: {
+          notebook: {
+            uiPreferences: {
+              charts: "Altair",
+              tables: "Great Tables",
+              otherElements: "Orion UI",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(migrated.settings.notebook).not.toHaveProperty("uiPreferences");
   });
 
   it("accepts any positive integer for read-only tool concurrency", () => {
@@ -137,8 +180,11 @@ describe("settings migrations", () => {
 
     for (const invalidValue of [0, -1, 1.5, Number.NaN]) {
       const invalidDoc = createDefaultUserSettingsDocument();
-      invalidDoc.settings.agent.execution.maxParallelReadOnlyCalls = invalidValue;
-      expect(UserSettingsDocumentSchema.safeParse(invalidDoc).success).toBe(false);
+      invalidDoc.settings.agent.execution.maxParallelReadOnlyCalls =
+        invalidValue;
+      expect(UserSettingsDocumentSchema.safeParse(invalidDoc).success).toBe(
+        false,
+      );
     }
 
     const workspace = parseWorkspaceSettingsDocumentFromJson(
@@ -151,11 +197,24 @@ describe("settings migrations", () => {
             },
           },
         },
-      })
+      }),
     );
-    expect(
-      workspace.overrides.agent?.execution?.maxParallelReadOnlyCalls
-    ).toBe(250_000);
+    expect(workspace.overrides.agent?.execution?.maxParallelReadOnlyCalls).toBe(
+      250_000,
+    );
+  });
+
+  it("limits the maximum goal reviews setting to 1–50", () => {
+    for (const validValue of [1, 10, 50]) {
+      const doc = createDefaultUserSettingsDocument();
+      doc.settings.agent.goals.maxReviews = validValue;
+      expect(UserSettingsDocumentSchema.safeParse(doc).success).toBe(true);
+    }
+    for (const invalidValue of [0, 51, 1.5]) {
+      const doc = createDefaultUserSettingsDocument();
+      doc.settings.agent.goals.maxReviews = invalidValue;
+      expect(UserSettingsDocumentSchema.safeParse(doc).success).toBe(false);
+    }
   });
 
   it("requires title lengths between 10 and 100 characters", () => {
@@ -193,13 +252,11 @@ describe("settings migrations", () => {
           workspace: { pinnedDirectoryPaths: [], pinnedFilePaths: [] },
           providers: { credentials: {} },
         },
-      })
+      }),
     );
 
     expect(migrated.settings.chat.titleGenerationModelId).toBe("gpt-4o-mini");
-    expect(
-      "chatGenerationModelId" in migrated.settings.chat
-    ).toBe(false);
+    expect("chatGenerationModelId" in migrated.settings.chat).toBe(false);
     expect(migrated.settings.agent.terminal.poolIdleTimeoutMs).toBe(3_600_000);
   });
 
@@ -218,10 +275,13 @@ describe("settings migrations", () => {
             search: { maxMatches: 100 },
           },
         },
-      })
+      }),
     );
 
-    const terminal = migrated.settings.agent.terminal as Record<string, unknown>;
+    const terminal = migrated.settings.agent.terminal as Record<
+      string,
+      unknown
+    >;
     const agent = migrated.settings.agent as Record<string, unknown>;
     expect(terminal).not.toHaveProperty("executorTimeoutMs");
     expect(terminal).not.toHaveProperty("executorAvailabilityTimeoutMs");
@@ -240,7 +300,7 @@ describe("settings migrations", () => {
             search: { maxMatches: 100 },
           },
         },
-      })
+      }),
     );
 
     const agent = migrated.overrides.agent as Record<string, unknown>;
@@ -265,7 +325,7 @@ describe("mergeSettings", () => {
     expect(merged.agent.execution.maxParallelReadOnlyCalls).toBe(999);
     expect(merged.agent.terminal.poolIdleTimeoutMs).toBe(250);
     expect(merged.agent.terminal.foregroundBudgetMs).toBe(
-      DEFAULT_SETTINGS.agent.terminal.foregroundBudgetMs
+      DEFAULT_SETTINGS.agent.terminal.foregroundBudgetMs,
     );
     expect(merged.agent.context.compactionRetentionTurns).toBe(4);
   });

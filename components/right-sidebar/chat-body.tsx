@@ -6,6 +6,12 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, AtSign, ChevronDown, Copy, GitFork } from "lucide-react";
 import { ToolInvocationCard } from "./tool-invocation-card";
 import { DelegateInvocationCard } from "./delegate-invocation-card";
+import { GoalContractProposalCard } from "./goal-contract-proposal-card";
+import {
+  AskQuestionProvider,
+  AskQuestionToolCard,
+  type AskQuestionContextValue,
+} from "./ask-question-context";
 import { AssistantActivityGroup } from "./assistant-activity-group";
 import { UserMessage } from "./user-message";
 import { AssistantMessage } from "./assistant-message";
@@ -15,7 +21,10 @@ import { ErrorCard } from "../common/error-card";
 import { NoKernelPrompt } from "../common/no-kernel-prompt";
 import { parseChatApiErrorMessage } from "@/lib/chat/chat-api-errors";
 import { ThinkingBlock } from "./thinking-block";
-import { CostSummaryCard, type CostSummaryMessageData } from "./cost-summary-card";
+import {
+  CostSummaryCard,
+  type CostSummaryMessageData,
+} from "./cost-summary-card";
 import {
   buildAssistantActivityMessageBlocks,
   buildAssistantRenderBlocks,
@@ -43,8 +52,9 @@ import {
 } from "@/components/ui/tooltip";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 import type { ToolApprovalMode } from "@/lib/settings/schema";
-import type { EditingState } from "./types";
+import type { EditingState, LLM } from "./types";
 import type { EditCheckpointStatus } from "@/lib/agent/edit-checkpoints";
+import { isGoalContractProposalPart } from "@/lib/agent/goals/contract-author";
 import { dispatchInsertChatMessage } from "@/lib/chat/chat-composer-events";
 import {
   formatAssistantMessageClipboardText,
@@ -70,6 +80,12 @@ export interface ChatBodyProps {
   pendingApprovalIds?: Set<string>;
   onApprove?: (toolCallId: string) => void;
   onReject?: (toolCallId: string) => void;
+  /** Proposal decisions are separate from ordinary dangerous-tool approvals. */
+  onApproveGoalContract?: (toolCallId: string) => void;
+  onRequestGoalContractRevision?: (toolCallId: string) => void;
+  goalContractActionIds?: Set<string>;
+  goalContractErrors?: Map<string, string>;
+  goalEvaluatorPicker?: GoalEvaluatorPickerProps;
   toolApprovalMode?: ToolApprovalMode;
   onToolApprovalModeChange?: (mode: ToolApprovalMode) => void;
   /** Live progress descriptions for running sub-agent tool calls, keyed by toolCallId. */
@@ -89,7 +105,10 @@ export interface ChatBodyProps {
   isRefreshingCostSummary?: boolean;
   checkpointStatuses?: Map<string, EditCheckpointStatus>;
   checkpointRequestByMessageId?: Map<string, string>;
-  onRestoreCheckpoint?: (checkpointId: string, action: CheckpointMessageAction) => void;
+  onRestoreCheckpoint?: (
+    checkpointId: string,
+    action: CheckpointMessageAction,
+  ) => void;
   onForkFromAssistantMessage?: (message: UIMessage, index: number) => void;
   /** Optional prompt categories rendered when this chat has no rows. */
   emptyPromptCategories?: readonly BusinessPromptCategory[];
@@ -97,6 +116,8 @@ export interface ChatBodyProps {
   emptyPromptLibraryKey?: string;
   /** When set, renders a divider after the summarized portion of the conversation. */
   compactionSummary?: CompactionSummary | null;
+  /** Chat-scoped handlers for `ask_question` questionnaire cards. */
+  askQuestion?: AskQuestionContextValue;
 }
 
 interface ChatMessageRowProps {
@@ -116,6 +137,11 @@ interface ChatMessageRowProps {
   pendingApprovalIds?: Set<string>;
   onApprove?: (toolCallId: string) => void;
   onReject?: (toolCallId: string) => void;
+  onApproveGoalContract?: (toolCallId: string) => void;
+  onRequestGoalContractRevision?: (toolCallId: string) => void;
+  goalContractActionIds?: Set<string>;
+  goalContractErrors?: Map<string, string>;
+  goalEvaluatorPicker?: GoalEvaluatorPickerProps;
   toolApprovalMode?: ToolApprovalMode;
   onToolApprovalModeChange?: (mode: ToolApprovalMode) => void;
   subagentProgress?: Map<string, string>;
@@ -129,28 +155,31 @@ interface ChatMessageRowProps {
   isRefreshingCostSummary?: boolean;
   checkpointStatuses?: Map<string, EditCheckpointStatus>;
   checkpointRequestByMessageId?: Map<string, string>;
-  onRestoreCheckpoint?: (checkpointId: string, action: CheckpointMessageAction) => void;
+  onRestoreCheckpoint?: (
+    checkpointId: string,
+    action: CheckpointMessageAction,
+  ) => void;
   onForkFromAssistantMessage?: (message: UIMessage, index: number) => void;
 }
 
 type ChatRenderItem =
   | { type: "message"; message: UIMessage; messageIndex: number }
   | {
-    type: "activityRun";
-    items: AssistantActivityMessagePart[];
-    firstMessageIndex: number;
-    lastMessageIndex: number;
-    hasFollowingText: boolean;
-  }
+      type: "activityRun";
+      items: AssistantActivityMessagePart[];
+      firstMessageIndex: number;
+      lastMessageIndex: number;
+      hasFollowingText: boolean;
+    }
   | { type: "kernelPrompt" }
   | { type: "loading" }
   | {
-    type: "error";
-    title?: string;
-    message: string | undefined;
-    actionUrl?: string;
-    actionLabel?: string;
-  }
+      type: "error";
+      title?: string;
+      message: string | undefined;
+      actionUrl?: string;
+      actionLabel?: string;
+    }
   | { type: "compactionDivider"; summary: CompactionSummary };
 
 type ConversationSelectionSource = "assistant" | "tool";
@@ -167,18 +196,9 @@ type ConversationSelectionPopoverState = {
 };
 
 /** Finds the element carrying conversation-reference metadata for a text node. */
-function closestConversationReferenceElement(node: Node | null): HTMLElement | null {
-  const element =
-    node instanceof HTMLElement
-      ? node
-      : node?.parentElement instanceof HTMLElement
-        ? node.parentElement
-        : null;
-  return element?.closest<HTMLElement>("[data-orion-conversation-reference='true']") ?? null;
-}
-
-/** Finds the floating mention action, which lives outside the chat scroll root. */
-function closestConversationMentionPopoverElement(node: Node | null): HTMLElement | null {
+function closestConversationReferenceElement(
+  node: Node | null,
+): HTMLElement | null {
   const element =
     node instanceof HTMLElement
       ? node
@@ -186,7 +206,26 @@ function closestConversationMentionPopoverElement(node: Node | null): HTMLElemen
         ? node.parentElement
         : null;
   return (
-    element?.closest<HTMLElement>("[data-orion-conversation-mention-popover='true']") ?? null
+    element?.closest<HTMLElement>(
+      "[data-orion-conversation-reference='true']",
+    ) ?? null
+  );
+}
+
+/** Finds the floating mention action, which lives outside the chat scroll root. */
+function closestConversationMentionPopoverElement(
+  node: Node | null,
+): HTMLElement | null {
+  const element =
+    node instanceof HTMLElement
+      ? node
+      : node?.parentElement instanceof HTMLElement
+        ? node.parentElement
+        : null;
+  return (
+    element?.closest<HTMLElement>(
+      "[data-orion-conversation-mention-popover='true']",
+    ) ?? null
   );
 }
 
@@ -200,15 +239,18 @@ function readDatasetIndex(value: string | undefined): number | null {
 /** Builds a popover payload for a selection inside assistant or tool chat content. */
 function getConversationSelectionState(
   root: HTMLElement,
-  selection: Selection | null
+  selection: Selection | null,
 ): ConversationSelectionPopoverState | null {
-  if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return null;
+  if (!selection || selection.rangeCount === 0 || selection.isCollapsed)
+    return null;
 
   const selectedText = selection.toString().trim();
   if (!selectedText) return null;
 
   const range = selection.getRangeAt(0);
-  const referenceElement = closestConversationReferenceElement(range.commonAncestorContainer);
+  const referenceElement = closestConversationReferenceElement(
+    range.commonAncestorContainer,
+  );
   if (!referenceElement || !root.contains(referenceElement)) return null;
   if (
     !referenceElement.contains(range.startContainer) ||
@@ -221,7 +263,9 @@ function getConversationSelectionState(
   if (source !== "assistant" && source !== "tool") return null;
 
   const messageId = referenceElement.dataset.orionMessageId;
-  const messageIndex = readDatasetIndex(referenceElement.dataset.orionMessageIndex);
+  const messageIndex = readDatasetIndex(
+    referenceElement.dataset.orionMessageIndex,
+  );
   const partIndex = readDatasetIndex(referenceElement.dataset.orionPartIndex);
   if (!messageId || messageIndex === null || partIndex === null) return null;
 
@@ -246,7 +290,8 @@ function ConversationSelectionMentionPopover({
 }: {
   rootRef: React.RefObject<HTMLDivElement | null>;
 }) {
-  const [state, setState] = React.useState<ConversationSelectionPopoverState | null>(null);
+  const [state, setState] =
+    React.useState<ConversationSelectionPopoverState | null>(null);
 
   const updateFromSelection = React.useCallback(() => {
     const root = rootRef.current;
@@ -260,7 +305,8 @@ function ConversationSelectionMentionPopover({
       if (!selection || selection.isCollapsed) setState(null);
     };
     document.addEventListener("selectionchange", handleSelectionChange);
-    return () => document.removeEventListener("selectionchange", handleSelectionChange);
+    return () =>
+      document.removeEventListener("selectionchange", handleSelectionChange);
   }, []);
 
   const mentionSelection = React.useCallback(() => {
@@ -276,7 +322,7 @@ function ConversationSelectionMentionPopover({
           toolName: state.toolName,
           toolCallId: state.toolCallId,
         },
-      })
+      }),
     );
     window.getSelection()?.removeAllRanges();
     setState(null);
@@ -309,7 +355,7 @@ function ConversationSelectionMentionPopover({
 
   const left = Math.min(
     Math.max(state.rect.left + state.rect.width / 2, 48),
-    window.innerWidth - 48
+    window.innerWidth - 48,
   );
   const top = Math.max(state.rect.top - 38, 8);
 
@@ -331,20 +377,25 @@ function ConversationSelectionMentionPopover({
 /** True when a rendered row includes the message at `messageIndex`. */
 function rowContainsMessageIndex(
   item: Extract<ChatRenderItem, { type: "message" | "activityRun" }>,
-  messageIndex: number
+  messageIndex: number,
 ): boolean {
   if (item.type === "message") return item.messageIndex === messageIndex;
-  return messageIndex >= item.firstMessageIndex && messageIndex <= item.lastMessageIndex;
+  return (
+    messageIndex >= item.firstMessageIndex &&
+    messageIndex <= item.lastMessageIndex
+  );
 }
 
 /** Inserts a compaction divider after the last summarized message row. */
 function appendMessageRowsWithCompactionDivider(
   blocks: AssistantActivityMessageBlock[],
   messages: UIMessage[],
-  compactionSummary: CompactionSummary | null | undefined
+  compactionSummary: CompactionSummary | null | undefined,
 ): ChatRenderItem[] {
   const coversThroughIndex = compactionSummary
-    ? messages.findIndex((message) => message.id === compactionSummary.coversThrough)
+    ? messages.findIndex(
+        (message) => message.id === compactionSummary.coversThrough,
+      )
     : -1;
   const shouldInsertDivider =
     compactionSummary != null &&
@@ -371,7 +422,10 @@ function appendMessageRowsWithCompactionDivider(
 }
 
 /** Compare UI message parts by the fields that affect rendered chat rows. */
-function areRenderedPartsEqual(prev: UIMessage["parts"], next: UIMessage["parts"]): boolean {
+function areRenderedPartsEqual(
+  prev: UIMessage["parts"],
+  next: UIMessage["parts"],
+): boolean {
   if (prev === next) return true;
   if (prev.length !== next.length) return false;
 
@@ -393,13 +447,25 @@ function areRenderedPartsEqual(prev: UIMessage["parts"], next: UIMessage["parts"
     if (isToolUIPart(prevPart) && isToolUIPart(nextPart)) {
       if (prevPart.toolCallId !== nextPart.toolCallId) return false;
       if (prevPart.state !== nextPart.state) return false;
-      if ("input" in prevPart && "input" in nextPart && prevPart.input !== nextPart.input) {
+      if (
+        "input" in prevPart &&
+        "input" in nextPart &&
+        prevPart.input !== nextPart.input
+      ) {
         return false;
       }
-      if ("output" in prevPart && "output" in nextPart && prevPart.output !== nextPart.output) {
+      if (
+        "output" in prevPart &&
+        "output" in nextPart &&
+        prevPart.output !== nextPart.output
+      ) {
         return false;
       }
-      if ("errorText" in prevPart && "errorText" in nextPart && prevPart.errorText !== nextPart.errorText) {
+      if (
+        "errorText" in prevPart &&
+        "errorText" in nextPart &&
+        prevPart.errorText !== nextPart.errorText
+      ) {
         return false;
       }
       continue;
@@ -414,7 +480,7 @@ function areToolMapValuesEqual(
   prevMessage: UIMessage,
   nextMessage: UIMessage,
   prevMap: Map<string, string> | undefined,
-  nextMap: Map<string, string> | undefined
+  nextMap: Map<string, string> | undefined,
 ): boolean {
   if (prevMap === nextMap) return true;
   for (const part of nextMessage.parts) {
@@ -425,10 +491,16 @@ function areToolMapValuesEqual(
   }
   for (const part of prevMessage.parts) {
     if (!isToolUIPart(part)) continue;
-    if (nextMessage.parts.some((candidate) => isToolUIPart(candidate) && candidate.toolCallId === part.toolCallId)) {
+    if (
+      nextMessage.parts.some(
+        (candidate) =>
+          isToolUIPart(candidate) && candidate.toolCallId === part.toolCallId,
+      )
+    ) {
       continue;
     }
-    if (prevMap?.get(part.toolCallId) !== nextMap?.get(part.toolCallId)) return false;
+    if (prevMap?.get(part.toolCallId) !== nextMap?.get(part.toolCallId))
+      return false;
   }
   return true;
 }
@@ -438,7 +510,7 @@ function areToolTimingValuesEqual(
   prevMessage: UIMessage,
   nextMessage: UIMessage,
   prevMap: Map<string, ToolTiming> | undefined,
-  nextMap: Map<string, ToolTiming> | undefined
+  nextMap: Map<string, ToolTiming> | undefined,
 ): boolean {
   if (prevMap === nextMap) return true;
 
@@ -463,12 +535,13 @@ function areToolTimingValuesEqual(
 function arePendingApprovalValuesEqual(
   message: UIMessage,
   prevIds: Set<string> | undefined,
-  nextIds: Set<string> | undefined
+  nextIds: Set<string> | undefined,
 ): boolean {
   if (prevIds === nextIds) return true;
   for (const part of message.parts) {
     if (!isToolUIPart(part)) continue;
-    if (prevIds?.has(part.toolCallId) !== nextIds?.has(part.toolCallId)) return false;
+    if (prevIds?.has(part.toolCallId) !== nextIds?.has(part.toolCallId))
+      return false;
   }
   return true;
 }
@@ -486,14 +559,21 @@ function isPendingToolState(state: string): boolean {
 /** Extract the leading text payload from a tool result for status detection. */
 function leadingResultText(result: unknown): string | null {
   if (typeof result === "string") return result;
-  if (Array.isArray(result) && result.length > 0 && typeof result[0] === "string") {
+  if (
+    Array.isArray(result) &&
+    result.length > 0 &&
+    typeof result[0] === "string"
+  ) {
     return result[0];
   }
   return null;
 }
 
 /** Detect tool errors represented either structurally or as legacy text prefixes. */
-function toolOutputIsError(result: unknown, leadingText: string | null): boolean {
+function toolOutputIsError(
+  result: unknown,
+  leadingText: string | null,
+): boolean {
   if (
     typeof result === "object" &&
     result !== null &&
@@ -508,7 +588,7 @@ function toolOutputIsError(result: unknown, leadingText: string | null): boolean
 /** Resolve the aggregate status shown on a compact activity group. */
 function getActivityStatus(
   items: AssistantPartWithIndex[],
-  pendingApprovalIds: Set<string> | undefined
+  pendingApprovalIds: Set<string> | undefined,
 ): "running" | "approval" | "error" | "warning" | "complete" {
   let hasPending = false;
   let hasApproval = false;
@@ -520,7 +600,10 @@ function getActivityStatus(
     const state = String(item.part.state);
     const result = "output" in item.part ? item.part.output : undefined;
     const leadingText = leadingResultText(result);
-    if (pendingApprovalIds?.has(item.part.toolCallId) || state === "approval-requested") {
+    if (
+      pendingApprovalIds?.has(item.part.toolCallId) ||
+      state === "approval-requested"
+    ) {
       hasApproval = true;
     }
     if (isPendingToolState(state)) {
@@ -572,12 +655,27 @@ interface ActivityItemRenderOptions {
   pendingApprovalIds?: Set<string>;
   onApprove?: (toolCallId: string) => void;
   onReject?: (toolCallId: string) => void;
+  onApproveGoalContract?: (toolCallId: string) => void;
+  onRequestGoalContractRevision?: (toolCallId: string) => void;
+  goalContractActionIds?: Set<string>;
+  goalContractErrors?: Map<string, string>;
+  goalEvaluatorPicker?: GoalEvaluatorPickerProps;
   toolApprovalMode?: ToolApprovalMode;
   onToolApprovalModeChange?: (mode: ToolApprovalMode) => void;
   subagentProgress?: Map<string, string>;
   subagentReportPaths?: Map<string, string>;
   onOpenSubagentChat?: (toolCallId: string) => void;
   onOpenSubagentReport?: (path: string) => void;
+}
+
+/** Everything the goal proposal card needs to let the user pick a reviewer model. */
+export interface GoalEvaluatorPickerProps {
+  models: LLM[];
+  pinnedModelIds: string[];
+  selectedModel: string;
+  onSelectedModelChange: (model: string) => void;
+  onOpenModelsSettings?: () => void;
+  onOpenProvidersSettings?: () => void;
 }
 
 /** Render one activity part using its original message reference metadata. */
@@ -590,6 +688,11 @@ function renderAssistantActivityItem({
   pendingApprovalIds,
   onApprove,
   onReject,
+  onApproveGoalContract,
+  onRequestGoalContractRevision,
+  goalContractActionIds,
+  goalContractErrors,
+  goalEvaluatorPicker,
   toolApprovalMode,
   onToolApprovalModeChange,
   subagentProgress,
@@ -600,16 +703,56 @@ function renderAssistantActivityItem({
   const { part, partIndex, message, messageIndex } = item;
   if (isToolUIPart(part)) {
     const inv = part;
-    const toolName = inv.type.slice(5) as OrionToolName;
+    const toolName = inv.type.slice(5);
     // Shared constant, not a fresh literal: the tool cards memoize on `args`
     // identity, and a new `{}` each render would defeat that for pending calls.
     const invArgs =
-      ("input" in inv && inv.input != null) ? (inv.input as Record<string, unknown>) : EMPTY_TOOL_ARGS;
+      "input" in inv && inv.input != null
+        ? (inv.input as Record<string, unknown>)
+        : EMPTY_TOOL_ARGS;
     const invResult = "output" in inv ? inv.output : undefined;
     const invErrorText =
-      "errorText" in inv && typeof inv.errorText === "string" ? inv.errorText : undefined;
+      "errorText" in inv && typeof inv.errorText === "string"
+        ? inv.errorText
+        : undefined;
 
-    if (toolName === "delegate") {
+    if (isGoalContractProposalPart(inv)) {
+      return (
+        <GoalContractProposalCard
+          key={inv.toolCallId}
+          toolCallId={inv.toolCallId}
+          input={invArgs}
+          output={invResult}
+          state={inv.state}
+          busy={goalContractActionIds?.has(inv.toolCallId)}
+          error={goalContractErrors?.get(inv.toolCallId)}
+          onApprove={onApproveGoalContract}
+          onRequestRevision={onRequestGoalContractRevision}
+          models={goalEvaluatorPicker?.models}
+          pinnedModelIds={goalEvaluatorPicker?.pinnedModelIds}
+          evaluatorModel={goalEvaluatorPicker?.selectedModel}
+          onEvaluatorModelChange={goalEvaluatorPicker?.onSelectedModelChange}
+          onOpenModelsSettings={goalEvaluatorPicker?.onOpenModelsSettings}
+          onOpenProvidersSettings={goalEvaluatorPicker?.onOpenProvidersSettings}
+        />
+      );
+    }
+
+    const orionToolName = toolName as OrionToolName;
+
+    if (orionToolName === "ask_question") {
+      return (
+        <AskQuestionToolCard
+          key={inv.toolCallId}
+          toolCallId={inv.toolCallId}
+          input={invArgs}
+          output={invResult}
+          state={inv.state}
+        />
+      );
+    }
+
+    if (orionToolName === "delegate") {
       return (
         <DelegateInvocationCard
           key={inv.toolCallId}
@@ -637,7 +780,7 @@ function renderAssistantActivityItem({
     return (
       <ToolInvocationCard
         key={inv.toolCallId}
-        toolName={toolName}
+        toolName={orionToolName}
         args={invArgs}
         result={invResult}
         state={inv.state}
@@ -703,6 +846,11 @@ interface AssistantActivityRunRowProps {
   pendingApprovalIds?: Set<string>;
   onApprove?: (toolCallId: string) => void;
   onReject?: (toolCallId: string) => void;
+  onApproveGoalContract?: (toolCallId: string) => void;
+  onRequestGoalContractRevision?: (toolCallId: string) => void;
+  goalContractActionIds?: Set<string>;
+  goalContractErrors?: Map<string, string>;
+  goalEvaluatorPicker?: GoalEvaluatorPickerProps;
   toolApprovalMode?: ToolApprovalMode;
   onToolApprovalModeChange?: (mode: ToolApprovalMode) => void;
   subagentProgress?: Map<string, string>;
@@ -721,6 +869,11 @@ function AssistantActivityRunRow({
   pendingApprovalIds,
   onApprove,
   onReject,
+  onApproveGoalContract,
+  onRequestGoalContractRevision,
+  goalContractActionIds,
+  goalContractErrors,
+  goalEvaluatorPicker,
   toolApprovalMode,
   onToolApprovalModeChange,
   subagentProgress,
@@ -731,7 +884,9 @@ function AssistantActivityRunRow({
 }: AssistantActivityRunRowProps) {
   const status = getActivityStatus(item.items, pendingApprovalIds);
   const hasPendingApproval = status === "approval";
-  const toolCount = item.items.filter((activityItem) => isToolUIPart(activityItem.part)).length;
+  const toolCount = item.items.filter((activityItem) =>
+    isToolUIPart(activityItem.part),
+  ).length;
   const isWaitingForFinalResponse = isActivityGroupWaitingForFinalResponse({
     hasFollowingText: item.hasFollowingText,
     isLastMessage,
@@ -748,7 +903,10 @@ function AssistantActivityRunRow({
             isActivityComplete: !isWaitingForFinalResponse,
           })}
           isWaitingForFinalResponse={isWaitingForFinalResponse}
-          autoCollapse={shouldAutoCollapseActivityGroup(item.hasFollowingText, hasPendingApproval)}
+          autoCollapse={shouldAutoCollapseActivityGroup(
+            item.hasFollowingText,
+            hasPendingApproval,
+          )}
           forceExpanded={shouldForceExpandActivityGroup(hasPendingApproval)}
         >
           {item.items.map((activityItem, activityIndex) =>
@@ -761,13 +919,18 @@ function AssistantActivityRunRow({
               pendingApprovalIds,
               onApprove,
               onReject,
+              onApproveGoalContract,
+              onRequestGoalContractRevision,
+              goalContractActionIds,
+              goalContractErrors,
+              goalEvaluatorPicker,
               toolApprovalMode,
               onToolApprovalModeChange,
               subagentProgress,
               subagentReportPaths,
               onOpenSubagentChat,
               onOpenSubagentReport,
-            })
+            }),
           )}
         </AssistantActivityGroup>
       </div>
@@ -844,73 +1007,109 @@ function AssistantMessageActions({
  * Render one chat row. Historical rows are memoized because AI SDK streaming
  * can clone message objects on every chunk.
  */
-const ChatMessageRow = React.memo(function ChatMessageRow({
-  message,
-  index,
-  isLastMessage,
-  isDimmed,
-  isEditing,
-  isLoading,
-  isAgentTurnActive = false,
-  isForkingDisabled = false,
-  onUserMessageClick,
-  canEditUserMessages = true,
-  pendingApprovalIds,
-  onApprove,
-  onReject,
-  toolApprovalMode,
-  onToolApprovalModeChange,
-  subagentProgress,
-  subagentReportPaths,
-  toolTimings,
-  onOpenSubagentChat,
-  onOpenSubagentReport,
-  costSummaryByMessageId,
-  onDismissCostSummary,
-  onRefreshCostSummary,
-  isRefreshingCostSummary,
-  checkpointStatuses,
-  checkpointRequestByMessageId,
-  onRestoreCheckpoint,
-  onForkFromAssistantMessage,
-}: ChatMessageRowProps) {
-  const handleUserClick = React.useCallback(() => {
-    onUserMessageClick(message, index);
-  }, [index, message, onUserMessageClick]);
-  const handleForkFromAssistantMessage = React.useCallback(() => {
-    if (message.role !== "assistant") return;
-    onForkFromAssistantMessage?.(message, index);
-  }, [index, message, onForkFromAssistantMessage]);
+const ChatMessageRow = React.memo(
+  function ChatMessageRow({
+    message,
+    index,
+    isLastMessage,
+    isDimmed,
+    isEditing,
+    isLoading,
+    isAgentTurnActive = false,
+    isForkingDisabled = false,
+    onUserMessageClick,
+    canEditUserMessages = true,
+    pendingApprovalIds,
+    onApprove,
+    onReject,
+    onApproveGoalContract,
+    onRequestGoalContractRevision,
+    goalContractActionIds,
+    goalContractErrors,
+    goalEvaluatorPicker,
+    toolApprovalMode,
+    onToolApprovalModeChange,
+    subagentProgress,
+    subagentReportPaths,
+    toolTimings,
+    onOpenSubagentChat,
+    onOpenSubagentReport,
+    costSummaryByMessageId,
+    onDismissCostSummary,
+    onRefreshCostSummary,
+    isRefreshingCostSummary,
+    checkpointStatuses,
+    checkpointRequestByMessageId,
+    onRestoreCheckpoint,
+    onForkFromAssistantMessage,
+  }: ChatMessageRowProps) {
+    const handleUserClick = React.useCallback(() => {
+      onUserMessageClick(message, index);
+    }, [index, message, onUserMessageClick]);
+    const handleForkFromAssistantMessage = React.useCallback(() => {
+      if (message.role !== "assistant") return;
+      onForkFromAssistantMessage?.(message, index);
+    }, [index, message, onForkFromAssistantMessage]);
 
-  const costSummary = costSummaryByMessageId?.[message.id];
-  const messageCheckpointId = checkpointRequestByMessageId?.get(message.id);
-  const checkpointStatus = messageCheckpointId
-    ? checkpointStatuses?.get(messageCheckpointId)
-    : undefined;
-  const checkpointAction: CheckpointMessageAction | undefined =
-    checkpointStatus === "reverted"
-      ? "redo"
-      : checkpointStatus
-        ? "restore"
-        : undefined;
-  const actionableCheckpointId = checkpointAction ? messageCheckpointId : undefined;
+    const costSummary = costSummaryByMessageId?.[message.id];
+    const messageCheckpointId = checkpointRequestByMessageId?.get(message.id);
+    const checkpointStatus = messageCheckpointId
+      ? checkpointStatuses?.get(messageCheckpointId)
+      : undefined;
+    const checkpointAction: CheckpointMessageAction | undefined =
+      checkpointStatus === "reverted"
+        ? "redo"
+        : checkpointStatus
+          ? "restore"
+          : undefined;
+    const actionableCheckpointId = checkpointAction
+      ? messageCheckpointId
+      : undefined;
 
-  /** Render one grouped reasoning/tool part using the existing detailed components. */
-  const renderActivityItem = (item: AssistantPartWithIndex) => {
-    const { part, partIndex } = item;
-    if (part.type === "reasoning" && part.text) {
-      const hasTextAfter = message.parts
-        .slice(partIndex + 1)
-        .some((p) => p.type === "text" && "text" in p && p.text);
+    /** Render one grouped reasoning/tool part using the existing detailed components. */
+    const renderActivityItem = (item: AssistantPartWithIndex) => {
+      const { part, partIndex } = item;
+      if (part.type === "reasoning" && part.text) {
+        const hasTextAfter = message.parts
+          .slice(partIndex + 1)
+          .some((p) => p.type === "text" && "text" in p && p.text);
+        return renderAssistantActivityItem({
+          item: { ...item, message, messageIndex: index },
+          isLoading,
+          isLastMessage,
+          messageHasFollowingText: hasTextAfter,
+          hasPartsAfter: partIndex < message.parts.length - 1,
+          pendingApprovalIds,
+          onApprove,
+          onReject,
+          onApproveGoalContract,
+          onRequestGoalContractRevision,
+          goalContractActionIds,
+          goalContractErrors,
+          goalEvaluatorPicker,
+          toolApprovalMode,
+          onToolApprovalModeChange,
+          subagentProgress,
+          subagentReportPaths,
+          onOpenSubagentChat,
+          onOpenSubagentReport,
+        });
+      }
+
       return renderAssistantActivityItem({
         item: { ...item, message, messageIndex: index },
         isLoading,
         isLastMessage,
-        messageHasFollowingText: hasTextAfter,
+        messageHasFollowingText: false,
         hasPartsAfter: partIndex < message.parts.length - 1,
         pendingApprovalIds,
         onApprove,
         onReject,
+        onApproveGoalContract,
+        onRequestGoalContractRevision,
+        goalContractActionIds,
+        goalContractErrors,
+        goalEvaluatorPicker,
         toolApprovalMode,
         onToolApprovalModeChange,
         subagentProgress,
@@ -918,173 +1117,234 @@ const ChatMessageRow = React.memo(function ChatMessageRow({
         onOpenSubagentChat,
         onOpenSubagentReport,
       });
-    }
+    };
 
-    return renderAssistantActivityItem({
-      item: { ...item, message, messageIndex: index },
-      isLoading,
-      isLastMessage,
-      messageHasFollowingText: false,
-      hasPartsAfter: partIndex < message.parts.length - 1,
-      pendingApprovalIds,
-      onApprove,
-      onReject,
-      toolApprovalMode,
-      onToolApprovalModeChange,
-      subagentProgress,
-      subagentReportPaths,
-      onOpenSubagentChat,
-      onOpenSubagentReport,
-    });
-  };
+    const renderBlocks =
+      message.role === "assistant"
+        ? buildAssistantRenderBlocks(message.parts)
+        : [];
+    const hasAssistantProse = Boolean(
+      formatAssistantMessageClipboardText(message).trim(),
+    );
+    const showAssistantActions =
+      message.role === "assistant" &&
+      !costSummary &&
+      hasAssistantProse &&
+      !isLoading &&
+      !isAgentTurnActive;
 
-  const renderBlocks = message.role === "assistant"
-    ? buildAssistantRenderBlocks(message.parts)
-    : [];
-  const hasAssistantProse = Boolean(formatAssistantMessageClipboardText(message).trim());
-  const showAssistantActions =
-    message.role === "assistant" &&
-    !costSummary &&
-    hasAssistantProse &&
-    !isLoading &&
-    !isAgentTurnActive;
-
-  return (
-    <div
-      className={`flex min-w-0 w-full ${message.role === "user" ? "justify-end" : "justify-start"
+    return (
+      <div
+        className={`flex min-w-0 w-full ${
+          message.role === "user" ? "justify-end" : "justify-start"
         } transition-opacity ${isDimmed ? "opacity-50" : ""}`}
-    >
-      {message.role === "user" ? (
-        <UserMessage
-          message={message}
-          onEdit={canEditUserMessages ? handleUserClick : undefined}
-          checkpointId={actionableCheckpointId}
-          checkpointAction={checkpointAction}
-          onRestoreCheckpoint={onRestoreCheckpoint}
-        />
-      ) : costSummary ? (
-        <CostSummaryCard
-          summary={costSummary.summary}
-          modelLabels={costSummary.modelLabels}
-          onDismiss={onDismissCostSummary}
-          onRefresh={onRefreshCostSummary}
-          isRefreshing={isRefreshingCostSummary}
-        />
-      ) : (
-        <div className="w-full min-w-0 space-y-2">
-          {/* Render assistant text and grouped activity in chronological order. */}
-          {renderBlocks.map((block, blockIndex) => {
-            if (block.type === "text") {
-              return (
-                <AssistantMessage
-                  key={`${message.id}-text-${block.item.partIndex}`}
-                  content={block.item.part.text}
-                  isStreaming={isLoading && isLastMessage}
-                  conversationReference={{
-                    messageId: message.id,
-                    messageIndex: index,
-                    partIndex: block.item.partIndex,
-                  }}
-                />
-              );
-            }
-
-            const status = getActivityStatus(block.items, pendingApprovalIds);
-            const hasPendingApproval = status === "approval";
-            const toolCount = block.items.filter((item) => isToolUIPart(item.part)).length;
-            const isWaitingForFinalResponse = isActivityGroupWaitingForFinalResponse({
-              hasFollowingText: block.hasFollowingText,
-              isLastMessage,
-              activityStatus: status,
-              isTurnActive: isAgentTurnActive,
-            });
-            return (
-              <AssistantActivityGroup
-                key={`${message.id}-activity-${block.items[0]?.partIndex ?? blockIndex}`}
-                toolCount={toolCount}
-                durationMs={getActivityDurationMs(block.items, toolTimings, {
-                  isActivityComplete: !isWaitingForFinalResponse,
-                })}
-                isWaitingForFinalResponse={isWaitingForFinalResponse}
-                autoCollapse={shouldAutoCollapseActivityGroup(block.hasFollowingText, hasPendingApproval)}
-                forceExpanded={shouldForceExpandActivityGroup(hasPendingApproval)}
-              >
-                {block.items.map(renderActivityItem)}
-              </AssistantActivityGroup>
-            );
-          })}
-          {showAssistantActions ? (
-            <AssistantMessageActions
-              message={message}
-              onForkFromAssistantMessage={
-                !isEditing && !isForkingDisabled && onForkFromAssistantMessage
-                  ? handleForkFromAssistantMessage
-                  : undefined
+      >
+        {message.role === "user" ? (
+          <UserMessage
+            message={message}
+            onEdit={canEditUserMessages ? handleUserClick : undefined}
+            checkpointId={actionableCheckpointId}
+            checkpointAction={checkpointAction}
+            onRestoreCheckpoint={onRestoreCheckpoint}
+          />
+        ) : costSummary ? (
+          <CostSummaryCard
+            summary={costSummary.summary}
+            modelLabels={costSummary.modelLabels}
+            onDismiss={onDismissCostSummary}
+            onRefresh={onRefreshCostSummary}
+            isRefreshing={isRefreshingCostSummary}
+          />
+        ) : (
+          <div className="w-full min-w-0 space-y-2">
+            {/* Render assistant text and grouped activity in chronological order. */}
+            {renderBlocks.map((block, blockIndex) => {
+              if (block.type === "text") {
+                return (
+                  <AssistantMessage
+                    key={`${message.id}-text-${block.item.partIndex}`}
+                    content={block.item.part.text}
+                    isStreaming={isLoading && isLastMessage}
+                    conversationReference={{
+                      messageId: message.id,
+                      messageIndex: index,
+                      partIndex: block.item.partIndex,
+                    }}
+                  />
+                );
               }
-            />
-          ) : null}
-        </div>
-      )}
-    </div>
-  );
-}, (prev, next) => {
-  if (prev.message.id !== next.message.id) return false;
-  if (prev.message.role !== next.message.role) return false;
-  if (prev.index !== next.index) return false;
-  if (prev.isLastMessage !== next.isLastMessage) return false;
-  if (prev.isDimmed !== next.isDimmed) return false;
-  if (prev.isEditing !== next.isEditing) return false;
-  if (prev.isForkingDisabled !== next.isForkingDisabled) return false;
 
-  const prevEffectiveLoading = prev.isLastMessage ? prev.isLoading : false;
-  const nextEffectiveLoading = next.isLastMessage ? next.isLoading : false;
-  if (prevEffectiveLoading !== nextEffectiveLoading) return false;
-  const prevTurnActive = prev.isLastMessage ? (prev.isAgentTurnActive ?? false) : false;
-  const nextTurnActive = next.isLastMessage ? (next.isAgentTurnActive ?? false) : false;
-  if (prevTurnActive !== nextTurnActive) return false;
+              if (block.type === "goalContractProposal") {
+                return renderActivityItem(block.item);
+              }
 
-  // An agent loop appends steps to one assistant message, so the "last message"
-  // can hold a hundred parts by the end of a run. Re-rendering it on every
-  // streaming commit repaints the entire run ~20×/sec and starves the main
-  // thread — which is what left the chat body frozen mid-run. The comparisons
-  // below already catch everything a streaming turn can change: part content
-  // and tool state via `areRenderedPartsEqual`, elapsed times via
-  // `areToolTimingValuesEqual`, and the loading/turn-active flags above.
-  if (!areRenderedPartsEqual(prev.message.parts, next.message.parts)) return false;
-  if (prev.message.metadata !== next.message.metadata) return false;
-  if (!arePendingApprovalValuesEqual(next.message, prev.pendingApprovalIds, next.pendingApprovalIds)) {
-    return false;
-  }
-  if (!areToolMapValuesEqual(prev.message, next.message, prev.subagentProgress, next.subagentProgress)) {
-    return false;
-  }
-  if (!areToolMapValuesEqual(prev.message, next.message, prev.subagentReportPaths, next.subagentReportPaths)) {
-    return false;
-  }
-  if (!areToolTimingValuesEqual(prev.message, next.message, prev.toolTimings, next.toolTimings)) {
-    return false;
-  }
-  if (prev.toolApprovalMode !== next.toolApprovalMode) return false;
-  if (prev.onToolApprovalModeChange !== next.onToolApprovalModeChange) return false;
-  if (prev.costSummaryByMessageId?.[prev.message.id] !== next.costSummaryByMessageId?.[next.message.id]) {
-    return false;
-  }
-  if (prev.isRefreshingCostSummary !== next.isRefreshingCostSummary) return false;
-  const prevCheckpointId = prev.checkpointRequestByMessageId?.get(prev.message.id);
-  const nextCheckpointId = next.checkpointRequestByMessageId?.get(next.message.id);
-  if (prevCheckpointId !== nextCheckpointId) return false;
-  if (
-    prevCheckpointId &&
-    prev.checkpointStatuses?.get(prevCheckpointId) !== next.checkpointStatuses?.get(prevCheckpointId)
-  ) {
-    return false;
-  }
-  if (prev.onRestoreCheckpoint !== next.onRestoreCheckpoint) return false;
-  if (prev.canEditUserMessages !== next.canEditUserMessages) return false;
-  if (prev.onForkFromAssistantMessage !== next.onForkFromAssistantMessage) return false;
+              const status = getActivityStatus(block.items, pendingApprovalIds);
+              const hasPendingApproval = status === "approval";
+              const toolCount = block.items.filter((item) =>
+                isToolUIPart(item.part),
+              ).length;
+              const isWaitingForFinalResponse =
+                isActivityGroupWaitingForFinalResponse({
+                  hasFollowingText: block.hasFollowingText,
+                  isLastMessage,
+                  activityStatus: status,
+                  isTurnActive: isAgentTurnActive,
+                });
+              return (
+                <AssistantActivityGroup
+                  key={`${message.id}-activity-${block.items[0]?.partIndex ?? blockIndex}`}
+                  toolCount={toolCount}
+                  durationMs={getActivityDurationMs(block.items, toolTimings, {
+                    isActivityComplete: !isWaitingForFinalResponse,
+                  })}
+                  isWaitingForFinalResponse={isWaitingForFinalResponse}
+                  autoCollapse={shouldAutoCollapseActivityGroup(
+                    block.hasFollowingText,
+                    hasPendingApproval,
+                  )}
+                  forceExpanded={shouldForceExpandActivityGroup(
+                    hasPendingApproval,
+                  )}
+                >
+                  {block.items.map(renderActivityItem)}
+                </AssistantActivityGroup>
+              );
+            })}
+            {showAssistantActions ? (
+              <AssistantMessageActions
+                message={message}
+                onForkFromAssistantMessage={
+                  !isEditing && !isForkingDisabled && onForkFromAssistantMessage
+                    ? handleForkFromAssistantMessage
+                    : undefined
+                }
+              />
+            ) : null}
+          </div>
+        )}
+      </div>
+    );
+  },
+  (prev, next) => {
+    if (prev.message.id !== next.message.id) return false;
+    if (prev.message.role !== next.message.role) return false;
+    if (prev.index !== next.index) return false;
+    if (prev.isLastMessage !== next.isLastMessage) return false;
+    if (prev.isDimmed !== next.isDimmed) return false;
+    if (prev.isEditing !== next.isEditing) return false;
+    if (prev.isForkingDisabled !== next.isForkingDisabled) return false;
 
-  return true;
-});
+    const prevEffectiveLoading = prev.isLastMessage ? prev.isLoading : false;
+    const nextEffectiveLoading = next.isLastMessage ? next.isLoading : false;
+    if (prevEffectiveLoading !== nextEffectiveLoading) return false;
+    const prevTurnActive = prev.isLastMessage
+      ? (prev.isAgentTurnActive ?? false)
+      : false;
+    const nextTurnActive = next.isLastMessage
+      ? (next.isAgentTurnActive ?? false)
+      : false;
+    if (prevTurnActive !== nextTurnActive) return false;
+
+    // An agent loop appends steps to one assistant message, so the "last message"
+    // can hold a hundred parts by the end of a run. Re-rendering it on every
+    // streaming commit repaints the entire run ~20×/sec and starves the main
+    // thread — which is what left the chat body frozen mid-run. The comparisons
+    // below already catch everything a streaming turn can change: part content
+    // and tool state via `areRenderedPartsEqual`, elapsed times via
+    // `areToolTimingValuesEqual`, and the loading/turn-active flags above.
+    if (!areRenderedPartsEqual(prev.message.parts, next.message.parts))
+      return false;
+    if (prev.message.metadata !== next.message.metadata) return false;
+    if (
+      !arePendingApprovalValuesEqual(
+        next.message,
+        prev.pendingApprovalIds,
+        next.pendingApprovalIds,
+      )
+    ) {
+      return false;
+    }
+    if (
+      !arePendingApprovalValuesEqual(
+        next.message,
+        prev.goalContractActionIds,
+        next.goalContractActionIds,
+      )
+    ) {
+      return false;
+    }
+    for (const part of next.message.parts) {
+      if (!isGoalContractProposalPart(part)) continue;
+      if (
+        prev.goalContractErrors?.get(part.toolCallId) !==
+        next.goalContractErrors?.get(part.toolCallId)
+      ) {
+        return false;
+      }
+    }
+    if (
+      !areToolMapValuesEqual(
+        prev.message,
+        next.message,
+        prev.subagentProgress,
+        next.subagentProgress,
+      )
+    ) {
+      return false;
+    }
+    if (
+      !areToolMapValuesEqual(
+        prev.message,
+        next.message,
+        prev.subagentReportPaths,
+        next.subagentReportPaths,
+      )
+    ) {
+      return false;
+    }
+    if (
+      !areToolTimingValuesEqual(
+        prev.message,
+        next.message,
+        prev.toolTimings,
+        next.toolTimings,
+      )
+    ) {
+      return false;
+    }
+    if (prev.toolApprovalMode !== next.toolApprovalMode) return false;
+    if (prev.onToolApprovalModeChange !== next.onToolApprovalModeChange)
+      return false;
+    if (
+      prev.costSummaryByMessageId?.[prev.message.id] !==
+      next.costSummaryByMessageId?.[next.message.id]
+    ) {
+      return false;
+    }
+    if (prev.isRefreshingCostSummary !== next.isRefreshingCostSummary)
+      return false;
+    const prevCheckpointId = prev.checkpointRequestByMessageId?.get(
+      prev.message.id,
+    );
+    const nextCheckpointId = next.checkpointRequestByMessageId?.get(
+      next.message.id,
+    );
+    if (prevCheckpointId !== nextCheckpointId) return false;
+    if (
+      prevCheckpointId &&
+      prev.checkpointStatuses?.get(prevCheckpointId) !==
+        next.checkpointStatuses?.get(prevCheckpointId)
+    ) {
+      return false;
+    }
+    if (prev.onRestoreCheckpoint !== next.onRestoreCheckpoint) return false;
+    if (prev.canEditUserMessages !== next.canEditUserMessages) return false;
+    if (prev.onForkFromAssistantMessage !== next.onForkFromAssistantMessage)
+      return false;
+
+    return true;
+  },
+);
 
 interface EmptyChatPromptStateProps {
   categories: readonly BusinessPromptCategory[];
@@ -1105,10 +1365,10 @@ function EmptyChatPromptState({
   const handleCategoryClick = React.useCallback(
     (categoryId: BusinessPromptCategory["id"]) => {
       setExpandedCategoryId((current) =>
-        current === categoryId ? null : categoryId
+        current === categoryId ? null : categoryId,
       );
     },
-    []
+    [],
   );
 
   return (
@@ -1149,8 +1409,9 @@ function EmptyChatPromptState({
                   </span>
                   <ChevronDown
                     aria-hidden="true"
-                    className={`mt-1 size-4 shrink-0 text-muted-foreground transition-transform ${isExpanded ? "rotate-180" : ""
-                      }`}
+                    className={`mt-1 size-4 shrink-0 text-muted-foreground transition-transform ${
+                      isExpanded ? "rotate-180" : ""
+                    }`}
                   />
                 </button>
                 <div
@@ -1158,13 +1419,17 @@ function EmptyChatPromptState({
                   role="region"
                   aria-label={`Prompt suggestions for ${category.title}`}
                   aria-hidden={!isExpanded}
-                  className={`grid overflow-hidden transition-[grid-template-rows] duration-200 ease-out ${isExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-                    }`}
+                  className={`grid overflow-hidden transition-[grid-template-rows] duration-200 ease-out ${
+                    isExpanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+                  }`}
                 >
                   <div className="min-h-0 overflow-hidden">
                     <div
-                      className={`mt-1 grid gap-0.5 py-1 pl-9 transition-opacity duration-150 ${isExpanded ? "opacity-100" : "pointer-events-none opacity-0"
-                        }`}
+                      className={`mt-1 grid gap-0.5 py-1 pl-9 transition-opacity duration-150 ${
+                        isExpanded
+                          ? "opacity-100"
+                          : "pointer-events-none opacity-0"
+                      }`}
                     >
                       {category.prompts.map((suggestion) => (
                         <button
@@ -1173,7 +1438,9 @@ function EmptyChatPromptState({
                           tabIndex={isExpanded ? 0 : -1}
                           aria-label={`Use prompt suggestion: ${suggestion.title}`}
                           className="w-full rounded-md px-2 py-1.5 text-left text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:text-foreground"
-                          onClick={() => handleSuggestionClick(suggestion.prompt)}
+                          onClick={() =>
+                            handleSuggestionClick(suggestion.prompt)
+                          }
                         >
                           {suggestion.title}
                         </button>
@@ -1205,6 +1472,11 @@ export function ChatBody({
   pendingApprovalIds,
   onApprove,
   onReject,
+  onApproveGoalContract,
+  onRequestGoalContractRevision,
+  goalContractActionIds,
+  goalContractErrors,
+  goalEvaluatorPicker,
   toolApprovalMode,
   onToolApprovalModeChange,
   subagentProgress,
@@ -1224,6 +1496,7 @@ export function ChatBody({
   emptyPromptCategories,
   emptyPromptLibraryKey,
   compactionSummary,
+  askQuestion,
 }: ChatBodyProps) {
   const scrollParentRef = React.useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = React.useRef(true);
@@ -1233,12 +1506,20 @@ export function ChatBody({
 
   const parsedApiError = React.useMemo(
     () => parseChatApiErrorMessage(error?.message),
-    [error?.message]
+    [error?.message],
   );
   const errorMessage = parsedApiError?.message ?? error?.message;
   const errorTitle = parsedApiError?.title;
   const errorActionUrl = parsedApiError?.actionUrl;
   const errorActionLabel = parsedApiError?.actionLabel;
+  const hasPendingGoalContractProposal = messages.some((message) =>
+    message.parts.some(
+      (part) =>
+        isGoalContractProposalPart(part) &&
+        "state" in part &&
+        (part.state === "input-available" || part.state === "input-streaming"),
+    ),
+  );
 
   /**
    * An agent loop is one `/api/chat` request per step, so `isLoading` drops to
@@ -1247,8 +1528,23 @@ export function ChatBody({
    * turn-active signal spans those gaps. Approvals are excluded: the turn is
    * still "active" while waiting on the user, but nothing is loading.
    */
+  // Same reasoning as approvals: the turn stays active while a questionnaire
+  // waits on the user, but nothing is loading.
+  const hasPendingAskQuestion = messages.some((message) =>
+    message.parts.some(
+      (part) =>
+        part.type === "tool-ask_question" &&
+        "state" in part &&
+        (part.state === "input-available" || part.state === "input-streaming"),
+    ),
+  );
+
   const showLoadingRow =
-    isLoading || (Boolean(isAgentTurnActive) && !(pendingApprovalIds && pendingApprovalIds.size > 0));
+    isLoading ||
+    (Boolean(isAgentTurnActive) &&
+      !(pendingApprovalIds && pendingApprovalIds.size > 0) &&
+      !hasPendingGoalContractProposal &&
+      !hasPendingAskQuestion);
 
   const rowItems = React.useMemo<ChatRenderItem[]>(() => {
     const rows = appendMessageRowsWithCompactionDivider(
@@ -1256,7 +1552,7 @@ export function ChatBody({
         groupConsecutiveActivityOnlyMessages: groupConsecutiveAssistantActivity,
       }),
       messages,
-      compactionSummary
+      compactionSummary,
     );
 
     if (showKernelPrompt) {
@@ -1386,138 +1682,166 @@ export function ChatBody({
   }, [rowItems.length, updateBottomState]);
 
   return (
-    <div className="relative min-h-0 min-w-0 flex-1">
-      <ConversationSelectionMentionPopover rootRef={scrollParentRef} />
-      <div
-        ref={scrollParentRef}
-        className="h-full min-w-0 overflow-x-hidden overflow-y-auto px-4"
-        onScroll={updateBottomState}
-      >
-        {showEmptyPromptState && emptyPromptCategories ? (
-          <EmptyChatPromptState
-            key={emptyPromptLibraryKey ?? viewKey}
-            categories={emptyPromptCategories}
-          />
-        ) : null}
+    <AskQuestionProvider value={askQuestion}>
+      <div className="relative min-h-0 min-w-0 flex-1">
+        <ConversationSelectionMentionPopover rootRef={scrollParentRef} />
         <div
-          className="relative min-w-0"
-          style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+          ref={scrollParentRef}
+          className="h-full min-w-0 overflow-x-hidden overflow-y-auto px-4"
+          onScroll={updateBottomState}
         >
-          {virtualItems.map((virtualRow) => {
-            const item = rowItems[virtualRow.index];
-            if (!item) return null;
+          {showEmptyPromptState && emptyPromptCategories ? (
+            <EmptyChatPromptState
+              key={emptyPromptLibraryKey ?? viewKey}
+              categories={emptyPromptCategories}
+            />
+          ) : null}
+          <div
+            className="relative min-w-0"
+            style={{ height: `${rowVirtualizer.getTotalSize()}px` }}
+          >
+            {virtualItems.map((virtualRow) => {
+              const item = rowItems[virtualRow.index];
+              if (!item) return null;
 
-            return (
-              <div
-                key={virtualRow.key}
-                ref={rowVirtualizer.measureElement}
-                data-index={virtualRow.index}
-                className="absolute left-0 top-0 w-full pb-4"
-                style={{ transform: `translateY(${virtualRow.start}px)` }}
-              >
-                {item.type === "message" && (
-                  <ChatMessageRow
-                    message={item.message}
-                    index={item.messageIndex}
-                    isLastMessage={item.messageIndex === messages.length - 1}
-                    isDimmed={
-                      !!editingState && editingState.messageId !== item.message.id
-                    }
-                    isEditing={editingState !== null}
-                    isLoading={isLoading && item.messageIndex === messages.length - 1}
-                    isAgentTurnActive={
-                      isAgentTurnActive && item.messageIndex === messages.length - 1
-                    }
-                    isForkingDisabled={isAgentTurnActive || isLoading}
-                    onUserMessageClick={onUserMessageClick}
-                    canEditUserMessages={canEditUserMessages}
-                    pendingApprovalIds={pendingApprovalIds}
-                    onApprove={onApprove}
-                    onReject={onReject}
-                    toolApprovalMode={toolApprovalMode}
-                    onToolApprovalModeChange={onToolApprovalModeChange}
-                    subagentProgress={subagentProgress}
-                    subagentReportPaths={subagentReportPaths}
-                    toolTimings={toolTimings}
-                    onOpenSubagentChat={onOpenSubagentChat}
-                    onOpenSubagentReport={onOpenSubagentReport}
-                    costSummaryByMessageId={costSummaryByMessageId}
-                    onDismissCostSummary={onDismissCostSummary}
-                    onRefreshCostSummary={onRefreshCostSummary}
-                    isRefreshingCostSummary={isRefreshingCostSummary}
-                    checkpointStatuses={checkpointStatuses}
-                    checkpointRequestByMessageId={checkpointRequestByMessageId}
-                    onRestoreCheckpoint={onRestoreCheckpoint}
-                    onForkFromAssistantMessage={onForkFromAssistantMessage}
-                  />
-                )}
-
-                {item.type === "activityRun" && (
-                  <AssistantActivityRunRow
-                    item={item}
-                    isLastMessage={item.lastMessageIndex === messages.length - 1}
-                    isLoading={isLoading && item.lastMessageIndex === messages.length - 1}
-                    isAgentTurnActive={
-                      isAgentTurnActive && item.lastMessageIndex === messages.length - 1
-                    }
-                    pendingApprovalIds={pendingApprovalIds}
-                    onApprove={onApprove}
-                    onReject={onReject}
-                    toolApprovalMode={toolApprovalMode}
-                    onToolApprovalModeChange={onToolApprovalModeChange}
-                    subagentProgress={subagentProgress}
-                    subagentReportPaths={subagentReportPaths}
-                    toolTimings={toolTimings}
-                    onOpenSubagentChat={onOpenSubagentChat}
-                    onOpenSubagentReport={onOpenSubagentReport}
-                  />
-                )}
-
-                {item.type === "kernelPrompt" && (
-                  <div className="flex justify-start">
-                    <NoKernelPrompt
-                      onConnect={onOpenKernelDropdown}
-                      onDismiss={onDismissKernelPrompt}
+              return (
+                <div
+                  key={virtualRow.key}
+                  ref={rowVirtualizer.measureElement}
+                  data-index={virtualRow.index}
+                  className="absolute left-0 top-0 w-full pb-4"
+                  style={{ transform: `translateY(${virtualRow.start}px)` }}
+                >
+                  {item.type === "message" && (
+                    <ChatMessageRow
+                      message={item.message}
+                      index={item.messageIndex}
+                      isLastMessage={item.messageIndex === messages.length - 1}
+                      isDimmed={
+                        !!editingState &&
+                        editingState.messageId !== item.message.id
+                      }
+                      isEditing={editingState !== null}
+                      isLoading={
+                        isLoading && item.messageIndex === messages.length - 1
+                      }
+                      isAgentTurnActive={
+                        isAgentTurnActive &&
+                        item.messageIndex === messages.length - 1
+                      }
+                      isForkingDisabled={isAgentTurnActive || isLoading}
+                      onUserMessageClick={onUserMessageClick}
+                      canEditUserMessages={canEditUserMessages}
+                      pendingApprovalIds={pendingApprovalIds}
+                      onApprove={onApprove}
+                      onReject={onReject}
+                      onApproveGoalContract={onApproveGoalContract}
+                      onRequestGoalContractRevision={
+                        onRequestGoalContractRevision
+                      }
+                      goalContractActionIds={goalContractActionIds}
+                      goalContractErrors={goalContractErrors}
+                      goalEvaluatorPicker={goalEvaluatorPicker}
+                      toolApprovalMode={toolApprovalMode}
+                      onToolApprovalModeChange={onToolApprovalModeChange}
+                      subagentProgress={subagentProgress}
+                      subagentReportPaths={subagentReportPaths}
+                      toolTimings={toolTimings}
+                      onOpenSubagentChat={onOpenSubagentChat}
+                      onOpenSubagentReport={onOpenSubagentReport}
+                      costSummaryByMessageId={costSummaryByMessageId}
+                      onDismissCostSummary={onDismissCostSummary}
+                      onRefreshCostSummary={onRefreshCostSummary}
+                      isRefreshingCostSummary={isRefreshingCostSummary}
+                      checkpointStatuses={checkpointStatuses}
+                      checkpointRequestByMessageId={
+                        checkpointRequestByMessageId
+                      }
+                      onRestoreCheckpoint={onRestoreCheckpoint}
+                      onForkFromAssistantMessage={onForkFromAssistantMessage}
                     />
-                  </div>
-                )}
+                  )}
 
-                {item.type === "loading" && <LoadingMessage />}
+                  {item.type === "activityRun" && (
+                    <AssistantActivityRunRow
+                      item={item}
+                      isLastMessage={
+                        item.lastMessageIndex === messages.length - 1
+                      }
+                      isLoading={
+                        isLoading &&
+                        item.lastMessageIndex === messages.length - 1
+                      }
+                      isAgentTurnActive={
+                        isAgentTurnActive &&
+                        item.lastMessageIndex === messages.length - 1
+                      }
+                      pendingApprovalIds={pendingApprovalIds}
+                      onApprove={onApprove}
+                      onReject={onReject}
+                      onApproveGoalContract={onApproveGoalContract}
+                      onRequestGoalContractRevision={
+                        onRequestGoalContractRevision
+                      }
+                      goalContractActionIds={goalContractActionIds}
+                      goalContractErrors={goalContractErrors}
+                      goalEvaluatorPicker={goalEvaluatorPicker}
+                      toolApprovalMode={toolApprovalMode}
+                      onToolApprovalModeChange={onToolApprovalModeChange}
+                      subagentProgress={subagentProgress}
+                      subagentReportPaths={subagentReportPaths}
+                      toolTimings={toolTimings}
+                      onOpenSubagentChat={onOpenSubagentChat}
+                      onOpenSubagentReport={onOpenSubagentReport}
+                    />
+                  )}
 
-                {item.type === "compactionDivider" && (
-                  <CompactionDivider summary={item.summary} />
-                )}
-
-                {item.type === "error" && (
-                  <div className="flex justify-end">
-                    <div className="max-w-[80%]">
-                      <ErrorCard
-                        title={item.title}
-                        message={item.message}
-                        actionUrl={item.actionUrl}
-                        actionLabel={item.actionLabel}
+                  {item.type === "kernelPrompt" && (
+                    <div className="flex justify-start">
+                      <NoKernelPrompt
+                        onConnect={onOpenKernelDropdown}
+                        onDismiss={onDismissKernelPrompt}
                       />
                     </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
+                  )}
 
-      {!isAtBottom && messages.length > 0 && (
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          className="absolute bottom-3 right-3 z-10 h-7 w-7 rounded-full bg-background/95 text-muted-foreground shadow-md backdrop-blur hover:text-foreground [&_svg]:size-3.5"
-          aria-label="Scroll to bottom"
-          onClick={scrollToBottom}
-        >
-          <ArrowDown />
-        </Button>
-      )}
-    </div>
+                  {item.type === "loading" && <LoadingMessage />}
+
+                  {item.type === "compactionDivider" && (
+                    <CompactionDivider summary={item.summary} />
+                  )}
+
+                  {item.type === "error" && (
+                    <div className="flex justify-end">
+                      <div className="max-w-[80%]">
+                        <ErrorCard
+                          title={item.title}
+                          message={item.message}
+                          actionUrl={item.actionUrl}
+                          actionLabel={item.actionLabel}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {!isAtBottom && messages.length > 0 && (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="absolute bottom-3 right-3 z-10 h-7 w-7 rounded-full bg-background/95 text-muted-foreground shadow-md backdrop-blur hover:text-foreground [&_svg]:size-3.5"
+            aria-label="Scroll to bottom"
+            onClick={scrollToBottom}
+          >
+            <ArrowDown />
+          </Button>
+        )}
+      </div>
+    </AskQuestionProvider>
   );
 }

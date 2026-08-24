@@ -45,7 +45,7 @@ describe("user file settings storage", () => {
 
     const raw = await readFile(path.join(tempDirectory, "settings.json"), "utf8");
     expect(JSON.parse(raw)).toEqual({
-      version: 1,
+      version: 2,
       settings: {
         onboarding: {
           signInStepCompleted: false,
@@ -121,7 +121,7 @@ describe("user file settings storage", () => {
 
     const backedUp = await readFile(path.join(backupDirectory, backupFiles[0]!), "utf8");
     expect(JSON.parse(backedUp)).toEqual({
-      version: 1,
+      version: 2,
       settings: {
         onboarding: {
           signInStepCompleted: false,

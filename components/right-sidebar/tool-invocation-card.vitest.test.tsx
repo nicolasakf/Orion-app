@@ -101,18 +101,18 @@ describe("ToolInvocationCard", () => {
     dispatchSpy.mockRestore();
   });
 
-  it("shows the model-facing Plotly inspection image and opens it full screen", () => {
+  it("shows the model-facing output inspection image and opens it full screen", () => {
     render(
       <ToolInvocationCard
-        toolName="inspect_plotly_output"
+        toolName="inspect_output"
         args={{ cellIndex: 2, outputIndex: 1 }}
         result={{
-          text: "[Plotly rendered inspection: cell 2, output 1]",
+          text: "[Rendered output inspection: cell 2, output 1]",
           visuals: [{
-            visualId: "plotly-2-1",
+            visualId: "output-2-1",
             mimeType: "image/png",
             data: "cG5n",
-            source: "inspect_plotly_output",
+            source: "inspect_output",
             cellIndex: 2,
             outputIndex: 1,
             byteLength: 3,
@@ -122,14 +122,14 @@ describe("ToolInvocationCard", () => {
       />
     );
 
-    const preview = screen.getByAltText("Rendered Plotly preview");
+    const preview = screen.getByAltText("Rendered output preview");
     expect(preview).toHaveAttribute("src", "data:image/png;base64,cG5n");
 
-    fireEvent.click(screen.getByRole("button", { name: "Open rendered Plotly preview in full screen" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open rendered output preview in full screen" }));
 
-    expect(screen.getByAltText("Rendered Plotly preview in full screen")).toHaveAttribute(
+    expect(screen.getByAltText("Rendered output preview in full screen")).toHaveAttribute(
       "data-visual-id",
-      "plotly-2-1"
+      "output-2-1"
     );
   });
 });

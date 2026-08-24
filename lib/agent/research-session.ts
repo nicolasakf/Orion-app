@@ -5,7 +5,7 @@ export const RESEARCH_SESSION_MAX_STEPS = 60;
 export const RESEARCH_SESSION_BUDGET_WARNING_STEP = Math.floor(RESEARCH_SESSION_MAX_STEPS * 0.9);
 export const RESEARCH_SESSION_MAX_STALLED_STEPS = 2;
 
-export type ResearchSessionActivation = "research-mode" | "slash";
+export type ResearchSessionActivation = "explore-mode" | "slash";
 export type ResearchSessionIntensity = "light" | "standard" | "deep";
 export type ResearchNudge =
   | "document_evidence"
@@ -22,7 +22,10 @@ export const ResearchNudgeSchema = z.enum([
 
 export const ResearchSessionSnapshotSchema = z.object({
   active: z.boolean().catch(false).default(false),
-  activation: z.enum(["research-mode", "slash"]).nullable().catch(null).default(null),
+  activation: z.preprocess(
+    (value) => (value === "research-mode" ? "explore-mode" : value),
+    z.enum(["explore-mode", "slash"]).nullable().catch(null).default(null),
+  ),
   objective: z.string().catch("").default(""),
   profile: z.string().catch("general").default("general"),
   intensity: z.enum(["light", "standard", "deep"]).catch("standard").default("standard"),
@@ -86,7 +89,7 @@ const SUBSTANTIVE_TOOL_NAMES = new Set([
   "read_notebook",
   "read_cell",
   "read_cell_output",
-  "inspect_plotly_output",
+  "inspect_output",
   "insert_cell",
   "delete_cell",
   "overwrite_cell_source",
@@ -103,12 +106,15 @@ const SUBSTANTIVE_TOOL_NAMES = new Set([
   "delegate",
 ]);
 
+/** Tools that return kernel output when asked to run the cells they wrote. */
+const CELL_MUTATION_TOOL_NAMES = new Set(["insert_cell", "overwrite_cell_source"]);
+
 const EVIDENCE_TOOL_NAMES = new Set([
   "execute_cell",
   "execute_code",
   "read_cell",
   "read_cell_output",
-  "inspect_plotly_output",
+  "inspect_output",
   "read_notebook",
   "bash",
   "web_fetch",
@@ -130,8 +136,8 @@ export function createResearchSession(options: {
   return {
     ...EMPTY_SESSION,
     active: true,
-    activation: options.activation ?? "research-mode",
-    objective: options.objective.trim() || "Research mode investigation",
+    activation: options.activation ?? "explore-mode",
+    objective: options.objective.trim() || "Explore mode investigation",
     profile: options.profile?.trim() || "general",
     intensity: options.intensity ?? "standard",
   };
@@ -189,6 +195,17 @@ function outputHasEvidence(output: unknown): boolean {
   return Object.keys(record).length > 0;
 }
 
+/**
+ * Whether a cell mutation call asked to run the cells it wrote.
+ *
+ * `insert_cell` and `overwrite_cell_source` return kernel output when
+ * `execute` is true, so those calls are as much evidence as `execute_cell` is.
+ */
+function inputRequestedExecution(input: unknown): boolean {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return false;
+  return (input as Record<string, unknown>).execute === true;
+}
+
 function inputHasInsertedMarkdown(input: unknown): boolean {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return false;
   const cells = (input as Record<string, unknown>).cells;
@@ -244,10 +261,13 @@ export function getResearchTurnActivity(message: UIMessage | undefined): Researc
     const succeeded = toolPartSucceeded(part);
     if (succeeded && SUBSTANTIVE_TOOL_NAMES.has(toolName)) successfulSubstantiveToolCount += 1;
     const output = "output" in part ? part.output : undefined;
-    if (succeeded && EVIDENCE_TOOL_NAMES.has(toolName) && outputHasEvidence(output)) {
+    const input = "input" in part ? part.input : undefined;
+    const producesEvidence =
+      EVIDENCE_TOOL_NAMES.has(toolName) ||
+      (CELL_MUTATION_TOOL_NAMES.has(toolName) && inputRequestedExecution(input));
+    if (succeeded && producesEvidence && outputHasEvidence(output)) {
       evidenceProduced = true;
     }
-    const input = "input" in part ? part.input : undefined;
     if (
       succeeded &&
       ((toolName === "insert_cell" && inputHasInsertedMarkdown(input)) ||
@@ -360,7 +380,7 @@ export function summarizeResearchSessionForPrompt(options: {
   if (!session.active) return "";
 
   const lines = [
-    "## Research Session",
+    "## Explore Session",
     "",
     `Objective: ${session.objective}`,
     `Profile: ${session.profile}; step ${session.stepCount}/${RESEARCH_SESSION_MAX_STEPS}.`,

@@ -7,15 +7,11 @@
 
 export const TOOL_OUTPUT_TEXT_CHAR_BUDGET = 10000 * 4;  // rule of thumb: 4 chars per token
 /**
- * Base64 costs roughly one token per 1.8 characters, so this cap is worth about
- * 17k tokens — enough to read a chart, cheap enough to carry.
- *
- * The previous 200k budget was worth ~110k tokens *per preview*: a single
- * `execute_cell` step in session 1786825713795 returned two 128k-char figures,
- * both under the cap, and one call cost $1.66. `resizeRasterPreview` downscales
- * to fit this budget rather than dropping the preview outright.
+ * A one-million-character cap preserves enough detail for models to read dense
+ * visual output while the raster-preparation path still downsizes larger images
+ * before they enter context.
  */
-export const TOOL_OUTPUT_IMAGE_BASE64_CHAR_BUDGET = 30_000;
+export const TOOL_OUTPUT_IMAGE_BASE64_CHAR_BUDGET = 1_000_000;
 export const TOOL_OUTPUT_MAX_OMITTED_RATIO = 1 / 3;
 
 /**

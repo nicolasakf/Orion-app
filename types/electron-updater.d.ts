@@ -20,6 +20,19 @@ interface OrionDesktopWorkspacePathRequest {
   jupyterBaseUrl: string;
 }
 
+interface OrionDesktopCaptureRegionRequest {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface OrionDesktopCaptureRegionResult {
+  data: string;
+  width: number;
+  height: number;
+}
+
 interface OrionDesktopShellBridge {
   setWindowBackgroundColor: (color: string) => Promise<void>;
   showProjectFolderPicker: () => Promise<
@@ -29,6 +42,9 @@ interface OrionDesktopShellBridge {
   revealWorkspacePath: (request: OrionDesktopWorkspacePathRequest) => Promise<void>;
   openWorkspacePath: (request: OrionDesktopWorkspacePathRequest) => Promise<void>;
   reloadIgnoringCache: () => Promise<void>;
+  capturePageRegion: (
+    request: OrionDesktopCaptureRegionRequest
+  ) => Promise<OrionDesktopCaptureRegionResult>;
   onOpenSettings: (listener: () => void) => () => void;
   onReloadRequested: (
     listener: (options?: { bypassCache?: boolean }) => void

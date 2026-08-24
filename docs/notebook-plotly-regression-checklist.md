@@ -15,8 +15,8 @@ Use this checklist after changes to notebook output rendering, Plotly MIME handl
 - Repeated legend toggles do not move the chart into a tiny viewport.
 - Hover labels stay anchored near points/slices and do not jump to page corners.
 - Plot remains readable after notebook scroll, cell focus changes, and theme switch.
-- `inspect_plotly_output` returns the current rendered chart and reports the same output, SVG, and plot-area dimensions visible in the UI.
-- `inspect_plotly_output` reports intentional test collisions/overflow and reports none after they are repaired.
+- `inspect_output` returns the current rendered chart and reports the same output, SVG, and plot-area dimensions visible in the UI.
+- `inspect_output` reports intentional test collisions/overflow and reports none after they are repaired.
 
 ## Modebar / Popover Checks
 - Modebar remains within the notebook output area (not pinned to far page edges).

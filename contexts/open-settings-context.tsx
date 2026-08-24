@@ -19,6 +19,10 @@ interface OpenSettingsContextValue {
   openUserSettingsFile: () => void;
   /** Registers the handler that opens the user settings file in the editor. */
   registerOpenUserSettingsFileHandler: (handler: (() => void) | null) => void;
+  /** Opens `ORION.md` in the main editor. */
+  openPersonalContextFile: () => void;
+  /** Registers the handler that opens `ORION.md` in the editor. */
+  registerOpenPersonalContextFileHandler: (handler: (() => void) | null) => void;
 }
 
 const OpenSettingsContext =
@@ -30,6 +34,7 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
   const [initialAgentSection, setInitialAgentSection] =
     React.useState<AgentSettingsSection | null>(null);
   const openUserSettingsFileHandlerRef = React.useRef<(() => void) | null>(null);
+  const openPersonalContextFileHandlerRef = React.useRef<(() => void) | null>(null);
 
   /** Opens the settings dialog from the desktop menu or keyboard shortcut. */
   React.useEffect(() => {
@@ -96,6 +101,17 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
     openUserSettingsFileHandlerRef.current?.();
   }, []);
 
+  const registerOpenPersonalContextFileHandler = React.useCallback(
+    (handler: (() => void) | null) => {
+      openPersonalContextFileHandlerRef.current = handler;
+    },
+    [],
+  );
+
+  const openPersonalContextFile = React.useCallback(() => {
+    openPersonalContextFileHandlerRef.current?.();
+  }, []);
+
   const value = React.useMemo(
     () => ({
       open,
@@ -105,6 +121,8 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
       initialAgentSection,
       openUserSettingsFile,
       registerOpenUserSettingsFileHandler,
+      openPersonalContextFile,
+      registerOpenPersonalContextFileHandler,
     }),
     [
       open,
@@ -114,6 +132,8 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
       initialAgentSection,
       openUserSettingsFile,
       registerOpenUserSettingsFileHandler,
+      openPersonalContextFile,
+      registerOpenPersonalContextFileHandler,
     ],
   );
 

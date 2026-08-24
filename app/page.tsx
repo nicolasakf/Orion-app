@@ -82,6 +82,7 @@ import {
 import { EditorReloadDialog } from "@/components/editor-reload-dialog";
 import { FileNotFoundDialog } from "@/components/file-not-found-dialog";
 import { useJupyterShellReady } from "@/hooks/use-jupyter-shell-ready";
+import { useRegisterOpenPersonalContextFile } from "@/hooks/use-register-open-personal-context-file";
 import { useRegisterOpenUserSettingsFile } from "@/hooks/use-register-open-user-settings-file";
 import {
   OpenSettingsProvider,
@@ -111,7 +112,7 @@ import {
   savePanelVisibilityState,
   type PanelVisibilityState,
 } from "@/lib/ui-session-state";
-import { isUserSettingsEditorPath } from "@/lib/settings/user-settings-editor-path";
+import { isOrionHomeEditorPath } from "@/lib/local/orion-home-editor-path";
 import type {
   OpenDocumentSaveResult,
   OpenDocumentSnapshotProvider,
@@ -278,13 +279,14 @@ function parseStoredCurrentFile(raw: string | null): ActiveFile | null {
   }
 }
 
-/** Registers the handler that opens user settings JSON from the settings dialog. */
-function RegisterOpenUserSettingsFile({
+/** Registers handlers that open virtual ~/.orion files from the settings dialog. */
+function RegisterOpenOrionHomeFiles({
   onOpenFile,
 }: {
   onOpenFile: (file: ActiveFile) => void;
 }) {
   useRegisterOpenUserSettingsFile({ onOpenFile });
+  useRegisterOpenPersonalContextFile({ onOpenFile });
   return null;
 }
 
@@ -443,7 +445,7 @@ function MobileLayout({
 
   return (
     <div className="flex flex-col h-dvh w-full overflow-hidden">
-      <RegisterOpenUserSettingsFile onOpenFile={handleMobileFileSelect} />
+      <RegisterOpenOrionHomeFiles onOpenFile={handleMobileFileSelect} />
       <MobileToolbar
         title={
           activeMobileView === "chat"
@@ -550,6 +552,7 @@ function MobileLayout({
           <TerminalPanel
             kernelService={kernelService}
             workspaceDirectory={workspaceDirectory}
+            rootDirectory={jupyterRootDirectory}
             onOpenKernelDropdown={
               !currentKernel ? openConnectionDialog : onOpenKernelDropdown
             }
@@ -1349,7 +1352,7 @@ export default function Page() {
    */
   const handleEditorFileLoadError = useCallback(
     (failedFilepath: string, error?: unknown): boolean => {
-      if (isUserSettingsEditorPath(failedFilepath)) {
+      if (isOrionHomeEditorPath(failedFilepath)) {
         return false;
       }
 
@@ -3020,7 +3023,7 @@ export default function Page() {
       <NotebookViewModeProvider>
         <MarkdownEditorViewModeProvider>
           <div className="h-screen">
-            <RegisterOpenUserSettingsFile onOpenFile={handleFileSelect} />
+            <RegisterOpenOrionHomeFiles onOpenFile={handleFileSelect} />
             {hasLoadedPanelVisibilityState ? (
               isBusinessExperience ? (
                 <BusinessShell
@@ -3380,6 +3383,7 @@ export default function Page() {
                       <TerminalPanel
                         kernelService={kernelService}
                         workspaceDirectory={workspaceDirectory}
+                        rootDirectory={jupyterRootDirectory}
                         onOpenKernelDropdown={
                           !currentKernel
                             ? openConnectionDialog

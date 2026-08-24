@@ -3,9 +3,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Monaco } from "@monaco-editor/react";
 import { extname } from "path";
+import { toast } from "sonner";
 
 import { getMonacoLanguageForFilepath } from "@/lib/editor/monaco-language";
 import type { KernelService } from "@/lib/kernel/kernel-service";
+import { isOrionHomeEditorPath } from "@/lib/local/orion-home-editor-path";
+import {
+  isPersonalContextEditorPath,
+  PERSONAL_CONTEXT_FILE_CHANGED_EVENT,
+} from "@/lib/onboarding/personal-context-editor-path";
+import {
+  loadPersonalContextFileFromApi,
+  savePersonalContextFileToApi,
+} from "@/lib/onboarding/personal-context-file.client";
 import { isUserSettingsEditorPath } from "@/lib/settings/user-settings-editor-path";
 import {
   loadUserSettingsRawFileFromApi,
@@ -116,7 +126,7 @@ export function useTextFileModel({
         return true;
       }
 
-      if (!isUserSettingsEditorPath(filepath) && !kernelService) {
+      if (!isOrionHomeEditorPath(filepath) && !kernelService) {
         fileContentRef.current = "";
         setFileContentState("");
         setFileLanguage("plaintext");
@@ -129,13 +139,24 @@ export function useTextFileModel({
         setFileLanguage(
           isUserSettingsEditorPath(filepath)
             ? "json"
-            : pathExtension === "ipynb" && openNotebookAsText
-              ? "json"
-              : getMonacoLanguageForFilepath(filepath),
+            : isPersonalContextEditorPath(filepath)
+              ? "markdown"
+              : pathExtension === "ipynb" && openNotebookAsText
+                ? "json"
+                : getMonacoLanguageForFilepath(filepath),
         );
 
         if (isUserSettingsEditorPath(filepath)) {
           const file = await loadUserSettingsRawFileFromApi();
+          fileContentRef.current = file.content;
+          setFileContentState(file.content);
+          isDirtyRef.current = false;
+          onUnsavedChangesChange?.(false);
+          return true;
+        }
+
+        if (isPersonalContextEditorPath(filepath)) {
+          const file = await loadPersonalContextFileFromApi();
           fileContentRef.current = file.content;
           setFileContentState(file.content);
           isDirtyRef.current = false;
@@ -206,9 +227,29 @@ export function useTextFileModel({
     void loadFileFromSource(filepath ?? "");
   }, [filepath, loadFileFromSource]);
 
+  useEffect(() => {
+    if (!isPersonalContextEditorPath(filepath)) return;
+
+    const handlePersonalContextFileChanged = () => {
+      if (isDirtyRef.current) return;
+      void loadFileFromSource(filepath ?? "");
+    };
+
+    window.addEventListener(
+      PERSONAL_CONTEXT_FILE_CHANGED_EVENT,
+      handlePersonalContextFileChanged,
+    );
+    return () => {
+      window.removeEventListener(
+        PERSONAL_CONTEXT_FILE_CHANGED_EVENT,
+        handlePersonalContextFileChanged,
+      );
+    };
+  }, [filepath, loadFileFromSource]);
+
   const documentSync = useActiveDocumentSync({
     path:
-      filepath && !isUserSettingsEditorPath(filepath)
+      filepath && !isOrionHomeEditorPath(filepath)
         ? filepath
         : null,
     contentsManager: kernelService?.getContentsManager() ?? null,
@@ -264,7 +305,7 @@ export function useTextFileModel({
     async (path: string): Promise<OpenDocumentSaveResult> => {
       if (!filepath || path !== filepath) return { status: "not-open" };
       if (!isDirtyRef.current) return { status: "clean" };
-      if (!isUserSettingsEditorPath(filepath) && !kernelService) {
+      if (!isOrionHomeEditorPath(filepath) && !kernelService) {
         return {
           status: "error",
           message: "Cannot save the open text editor without a Jupyter connection.",
@@ -284,6 +325,16 @@ export function useTextFileModel({
           }
           window.dispatchEvent(new CustomEvent("orion:user-settings-file-changed"));
           console.log("User settings file saved successfully");
+          return { status: "saved" };
+        }
+
+        if (isPersonalContextEditorPath(filepath)) {
+          await savePersonalContextFileToApi(contentToSave);
+          if (dirtyVersionRef.current === dirtyVersionToSave) {
+            markClean();
+          }
+          window.dispatchEvent(new CustomEvent(PERSONAL_CONTEXT_FILE_CHANGED_EVENT));
+          console.log("Personal context file saved successfully");
           return { status: "saved" };
         }
 
@@ -329,6 +380,9 @@ export function useTextFileModel({
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.error("Error saving file:", error);
+        if (isPersonalContextEditorPath(filepath)) {
+          toast.error(message);
+        }
         return { status: "error", message };
       }
     },

@@ -1,4 +1,4 @@
-import { Bot, Brain, Bug, DollarSign, Minimize2, type LucideIcon } from "lucide-react";
+import { Bot, Brain, Bug, DollarSign, Minimize2, Target, type LucideIcon } from "lucide-react";
 
 /** GitHub issues page for reporting bugs in Orion. */
 export const ORION_GITHUB_ISSUES_URL = "https://github.com/nicolasakf/Orion-app/issues/new";
@@ -31,6 +31,13 @@ export interface SlashCommand {
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
+  {
+    name: "goal",
+    label: "/goal",
+    description: "Set a measurable goal with independent artifact review",
+    icon: Target,
+    category: "builtin",
+  },
   {
     name: "compact",
     label: "/compact",

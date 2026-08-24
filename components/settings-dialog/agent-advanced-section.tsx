@@ -10,6 +10,10 @@ import {
 } from "@/components/settings-dialog/settings-form-fields";
 import { SettingsSectionLayout } from "@/components/settings-dialog/settings-section-layout";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import {
+  MAX_MAX_QUESTIONS_PER_ASK,
+  MIN_MAX_QUESTIONS_PER_ASK,
+} from "@/lib/settings/schema";
 import type { AgentSettingsSection } from "@/components/settings-dialog/types";
 
 /** Agent advanced settings sections backed by `settings.agent` in settings.json. */
@@ -54,6 +58,17 @@ export function AgentAdvancedSection({ section }: { section: AgentSettingsSectio
                     updateAgent("execution", { maxParallelReadOnlyCalls: value })
                   }
                 />
+                <SettingsNumberField
+                  id="agent-max-questions-per-ask"
+                  label="Maximum questions per ask"
+                  description="Maximum questions Orion may put in one questionnaire when it asks you to clarify something in the chat."
+                  value={agent.execution.maxQuestionsPerAsk}
+                  min={MIN_MAX_QUESTIONS_PER_ASK}
+                  max={MAX_MAX_QUESTIONS_PER_ASK}
+                  onChange={(value) =>
+                    updateAgent("execution", { maxQuestionsPerAsk: value })
+                  }
+                />
               </div>
             </div>
             <Separator />
@@ -73,7 +88,7 @@ export function AgentAdvancedSection({ section }: { section: AgentSettingsSectio
                 <SettingsNumberField
                   id="agent-image-base64-char-budget"
                   label="Image base64 character budget"
-                  description="Maximum base64 characters for image tool outputs (plots, previews). Images above this limit are omitted from context because they use many tokens."
+                  description="Maximum base64 characters for image tool outputs (plots, previews). Larger model-facing previews are resized to fit and omitted only when they cannot be reduced safely."
                   value={agent.toolOutput.imageBase64CharBudget}
                   min={1}
                   onChange={(value) =>

@@ -1,5 +1,7 @@
 import { isToolUIPart, type UIMessage } from "ai";
 
+import { isGoalContractProposalPart } from "@/lib/agent/goals/contract-author";
+
 export interface ToolTiming {
   startedAt: number;
   endedAt?: number;
@@ -32,6 +34,10 @@ export type AssistantRenderBlock =
       item: AssistantPartWithIndex & {
         part: Extract<UIMessage["parts"][number], { type: "text" }>;
       };
+    }
+  | {
+      type: "goalContractProposal";
+      item: AssistantPartWithIndex;
     };
 
 export type AssistantActivityMessageBlock =
@@ -50,7 +56,7 @@ export type AssistantActivityMessageBlock =
 
 /** True when a message part renders inside the compact activity group. */
 export function isAssistantActivityPart(part: UIMessage["parts"][number]): boolean {
-  if (isToolUIPart(part)) return true;
+  if (isToolUIPart(part)) return !isGoalContractProposalPart(part);
   return part.type === "reasoning" && "text" in part && Boolean(part.text);
 }
 
@@ -195,6 +201,17 @@ export function buildAssistantActivityMessageBlocks(
       runEndIndex++;
     }
 
+    const runHasGoalContractProposal = messages
+      .slice(runStartIndex, runEndIndex)
+      .some((candidate) => candidate.parts.some(isGoalContractProposalPart));
+    if (runHasGoalContractProposal) {
+      for (let index = runStartIndex; index < runEndIndex; index++) {
+        blocks.push({ type: "message", message: messages[index], messageIndex: index });
+      }
+      messageIndex = runEndIndex;
+      continue;
+    }
+
     if (!assistantRunHasActivity(messages, runStartIndex, runEndIndex)) {
       for (let index = runStartIndex; index < runEndIndex; index++) {
         blocks.push({ type: "message", message: messages[index], messageIndex: index });
@@ -239,6 +256,36 @@ export function buildAssistantActivityMessageBlocks(
 
 /** Build render blocks that group contiguous reasoning/tool activity. */
 export function buildAssistantRenderBlocks(parts: UIMessage["parts"]): AssistantRenderBlock[] {
+  if (parts.some(isGoalContractProposalPart)) {
+    const blocks: AssistantRenderBlock[] = [];
+    let pendingActivity: AssistantPartWithIndex[] = [];
+
+    /** Flush ordinary investigation activity before a proposal or text boundary. */
+    const flushActivity = (hasFollowingText: boolean) => {
+      if (pendingActivity.length === 0) return;
+      blocks.push({ type: "activityGroup", items: pendingActivity, hasFollowingText });
+      pendingActivity = [];
+    };
+
+    parts.forEach((part, partIndex) => {
+      if (isGoalContractProposalPart(part)) {
+        flushActivity(false);
+        blocks.push({ type: "goalContractProposal", item: { part, partIndex } });
+        return;
+      }
+      if (isAssistantActivityPart(part)) {
+        pendingActivity.push({ part, partIndex });
+        return;
+      }
+      if (isRenderableAssistantText(part)) {
+        flushActivity(true);
+        blocks.push({ type: "text", item: { part, partIndex } });
+      }
+    });
+    flushActivity(false);
+    return blocks;
+  }
+
   const blocks: AssistantRenderBlock[] = [];
   const finalTextIndex = (() => {
     for (let index = parts.length - 1; index >= 0; index--) {

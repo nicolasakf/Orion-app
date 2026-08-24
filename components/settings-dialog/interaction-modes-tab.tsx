@@ -18,10 +18,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { SettingsInfoLabel } from "@/components/settings-dialog/settings-info-label";
 import {
-  SettingsInfoLabel,
-} from "@/components/settings-dialog/settings-info-label";
-import { SettingsSwitchField } from "@/components/settings-dialog/settings-form-fields";
+  SettingsColorField,
+  SettingsColorListField,
+  SettingsNumberField,
+  SettingsSwitchField,
+} from "@/components/settings-dialog/settings-form-fields";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
 import {
   getDefaultInteractionModeConfig,
@@ -46,7 +49,7 @@ const TOOL_LABELS: Record<OrionToolName, string> = {
   edit_orion_metadata: "Edit Orion metadata",
   execute_cell: "Execute cell",
   read_cell_output: "Read cell output",
-  inspect_plotly_output: "Inspect Plotly output",
+  inspect_output: "Inspect output",
   execute_code: "Execute code",
   bash: "Bash",
   await_command: "Await command",
@@ -60,6 +63,7 @@ const TOOL_LABELS: Record<OrionToolName, string> = {
   delegate: "Delegate",
   load_skill: "Load skill",
   connections: "Connections",
+  ask_question: "Ask question",
 };
 
 const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
@@ -70,7 +74,7 @@ const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
       "read_notebook",
       "read_cell",
       "read_cell_output",
-      "inspect_plotly_output",
+      "inspect_output",
       "insert_cell",
       "delete_cell",
       "overwrite_cell_source",
@@ -94,7 +98,7 @@ const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
   },
   {
     label: "App",
-    tools: ["reload_page", "update_memory"],
+    tools: ["reload_page", "update_memory", "ask_question"],
   },
   {
     label: "Web and Extensions",
@@ -121,7 +125,7 @@ function makeCustomModeId(label: string, existingIds: Set<string>): string {
 function createCustomMode(
   label: string,
   baseMode: InteractionModeBase,
-  existing: InteractionModeConfig[]
+  existing: InteractionModeConfig[],
 ): InteractionModeConfig {
   const defaults = getDefaultInteractionModeConfig(baseMode);
   return {
@@ -137,11 +141,15 @@ function createCustomMode(
 export function AgentInteractionModesSection() {
   const { effectiveSettings, setUserSettings } = useOrionSettings();
   const modes = React.useMemo(
-    () => normalizeInteractionModeConfigs(effectiveSettings.chat.interactionModes),
-    [effectiveSettings.chat.interactionModes]
+    () =>
+      normalizeInteractionModeConfigs(effectiveSettings.chat.interactionModes),
+    [effectiveSettings.chat.interactionModes],
   );
-  const [selectedModeId, setSelectedModeId] = React.useState(modes[0]?.id ?? "Agent");
-  const selectedMode = modes.find((mode) => mode.id === selectedModeId) ?? modes[0];
+  const [selectedModeId, setSelectedModeId] = React.useState(
+    modes[0]?.id ?? "Agent",
+  );
+  const selectedMode =
+    modes.find((mode) => mode.id === selectedModeId) ?? modes[0];
 
   React.useEffect(() => {
     if (modes.some((mode) => mode.id === selectedModeId)) return;
@@ -157,10 +165,36 @@ export function AgentInteractionModesSection() {
           interactionModes: normalizeInteractionModeConfigs(nextModes),
         },
       })).catch((error) => {
-        toast.error(error instanceof Error ? error.message : "Failed to save interaction modes.");
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to save interaction modes.",
+        );
       });
     },
-    [setUserSettings]
+    [setUserSettings],
+  );
+
+  const updateGoalMaxReviews = React.useCallback(
+    (maxReviews: number) => {
+      void setUserSettings((current) => ({
+        ...current,
+        agent: {
+          ...current.agent,
+          goals: {
+            ...current.agent.goals,
+            maxReviews,
+          },
+        },
+      })).catch((error) => {
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Failed to save goal settings.",
+        );
+      });
+    },
+    [setUserSettings],
   );
 
   const updateSelectedMode = (patch: Partial<InteractionModeConfig>) => {
@@ -172,13 +206,18 @@ export function AgentInteractionModesSection() {
           return {
             ...mode,
             toolNames: patch.toolNames ?? mode.toolNames,
-            customSystemPrompt: patch.customSystemPrompt ?? mode.customSystemPrompt,
+            customSystemPrompt:
+              patch.customSystemPrompt ?? mode.customSystemPrompt,
             bashPolicy: patch.bashPolicy ?? mode.bashPolicy,
             hiddenInSelector: patch.hiddenInSelector ?? mode.hiddenInSelector,
+            selectorColor:
+              patch.selectorColor !== undefined
+                ? patch.selectorColor
+                : mode.selectorColor,
           };
         }
         return { ...mode, ...patch, builtIn: false };
-      })
+      }),
     );
   };
 
@@ -192,7 +231,10 @@ export function AgentInteractionModesSection() {
     if (!selectedMode) return;
     const nextMode = {
       ...selectedMode,
-      id: makeCustomModeId(`${selectedMode.label} copy`, new Set(modes.map((mode) => mode.id))),
+      id: makeCustomModeId(
+        `${selectedMode.label} copy`,
+        new Set(modes.map((mode) => mode.id)),
+      ),
       label: `${selectedMode.label} copy`,
       builtIn: false,
     };
@@ -207,11 +249,17 @@ export function AgentInteractionModesSection() {
   };
 
   const resetBuiltin = () => {
-    if (!selectedMode || !selectedMode.builtIn || !isBuiltInInteractionModeId(selectedMode.id)) {
+    if (
+      !selectedMode ||
+      !selectedMode.builtIn ||
+      !isBuiltInInteractionModeId(selectedMode.id)
+    ) {
       return;
     }
     const resetMode = getDefaultInteractionModeConfig(selectedMode.id);
-    saveModes(modes.map((mode) => (mode.id === selectedMode.id ? resetMode : mode)));
+    saveModes(
+      modes.map((mode) => (mode.id === selectedMode.id ? resetMode : mode)),
+    );
   };
 
   const toggleTool = (toolName: OrionToolName, enabled: boolean) => {
@@ -233,7 +281,8 @@ export function AgentInteractionModesSection() {
       <div className="space-y-2">
         <h2 className="text-lg font-semibold">Interaction modes</h2>
         <p className="text-sm text-muted-foreground">
-          Customize each mode&apos;s tools and appended system prompt instructions.
+          Choose which modes appear in chat and customize standard mode
+          behavior.
         </p>
       </div>
 
@@ -254,7 +303,10 @@ export function AgentInteractionModesSection() {
                     <span className="flex items-center gap-1.5">
                       <span>{mode.label}</span>
                       {mode.beta ? (
-                        <Badge variant="secondary" className="px-1 py-0 text-[10px] font-normal">
+                        <Badge
+                          variant="secondary"
+                          className="px-1 py-0 text-[10px] font-normal"
+                        >
                           Beta
                         </Badge>
                       ) : null}
@@ -274,23 +326,44 @@ export function AgentInteractionModesSection() {
               </SelectContent>
             </Select>
           </div>
-          <Button type="button" className="h-10 shrink-0 px-3" onClick={createMode}>
+          <Button
+            type="button"
+            className="h-10 shrink-0 px-3"
+            onClick={createMode}
+          >
             <Plus className="size-4" />
             New
           </Button>
           {selectedMode ? (
             <div className="ml-auto flex shrink-0 gap-2">
-              <Button type="button" size="sm" variant="outline" onClick={duplicateMode}>
-                <Copy className="size-4" />
-                Duplicate
-              </Button>
+              {selectedMode.orchestration === "normal" ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={duplicateMode}
+                >
+                  <Copy className="size-4" />
+                  Duplicate
+                </Button>
+              ) : null}
               {selectedMode.builtIn ? (
-                <Button type="button" size="sm" variant="outline" onClick={resetBuiltin}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={resetBuiltin}
+                >
                   <RotateCcw className="size-4" />
                   Reset
                 </Button>
               ) : (
-                <Button type="button" size="sm" variant="outline" onClick={deleteMode}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={deleteMode}
+                >
                   <Trash2 className="size-4" />
                   Delete
                 </Button>
@@ -303,8 +376,8 @@ export function AgentInteractionModesSection() {
           <div className="min-h-0 space-y-5 overflow-auto pr-1">
             {selectedMode.beta ? (
               <p className="text-sm text-muted-foreground">
-                This mode is in beta and still being tested. Enable it in the chat selector when you
-                want to try it.
+                This mode is in beta and still being tested. Enable it in the
+                chat selector when you want to try it.
               </p>
             ) : null}
 
@@ -318,120 +391,188 @@ export function AgentInteractionModesSection() {
               }
             />
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="mode-label">Label</Label>
-                <Input
-                  id="mode-label"
-                  value={selectedMode.label}
-                  disabled={selectedMode.builtIn}
-                  onChange={(event) => updateSelectedMode({ label: event.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="mode-base">Base prompt</Label>
-                <Select
-                  value={selectedMode.baseMode}
-                  disabled={selectedMode.builtIn}
-                  onValueChange={(value) =>
-                    updateSelectedMode({ baseMode: value as InteractionModeBase })
-                  }
-                >
-                  <SelectTrigger id="mode-base">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="Agent">Agent</SelectItem>
-                    <SelectItem value="Ask">Ask</SelectItem>
-                    <SelectItem value="Edit">Edit</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2 sm:col-span-2">
-                <Label htmlFor="mode-description">Description</Label>
-                <Input
-                  id="mode-description"
-                  value={selectedMode.description}
-                  disabled={selectedMode.builtIn}
-                  onChange={(event) => updateSelectedMode({ description: event.target.value })}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="mode-bash-policy">Bash policy</Label>
-                <Select
-                  value={selectedMode.bashPolicy}
-                  onValueChange={(value) =>
-                    updateSelectedMode({ bashPolicy: value as InteractionModeBashPolicy })
-                  }
-                >
-                  <SelectTrigger id="mode-bash-policy">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="full">Full</SelectItem>
-                    <SelectItem value="read_only">Read-only</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
+            <SettingsColorField
+              id="mode-selector-color"
+              label="Selector color"
+              description="Tint shown on this mode's icon and button in the chat mode menu. Modes based on Agent can use Default for Orion's standard styling."
+              value={selectedMode.selectorColor}
+              allowDefault={
+                selectedMode.orchestration !== "goal" &&
+                selectedMode.baseMode === "Agent"
+              }
+              onChange={(selectorColor) => updateSelectedMode({ selectorColor })}
+            />
 
-            <Separator />
-
-            <section className="space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-sm font-bold">Tools</h3>
-                <div className="flex gap-2">
-                  <Button type="button" size="sm" variant="outline" onClick={() => setAllTools(true)}>
-                    Select all
-                  </Button>
-                  <Button type="button" size="sm" variant="outline" onClick={() => setAllTools(false)}>
-                    Clear
-                  </Button>
+            {selectedMode.orchestration === "goal" ? (
+              <section className="space-y-3 rounded-lg border border-border/60 p-4">
+                <SettingsInfoLabel
+                  label="Goal orchestration"
+                  description="Goal uses Agent for workspace changes, with separate contract-author and supervisor phases that have fixed permissions."
+                />
+                <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                  <div>
+                    <dt className="text-muted-foreground">Worker mode</dt>
+                    <dd className="font-medium">Agent</dd>
+                  </div>
+                  <div>
+                    <dt className="text-muted-foreground">Completion</dt>
+                    <dd className="font-medium">
+                      Independent supervisor review
+                    </dd>
+                  </div>
+                </dl>
+                <SettingsNumberField
+                  id="goal-max-reviews"
+                  label="Maximum reviews"
+                  description="Maximum number of independent artifact reviews Orion may run for one goal before stopping."
+                  value={effectiveSettings.agent.goals.maxReviews}
+                  min={1}
+                  max={50}
+                  onChange={updateGoalMaxReviews}
+                />
+              </section>
+            ) : (
+              <>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="mode-label">Label</Label>
+                    <Input
+                      id="mode-label"
+                      value={selectedMode.label}
+                      disabled={selectedMode.builtIn}
+                      onChange={(event) =>
+                        updateSelectedMode({ label: event.target.value })
+                      }
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="mode-base">Base prompt</Label>
+                    <Select
+                      value={selectedMode.baseMode}
+                      disabled={selectedMode.builtIn}
+                      onValueChange={(value) =>
+                        updateSelectedMode({
+                          baseMode: value as InteractionModeBase,
+                        })
+                      }
+                    >
+                      <SelectTrigger id="mode-base">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="Agent">Agent</SelectItem>
+                        <SelectItem value="Ask">Ask</SelectItem>
+                        <SelectItem value="Edit">Edit</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2 sm:col-span-2">
+                    <Label htmlFor="mode-description">Description</Label>
+                    <Input
+                      id="mode-description"
+                      value={selectedMode.description}
+                      disabled={selectedMode.builtIn}
+                      onChange={(event) =>
+                        updateSelectedMode({ description: event.target.value })
+                      }
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="mode-bash-policy">Bash policy</Label>
+                    <Select
+                      value={selectedMode.bashPolicy}
+                      onValueChange={(value) =>
+                        updateSelectedMode({
+                          bashPolicy: value as InteractionModeBashPolicy,
+                        })
+                      }
+                    >
+                      <SelectTrigger id="mode-bash-policy">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="full">Full</SelectItem>
+                        <SelectItem value="read_only">Read-only</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
-              </div>
-              <div className="grid gap-4 lg:grid-cols-3">
-                {TOOL_GROUPS.map((group) => (
-                  <div key={group.label} className="space-y-2">
-                    <p className="text-xs font-semibold uppercase text-muted-foreground">
-                      {group.label}
-                    </p>
-                    <div className="space-y-2">
-                      {group.tools.map((toolName) => (
-                        <label
-                          key={toolName}
-                          className="flex items-center gap-2 text-sm text-foreground"
-                        >
-                          <Checkbox
-                            checked={selectedMode.toolNames.includes(toolName)}
-                            onCheckedChange={(checked) => toggleTool(toolName, checked === true)}
-                          />
-                          <span>{TOOL_LABELS[toolName]}</span>
-                        </label>
-                      ))}
+
+                <Separator />
+
+                <section className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-bold">Tools</h3>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setAllTools(true)}
+                      >
+                        Select all
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setAllTools(false)}
+                      >
+                        Clear
+                      </Button>
                     </div>
                   </div>
-                ))}
-              </div>
-            </section>
+                  <div className="grid gap-4 lg:grid-cols-3">
+                    {TOOL_GROUPS.map((group) => (
+                      <div key={group.label} className="space-y-2">
+                        <p className="text-xs font-semibold uppercase text-muted-foreground">
+                          {group.label}
+                        </p>
+                        <div className="space-y-2">
+                          {group.tools.map((toolName) => (
+                            <label
+                              key={toolName}
+                              className="flex items-center gap-2 text-sm text-foreground"
+                            >
+                              <Checkbox
+                                checked={selectedMode.toolNames.includes(
+                                  toolName,
+                                )}
+                                onCheckedChange={(checked) =>
+                                  toggleTool(toolName, checked === true)
+                                }
+                              />
+                              <span>{TOOL_LABELS[toolName]}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
 
-            <Separator />
+                <Separator />
 
-            <section className="space-y-2">
-              <SettingsInfoLabel
-                htmlFor="mode-custom-prompt"
-                label="Custom system prompt instructions"
-                description="Add mode-specific instructions"
-              />
-              <Textarea
-                id="mode-custom-prompt"
-                value={selectedMode.customSystemPrompt}
-                placeholder="Add mode-specific instructions"
-                className="min-h-40 font-mono text-xs"
-                onChange={(event) =>
-                  updateSelectedMode({ customSystemPrompt: event.target.value })
-                }
-              />
-            </section>
+                <section className="space-y-2">
+                  <SettingsInfoLabel
+                    htmlFor="mode-custom-prompt"
+                    label="Custom system prompt instructions"
+                    description="Add mode-specific instructions"
+                  />
+                  <Textarea
+                    id="mode-custom-prompt"
+                    value={selectedMode.customSystemPrompt}
+                    placeholder="Add mode-specific instructions"
+                    className="min-h-40 font-mono text-xs"
+                    onChange={(event) =>
+                      updateSelectedMode({
+                        customSystemPrompt: event.target.value,
+                      })
+                    }
+                  />
+                </section>
+              </>
+            )}
           </div>
         ) : null}
       </div>

@@ -88,6 +88,76 @@ function renderMessageChatBody(
 }
 
 describe("ChatBody empty prompt library", () => {
+  it("renders an actionable goal contract proposal in the main chat", () => {
+    const onApproveGoalContract = vi.fn();
+    const onRequestGoalContractRevision = vi.fn();
+    renderMessageChatBody(
+      [
+        {
+          id: "assistant-goal-contract",
+          role: "assistant",
+          parts: [
+            {
+              type: "tool-propose_goal_contract",
+              toolCallId: "proposal-1",
+              state: "input-available",
+              input: {
+                objective: "Find a statistically strong sales relationship.",
+                deliverables: [
+                  { path: "analysis.ipynb", description: "Reproducible analysis" },
+                ],
+                acceptanceCriteria: [
+                  { id: "validated", description: "Reports effect size and uncertainty." },
+                ],
+                constraints: ["Do not claim causation."],
+              },
+            } as UIMessage["parts"][number],
+          ],
+        },
+      ],
+      {
+        groupConsecutiveAssistantActivity: true,
+        onApproveGoalContract,
+        onRequestGoalContractRevision,
+      }
+    );
+
+    expect(screen.getByText("Proposed goal contract")).toBeInTheDocument();
+    expect(screen.queryByText("analysis.ipynb")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    expect(screen.getByText("analysis.ipynb")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Show less" }));
+    expect(screen.queryByText("analysis.ipynb")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "No, do it differently" }));
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    expect(onRequestGoalContractRevision).toHaveBeenCalledWith("proposal-1");
+    expect(onApproveGoalContract).toHaveBeenCalledWith("proposal-1");
+  });
+
+  it("shows a compact writing state without validating partial contract input", () => {
+    renderMessageChatBody(
+      [
+        {
+          id: "assistant-streaming-goal-contract",
+          role: "assistant",
+          parts: [
+            {
+              type: "tool-propose_goal_contract",
+              toolCallId: "proposal-streaming",
+              state: "input-streaming",
+              input: { objective: "Partially streamed" },
+            } as UIMessage["parts"][number],
+          ],
+        },
+      ],
+      { groupConsecutiveAssistantActivity: true },
+    );
+
+    expect(screen.getByText("Writing goal contract…")).toBeInTheDocument();
+    expect(screen.queryByText("Invalid goal contract")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  });
+
   it("renders the runtime warning when a tool is blocked by a disconnected server", () => {
     renderEmptyChatBody({ showKernelPrompt: true });
 

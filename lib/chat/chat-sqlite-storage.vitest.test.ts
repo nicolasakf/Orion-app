@@ -18,12 +18,14 @@ import {
   getContextCalibration,
   getEditCheckpointByRequestId,
   getEditCheckpointsForChat,
+  getGoalSession,
   insertModelUsage,
   interruptOpenEditCheckpoints,
   recordEditCheckpointTarget,
   resolveOrCreateChatSession,
   resolveOrCreateModelRequest,
   saveChat,
+  saveGoalSession,
   updateEditCheckpointStatus,
   updateChatSessionStatus,
   updateCompactionSummary,
@@ -31,6 +33,7 @@ import {
 } from "@/lib/chat/chat-sqlite-storage.server";
 import type { ChatWire } from "@/lib/chat/chat-types";
 import type { OrionDatabase } from "@/lib/chat/sqlite-adapter";
+import { createGoalSession } from "@/lib/agent/goals/controller";
 
 let tempDirectory: string;
 
@@ -136,7 +139,7 @@ describe("SQLite chat storage", () => {
 
     const migratedDb = await getChatDatabase();
 
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(4);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(5);
     await expect(getChat("chat-1")).resolves.toMatchObject({
       id: "chat-1",
       messages: [{ id: "message-1" }],
@@ -150,12 +153,14 @@ describe("SQLite chat storage", () => {
     expect(indexExists(migratedDb, "model_usage_request_id_idx")).toBe(true);
     expect(indexExists(migratedDb, "model_usage_gateway_generation_id_idx")).toBe(true);
     expect(tableExists(migratedDb, "context_calibration")).toBe(true);
+    expect(tableExists(migratedDb, "goal_session")).toBe(true);
+    expect(tableExists(migratedDb, "goal_evaluation")).toBe(true);
   });
 
   it("creates the full schema on a fresh database", async () => {
     const db = await getChatDatabase();
 
-    expect(db.pragma("user_version", { simple: true })).toBe(4);
+    expect(db.pragma("user_version", { simple: true })).toBe(5);
     expect(tableExists(db, "chats")).toBe(true);
     expect(tableExists(db, "chat_messages")).toBe(true);
     expect(tableExists(db, "subagent_sessions")).toBe(true);
@@ -169,6 +174,8 @@ describe("SQLite chat storage", () => {
     expect(columnExists(db, "model_usage", "actual_reasoning_tokens")).toBe(true);
     expect(columnExists(db, "model_usage", "estimated_output_tokens")).toBe(true);
     expect(columnExists(db, "model_usage", "pricing_snapshot_json")).toBe(true);
+    expect(tableExists(db, "goal_session")).toBe(true);
+    expect(tableExists(db, "goal_evaluation")).toBe(true);
   });
 
   it("repairs a partial v4 database missing provenance token columns", async () => {
@@ -209,7 +216,7 @@ describe("SQLite chat storage", () => {
 
     const db = await getChatDatabase();
 
-    expect(db.pragma("user_version", { simple: true })).toBe(4);
+    expect(db.pragma("user_version", { simple: true })).toBe(5);
     expect(columnExists(db, "model_usage", "estimated_output_tokens")).toBe(true);
     expect(columnExists(db, "model_usage", "actual_output_tokens")).toBe(true);
     expect(columnExists(db, "model_usage", "actual_reasoning_tokens")).toBe(true);
@@ -260,6 +267,72 @@ describe("SQLite chat storage", () => {
     await saveChat(createChat({ id: "chat-2" }));
     await clearChats();
     await expect(getChats()).resolves.toEqual([]);
+  });
+
+  it("round-trips goal sessions and evaluation history", async () => {
+    await saveChat(createChat());
+    const goal = createGoalSession({
+      id: "goal-1",
+      chatId: "chat-1",
+      contract: {
+        objective: "Create a report",
+        deliverables: [{ path: "report.ipynb", description: "Report notebook" }],
+        acceptanceCriteria: [{ id: "complete", description: "Contains findings" }],
+        constraints: [],
+      },
+      evaluatorModel: "openai:gpt-test",
+      evaluatorProvider: "openai",
+      evaluatorModelId: "gpt-test",
+      maxReviews: 10,
+      baselineEntries: [],
+      workerRequestId: "worker-1",
+      now: "2026-05-19T12:00:00.000Z",
+    });
+    goal.evaluations.push({
+      id: "evaluation-1",
+      contractVersion: 1,
+      reviewNumber: 1,
+      modelRequestId: "evaluation-request-1",
+      manifest: {
+        entries: [],
+        createdPaths: [],
+        modifiedPaths: [],
+        deletedPaths: [],
+        deliverablePaths: [],
+        fingerprint: "empty",
+        truncated: false,
+        capturedAt: "2026-05-19T12:01:00.000Z",
+      },
+      verdict: null,
+      createdAt: "2026-05-19T12:01:00.000Z",
+    });
+
+    await saveGoalSession(goal);
+    await expect(getGoalSession("chat-1")).resolves.toMatchObject({
+      id: "goal-1",
+      evaluations: [{ id: "evaluation-1" }],
+    });
+
+    const replacement = createGoalSession({
+      id: "goal-2",
+      chatId: "chat-1",
+      contract: goal.contract,
+      evaluatorModel: "openai:gpt-test",
+      evaluatorProvider: "openai",
+      evaluatorModelId: "gpt-test",
+      maxReviews: 5,
+      baselineEntries: [],
+      workerRequestId: "worker-2",
+      now: "2026-05-19T12:02:00.000Z",
+    });
+    await saveGoalSession(replacement);
+    await expect(getGoalSession("chat-1")).resolves.toMatchObject({
+      id: "goal-2",
+      evaluations: [],
+    });
+
+    await deleteChat("chat-1");
+    await expect(getGoalSession("chat-1")).resolves.toBeNull();
   });
 
   it("returns metadata without hydrating message bodies and sorts newest first", async () => {
@@ -443,7 +516,7 @@ describe("SQLite chat storage", () => {
 
     const migratedDb = await getChatDatabase();
 
-    expect(migratedDb.pragma("user_version", { simple: true })).toBe(4);
+    expect(migratedDb.pragma("user_version", { simple: true })).toBe(5);
     expect(columnExists(migratedDb, "chats", "forked_from_json")).toBe(true);
   });
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildModeToolAccessSection,
+  modeAllowsChainedCellExecution,
   resolveModeToolCapabilities,
 } from "./mode-capabilities";
 import { getDefaultInteractionModeConfig } from "./interaction-modes";
@@ -90,5 +91,26 @@ describe("buildModeToolAccessSection", () => {
 
     expect(section).toContain("**No shell.**");
     expect(section).not.toContain("**Read-only shell.**");
+  });
+});
+
+describe("modeAllowsChainedCellExecution", () => {
+  it("blocks the chained run in a mode that withholds execute_cell", () => {
+    // Edit mode ships insert_cell and overwrite_cell_source, so the mutation
+    // tool being present says nothing about whether the kernel may be reached.
+    const edit = getDefaultInteractionModeConfig("Edit");
+
+    expect(edit.toolNames).toContain("overwrite_cell_source");
+    expect(edit.toolNames).not.toContain("execute_cell");
+    expect(modeAllowsChainedCellExecution(edit.toolNames)).toBe(false);
+  });
+
+  it("allows it in the modes that can run cells", () => {
+    expect(
+      modeAllowsChainedCellExecution(getDefaultInteractionModeConfig("Agent").toolNames)
+    ).toBe(true);
+    expect(
+      modeAllowsChainedCellExecution(getDefaultInteractionModeConfig("Explore").toolNames)
+    ).toBe(true);
   });
 });

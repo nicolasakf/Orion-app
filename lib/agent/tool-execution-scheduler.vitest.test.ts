@@ -28,7 +28,7 @@ describe("parallel read-only tool policy", () => {
       "read_notebook",
       "read_cell",
       "read_cell_output",
-      "inspect_plotly_output",
+      "inspect_output",
       "list_kernels",
       "web_search",
       "web_fetch",

@@ -37,7 +37,7 @@ export interface ModeToolCapabilities {
 /** Default tool names assumed for a base mode when a caller passes none. */
 const DEFAULT_TOOL_NAMES_BY_BASE_MODE = {
   Agent: ORION_TOOL_NAMES,
-  Research: ORION_TOOL_NAMES,
+  Explore: ORION_TOOL_NAMES,
   Edit: Object.keys(EDIT_MODE_TOOLS) as OrionToolName[],
   Ask: Object.keys(ASK_MODE_TOOLS) as OrionToolName[],
 } as const;
@@ -57,6 +57,22 @@ const EXECUTION_TOOLS: readonly OrionToolName[] = [
   "execute_code",
   "restart_notebook",
 ];
+
+/**
+ * Whether a mode may run notebook cells chained onto `insert_cell` or
+ * `overwrite_cell_source`.
+ *
+ * Those tools can run the cells they just wrote, and Edit mode ships them while
+ * withholding `execute_cell` — so the chain has to answer to the same tool list
+ * the model was given, not to the mutation tool being available.
+ *
+ * @param toolNames - Resolved tool names for the active mode
+ */
+export function modeAllowsChainedCellExecution(
+  toolNames: readonly OrionToolName[]
+): boolean {
+  return toolNames.includes("execute_cell");
+}
 
 /**
  * Resolves the capabilities a prompt may claim, from the mode's real tool list.

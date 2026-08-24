@@ -43,13 +43,13 @@ describe("formatUserMessageClipboardText", () => {
       role: "user",
       parts: [{ type: "text", text: "Analyze this cell." }],
       metadata: {
-        slashCommands: [{ label: "/deep-eda", name: "skill:deep-eda", category: "skill" }],
+        slashCommands: [{ label: "/explore", name: "skill:explore", category: "skill" }],
         references: [cellReference],
       },
     };
 
     expect(formatUserMessageClipboardText(message)).toBe(
-      "/deep-eda @Cell #2\nAnalyze this cell."
+      "/explore @Cell #2\nAnalyze this cell."
     );
   });
 
@@ -124,11 +124,11 @@ describe("Orion message clipboard payloads", () => {
       version: 1 as const,
       text: "Please inspect this.",
       metadata: {
-        slashCommands: [{ label: "/deep-eda", name: "skill:deep-eda", category: "skill" as const }],
+        slashCommands: [{ label: "/explore", name: "skill:explore", category: "skill" as const }],
         references: [cellReference],
       },
     };
 
-    expect(formatClipboardPayloadComposerText(payload)).toBe("/deep-eda Please inspect this.");
+    expect(formatClipboardPayloadComposerText(payload)).toBe("/explore Please inspect this.");
   });
 });

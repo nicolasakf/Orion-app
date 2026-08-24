@@ -6,6 +6,7 @@ import type { ModelSettingsMap } from "./types";
 
 const SESSION_MODEL_KEY = "orion:selectedModel";
 const SESSION_MODEL_SETTINGS_KEY = "orion:modelSettings";
+const SESSION_GOAL_EVALUATOR_MODEL_KEY = "orion:goalEvaluatorModel";
 
 /** Browser-tab fallback used only when no selected chat model is stored. */
 export const SESSION_FALLBACK_CHAT_MODEL_ID = DEFAULT_SELECTED_CHAT_MODEL_ID;
@@ -42,6 +43,33 @@ export function saveSelectedModelToSession(modelId: string): void {
 
   try {
     window.sessionStorage.setItem(SESSION_MODEL_KEY, modelId);
+  } catch {
+    // Losing session persistence is non-fatal; the UI can still use React state.
+  }
+}
+
+/**
+ * Reads the model chosen to evaluate supervised goals.
+ *
+ * Returns null when the user has not picked one, so callers fall back to the
+ * composer's model and behaviour is unchanged until they choose a reviewer.
+ */
+export function loadGoalEvaluatorModelFromSession(): string | null {
+  if (typeof window === "undefined") return null;
+
+  try {
+    return window.sessionStorage.getItem(SESSION_GOAL_EVALUATOR_MODEL_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Saves the goal evaluator model so the next goal defaults to the same reviewer. */
+export function saveGoalEvaluatorModelToSession(modelId: string): void {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.setItem(SESSION_GOAL_EVALUATOR_MODEL_KEY, modelId);
   } catch {
     // Losing session persistence is non-fatal; the UI can still use React state.
   }

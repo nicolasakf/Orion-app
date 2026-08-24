@@ -2590,6 +2590,9 @@ function NotebookCellComponent({
                               <div
                                 id={`output-${cellIndex}-${idx}`}
                                 className="jp-OutputArea-output"
+                                data-orion-output-cell-index={cellIndex}
+                                data-orion-output-index={idx}
+                                data-orion-output-view="notebook"
                                 onMouseEnter={() => handleOutputMouseEnter(idx)}
                                 onMouseLeave={handleOutputMouseLeave}
                               >

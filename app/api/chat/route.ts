@@ -1,5 +1,5 @@
 import { type ModelMessage } from "@ai-sdk/provider-utils";
-import { convertToModelMessages, streamText, type UIMessage } from "ai";
+import { convertToModelMessages, streamText, type ToolSet, type UIMessage } from "ai";
 import compactionSystemPrompt from "@/lib/agent/prompts/compaction-system-prompt.md";
 import { z } from "zod";
 import { generateBufferedText } from "@/lib/agent/buffered-text-generation.server";
@@ -20,6 +20,7 @@ import {
   isLocalProvider,
 } from "@/lib/agent/local-provider-models";
 import { orionTools } from "@/lib/agent/tool-schemas";
+import { clampMaxQuestionsPerAsk } from "@/lib/agent/ask-question";
 import {
   getDefaultInteractionModeConfig,
   resolveInteractionModeConfig,
@@ -56,7 +57,6 @@ import {
 import { prepareChatInvocation } from "@/lib/agent/prepare-chat-invocation.server";
 import {
   AgentCommunicationStyleSchema,
-  NotebookUiPreferencesSchema,
   type AgentCommunicationStyle,
 } from "@/lib/settings/schema";
 import type { AgentRule } from "@/lib/agent/rules";
@@ -92,6 +92,15 @@ import {
 } from "@/lib/chat/chat-api-errors";
 import { loadPersonalContextForModel } from "@/lib/onboarding/personal-context.server";
 import { foldCompactionChunks } from "@/lib/agent/compaction-fold";
+import {
+  GoalContinuationSchema,
+  GoalEvaluationRequestSchema,
+} from "@/lib/agent/goals/types";
+import {
+  GOAL_CONTRACT_AUTHOR_ORION_TOOL_NAMES,
+  goalContractProposalTool,
+  GOAL_CONTRACT_PROPOSAL_TOOL_NAME,
+} from "@/lib/agent/goals/contract-author";
 
 /** Standard request duration limit in seconds */
 export const maxDuration = 300;
@@ -327,9 +336,7 @@ async function handleChatRequest(
     agentCommunicationStyle?: unknown;
     /** Custom communication instructions; overrides preset when non-empty. */
     agentCustomCommunicationStyle?: unknown;
-    /** Preferred libraries for agent-authored notebook and App View interfaces. */
-    notebookUiPreferences?: unknown;
-    /** Lightweight notebook-native Research mode session state. */
+    /** Lightweight notebook-native Explore mode session state. */
     researchSession?: unknown;
     /** Soft steering instruction selected by the client loop. */
     researchNudge?: unknown;
@@ -341,6 +348,14 @@ async function handleChatRequest(
     businessExperienceMode?: boolean;
     /** Effective context settings used by preflight and runtime compaction. */
     contextSettings?: unknown;
+    /** Effective `agent.execution.maxQuestionsPerAsk` used to size `ask_question`. */
+    maxQuestionsPerAsk?: unknown;
+    /** Runs the visible agent in contract-authoring mode until the user approves. */
+    goalContractDraft?: unknown;
+    /** Artifact-only evaluation contract and manifest. */
+    goalEvaluation?: unknown;
+    /** Private goal contract and repair instruction injected into the worker. */
+    goalContinuation?: unknown;
   };
 
   try {
@@ -389,14 +404,44 @@ async function handleChatRequest(
     previousSummaryText,
     agentCommunicationStyle: rawAgentCommunicationStyle,
     agentCustomCommunicationStyle: rawAgentCustomCommunicationStyle,
-    notebookUiPreferences: rawNotebookUiPreferences,
     researchSession: researchSessionRaw,
     researchNudge: researchNudgeRaw,
     automaticContinuationAttempt: automaticContinuationAttemptRaw,
     automaticContinuationReason: automaticContinuationReasonRaw,
     businessExperienceMode: businessExperienceModeRaw,
     contextSettings: rawContextSettings,
+    maxQuestionsPerAsk: rawMaxQuestionsPerAsk,
+    goalContractDraft: goalContractDraftRaw,
+    goalEvaluation: goalEvaluationRaw,
+    goalContinuation: goalContinuationRaw,
   } = body;
+
+  const parsedGoalEvaluation = GoalEvaluationRequestSchema.optional().safeParse(
+    goalEvaluationRaw
+  );
+  const parsedGoalContinuation = GoalContinuationSchema.optional().safeParse(
+    goalContinuationRaw
+  );
+  const parsedGoalContractDraft = z.boolean().optional().safeParse(goalContractDraftRaw);
+  if (
+    !parsedGoalEvaluation.success ||
+    !parsedGoalContinuation.success ||
+    !parsedGoalContractDraft.success
+  ) {
+    return Response.json(
+      { title: "Invalid Request", message: "Goal supervision context is invalid." },
+      { status: 400 }
+    );
+  }
+  const goalEvaluation = parsedGoalEvaluation.data;
+  const goalContinuation = parsedGoalContinuation.data;
+  const goalContractDraft = parsedGoalContractDraft.data === true;
+  if (origin === "goal_evaluation" && !goalEvaluation) {
+    return Response.json(
+      { title: "Invalid Request", message: "Goal evaluation context is required." },
+      { status: 400 }
+    );
+  }
 
   const parsedContextSettings = ContextUsageSettingsSchema.safeParse(rawContextSettings ?? {});
   if (!parsedContextSettings.success) {
@@ -406,6 +451,10 @@ async function handleChatRequest(
     );
   }
   const contextSettings = parsedContextSettings.data;
+
+  // Clamped rather than rejected: an out-of-range limit is a stale or
+  // hand-edited settings file, not a reason to fail the user's message.
+  const maxQuestionsPerAsk = clampMaxQuestionsPerAsk(rawMaxQuestionsPerAsk);
 
   const parsedResearchSession = ResearchSessionSnapshotSchema.safeParse(researchSessionRaw);
   const researchSession =
@@ -432,16 +481,6 @@ async function handleChatRequest(
     typeof rawAgentCustomCommunicationStyle === "string"
       ? rawAgentCustomCommunicationStyle.trim()
       : "";
-  const parsedNotebookUiPreferences = NotebookUiPreferencesSchema.optional().safeParse(
-    rawNotebookUiPreferences
-  );
-  if (!parsedNotebookUiPreferences.success) {
-    return Response.json(
-      { title: "Invalid Request", message: "Notebook UI preferences are invalid." },
-      { status: 400 }
-    );
-  }
-  const notebookUiPreferences = parsedNotebookUiPreferences.data;
 
   const resolvedCredential = await resolveProviderCredentialForModel(providerId, modelId);
 
@@ -543,6 +582,14 @@ async function handleChatRequest(
   const effectiveInteractionModeConfig =
     origin === "subagent"
       ? getDefaultInteractionModeConfig("Agent")
+      : goalContractDraft
+        ? {
+            ...getDefaultInteractionModeConfig("Agent"),
+            toolNames: [...GOAL_CONTRACT_AUTHOR_ORION_TOOL_NAMES],
+            bashPolicy: "read_only" as const,
+          }
+      : origin === "goal_evaluation"
+        ? getDefaultInteractionModeConfig("Ask")
       : resolveInteractionModeConfig({
           modeId: rawInteractionMode,
           requestConfig: rawInteractionModeConfig,
@@ -690,7 +737,13 @@ async function handleChatRequest(
       // results already in history.
       messages = await convertToModelMessages(
         rawMessagesForModel as Array<Omit<UIMessage, "id">>,
-        { ignoreIncompleteToolCalls: true, tools: orionTools }
+        {
+          ignoreIncompleteToolCalls: true,
+          tools: {
+            ...orionTools,
+            [GOAL_CONTRACT_PROPOSAL_TOOL_NAME]: goalContractProposalTool,
+          },
+        }
       );
     } catch {
       return new Response(
@@ -1170,7 +1223,10 @@ async function handleChatRequest(
   const modelRequest = options.preflight
     ? null
     : await resolveOrCreateModelRequest({
-        id: requestOrigin === "user" ? clientModelRequestId : undefined,
+        id:
+          requestOrigin === "user" || requestOrigin === "goal_evaluation"
+            ? clientModelRequestId
+            : undefined,
         origin: requestOrigin,
         chatSessionId: chatSession?.sessionId,
       });
@@ -1182,7 +1238,7 @@ async function handleChatRequest(
     userId: "local",
     model: modelId,
     provider: providerId,
-    agentMode: effectiveMode === "Research" || effectiveMode === "Agent",
+    agentMode: effectiveMode === "Explore" || effectiveMode === "Agent",
     messageCount: messages.length,
     messages: messages.map((m) => ({ role: m.role, content: m.content })),
     modelSettings: validatedModelSettings ?? null,
@@ -1232,15 +1288,18 @@ async function handleChatRequest(
       clientPlatformOs,
       communicationStyle: agentCommunicationStyle,
       customCommunicationStyle: agentCustomCommunicationStyle,
-      uiPreferences: notebookUiPreferences,
       businessExperienceMode,
       researchSession,
       researchNudge,
       automaticContinuationAttempt,
       automaticContinuationReason,
       canForceToolChoice,
+      maxQuestionsPerAsk,
       hasDelegatedForcedSubagent:
         forcedSubagentName != null && hasDelegatedSubagentInHistory(forcedSubagentName),
+      goalContractDraft,
+      goalEvaluation,
+      goalContinuation,
     });
 
     // Preflight prepares the same context but must not create model-call dev logs.
@@ -1306,7 +1365,7 @@ async function handleChatRequest(
       requestId,
       model: modelId,
       provider: providerId,
-      agentMode: effectiveMode === "Research" || effectiveMode === "Agent",
+      agentMode: effectiveMode === "Explore" || effectiveMode === "Agent",
       processedMessageCount: processedMessages.length,
       processedMessages: processedMessages.map((m) => ({ role: m.role, content: m.content })),
       hasTools: true,
@@ -1320,7 +1379,7 @@ async function handleChatRequest(
       // Pass the mode-appropriate tool subset.
       // Cast to orionTools type so toolChoice can reference enforced tools across modes;
       // forced tool choices are already false in Ask mode.
-      tools: toolsForMode as typeof orionTools,
+      tools: toolsForMode as ToolSet,
       toolChoice: forcedToolChoice,
       onFinish: async ({ usage, providerMetadata }) => {
         const durationMs = Date.now() - requestStartMs;

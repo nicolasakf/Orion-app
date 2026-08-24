@@ -15,6 +15,7 @@ import {
   type UpdateEditCheckpointStatusRequest,
 } from "@/lib/agent/edit-checkpoints";
 import { UNCALIBRATED_CORRECTION_RATIO } from "@/lib/agent/token-budget";
+import { GoalSessionSchema, type GoalSession } from "@/lib/agent/goals/types";
 import {
   getChatStorageDegradedReason,
   isChatStorageDegraded,
@@ -37,6 +38,7 @@ import {
   getFallbackChats,
   getFallbackEditCheckpointByRequestId,
   getFallbackEditCheckpointsForChat,
+  getFallbackGoalSession,
   insertFallbackModelUsage,
   interruptFallbackOpenEditCheckpoints,
   recordFallbackEditCheckpointTarget,
@@ -44,9 +46,11 @@ import {
   resolveFallbackOrCreateModelRequest,
   saveFallbackChat,
   saveFallbackChats,
+  saveFallbackGoalSession,
   updateFallbackChatSessionStatus,
   updateFallbackCompactionSummary,
   updateFallbackEditCheckpointStatus,
+  deleteFallbackGoalSession,
 } from "@/lib/chat/chat-storage-fallback.server";
 import {
   ensureOrionDataDirectory,
@@ -69,6 +73,14 @@ interface ChatMessageRow {
 interface SubagentSessionRow {
   tool_call_id: string;
   session_json: string;
+}
+
+interface GoalSessionRow {
+  session_json: string;
+}
+
+interface GoalEvaluationRow {
+  evaluation_json: string;
 }
 
 interface EditCheckpointRow {
@@ -176,7 +188,7 @@ export interface ChatCostSummary {
   models: ChatCostSummaryModel[];
 }
 
-const CURRENT_SCHEMA_VERSION = 4;
+const CURRENT_SCHEMA_VERSION = 5;
 
 let database: OrionDatabase | null = null;
 
@@ -431,6 +443,38 @@ function migrateToVersion4(db: OrionDatabase): void {
   migrate();
 }
 
+/** Adds durable goal sessions and their review history. */
+function migrateToVersion5(db: OrionDatabase): void {
+  const migrate = db.transaction(() => {
+    createBaseChatSchema(db);
+    db.exec(`
+      create table if not exists goal_session (
+        id text primary key,
+        chat_id text not null unique,
+        session_json text not null,
+        created_at text not null,
+        updated_at text not null,
+        foreign key (chat_id) references chats(id) on delete cascade
+      );
+
+      create table if not exists goal_evaluation (
+        id text primary key,
+        goal_id text not null,
+        ordinal integer not null,
+        evaluation_json text not null,
+        created_at text not null,
+        foreign key (goal_id) references goal_session(id) on delete cascade
+      );
+
+      create index if not exists goal_evaluation_goal_ordinal_idx
+        on goal_evaluation(goal_id, ordinal);
+
+      pragma user_version = 5;
+    `);
+  });
+  migrate();
+}
+
 /** Runs all pending local SQLite migrations in order. */
 function migrateDatabase(db: OrionDatabase): void {
   const version = db.pragma("user_version", { simple: true }) as number;
@@ -451,6 +495,9 @@ function migrateDatabase(db: OrionDatabase): void {
   }
   if (version < 4) {
     migrateToVersion4(db);
+  }
+  if (version < 5) {
+    migrateToVersion5(db);
   }
 
   const finalVersion = db.pragma("user_version", { simple: true }) as number;
@@ -683,6 +730,83 @@ export async function clearChats(): Promise<void> {
 
   const db = await getChatDatabase();
   db.prepare("delete from chats").run();
+}
+
+/** Saves one complete goal session and replaces its evaluation rows atomically. */
+export async function saveGoalSession(session: GoalSession): Promise<void> {
+  if (usingFallbackStorage()) {
+    await saveFallbackGoalSession(session);
+    return;
+  }
+
+  const parsed = GoalSessionSchema.parse(session);
+  const db = await getChatDatabase();
+  const transaction = db.transaction((nextSession: GoalSession) => {
+    const existing = db.prepare("select id from goal_session where chat_id = ?")
+      .get(nextSession.chatId) as { id: string } | undefined;
+    if (existing && existing.id !== nextSession.id) {
+      db.prepare("delete from goal_session where id = ?").run(existing.id);
+    }
+    const sessionWithoutEvaluations = { ...nextSession, evaluations: [] };
+    db.prepare(`
+      insert into goal_session (id, chat_id, session_json, created_at, updated_at)
+      values (@id, @chatId, @sessionJson, @createdAt, @updatedAt)
+      on conflict(chat_id) do update set
+        id = excluded.id,
+        session_json = excluded.session_json,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at
+    `).run({
+      id: nextSession.id,
+      chatId: nextSession.chatId,
+      sessionJson: JSON.stringify(sessionWithoutEvaluations),
+      createdAt: nextSession.createdAt,
+      updatedAt: nextSession.updatedAt,
+    });
+    db.prepare("delete from goal_evaluation where goal_id = ?").run(nextSession.id);
+    const insertEvaluation = db.prepare(`
+      insert into goal_evaluation (id, goal_id, ordinal, evaluation_json, created_at)
+      values (@id, @goalId, @ordinal, @evaluationJson, @createdAt)
+    `);
+    nextSession.evaluations.forEach((evaluation, ordinal) => {
+      insertEvaluation.run({
+        id: evaluation.id,
+        goalId: nextSession.id,
+        ordinal,
+        evaluationJson: JSON.stringify(evaluation),
+        createdAt: evaluation.createdAt,
+      });
+    });
+  });
+  transaction(parsed);
+}
+
+/** Returns the current goal session associated with one chat. */
+export async function getGoalSession(chatId: string): Promise<GoalSession | null> {
+  if (usingFallbackStorage()) return getFallbackGoalSession(chatId);
+  const db = await getChatDatabase();
+  const row = db.prepare("select session_json from goal_session where chat_id = ?")
+    .get(chatId) as GoalSessionRow | undefined;
+  if (!row) return null;
+  const rawSession = JSON.parse(row.session_json) as Record<string, unknown>;
+  const goalId = typeof rawSession.id === "string" ? rawSession.id : "";
+  const evaluationRows = db.prepare(
+    "select evaluation_json from goal_evaluation where goal_id = ? order by ordinal asc"
+  ).all(goalId) as GoalEvaluationRow[];
+  return GoalSessionSchema.parse({
+    ...rawSession,
+    evaluations: evaluationRows.map((evaluation) => JSON.parse(evaluation.evaluation_json)),
+  });
+}
+
+/** Deletes the current goal session associated with one chat. */
+export async function deleteGoalSession(chatId: string): Promise<void> {
+  if (usingFallbackStorage()) {
+    await deleteFallbackGoalSession(chatId);
+    return;
+  }
+  const db = await getChatDatabase();
+  db.prepare("delete from goal_session where chat_id = ?").run(chatId);
 }
 
 /** Updates or clears a chat compaction summary without rewriting messages. */

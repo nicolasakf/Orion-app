@@ -30,9 +30,33 @@ interface NativeProjectFolderPickerResult {
   name: string;
 }
 
+interface DesktopCaptureRegionRequest {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface DesktopCaptureRegionResult {
+  data: string;
+  width: number;
+  height: number;
+}
+
 /** Returns true for the six-digit hex colors Orion sends from the renderer. */
 function isHexWindowBackgroundColor(color: unknown): color is string {
   return typeof color === "string" && /^#[0-9a-fA-F]{6}$/.test(color);
+}
+
+/** Returns true for a finite, positive, integer compositor-capture rectangle. */
+function isDesktopCaptureRegionRequest(value: unknown): value is DesktopCaptureRegionRequest {
+  if (!value || typeof value !== "object") return false;
+  const request = value as Partial<DesktopCaptureRegionRequest>;
+  return [request.x, request.y, request.width, request.height].every(Number.isInteger) &&
+    (request.x ?? -1) >= 0 &&
+    (request.y ?? -1) >= 0 &&
+    (request.width ?? 0) > 0 &&
+    (request.height ?? 0) > 0;
 }
 
 /** Returns the dev server URL for local `npx electron .` runs, or an explicit packaged override. */
@@ -274,6 +298,30 @@ function setupShellIpc(): void {
   ipcMain.handle("orion:shell:reload-ignoring-cache", (event) => {
     requireShellIpcWindow(event).webContents.reloadIgnoringCache();
   });
+  ipcMain.handle(
+    "orion:shell:capture-page-region",
+    async (event, value: unknown): Promise<DesktopCaptureRegionResult> => {
+      const appWindow = requireShellIpcWindow(event);
+      if (!isDesktopCaptureRegionRequest(value)) {
+        throw new Error("Invalid Electron compositor capture rectangle.");
+      }
+      const contentBounds = appWindow.getContentBounds();
+      const x = Math.min(value.x, Math.max(0, contentBounds.width - 1));
+      const y = Math.min(value.y, Math.max(0, contentBounds.height - 1));
+      const width = Math.min(value.width, contentBounds.width - x);
+      const height = Math.min(value.height, contentBounds.height - y);
+      if (width <= 0 || height <= 0) {
+        throw new Error("Electron compositor capture rectangle is outside the window.");
+      }
+      const image = await appWindow.webContents.capturePage({ x, y, width, height });
+      const size = image.getSize();
+      return {
+        data: image.toPNG().toString("base64"),
+        width: size.width,
+        height: size.height,
+      };
+    }
+  );
   ipcMain.handle("orion:shell:get-managed-jupyter-base-url", (event): string | null => {
     requireShellIpcWindow(event);
     return session?.jupyter?.baseUrl ?? null;
