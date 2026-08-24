@@ -452,6 +452,7 @@ export function NotebookEditor({
 }: NotebookEditorProps) {
   const [notebook, setNotebook] = useState<NotebookType | null>(null);
   const notebookRef = useRef<NotebookType | null>(null);
+  notebookRef.current = notebook;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedCellIds, setSelectedCellIds] = useState<Set<CellId>>(
@@ -483,10 +484,6 @@ export function NotebookEditor({
   const [subagentModelOptions, setSubagentModelOptions] = useState<
     SubagentModelOption[]
   >([]);
-
-  useEffect(() => {
-    notebookRef.current = notebook;
-  }, [notebook]);
 
   const cellRefs = useRef<Map<CellId, HTMLDivElement | null>>(new Map());
   const notebookRootRef = useRef<HTMLDivElement | null>(null);
