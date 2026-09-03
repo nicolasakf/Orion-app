@@ -1,7 +1,9 @@
 import {
   act,
   cleanup,
+  fireEvent,
   render,
+  screen,
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -52,29 +54,55 @@ vi.mock("@/components/notebook/notebook-app-view", () => ({
 
 /** Cell text Monaco holds locally, keyed by cell index, before it is flushed. */
 const unflushedCellSources = vi.hoisted(() => new Map<number, string>());
+/** Excerpt plan returned by the mocked cell handle, keyed by cell index. */
+const unflushedRunExcerpts = vi.hoisted(
+  () => new Map<number, { source: string; advanceCursor: boolean }>(),
+);
+/** How many times a cell advanced the caret after a line run. */
+const cursorAdvanceCounts = vi.hoisted(() => new Map<number, number>());
 
 vi.mock("@/components/notebook/notebook-cell", () => ({
   NotebookCell: ({
     cell,
     cellIndex,
     onRegisterRef,
+    onCellAction,
   }: {
     cell: { source: string[] };
     cellIndex: number;
     onRegisterRef?: (
       cellIndex: number,
-      ref: { getSource: () => string; focusSource: () => void } | null,
+      ref: {
+        getSource: () => string;
+        getRunExcerpt: () => { source: string; advanceCursor: boolean } | null;
+        advanceCursorToNextLine: () => void;
+        focusSource: () => void;
+      } | null,
     ) => void;
+    onCellAction?: (action: string, cellIndex: number) => void;
   }) => {
     useEffect(() => {
       onRegisterRef?.(cellIndex, {
         getSource: () =>
           unflushedCellSources.get(cellIndex) ?? cell.source.join(""),
+        getRunExcerpt: () => unflushedRunExcerpts.get(cellIndex) ?? null,
+        advanceCursorToNextLine: () => {
+          cursorAdvanceCounts.set(
+            cellIndex,
+            (cursorAdvanceCounts.get(cellIndex) ?? 0) + 1,
+          );
+        },
         focusSource: () => {},
       });
       return () => onRegisterRef?.(cellIndex, null);
     }, [cell, cellIndex, onRegisterRef]);
-    return null;
+    return (
+      <button
+        type="button"
+        data-testid={`run-selection-${cellIndex}`}
+        onClick={() => onCellAction?.("run-selection", cellIndex)}
+      />
+    );
   },
 }));
 
@@ -183,6 +211,8 @@ afterEach(() => {
   cleanup();
   notebookAppViewMock.mockClear();
   unflushedCellSources.clear();
+  unflushedRunExcerpts.clear();
+  cursorAdvanceCounts.clear();
   vi.restoreAllMocks();
 });
 
@@ -406,6 +436,44 @@ describe("NotebookEditor App View bulk cell add", () => {
 });
 
 describe("NotebookEditor agent execution state", () => {
+  it("saves Monaco text still inside the cell change debounce before an agent mutation", async () => {
+    const path = "/workspace/report.ipynb";
+    const contentsManager = {
+      get: vi.fn().mockResolvedValue({ content: makeNotebook() }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    let saveOpenNotebook:
+      | ((path: string) => Promise<{ status: string }>)
+      | null = null;
+
+    render(
+      <NotebookEditor
+        filepath={path}
+        kernelService={makeKernelService(contentsManager)}
+        onNotebookSaveHandlerChange={(handler) => {
+          saveOpenNotebook = handler;
+        }}
+      />,
+    );
+    await waitFor(() => {
+      expect(saveOpenNotebook).toBeTypeOf("function");
+      // The cell editors must be mounted, otherwise there is no Monaco text to read.
+      expect(screen.getByTestId("run-selection-1")).toBeTruthy();
+    });
+
+    // The editor owns this value, but its debounced onChange has not run yet.
+    unflushedCellSources.set(1, "const answer = 42;");
+
+    const result = await saveOpenNotebook!(path);
+
+    expect(result).toEqual({ status: "saved" });
+    expect(contentsManager.save).toHaveBeenCalledTimes(1);
+    const savedRequest = contentsManager.save.mock.calls[0]?.[1] as {
+      content: NotebookType;
+    };
+    expect(savedRequest.content.cells[1]?.source).toEqual(["const answer = 42;"]);
+  });
+
   it("refreshes a clean open notebook after a matching ContentsManager save", async () => {
     const path = "/workspace/report.ipynb";
     let currentNotebook = {
@@ -468,7 +536,90 @@ describe("NotebookEditor agent execution state", () => {
     });
   });
 
-  it("keeps cell text that has not left its change debounce yet", async () => {
+  it("merges an agent change into a notebook whose other cell is being typed in", async () => {
+    const path = "/workspace/report.ipynb";
+    let currentNotebook = {
+      ...makeNotebook(),
+      metadata: { title: "Before agent edit" },
+    };
+    let saveOpenNotebook:
+      | ((path: string) => Promise<{ status: string }>)
+      | null = null;
+    let fileChangedHandler:
+      | ((sender: unknown, args: {
+          type: "save";
+          oldValue: null;
+          newValue: { path: string; last_modified: string; size: number };
+        }) => void)
+      | null = null;
+    const contentsManager = {
+      get: vi.fn().mockImplementation(async () => ({ content: currentNotebook })),
+      save: vi.fn().mockResolvedValue(undefined),
+      fileChanged: {
+        connect: vi.fn((handler) => {
+          fileChangedHandler = handler;
+        }),
+        disconnect: vi.fn(),
+      },
+    };
+
+    const view = render(
+      <NotebookEditor
+        filepath={path}
+        kernelService={makeKernelService(contentsManager)}
+        onNotebookSaveHandlerChange={(handler) => {
+          saveOpenNotebook = handler;
+        }}
+      />,
+    );
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.notebook?.metadata.title).toBe("Before agent edit");
+      expect(screen.getByTestId("run-selection-1")).toBeTruthy();
+      expect(fileChangedHandler).toBeTypeOf("function");
+    });
+
+    // Monaco holds the new text, but the 300ms change debounce has not fired,
+    // so nothing has marked the notebook dirty yet.
+    unflushedCellSources.set(1, "1 + 2");
+
+    // The agent leaves the cell being typed in untouched, so the two edits merge.
+    currentNotebook = {
+      ...makeNotebook(),
+      metadata: { title: "After agent edit" },
+    };
+    act(() => {
+      fileChangedHandler?.(contentsManager, {
+        type: "save",
+        oldValue: null,
+        newValue: {
+          path,
+          last_modified: "2026-08-13T12:00:01.000Z",
+          size: 100,
+        },
+      });
+    });
+
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.notebook?.metadata.title).toBe("After agent edit");
+    });
+    expect(view.queryByText(/changed on disk/i)).toBeNull();
+
+    // The unsaved cell text survives the merge and is what a later save writes.
+    const saved = await saveOpenNotebook!(path);
+    expect(saved).toEqual({ status: "saved" });
+    const savedRequest = contentsManager.save.mock.calls[0]?.[1] as {
+      content: NotebookType;
+    };
+    expect(savedRequest.content.cells[1]?.source).toEqual(["1 + 2"]);
+  });
+
+  it("reports a conflict when the agent changes the same cell being typed in", async () => {
     const path = "/workspace/report.ipynb";
     let currentNotebook = {
       ...makeNotebook(),
@@ -503,17 +654,16 @@ describe("NotebookEditor agent execution state", () => {
         | NotebookAppViewTestProps
         | undefined;
       expect(props?.notebook?.metadata.title).toBe("Before agent edit");
+      expect(screen.getByTestId("run-selection-1")).toBeTruthy();
       expect(fileChangedHandler).toBeTypeOf("function");
     });
 
-    // Monaco holds the new text, but the 300ms change debounce has not fired,
-    // so nothing has marked the notebook dirty yet.
     unflushedCellSources.set(1, "1 + 2");
 
-    currentNotebook = {
-      ...makeNotebook(),
-      metadata: { title: "After agent edit" },
-    };
+    // The agent rewrote the very cell that holds unflushed text.
+    const diverged = makeNotebook();
+    diverged.cells[1]!.source = ["1 + 3"];
+    currentNotebook = { ...diverged, metadata: { title: "After agent edit" } };
     act(() => {
       fileChangedHandler?.(contentsManager, {
         type: "save",
@@ -919,6 +1069,122 @@ describe("NotebookEditor execution queue cancellation", () => {
       expect(onIsRunningChange).toHaveBeenLastCalledWith(false);
     });
     expect(execute).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("NotebookEditor selected-source execution", () => {
+  it("runs only the selected excerpt without replacing the cell source", async () => {
+    const contentsManager = {
+      get: vi.fn().mockResolvedValue({ content: makeNotebook() }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    const execute = vi.fn(async () => ({ done: Promise.resolve() }));
+    const kernelService = {
+      getContentsManager: () => contentsManager,
+      getAvailableKernels: vi.fn().mockResolvedValue([]),
+      getKernel: () => ({ name: "python", status: "idle" }),
+      getStatus: () => "idle",
+      execute,
+    } as unknown as KernelService;
+
+    unflushedRunExcerpts.set(1, { source: "print(1)", advanceCursor: false });
+
+    render(
+      <NotebookEditor
+        filepath="/workspace/report.ipynb"
+        kernelService={kernelService}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("run-selection-1")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("run-selection-1"));
+
+    await waitFor(() => {
+      expect(execute).toHaveBeenCalledWith("print(1)", expect.any(Function));
+    });
+    expect(execute).not.toHaveBeenCalledWith("1 + 1", expect.any(Function));
+    expect(cursorAdvanceCounts.get(1) ?? 0).toBe(0);
+
+    await waitFor(() => {
+      const props = notebookAppViewMock.mock.lastCall?.[0] as
+        | NotebookAppViewTestProps
+        | undefined;
+      expect(props?.notebook?.cells[1]?.source).toEqual(["1 + 1"]);
+    });
+  });
+
+  it("runs the current line and advances the caret when nothing is selected", async () => {
+    const contentsManager = {
+      get: vi.fn().mockResolvedValue({ content: makeNotebook() }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    const execute = vi.fn(async () => ({ done: Promise.resolve() }));
+    const kernelService = {
+      getContentsManager: () => contentsManager,
+      getAvailableKernels: vi.fn().mockResolvedValue([]),
+      getKernel: () => ({ name: "python", status: "idle" }),
+      getStatus: () => "idle",
+      execute,
+    } as unknown as KernelService;
+
+    unflushedRunExcerpts.set(1, { source: "1 + 1", advanceCursor: true });
+
+    render(
+      <NotebookEditor
+        filepath="/workspace/report.ipynb"
+        kernelService={kernelService}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("run-selection-1")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("run-selection-1"));
+
+    await waitFor(() => {
+      expect(execute).toHaveBeenCalledWith("1 + 1", expect.any(Function));
+    });
+    expect(cursorAdvanceCounts.get(1)).toBe(1);
+  });
+
+  it("advances the caret on an empty line without executing", async () => {
+    const contentsManager = {
+      get: vi.fn().mockResolvedValue({ content: makeNotebook() }),
+      save: vi.fn().mockResolvedValue(undefined),
+    };
+    const execute = vi.fn(async () => ({ done: Promise.resolve() }));
+    const kernelService = {
+      getContentsManager: () => contentsManager,
+      getAvailableKernels: vi.fn().mockResolvedValue([]),
+      getKernel: () => ({ name: "python", status: "idle" }),
+      getStatus: () => "idle",
+      execute,
+    } as unknown as KernelService;
+
+    unflushedRunExcerpts.set(1, { source: "", advanceCursor: true });
+
+    render(
+      <NotebookEditor
+        filepath="/workspace/report.ipynb"
+        kernelService={kernelService}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("run-selection-1")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByTestId("run-selection-1"));
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(execute).not.toHaveBeenCalled();
+    expect(cursorAdvanceCounts.get(1)).toBe(1);
   });
 });
 

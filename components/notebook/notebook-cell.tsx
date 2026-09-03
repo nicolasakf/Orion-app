@@ -123,7 +123,21 @@ import {
   setNotebookOutputTableMetadata,
 } from "@/lib/notebook/app-view";
 import { isHiddenInputCellWithoutVisibleContent } from "@/lib/notebook/cell-presentation";
+import {
+  advanceMonacoCursorToNextLine,
+  getMonacoRunExcerpt,
+  isRunSelectedSourceShortcut,
+  type RunExcerptPlan,
+} from "@/lib/notebook/monaco-selection";
 import { getRelativeTime } from "@/lib/utils";
+
+/** Parent-facing handle for reading a cell's live editor state. */
+export interface NotebookCellHandle {
+  getSource: () => string;
+  getRunExcerpt: () => RunExcerptPlan | null;
+  advanceCursorToNextLine: () => void;
+  focusSource: () => void;
+}
 
 interface NotebookCellProps {
   cell: NotebookCellType;
@@ -149,7 +163,7 @@ interface NotebookCellProps {
   onUpdateCellData?: (cellIndex: number, cell: NotebookCellType) => void;
   onRegisterRef?: (
     cellIndex: number,
-    ref: { getSource: () => string; focusSource: () => void } | null,
+    ref: NotebookCellHandle | null,
   ) => void;
   onContentChange?: (cellIndex: number, source: string) => void;
   onMentionCell?: (cellIndex: number) => void;
@@ -980,10 +994,27 @@ function NotebookCellComponent({
   const cellId = (cell.metadata as any)?.orion?.id;
   const prevCellIdRef = useRef(cellId);
 
+  // Last source this cell accepted from the parent. Comparing against it lets us
+  // tell an authoritative external change (agent edit, reload, checkpoint restore)
+  // apart from the parent re-rendering for an unrelated reason (execution status,
+  // outputs arriving, another cell running), which replaces the cell object
+  // without changing its source.
+  const syncedSourceRef = useRef(safeSource.join(""));
+
+  /** Drops a queued debounced change notification so stale text is never reported. */
+  const cancelPendingChangeNotification = useCallback(() => {
+    if (changeTimeoutRef.current) {
+      clearTimeout(changeTimeoutRef.current);
+      changeTimeoutRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     if (prevCellIdRef.current !== cellId) {
       prevCellIdRef.current = cellId;
       const newSource = Array.isArray(cell.source) ? cell.source.join("") : "";
+      cancelPendingChangeNotification();
+      syncedSourceRef.current = newSource;
       setLocalSource(newSource);
       setIsEditingMode(false);
       setHasLocalChanges(false);
@@ -997,11 +1028,14 @@ function NotebookCellComponent({
       setIsOutputCollapsed(orionMeta?.isOutputCollapsed ?? false);
       setHasMentionableEditorSelection(false);
     }
-  }, [cellId, cell.source, cell.metadata]);
+  }, [cancelPendingChangeNotification, cellId, cell.source, cell.metadata]);
 
-  // Create a ref object that exposes getSource and focusSource methods
-  const cellRef = useRef({
+  // Create a ref object that exposes live source, excerpt, and focus helpers
+  const cellRef = useRef<NotebookCellHandle>({
     getSource: () => localSource,
+    getRunExcerpt: () => getMonacoRunExcerpt(monacoEditorInstanceRef.current),
+    advanceCursorToNextLine: () =>
+      advanceMonacoCursorToNextLine(monacoEditorInstanceRef.current),
     focusSource: () => { },
   });
 
@@ -1098,6 +1132,10 @@ function NotebookCellComponent({
 
   // Update focusSource to enter edit mode and focus the cell source
   useEffect(() => {
+    cellRef.current.getRunExcerpt = () =>
+      getMonacoRunExcerpt(monacoEditorInstanceRef.current);
+    cellRef.current.advanceCursorToNextLine = () =>
+      advanceMonacoCursorToNextLine(monacoEditorInstanceRef.current);
     cellRef.current.focusSource = () => {
       if (cell.cell_type === CellType.CODE) {
         if (monacoEditorInstanceRef.current) {
@@ -1147,6 +1185,16 @@ function NotebookCellComponent({
       }
 
       if (
+        isRunSelectedSourceShortcut(event) &&
+        cell.cell_type === CellType.CODE
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        onCellAction?.("run-selection", cellIndex);
+        return;
+      }
+
+      if (
         event.key === "Enter" &&
         (event.shiftKey || event.metaKey || event.ctrlKey)
       ) {
@@ -1166,7 +1214,7 @@ function NotebookCellComponent({
     return () => {
       container.removeEventListener("keydown", handleEditingKeyDown, true);
     };
-  }, [isEditingMode, cellIndex, onCellAction, onCellSelect]);
+  }, [isEditingMode, cell.cell_type, cellIndex, onCellAction, onCellSelect]);
 
   // NEW: Update contentScrollHeight when content changes or collapse state changes
   useEffect(() => {
@@ -1294,10 +1342,11 @@ function NotebookCellComponent({
       },
       {
         icon: Play,
-        label: ["Run cell", "Run and select below"],
+        label: ["Run cell", "Run and select below", "Run selected text or current line"],
         shortcut: [
           [CmdOrCtrl, Enter],
           [Shift, Enter],
+          [AltOrOption, Enter],
         ],
         action: "run",
         cellTypes: [CellType.CODE],
@@ -1482,13 +1531,28 @@ function NotebookCellComponent({
   }, []);
 
   // Sync notebook source into the editor when the saved cell changes externally.
-  // Skip while the user has unsaved local edits — parent updates (queued/running
-  // status, other cells executing) replace the cell object and must not wipe typing.
+  //
+  // The discriminator is the source *content*, not a local-edit flag. Parent
+  // updates for queued/running status or other cells executing replace the cell
+  // object while leaving its source identical, so they are ignored and never wipe
+  // typing. A genuinely different source is authoritative (an agent edit, a reload
+  // from disk, a checkpoint restore) and is adopted, dropping the local-edit flag.
+  //
+  // Gating on `hasLocalChanges` instead would be sticky for the lifetime of this
+  // component — it is only cleared when a different cell id lands here, which
+  // cannot happen while the editor keys cells by id. Monaco would then shadow every
+  // later agent edit, and `getSource()` would keep feeding the stale text back into
+  // the editor's dirty tracking.
   useEffect(() => {
-    if (hasLocalChanges) return;
-    const src = Array.isArray(cell.source) ? cell.source.join("") : "";
-    setLocalSource(src);
-  }, [cell.source, cellId, hasLocalChanges]);
+    const incoming = Array.isArray(cell.source) ? cell.source.join("") : "";
+    if (incoming === syncedSourceRef.current) return;
+
+    // A change notification queued before this update carries pre-adoption text.
+    cancelPendingChangeNotification();
+    syncedSourceRef.current = incoming;
+    setLocalSource(incoming);
+    setHasLocalChanges(false);
+  }, [cancelPendingChangeNotification, cell.source, cellId]);
 
   // Initialize visibility and collapse states from cell metadata
   useEffect(() => {
@@ -1509,9 +1573,7 @@ function NotebookCellComponent({
    */
   const notifyCellModified = useCallback(
     (source: string) => {
-      if (changeTimeoutRef.current) {
-        clearTimeout(changeTimeoutRef.current);
-      }
+      cancelPendingChangeNotification();
 
       changeTimeoutRef.current = setTimeout(() => {
         if (onCellModified) {
@@ -1522,7 +1584,7 @@ function NotebookCellComponent({
         }
       }, 300); // Debounce for 300ms
     },
-    [cellIndex, onCellModified, onContentChange],
+    [cancelPendingChangeNotification, cellIndex, onCellModified, onContentChange],
   );
 
   /**

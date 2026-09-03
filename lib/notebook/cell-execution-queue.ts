@@ -8,6 +8,11 @@ export interface CellRunJob {
   triggerSource?: RunAllTriggerSource;
   /** Replaces an older pending automatic run with the same key. */
   coalesceKey?: string;
+  /**
+   * Optional per-index source used for kernel execution instead of the full
+   * cell source. The notebook cell text is left unchanged.
+   */
+  sourceOverrides?: Record<number, string>;
 }
 
 /**

@@ -25,9 +25,19 @@ export type ActiveDocumentDeletionSource = "contents-manager" | "poll";
 /**
  * Result of an editor reload request. `"deferred"` means the editor could not
  * reload yet (for example while agent cells are still executing) and the change
- * is still outstanding, so the sync layer must keep retrying.
+ * is still outstanding, so the sync layer must keep retrying. `"conflicted"`
+ * means the editor looked at the disk version and could not reconcile it with
+ * the buffer, so the change must be surfaced to the user instead of applied.
  */
-export type ActiveDocumentReloadOutcome = "deferred" | void;
+export type ActiveDocumentReloadOutcome = "deferred" | "conflicted" | void;
+
+/** Context handed to an editor so it can decide how to apply the disk version. */
+export interface ActiveDocumentReloadContext {
+  /** Whether the editor buffer held unsaved changes when the reload was requested. */
+  dirty: boolean;
+  /** True when the user explicitly chose to discard the buffer and take disk. */
+  discardLocalChanges: boolean;
+}
 
 /** Notifies the app shell that the clean active editor should follow a rename. */
 export function dispatchActiveDocumentRenamed(
@@ -73,10 +83,19 @@ interface UseActiveDocumentSyncOptions {
   path: string | null;
   contentsManager: ContentsManager | null;
   isDirty: () => boolean;
-  onReload: () => Promise<ActiveDocumentReloadOutcome>;
+  onReload: (
+    context: ActiveDocumentReloadContext,
+  ) => Promise<ActiveDocumentReloadOutcome>;
   onRenamed?: (newPath: string) => void;
   onDeleted?: (source: ActiveDocumentDeletionSource) => void;
   pollIntervalMs?: number;
+  /**
+   * Opt in to letting `onReload` see a dirty buffer so the editor can reconcile
+   * the two versions itself (the notebook merges per cell). Editors that leave
+   * this off keep the conservative behaviour: a dirty buffer is never handed to
+   * `onReload` and goes straight to a conflict.
+   */
+  canReloadWhenDirty?: boolean;
 }
 
 export interface ActiveDocumentSyncController {
@@ -140,6 +159,7 @@ export function useActiveDocumentSync({
   onRenamed,
   onDeleted,
   pollIntervalMs = ACTIVE_DOCUMENT_POLL_INTERVAL_MS,
+  canReloadWhenDirty = false,
 }: UseActiveDocumentSyncOptions): ActiveDocumentSyncController {
   const [state, setState] = useState<ActiveDocumentSyncState>({
     status: "current",
@@ -159,11 +179,13 @@ export function useActiveDocumentSync({
   const onReloadRef = useRef(onReload);
   const onRenamedRef = useRef(onRenamed);
   const onDeletedRef = useRef(onDeleted);
+  const canReloadWhenDirtyRef = useRef(canReloadWhenDirty);
 
   isDirtyRef.current = isDirty;
   onReloadRef.current = onReload;
   onRenamedRef.current = onRenamed;
   onDeletedRef.current = onDeleted;
+  canReloadWhenDirtyRef.current = canReloadWhenDirty;
 
   /** Records the version that is currently represented in the editor. */
   const recordLoadedModel = useCallback(
@@ -198,7 +220,8 @@ export function useActiveDocumentSync({
       }
       if (pendingVersionRef.current && versionsMatch(pendingVersionRef.current, version)) return;
 
-      if (isDirtyRef.current()) {
+      const dirty = isDirtyRef.current();
+      if (dirty && !canReloadWhenDirtyRef.current) {
         pendingVersionRef.current = version;
         setState({ status: "conflicted", version });
         return;
@@ -216,12 +239,22 @@ export function useActiveDocumentSync({
         setState({ status: "refreshing" });
         try {
           const generationBeforeReload = baselineGenerationRef.current;
-          const outcome = await onReloadRef.current();
+          const outcome = await onReloadRef.current({
+            dirty,
+            discardLocalChanges: false,
+          });
           if (outcome === "deferred") {
             // The editor could not apply the change yet. Leave the baseline
             // stale so polling retries until the reload can actually happen.
             pendingVersionRef.current = null;
             clearRefreshingState();
+            return;
+          }
+          if (outcome === "conflicted") {
+            // The editor read the disk version and could not reconcile it with
+            // the buffer. Surface it instead of replacing either side.
+            pendingVersionRef.current = version;
+            setState({ status: "conflicted", version });
             return;
           }
           // Only fall back to the triggering version when the editor did not
@@ -340,8 +373,11 @@ export function useActiveDocumentSync({
     const previousState = stateRef.current;
     setState({ status: "refreshing" });
     try {
-      const outcome = await onReloadRef.current();
-      if (outcome === "deferred") {
+      const outcome = await onReloadRef.current({
+        dirty: isDirtyRef.current(),
+        discardLocalChanges: true,
+      });
+      if (outcome === "deferred" || outcome === "conflicted") {
         // Nothing was replaced yet, so keep the unresolved state visible
         // instead of implying the disk version is now in the editor.
         setState(previousState.status === "refreshing" ? { status: "current" } : previousState);

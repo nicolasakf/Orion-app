@@ -113,4 +113,19 @@ describe("CellExecutionQueue", () => {
     expect(queue.pendingCount).toBe(1);
     expect(queue.dequeue()?.indices).toEqual([1]);
   });
+
+  it("preserves sourceOverrides when dequeuing a job", () => {
+    const queue = new CellExecutionQueue();
+    queue.enqueue({
+      indices: [2],
+      stopOnError: true,
+      sourceOverrides: { 2: "print(1)" },
+    });
+
+    expect(queue.dequeue()).toEqual({
+      indices: [2],
+      stopOnError: true,
+      sourceOverrides: { 2: "print(1)" },
+    });
+  });
 });

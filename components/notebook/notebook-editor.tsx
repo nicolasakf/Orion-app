@@ -50,7 +50,7 @@ import {
 } from "lucide-react";
 import { OrionLoader } from "@/components/common/orion-loader";
 import { parseNotebook } from "@/lib/notebook/notebook-parser";
-import { NotebookCell } from "@/components/notebook/notebook-cell";
+import { NotebookCell, type NotebookCellHandle } from "@/components/notebook/notebook-cell";
 import type {
   OrionUiLocalValue,
   OrionUiStateChangeContext,
@@ -81,6 +81,7 @@ import {
   dispatchActiveDocumentDeleted,
   dispatchActiveDocumentRenamed,
   useActiveDocumentSync,
+  type ActiveDocumentReloadContext,
   type ActiveDocumentReloadOutcome,
   type ActiveDocumentSyncController,
 } from "@/hooks/use-active-document-sync";
@@ -245,6 +246,7 @@ const NOTEBOOK_SHORTCUT_GROUPS = [
       { keys: "Enter", description: "Edit the selected cell" },
       { keys: "Shift + Enter", description: "Run selected cells and advance" },
       { keys: "Ctrl/Cmd + Enter", description: "Run selected cells" },
+      { keys: "Alt/Option + Enter", description: "Run selected text, or the current line and move down" },
       { keys: "Esc", description: "Leave edit mode or clear selection" },
       { keys: "H", description: "Show notebook shortcuts" },
     ],
@@ -297,6 +299,21 @@ function isNotebookKeyboardScope(
 /** Normalizes editor/source line endings before comparing dirty state. */
 function normalizeSourceForDirtyCheck(source: string): string {
   return source.replace(/\r\n/g, "\n");
+}
+
+/**
+ * Drops entries for cells that no longer exist, keeping the surviving handles.
+ *
+ * Replacing these maps wholesale would leave dirty checks blind to every mounted
+ * editor until its registration effect re-runs.
+ */
+function pruneRefMapToIds<T>(
+  refs: Map<CellId, T>,
+  availableIds: ReadonlySet<CellId>,
+): void {
+  for (const cellId of Array.from(refs.keys())) {
+    if (!availableIds.has(cellId)) refs.delete(cellId);
+  }
 }
 
 function SubagentOptionTooltip({
@@ -669,6 +686,12 @@ export function NotebookEditor({
   const documentSyncRef = useRef<ActiveDocumentSyncController | null>(null);
   const preserveDirtyRenameToRef = useRef<string | null>(null);
 
+  // The notebook content that matches what is on disk. React state holds the
+  // last committed document while unsaved typing lives in pendingCellChangesRef,
+  // so this is the baseline a per-cell reconcile compares the disk version
+  // against to tell "the agent changed this cell" from "only the user did".
+  const lastSyncedNotebookRef = useRef<NotebookType | null>(null);
+
   /** Marks the notebook as having unsaved changes and notifies the parent (once per transition). */
   const markDirty = useCallback(() => {
     dirtyVersionRef.current += 1;
@@ -777,9 +800,7 @@ export function NotebookEditor({
   );
 
   // Store refs to cell components for direct access
-  const cellComponentRefs = useRef<
-    Map<CellId, { getSource: () => string; focusSource: () => void }>
-  >(new Map());
+  const cellComponentRefs = useRef<Map<CellId, NotebookCellHandle>>(new Map());
   const executionQueueRef = useRef(new CellExecutionQueue());
   const orionUiChangeEpochRef = useRef(0);
   const orionUiChangeGenerationsRef = useRef(new Map<string, number>());
@@ -922,6 +943,7 @@ export function NotebookEditor({
         documentSyncRef.current?.recordLoadedModel(model);
 
         setNotebook(withIds);
+        lastSyncedNotebookRef.current = withIds;
         // Clear modified/pending cells when loading a new notebook.
         modifiedCellsRef.current = new Set();
         pendingCellChangesRef.current = new Map();
@@ -1027,7 +1049,7 @@ export function NotebookEditor({
   const registerCellRef = useCallback(
     (
       cellIndex: number,
-      ref: { getSource: () => string; focusSource: () => void } | null,
+      ref: NotebookCellHandle | null,
     ) => {
       const cellId = cellIdForIndex(cellIndex);
       if (!cellId) return;
@@ -1362,6 +1384,11 @@ export function NotebookEditor({
       sourceOverrides?: ReadonlyMap<CellId, string>,
     ): Promise<OpenDocumentSaveResult> => {
       if (path !== filepath) return { status: "not-open" };
+
+      // A notebook tool can arrive inside NotebookCell's change debounce. Read
+      // Monaco before the clean fast path so the agent never mutates a stale
+      // disk snapshot and then has its edit replaced by the editor buffer.
+      promoteUnflushedCellEdits();
       if (!isUnsavedRef.current) return { status: "clean" };
       const currentNotebook = notebookRef.current;
       if (!parentKernelService || !currentNotebook) {
@@ -1406,6 +1433,7 @@ export function NotebookEditor({
           // This prevents a later "clean" save (e.g. on file switch) from writing an older snapshot.
           notebookRef.current = notebookToSave;
           setNotebook(notebookToSave);
+          lastSyncedNotebookRef.current = notebookToSave;
 
           pendingCellChangesRef.current.clear();
           modifiedCellsRef.current.clear();
@@ -1426,6 +1454,7 @@ export function NotebookEditor({
       filepath,
       markClean,
       parentKernelService,
+      promoteUnflushedCellEdits,
     ],
   );
 
@@ -1845,96 +1874,204 @@ export function NotebookEditor({
     };
   }, []);
 
+  /** Returns the ordered stable cell ids of a notebook, skipping unidentified cells. */
+  const collectCellIds = useCallback((source: NotebookType): CellId[] => {
+    const ids: CellId[] = [];
+    source.cells.forEach((cell) => {
+      const cellId = getCellId(cell);
+      if (cellId) ids.push(cellId);
+    });
+    return ids;
+  }, []);
+
   /**
-   * Reloads the notebook from disk, or reports `"deferred"` when the reload has
-   * to wait for in-flight agent execution so the sync layer keeps retrying.
+   * Brings the editor in line with the version on disk.
+   *
+   * A clean buffer simply adopts the disk document. A dirty buffer is reconciled
+   * per cell: cells the user has edited keep their unsaved text as long as disk
+   * still matches the last-synced baseline for them, while every other cell takes
+   * the disk version. Only a cell that diverged on both sides (or one the user was
+   * editing that disk no longer has) is reported as `"conflicted"` for the user to
+   * resolve, so an agent editing one cell never blocks typing in another.
+   *
+   * Reports `"deferred"` when the reload has to wait for in-flight agent execution
+   * so the sync layer keeps retrying.
    */
-  const reloadNotebookAfterAgentModification = useCallback(async (): Promise<
-    ActiveDocumentReloadOutcome
-  > => {
-    if (!parentKernelService) {
-      return "deferred";
-    }
-
-    if (activeAgentExecutionCellsRef.current.size > 0) {
-      pendingAgentNotebookReloadRef.current = true;
-      return "deferred";
-    }
-
-    try {
-      const dirtyVersionBeforeReload = dirtyVersionRef.current;
-      const previousSelection: CellSelectionState = {
-        selectedCellIds: new Set(selectedCellIds),
-        selectionAnchorCellId,
-        cellCursorId,
-      };
-      const scrollContainer = notebookRootRef.current?.querySelector<HTMLElement>(
-        ".notebook-editor-scroll",
-      );
-      const scrollTop = scrollContainer?.scrollTop ?? null;
-      const contentsManager = parentKernelService.getContentsManager();
-      const model = await contentsManager.get(filepath, { content: true });
-      const parsedNotebook = parseNotebook(JSON.stringify(model.content));
-
-      const withIds = ensureUniqueCellIds(parsedNotebook, createCellId);
-
-      if (dirtyVersionRef.current !== dirtyVersionBeforeReload) {
-        throw new Error("Notebook changed in the editor while the disk version was loading.");
+  const reconcileNotebookWithDisk = useCallback(
+    async (
+      context: ActiveDocumentReloadContext,
+    ): Promise<ActiveDocumentReloadOutcome> => {
+      if (!parentKernelService) {
+        return "deferred";
       }
 
-      documentSyncRef.current?.recordLoadedModel(model);
+      if (activeAgentExecutionCellsRef.current.size > 0) {
+        pendingAgentNotebookReloadRef.current = true;
+        return "deferred";
+      }
 
-      setNotebook(withIds);
-      modifiedCellsRef.current = new Set();
-      pendingCellChangesRef.current = new Map();
-      cellComponentRefs.current = new Map();
-      cellRefs.current = new Map();
-      const availableIds = new Set(
-        withIds.cells.map((cell) => getCellId(cell)).filter((id): id is string => id !== null),
-      );
-      const preservedIds = new Set(
-        Array.from(previousSelection.selectedCellIds).filter((id) => availableIds.has(id)),
-      );
-      const preservedCursor =
-        previousSelection.cellCursorId && availableIds.has(previousSelection.cellCursorId)
-          ? previousSelection.cellCursorId
-          : (preservedIds.values().next().value ?? null);
-      const preservedAnchor =
-        previousSelection.selectionAnchorCellId &&
-        availableIds.has(previousSelection.selectionAnchorCellId)
-          ? previousSelection.selectionAnchorCellId
-          : preservedCursor;
-      applySelectionState(
-        preservedCursor
-          ? {
-              selectedCellIds: preservedIds.size > 0 ? preservedIds : new Set([preservedCursor]),
-              selectionAnchorCellId: preservedAnchor,
-              cellCursorId: preservedCursor,
-            }
-          : singleCellSelection(getCellId(withIds.cells[0])),
-      );
-      markClean();
-      if (scrollContainer && scrollTop !== null) {
-        window.requestAnimationFrame(() => {
-          scrollContainer.scrollTop = scrollTop;
+      const { discardLocalChanges } = context;
+
+      // Collect the local edits to preserve. An explicit "reload disk version"
+      // discards them, so it skips straight to a full replace.
+      const localEdits = new Map<CellId, string>();
+      if (!discardLocalChanges) {
+        // Cell editors report changes on a debounce, so recover any typing that
+        // has not reached the dirty flag before comparing against disk.
+        promoteUnflushedCellEdits();
+        capturePendingCellSources();
+        modifiedCellsRef.current.forEach((cellId) => {
+          const source = pendingCellChangesRef.current.get(cellId);
+          if (source !== undefined) localEdits.set(cellId, source);
         });
       }
-    } catch (err) {
-      console.error(
-        "Failed to reload notebook after agent modification:",
-        err,
-      );
-      throw err;
-    }
-  }, [
-    applySelectionState,
-    cellCursorId,
-    filepath,
-    markClean,
-    parentKernelService,
-    selectedCellIds,
-    selectionAnchorCellId,
-  ]);
+
+      const baselineNotebook = lastSyncedNotebookRef.current;
+      const currentNotebook = notebookRef.current;
+      if (localEdits.size > 0) {
+        // Structural edits (insert, delete, move) commit straight to React state,
+        // so there is no stable per-cell baseline left to merge against.
+        const baselineIds = baselineNotebook
+          ? collectCellIds(baselineNotebook)
+          : null;
+        const currentIds = currentNotebook ? collectCellIds(currentNotebook) : null;
+        if (
+          !baselineIds ||
+          !currentIds ||
+          baselineIds.length !== currentIds.length ||
+          baselineIds.some((cellId, index) => cellId !== currentIds[index])
+        ) {
+          return "conflicted";
+        }
+      }
+
+      try {
+        const dirtyVersionBeforeReload = dirtyVersionRef.current;
+        const previousSelection: CellSelectionState = {
+          selectedCellIds: new Set(selectedCellIds),
+          selectionAnchorCellId,
+          cellCursorId,
+        };
+        const scrollContainer = notebookRootRef.current?.querySelector<HTMLElement>(
+          ".notebook-editor-scroll",
+        );
+        const scrollTop = scrollContainer?.scrollTop ?? null;
+        const contentsManager = parentKernelService.getContentsManager();
+        const model = await contentsManager.get(filepath, { content: true });
+        const parsedNotebook = parseNotebook(JSON.stringify(model.content));
+
+        const withIds = ensureUniqueCellIds(parsedNotebook, createCellId);
+
+        if (dirtyVersionRef.current !== dirtyVersionBeforeReload) {
+          // Typing landed while the disk version was in flight, so the snapshot
+          // above no longer describes the buffer. Let the user resolve it.
+          return "conflicted";
+        }
+
+        // Decide which local edits survive the disk version.
+        const mergeableEdits = new Map<CellId, string>();
+        if (localEdits.size > 0) {
+          const baselineSources = new Map<CellId, string>();
+          baselineNotebook?.cells.forEach((cell) => {
+            const cellId = getCellId(cell);
+            if (cellId) baselineSources.set(cellId, cell.source.join(""));
+          });
+          const diskSources = new Map<CellId, string>();
+          withIds.cells.forEach((cell) => {
+            const cellId = getCellId(cell);
+            if (cellId) diskSources.set(cellId, cell.source.join(""));
+          });
+
+          for (const [cellId, localSource] of localEdits) {
+            const diskSource = diskSources.get(cellId);
+            const baselineSource = baselineSources.get(cellId);
+            if (diskSource === undefined || baselineSource === undefined) {
+              // The cell being edited no longer exists on disk.
+              return "conflicted";
+            }
+            if (
+              normalizeSourceForDirtyCheck(diskSource) !==
+              normalizeSourceForDirtyCheck(baselineSource)
+            ) {
+              // Both sides changed the same cell.
+              return "conflicted";
+            }
+            mergeableEdits.set(cellId, localSource);
+          }
+        }
+
+        documentSyncRef.current?.recordLoadedModel(model);
+
+        setNotebook(withIds);
+        notebookRef.current = withIds;
+        lastSyncedNotebookRef.current = withIds;
+
+        const availableIds = new Set(collectCellIds(withIds));
+
+        // Keep the surviving unsaved text pending against the new committed
+        // state. Their cell.source is unchanged, so their editors keep the
+        // user's typing while every other cell adopts the disk version.
+        modifiedCellsRef.current = new Set(mergeableEdits.keys());
+        pendingCellChangesRef.current = new Map(mergeableEdits);
+
+        // Prune the mounted-editor handles instead of dropping them, so dirty
+        // checks are not blind until the registration effects re-run.
+        pruneRefMapToIds(cellComponentRefs.current, availableIds);
+        pruneRefMapToIds(cellRefs.current, availableIds);
+
+        const preservedIds = new Set(
+          Array.from(previousSelection.selectedCellIds).filter((id) => availableIds.has(id)),
+        );
+        const preservedCursor =
+          previousSelection.cellCursorId && availableIds.has(previousSelection.cellCursorId)
+            ? previousSelection.cellCursorId
+            : (preservedIds.values().next().value ?? null);
+        const preservedAnchor =
+          previousSelection.selectionAnchorCellId &&
+          availableIds.has(previousSelection.selectionAnchorCellId)
+            ? previousSelection.selectionAnchorCellId
+            : preservedCursor;
+        applySelectionState(
+          preservedCursor
+            ? {
+                selectedCellIds: preservedIds.size > 0 ? preservedIds : new Set([preservedCursor]),
+                selectionAnchorCellId: preservedAnchor,
+                cellCursorId: preservedCursor,
+              }
+            : singleCellSelection(getCellId(withIds.cells[0])),
+        );
+        if (mergeableEdits.size > 0) {
+          markDirty();
+        } else {
+          markClean();
+        }
+        if (scrollContainer && scrollTop !== null) {
+          window.requestAnimationFrame(() => {
+            scrollContainer.scrollTop = scrollTop;
+          });
+        }
+      } catch (err) {
+        console.error(
+          "Failed to reload notebook after agent modification:",
+          err,
+        );
+        throw err;
+      }
+    },
+    [
+      applySelectionState,
+      capturePendingCellSources,
+      cellCursorId,
+      collectCellIds,
+      filepath,
+      markClean,
+      markDirty,
+      parentKernelService,
+      promoteUnflushedCellEdits,
+      selectedCellIds,
+      selectionAnchorCellId,
+    ],
+  );
 
   const documentSync = useActiveDocumentSync({
     path: filepath,
@@ -1945,7 +2082,8 @@ export function NotebookEditor({
       promoteUnflushedCellEdits();
       return isUnsavedRef.current;
     },
-    onReload: reloadNotebookAfterAgentModification,
+    onReload: reconcileNotebookWithDisk,
+    canReloadWhenDirty: true,
     onDeleted: (source) => {
       if (isUnsavedRef.current) return;
       if (source === "contents-manager") {
@@ -2524,7 +2662,10 @@ export function NotebookEditor({
         }
 
         capturePendingCellSources();
-        const cellsToRun = prepareCellsForExecution(job.indices);
+        const cellsToRun = prepareCellsForExecution(job.indices).map((cell) => ({
+          ...cell,
+          source: job.sourceOverrides?.[cell.index] ?? cell.source,
+        }));
         if (cellsToRun.length === 0) {
           job = queue.dequeue();
           continue;
@@ -2705,6 +2846,8 @@ export function NotebookEditor({
    *   batch operations (run all, run all above/below) and false for explicit
    *   multi-select runs.
    * @param coalesceKey - Optional key that replaces an older pending automatic run.
+   * @param sourceOverrides - Optional per-index source executed instead of the
+   *   full cell. The cell editor text is not replaced.
    */
   const handleRunCell = useCallback(
     (
@@ -2712,6 +2855,7 @@ export function NotebookEditor({
       stopOnError = true,
       triggerSource?: RunAllTriggerSource,
       coalesceKey?: string,
+      sourceOverrides?: Record<number, string>,
     ) => {
       if (!notebook || !isKernelAvailableForExecution()) {
         console.warn("Cannot run cell: kernel not available");
@@ -2736,6 +2880,7 @@ export function NotebookEditor({
         stopOnError,
         triggerSource,
         coalesceKey,
+        sourceOverrides,
       });
       markCellsQueued(finalIndices);
       void processExecutionQueue();
@@ -2749,6 +2894,44 @@ export function NotebookEditor({
       markCellsQueued,
       capturePendingCellSources,
     ],
+  );
+
+  /**
+   * Runs the current Monaco selection, or the current line when the caret is
+   * collapsed, without replacing cell source. A collapsed caret then moves down.
+   *
+   * @returns true when an excerpt was queued or the caret advanced.
+   */
+  const handleRunSelectedSource = useCallback(
+    (cellIndex: number): boolean => {
+      const currentNotebook = notebookRef.current;
+      if (
+        !currentNotebook ||
+        cellIndex < 0 ||
+        cellIndex >= currentNotebook.cells.length
+      ) {
+        return false;
+      }
+
+      const cell = currentNotebook.cells[cellIndex];
+      if (cell.cell_type !== CellType.CODE) return false;
+
+      const cellId = getCellId(cell);
+      const cellRef = cellId ? cellComponentRefs.current.get(cellId) : null;
+      const excerpt = cellRef?.getRunExcerpt() ?? null;
+      if (!excerpt) return false;
+
+      if (excerpt.source.length > 0) {
+        handleRunCell([cellIndex], true, undefined, undefined, {
+          [cellIndex]: excerpt.source,
+        });
+      }
+      if (excerpt.advanceCursor) {
+        cellRef?.advanceCursorToNextLine();
+      }
+      return true;
+    },
+    [handleRunCell],
   );
 
   /**
@@ -3591,6 +3774,9 @@ export function NotebookEditor({
         case "run":
           handleRunCell([cellIndexFromAction]);
           break;
+        case "run-selection":
+          handleRunSelectedSource(cellIndexFromAction);
+          break;
         case "run-and-advance":
           handleRunCell([cellIndexFromAction]);
           {
@@ -3891,6 +4077,7 @@ export function NotebookEditor({
     [
       notebook,
       handleRunCell,
+      handleRunSelectedSource,
       handleMoveCell,
       handleDeleteSelectedCells,
       handleCopySelectedCellsToClipboard,
@@ -4435,6 +4622,12 @@ export function NotebookEditor({
                 }
               }
             }
+          } else if (event.altKey && currentCursor >= 0) {
+            const ranSelection = handleRunSelectedSource(currentCursor);
+            if (!ranSelection && cellCursorId !== null) {
+              const cellRef = cellComponentRefs.current.get(cellCursorId);
+              cellRef?.focusSource();
+            }
           } else {
             // Plain Enter on a selected cell should enter edit mode
             if (cellCursorId !== null) {
@@ -4486,6 +4679,7 @@ export function NotebookEditor({
     handleChangeCellTypes,
     handleToggleSelectedCellsHidden,
     handleRunCell,
+    handleRunSelectedSource,
     handleMentionCell,
     focusNotebookCommandTarget,
     copiedCells,
