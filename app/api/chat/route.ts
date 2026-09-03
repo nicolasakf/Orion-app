@@ -38,6 +38,7 @@ import {
   updateChatSessionStatus,
   updateContextCalibration,
 } from "@/lib/chat/chat-sqlite-storage.server";
+import { usesClientModelRequestId } from "@/lib/chat/model-request-origin";
 import {
   CONTEXT_ESTIMATOR_VERSION,
   measurePreparedPrompt,
@@ -1223,10 +1224,9 @@ async function handleChatRequest(
   const modelRequest = options.preflight
     ? null
     : await resolveOrCreateModelRequest({
-        id:
-          requestOrigin === "user" || requestOrigin === "goal_evaluation"
-            ? clientModelRequestId
-            : undefined,
+        id: usesClientModelRequestId(requestOrigin)
+          ? clientModelRequestId
+          : undefined,
         origin: requestOrigin,
         chatSessionId: chatSession?.sessionId,
       });

@@ -60,6 +60,7 @@ import {
   formatAssistantMessageClipboardText,
   writeAssistantMessageToClipboard,
 } from "@/lib/chat/chat-message-copy";
+import { parseChatMessageGoalMessage } from "@/lib/chat/chat-references";
 
 type CheckpointMessageAction = "restore" | "redo";
 
@@ -668,10 +669,12 @@ interface ActivityItemRenderOptions {
   onOpenSubagentReport?: (path: string) => void;
 }
 
-/** Everything the goal proposal card needs to let the user pick a reviewer model. */
+/** Everything the goal proposal card needs to let the user pick its worker and reviewer. */
 export interface GoalEvaluatorPickerProps {
   models: LLM[];
   pinnedModelIds: string[];
+  workerModel: string;
+  onWorkerModelChange: (model: string) => void;
   selectedModel: string;
   onSelectedModelChange: (model: string) => void;
   onOpenModelsSettings?: () => void;
@@ -730,6 +733,8 @@ function renderAssistantActivityItem({
           onRequestRevision={onRequestGoalContractRevision}
           models={goalEvaluatorPicker?.models}
           pinnedModelIds={goalEvaluatorPicker?.pinnedModelIds}
+          workerModel={goalEvaluatorPicker?.workerModel}
+          onWorkerModelChange={goalEvaluatorPicker?.onWorkerModelChange}
           evaluatorModel={goalEvaluatorPicker?.selectedModel}
           onEvaluatorModelChange={goalEvaluatorPicker?.onSelectedModelChange}
           onOpenModelsSettings={goalEvaluatorPicker?.onOpenModelsSettings}
@@ -1065,6 +1070,7 @@ const ChatMessageRow = React.memo(
     const actionableCheckpointId = checkpointAction
       ? messageCheckpointId
       : undefined;
+    const goalMessage = parseChatMessageGoalMessage(message.metadata);
 
     /** Render one grouped reasoning/tool part using the existing detailed components. */
     const renderActivityItem = (item: AssistantPartWithIndex) => {
@@ -1142,10 +1148,10 @@ const ChatMessageRow = React.memo(
         {message.role === "user" ? (
           <UserMessage
             message={message}
-            onEdit={canEditUserMessages ? handleUserClick : undefined}
-            checkpointId={actionableCheckpointId}
-            checkpointAction={checkpointAction}
-            onRestoreCheckpoint={onRestoreCheckpoint}
+            onEdit={canEditUserMessages && !goalMessage ? handleUserClick : undefined}
+            checkpointId={goalMessage ? undefined : actionableCheckpointId}
+            checkpointAction={goalMessage ? undefined : checkpointAction}
+            onRestoreCheckpoint={goalMessage ? undefined : onRestoreCheckpoint}
           />
         ) : costSummary ? (
           <CostSummaryCard
@@ -1282,6 +1288,9 @@ const ChatMessageRow = React.memo(
         return false;
       }
     }
+    // Goal model selections live outside the persisted message. A picker change
+    // must therefore invalidate this otherwise-stable historical message row.
+    if (prev.goalEvaluatorPicker !== next.goalEvaluatorPicker) return false;
     if (
       !areToolMapValuesEqual(
         prev.message,

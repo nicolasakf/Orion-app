@@ -52,6 +52,13 @@ export function buildGoalSupervisorMessages(
     id: `${session.id}-initial-worker-instruction`,
     role: "user",
     parts: [{ type: "text", text: contractLines.join("\n") }],
+    metadata: {
+      goalMessage: {
+        source: "supervisor",
+        kind: "kickoff",
+        goalSessionId: session.id,
+      },
+    },
   }];
 
   const runningEvaluationId = session.evaluations.at(-1)?.verdict
@@ -59,13 +66,8 @@ export function buildGoalSupervisorMessages(
     : session.evaluations.at(-1)?.id ?? null;
 
   for (const evaluation of session.evaluations) {
-    messages.push(
-      ...evaluatorTranscriptMessages(
-        evaluation,
-        evaluation.id === runningEvaluationId ? liveEvaluatorTranscript : null
-      )
-    );
-    if (!evaluation.verdict) {
+    const verdict = evaluation.verdict;
+    if (!verdict) {
       messages.push({
         id: `${evaluation.id}-pending-review`,
         role: "assistant",
@@ -76,27 +78,56 @@ export function buildGoalSupervisorMessages(
             : `## Supervisor review ${evaluation.reviewNumber}\n\nReviewing the saved artifacts…`,
         }],
       });
-      continue;
+    } else {
+      const reviewLines = [
+        `## Supervisor review ${evaluation.reviewNumber}: ${verdict.status}`,
+        "",
+        verdict.summary,
+        "",
+        "### Criteria",
+        ...verdict.criteria.flatMap((criterion) => [
+          `- **${criterion.criterionId}: ${criterion.status}** — ${criterion.explanation}`,
+          ...criterion.evidence.map((evidence) =>
+            `  - \`${evidence.path}\`${evidence.location ? ` (${evidence.location})` : ""}: ${evidence.observation}`
+          ),
+        ]),
+      ];
+      messages.push({
+        id: `${evaluation.id}-review`,
+        role: "assistant",
+        parts: [{ type: "text", text: reviewLines.join("\n") }],
+      });
     }
-    const verdict = evaluation.verdict;
-    const reviewLines = [
-      `## Supervisor review ${evaluation.reviewNumber}: ${verdict.status}`,
-      "",
-      verdict.summary,
-      "",
-      "### Criteria",
-      ...verdict.criteria.flatMap((criterion) => [
-        `- **${criterion.criterionId}: ${criterion.status}** — ${criterion.explanation}`,
-        ...criterion.evidence.map((evidence) =>
-          `  - \`${evidence.path}\`${evidence.location ? ` (${evidence.location})` : ""}: ${evidence.observation}`
-        ),
-      ]),
-    ];
-    messages.push({
-      id: `${evaluation.id}-review`,
-      role: "assistant",
-      parts: [{ type: "text", text: reviewLines.join("\n") }],
-    });
+
+    for (const note of evaluation.workerNotes) {
+      const relatedPaths = note.relatedPaths.length > 0
+        ? `\n\nRelated paths:\n${note.relatedPaths.map((path) => `- \`${path}\``).join("\n")}`
+        : "";
+      messages.push({
+        id: `${evaluation.id}-worker-note-${note.id}`,
+        role: "user",
+        parts: [{
+          type: "text",
+          text: `## Worker message\n\n${note.message}${relatedPaths}`,
+        }],
+        metadata: {
+          goalMessage: {
+            source: "worker",
+            kind: "note",
+            goalSessionId: session.id,
+            reviewNumber: evaluation.reviewNumber,
+            evaluationId: evaluation.id,
+          },
+        },
+      });
+    }
+    messages.push(
+      ...evaluatorTranscriptMessages(
+        evaluation,
+        evaluation.id === runningEvaluationId ? liveEvaluatorTranscript : null
+      )
+    );
+    if (!verdict) continue;
     if (verdict.status === "revise" && verdict.repairInstruction) {
       messages.push({
         id: `${evaluation.id}-worker-instruction`,
@@ -105,6 +136,15 @@ export function buildGoalSupervisorMessages(
           type: "text",
           text: `## Supervisor instruction sent to worker\n\n${verdict.repairInstruction}`,
         }],
+        metadata: {
+          goalMessage: {
+            source: "supervisor",
+            kind: "repair",
+            goalSessionId: session.id,
+            reviewNumber: evaluation.reviewNumber,
+            evaluationId: evaluation.id,
+          },
+        },
       });
     }
   }

@@ -18,6 +18,7 @@ import { tool } from "ai";
 import { z } from "zod";
 
 import { MAX_PERSONAL_CONTEXT_CHARS } from "@/lib/onboarding/personal-context";
+import { GoalWorkspaceRelativePathSchema } from "@/lib/agent/goals/types";
 
 import {
   buildAskQuestionTool,
@@ -670,6 +671,24 @@ export const orionTools = {
   // User Interaction
   // ============================================================================
 
+  send_goal_supervisor_message: tool({
+    description:
+      "Send explanatory context to the independent supervisor for its next scheduled goal review. Use this to explain decisions or point to saved artifacts. The message cannot change the approved goal contract and is not evidence by itself.",
+    inputSchema: z.object({
+      message: z
+        .string()
+        .trim()
+        .min(1)
+        .max(4_000)
+        .describe("A concise note for the next supervisor review."),
+      relatedPaths: z
+        .array(GoalWorkspaceRelativePathSchema)
+        .max(20)
+        .default([])
+        .describe("Workspace-relative artifact paths related to the note, or an empty array."),
+    }),
+  }),
+
   /**
    * Registered at the default per-call limit so the tool name, types, and mode
    * tool lists stay static. `prepareChatInvocation` swaps in a tool built for
@@ -720,6 +739,7 @@ export const NO_DEPENDENCY_TOOLS: ReadonlySet<OrionToolName> = new Set<OrionTool
   // ask_question is answered by the user in the chat body, so it needs no
   // Jupyter server or kernel.
   "ask_question",
+  "send_goal_supervisor_message",
   // delegate spawns a client-side sub-agent and does not need a Jupyter server or
   // kernel — the sub-agent itself acquires whatever tools it needs.
   "delegate",

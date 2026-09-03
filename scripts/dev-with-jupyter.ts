@@ -3,7 +3,12 @@ import { spawn, type ChildProcess } from "child_process";
 import { existsSync } from "fs";
 import { resolve } from "path";
 
-import { keepAliveUntilExit, ORION_MAX_HTTP_HEADER_SIZE } from "../lib/cli/app-server";
+import {
+  DEFAULT_ORION_PORT,
+  findAvailableOrionPort,
+  keepAliveUntilExit,
+  ORION_MAX_HTTP_HEADER_SIZE,
+} from "../lib/cli/app-server";
 import {
   bootstrapJupyter,
   resolveJupyterRootDirectory,
@@ -33,7 +38,7 @@ function parseOptions(argv: string[]): DevWithJupyterOptions {
 function printUsage(): void {
   console.log(`Usage: npm run dev:notebook [--] [--here] [--pick-python] [-y|--yes]
 
-Starts Jupyter (same bootstrap as the Orion CLI) and Next.js dev on port 3001.
+Starts Jupyter (same bootstrap as the Orion CLI) and Next.js dev on port ${DEFAULT_ORION_PORT}.
 The app auto-connects via ~/.orion/runtime/jupyter-connection.json.
 
 Options:
@@ -47,8 +52,8 @@ Environment:
   ORION_DEV_INTERACTIVE=1   Same as passing --pick-python for setup prompts.`);
 }
 
-/** Spawns the Next.js dev server with Turbopack on port 3001. */
-function startNextDevServer(): ChildProcess {
+/** Spawns the Next.js dev server with Turbopack on Orion's default port. */
+function startNextDevServer(port: number): ChildProcess {
   const nextEntrypoint = resolve(process.cwd(), "node_modules/next/dist/bin/next");
   if (!existsSync(nextEntrypoint)) {
     throw new Error(
@@ -58,7 +63,14 @@ function startNextDevServer(): ChildProcess {
 
   return spawn(
     process.execPath,
-    [`--max-http-header-size=${ORION_MAX_HTTP_HEADER_SIZE}`, nextEntrypoint, "dev", "-p", "3001", "--turbopack"],
+    [
+      `--max-http-header-size=${ORION_MAX_HTTP_HEADER_SIZE}`,
+      nextEntrypoint,
+      "dev",
+      "-p",
+      String(port),
+      "--turbopack",
+    ],
     {
       cwd: process.cwd(),
       stdio: "inherit",
@@ -77,13 +89,14 @@ async function main(): Promise<void> {
 
   const options = parseOptions(argv);
   const jupyterRoot = resolveJupyterRootDirectory(options.here);
+  const port = await findAvailableOrionPort(DEFAULT_ORION_PORT);
 
   console.log("Checking Python and Jupyter...");
   const jupyter = await bootstrapJupyter(options, jupyterRoot);
   console.log(`Jupyter is running at ${jupyter.baseUrl} (root: ${jupyterRoot})`);
-  console.log("Starting Next.js dev server on http://127.0.0.1:3001 ...");
+  console.log(`Starting Next.js dev server on http://127.0.0.1:${port} ...`);
 
-  const nextDev = startNextDevServer();
+  const nextDev = startNextDevServer(port);
   nextDev.on("error", (error) => {
     jupyter.dispose();
     console.error(error);

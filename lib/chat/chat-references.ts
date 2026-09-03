@@ -82,12 +82,22 @@ export interface ChatMessageMetadata {
   slashCommands?: ChatSlashCommandToken[];
   /** Persisted marker for the user turn that began goal contract authoring. */
   goalContractDraft?: true;
+  /** Identifies a persisted goal-control turn without trusting display text. */
+  goalMessage?: ChatGoalMessageSource;
   /**
    * Context accounting for the request that produced this assistant message,
    * including the exact input-token count the provider reported. This is the only
    * path by which real token counts reach the UI — everything else is an estimate.
    */
   contextUsage?: ContextMeasurement;
+}
+
+export interface ChatGoalMessageSource {
+  source: "supervisor" | "worker";
+  kind: "kickoff" | "repair" | "note";
+  goalSessionId: string;
+  reviewNumber?: number;
+  evaluationId?: string;
 }
 
 export type ChatSlashCommandCategory = "builtin" | "subagent" | "skill";
@@ -175,10 +185,19 @@ const ChatSlashCommandTokenSchema = z.object({
   category: z.enum(["builtin", "subagent", "skill"]).optional(),
 });
 
+const ChatGoalMessageSourceSchema = z.object({
+  source: z.enum(["supervisor", "worker"]),
+  kind: z.enum(["kickoff", "repair", "note"]),
+  goalSessionId: z.string().min(1),
+  reviewNumber: z.number().int().positive().optional(),
+  evaluationId: z.string().min(1).optional(),
+});
+
 export const ChatMessageMetadataSchema = z.object({
   references: z.array(ResolvedChatReferenceSchema).max(20).optional(),
   slashCommands: z.array(ChatSlashCommandTokenSchema).max(10).optional(),
   goalContractDraft: z.literal(true).optional(),
+  goalMessage: ChatGoalMessageSourceSchema.optional(),
   contextUsage: ContextMeasurementSchema.optional(),
 });
 
@@ -209,6 +228,15 @@ export function parseChatMessageContextUsage(
   return parsed.data.contextUsage ?? null;
 }
 
+/** Returns the validated source descriptor for a goal-control chat message. */
+export function parseChatMessageGoalMessage(
+  metadata: unknown,
+): ChatGoalMessageSource | null {
+  const parsed = ChatMessageMetadataSchema.safeParse(metadata);
+  if (!parsed.success) return null;
+  return parsed.data.goalMessage ?? null;
+}
+
 /**
  * Keeps only chat metadata fields that Orion understands and should persist.
  *
@@ -224,11 +252,13 @@ export function normalizeChatMessageMetadata(
   const references = parsed.data.references ?? [];
   const slashCommands = parsed.data.slashCommands ?? [];
   const goalContractDraft = parsed.data.goalContractDraft;
+  const goalMessage = parsed.data.goalMessage;
   const contextUsage = parsed.data.contextUsage;
   if (
     references.length === 0 &&
     slashCommands.length === 0 &&
     !goalContractDraft &&
+    !goalMessage &&
     !contextUsage
   ) {
     return undefined;
@@ -238,6 +268,7 @@ export function normalizeChatMessageMetadata(
     ...(references.length > 0 ? { references } : {}),
     ...(slashCommands.length > 0 ? { slashCommands } : {}),
     ...(goalContractDraft ? { goalContractDraft } : {}),
+    ...(goalMessage ? { goalMessage } : {}),
     ...(contextUsage ? { contextUsage } : {}),
   };
 }

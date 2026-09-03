@@ -3,10 +3,14 @@ import { spawn, type ChildProcess } from "child_process";
 import { existsSync } from "fs";
 import { resolve } from "path";
 
-import { ORION_MAX_HTTP_HEADER_SIZE } from "../lib/cli/app-server";
+import {
+  DEFAULT_ORION_PORT,
+  findAvailableOrionPort,
+  ORION_MAX_HTTP_HEADER_SIZE,
+} from "../lib/cli/app-server";
 
-const DEFAULT_DEV_URL = "http://127.0.0.1:3001";
-const DEFAULT_DEV_PORT = "3001";
+const DEFAULT_DEV_URL = `http://127.0.0.1:${DEFAULT_ORION_PORT}`;
+const DEFAULT_DEV_PORT = String(DEFAULT_ORION_PORT);
 
 /** Prints usage for the desktop dev launcher. */
 function printUsage(): void {
@@ -15,7 +19,7 @@ function printUsage(): void {
 Starts the Next.js dev server, waits for it, then launches Electron.
 
 Environment:
-  ORION_DESKTOP_DEV_URL   URL Electron should load (default: http://127.0.0.1:3001).`);
+  ORION_DESKTOP_DEV_URL   URL Electron should load (default: ${DEFAULT_DEV_URL}).`);
 }
 
 /** Returns whether a local HTTP server is accepting connections. */
@@ -124,14 +128,18 @@ async function main(): Promise<void> {
     return;
   }
 
-  const devUrl = process.env.ORION_DESKTOP_DEV_URL ?? DEFAULT_DEV_URL;
-  const port = new URL(devUrl).port || DEFAULT_DEV_PORT;
+  let devUrl = process.env.ORION_DESKTOP_DEV_URL ?? DEFAULT_DEV_URL;
+  let port = new URL(devUrl).port || DEFAULT_DEV_PORT;
   const children: ChildProcess[] = [];
 
   let nextDev: ChildProcess | null = null;
   if (await isServerReady(devUrl)) {
     console.log(`Using existing Next.js dev server at ${devUrl}`);
   } else {
+    if (!process.env.ORION_DESKTOP_DEV_URL) {
+      port = String(await findAvailableOrionPort(DEFAULT_ORION_PORT));
+      devUrl = `http://127.0.0.1:${port}`;
+    }
     console.log(`Starting Next.js dev server at ${devUrl} ...`);
     nextDev = startNextDevServer(port);
     children.push(nextDev);

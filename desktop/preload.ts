@@ -49,6 +49,11 @@ contextBridge.exposeInMainWorld("orionDesktopShell", {
   },
   isWindowFocused: (): Promise<boolean> =>
     ipcRenderer.invoke("orion:shell:is-window-focused"),
+  setAgentRunPowerState: (state: {
+    active: boolean;
+    preventSystemSleep: boolean;
+  }): Promise<void> =>
+    ipcRenderer.invoke("orion:shell:set-agent-run-power-state", state),
   showNotification: (request: { title: string; body: string }): Promise<boolean> =>
     ipcRenderer.invoke("orion:shell:show-notification", request),
 });

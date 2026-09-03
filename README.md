@@ -163,7 +163,7 @@ npm install
 
 #### Dev mode
 
-Both commands start the Next.js dev server on port 3001 with hot reload (Turbopack). Pick one:
+Both commands start the Next.js dev server on port 7070 with hot reload (Turbopack). If that port is busy, Orion uses the next available local port. Pick one:
 
 | Command | What it starts | When to use |
 | --- | --- | --- |

@@ -149,6 +149,8 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   createGoalSession,
+  appendGoalWorkerNote,
+  cancelGoalEvaluation,
   endGoalSupervision,
   failGoalEvaluation,
   finishGoalEvaluation,
@@ -166,9 +168,18 @@ import {
 } from "@/lib/agent/goals/evaluator-runner";
 import {
   GoalContractSchema,
+  GoalWorkerNoteSchema,
   type GoalContinuation,
   type GoalSession,
 } from "@/lib/agent/goals/types";
+import {
+  createGoalWorkspace,
+  matchesPinnedGoalWorkspace,
+} from "@/lib/agent/goals/workspace";
+import {
+  buildGoalKickoffMessage,
+  buildGoalRepairMessage,
+} from "@/lib/agent/goals/worker-messages";
 import {
   GOAL_CONTRACT_AUTHOR_MAX_INVESTIGATION_STEPS,
   GOAL_CONTRACT_PROPOSAL_TOOL_NAME,
@@ -203,7 +214,7 @@ import {
 } from "./assistant-activity-grouping";
 import {
   getCompletedToolContinuationKey,
-  getTranscriptProgressCount,
+  getReviewReadyGoalWorkerRequestId,
   shouldContinueAfterToolCalls,
 } from "./assistant-turn-state";
 import { useContextUsage } from "./use-context-usage";
@@ -953,8 +964,11 @@ export function RightSidebar({
   const goalContractFailureToastIdsRef = useRef<Set<string>>(new Set());
   const goalStartAbortRef = useRef<AbortController | null>(null);
   const goalEvaluationAbortRef = useRef<AbortController | null>(null);
+  const goalEvaluationIdRef = useRef<string | null>(null);
   const goalEvaluationRunningRef = useRef(false);
-  const goalWorkerStartProgressRef = useRef<number | null>(null);
+  const goalWorkerRequestInFlightRef = useRef<string | null>(null);
+  const [reviewReadyWorkerRequestId, setReviewReadyWorkerRequestId] =
+    useState<string | null>(null);
   // Live reviewer transcript, so the supervisor panel shows the evaluator
   // working instead of staying blank until its verdict lands.
   const [liveEvaluatorTranscript, setLiveEvaluatorTranscript] = useState<
@@ -962,6 +976,8 @@ export function RightSidebar({
   >(null);
   const liveEvaluatorTranscriptRef = useRef<UIMessage[] | null>(null);
   const goalContinuationRef = useRef<GoalContinuation | undefined>(undefined);
+  /** Keeps every model step in a supervisor-initiated worker turn traceable. */
+  const goalWorkerRequestOriginRef = useRef(false);
   /** Shared request id for model calls triggered by the current user turn. */
   const modelRequestIdRef = useRef<string | undefined>(undefined);
   /** Ref holding the latest compaction summary for the transport interceptor. */
@@ -1278,6 +1294,8 @@ export function RightSidebar({
     () => ({
       models: modelsWithAccess,
       pinnedModelIds,
+      workerModel: selectedModel,
+      onWorkerModelChange: handleModelChange,
       selectedModel: goalEvaluatorModel,
       onSelectedModelChange: handleGoalEvaluatorModelChange,
       onOpenModelsSettings: () => openWithTab("models"),
@@ -1286,10 +1304,12 @@ export function RightSidebar({
     [
       goalEvaluatorModel,
       handleGoalEvaluatorModelChange,
+      handleModelChange,
       handleOpenProvidersSettings,
       modelsWithAccess,
       openWithTab,
       pinnedModelIds,
+      selectedModel,
     ],
   );
 
@@ -1627,9 +1647,12 @@ export function RightSidebar({
   useEffect(() => {
     goalEvaluationAbortRef.current?.abort();
     goalEvaluationAbortRef.current = null;
+    goalEvaluationIdRef.current = null;
     goalEvaluationRunningRef.current = false;
-    goalWorkerStartProgressRef.current = null;
+    goalWorkerRequestInFlightRef.current = null;
+    setReviewReadyWorkerRequestId(null);
     goalContinuationRef.current = undefined;
+    goalWorkerRequestOriginRef.current = false;
     liveEvaluatorTranscriptRef.current = null;
     setLiveEvaluatorTranscript(null);
     setGoalSupervisorOpen(false);
@@ -1649,8 +1672,12 @@ export function RightSidebar({
       .then(async (stored) => {
         if (cancelled) return;
         if (stored?.status === "active") {
+          const latestEvaluationId = stored.evaluations.at(-1)?.id;
+          const resumable = latestEvaluationId
+            ? cancelGoalEvaluation(stored, latestEvaluationId)
+            : stored;
           const paused: GoalSession = {
-            ...stored,
+            ...resumable,
             status: "paused",
             phase: "paused",
             updatedAt: new Date().toISOString(),
@@ -2072,6 +2099,15 @@ export function RightSidebar({
   const isToolServerReady = Boolean(
     kernelService && assistant?.toolsReady && serverAvailable,
   );
+  const connectedGoalWorkspaceRef = useRef(
+    createGoalWorkspace(workspaceDirectory, assistant?.rootDirectory),
+  );
+  connectedGoalWorkspaceRef.current = createGoalWorkspace(
+    workspaceDirectory,
+    assistant?.rootDirectory,
+  );
+  const isToolServerReadyRef = useRef(isToolServerReady);
+  isToolServerReadyRef.current = isToolServerReady;
   const toolExecutionSchedulerRef =
     useRef<OrderedToolExecutionScheduler | null>(null);
   const toolExecutionAbortControllerRef = useRef<AbortController | null>(null);
@@ -2716,6 +2752,9 @@ export function RightSidebar({
           ? (interactionModeConfigs.find((mode) => mode.id === "Agent") ??
             resolvedInteractionModeConfig)
           : resolvedInteractionModeConfig;
+      const pinnedWorkspace = goalSessionRef.current?.status === "active"
+        ? goalSessionRef.current.workspace
+        : undefined;
       return {
         provider: modelInfo?.provider,
         model: apiModelId,
@@ -2731,7 +2770,8 @@ export function RightSidebar({
         activeFilePath,
         connectedNotebookPath:
           assistant?.getCurrentConnectedNotebookPath() ?? undefined,
-        workspaceDirectory: workspaceDirectory ?? undefined,
+        workspaceDirectory:
+          pinnedWorkspace?.workspaceDirectory ?? workspaceDirectory ?? undefined,
         availableSkills: serializeAvailableSkills(
           assistant?.availableSkills ?? [],
         ),
@@ -2741,7 +2781,8 @@ export function RightSidebar({
         agentRules: serializeAgentRules(assistant?.availableRules ?? []),
         serverInfo: assistant?.serverInfo ?? undefined,
         jupyterServerIsLocal: assistant?.jupyterServerIsLocal ?? undefined,
-        rootDirectory: assistant?.rootDirectory ?? undefined,
+        rootDirectory:
+          pinnedWorkspace?.rootDirectory ?? assistant?.rootDirectory ?? undefined,
         clientPlatformOs,
         agentCommunicationStyle,
         agentCustomCommunicationStyle,
@@ -2751,6 +2792,7 @@ export function RightSidebar({
         researchNudge: researchNudgeRef.current,
         goalContractDraft: goalContractDraftActiveRef.current || undefined,
         goalContinuation: goalContinuationRef.current,
+        origin: goalWorkerRequestOriginRef.current ? "goal_worker" : undefined,
         businessExperienceMode: isBusinessExperience,
         contextSettings: effectiveSettings.agent.context,
         maxQuestionsPerAsk: effectiveSettings.agent.execution.maxQuestionsPerAsk,
@@ -3072,11 +3114,23 @@ export function RightSidebar({
       );
     },
     onFinish: ({ messages: finalMessages }) => {
+      const normalizedFinalMessages =
+        deduplicateMessagesById(finalMessages).messages;
+      const activeGoal = goalSessionRef.current;
+      const workerRequestId = getReviewReadyGoalWorkerRequestId({
+        messages: normalizedFinalMessages,
+        goal: activeGoal,
+        inFlightWorkerRequestId: goalWorkerRequestInFlightRef.current,
+        stopRequested: stopRequestedRef.current,
+      });
+      if (workerRequestId) {
+        goalWorkerRequestInFlightRef.current = null;
+        setReviewReadyWorkerRequestId(workerRequestId);
+      }
+
       const persistId = effectiveChatIdRef.current;
       if (!persistId) return;
 
-      const normalizedFinalMessages =
-        deduplicateMessagesById(finalMessages).messages;
       const latestChats = chatsRef.current;
       const chatForPersist = latestChats.find((c) => c.id === persistId);
       const checkpointRequestId = modelRequestIdRef.current;
@@ -3150,6 +3204,26 @@ export function RightSidebar({
     },
     onError: (error) => {
       console.log(error);
+      const activeGoal = goalSessionRef.current;
+      const workerRequestId = goalWorkerRequestInFlightRef.current;
+      if (
+        activeGoal?.status === "active" &&
+        activeGoal.phase === "working" &&
+        workerRequestId === activeGoal.workerRequestId
+      ) {
+        const pausedGoal = pauseGoalSupervision(
+          activeGoal,
+          new Date().toISOString(),
+          "Goal supervision paused because the worker request failed. Send or resume when the worker is available again.",
+        );
+        goalWorkerRequestInFlightRef.current = null;
+        setReviewReadyWorkerRequestId(null);
+        goalContinuationRef.current = undefined;
+        goalWorkerRequestOriginRef.current = false;
+        goalSessionRef.current = pausedGoal;
+        setGoalSession(pausedGoal);
+        void persistGoalSession(pausedGoal);
+      }
       const apiError = parseChatApiErrorMessage(error?.message);
       if (goalContractDraftActiveRef.current) {
         const contractAuthorError = apiError?.message?.trim();
@@ -3379,6 +3453,34 @@ export function RightSidebar({
   ]);
 
   const isInputLocked = isAgentTurnActive || isGoalStarting;
+
+  /** Keeps macOS awake for the complete agent turn when the desktop preference allows it. */
+  useEffect(() => {
+    if (!settingsHydrated) return;
+    const setAgentRunPowerState =
+      window.orionDesktopShell?.setAgentRunPowerState;
+    if (!setAgentRunPowerState) return;
+
+    const preventSystemSleep =
+      effectiveSettings.agent.execution.preventSystemSleep;
+    void setAgentRunPowerState({
+      active: isAgentTurnActive,
+      preventSystemSleep,
+    }).catch((error: unknown) => {
+      console.warn("Failed to update desktop agent power state:", error);
+    });
+
+    return () => {
+      void setAgentRunPowerState({
+        active: false,
+        preventSystemSleep,
+      }).catch(() => undefined);
+    };
+  }, [
+    effectiveSettings.agent.execution.preventSystemSleep,
+    isAgentTurnActive,
+    settingsHydrated,
+  ]);
 
   /** Stamp terminal tool timings when a turn completes so compact rows can show duration. */
   const prevTurnActiveForTimingsRef = useRef(isAgentTurnActive);
@@ -4011,6 +4113,32 @@ export function RightSidebar({
           trackedToolCallsRef.current.set(toolCallId, { status: "running" });
           markToolStarted(toolCallId);
 
+          const executingGoal = goalSessionRef.current;
+          if (
+            executingGoal?.status === "active" &&
+            executingGoal.chatId === scheduledChatId &&
+            (
+              !executingGoal.workspace ||
+              !isToolServerReadyRef.current ||
+              !matchesPinnedGoalWorkspace(
+                executingGoal.workspace,
+                connectedGoalWorkspaceRef.current,
+              )
+            )
+          ) {
+            const reason = "Goal supervision paused because its pinned workspace changed or became unavailable before a worker tool could run.";
+            const paused = pauseGoalSupervision(
+              executingGoal,
+              new Date().toISOString(),
+              reason,
+            );
+            goalContinuationRef.current = undefined;
+            goalSessionRef.current = paused;
+            setGoalSession(paused);
+            await persistGoalSession(paused);
+            throw new Error(reason);
+          }
+
           // ---- ask_question: the user answers it in the chat body -------
           // Parked on the scheduler rather than executed, so the model's turn
           // stays blocked on the questionnaire exactly as it would on any
@@ -4038,6 +4166,62 @@ export function RightSidebar({
               toolCallId,
               output: answers,
             });
+            return;
+          }
+
+          // ---- goal worker note: durable barrier before tool success ----
+          if (toolName === "send_goal_supervisor_message") {
+            try {
+              const currentGoal = goalSessionRef.current;
+              if (
+                !currentGoal ||
+                currentGoal.status !== "active" ||
+                currentGoal.phase !== "working" ||
+                currentGoal.chatId !== scheduledChatId
+              ) {
+                throw new Error(
+                  "The supervised goal ended or paused before this message could be queued.",
+                );
+              }
+              const note = GoalWorkerNoteSchema.parse({
+                id: crypto.randomUUID(),
+                toolCallId,
+                workerRequestId: modelRequestId ?? currentGoal.workerRequestId,
+                message: args.message,
+                relatedPaths: args.relatedPaths ?? [],
+                createdAt: new Date().toISOString(),
+              });
+              const nextGoal = appendGoalWorkerNote(currentGoal, note);
+              await persistGoalSession(nextGoal);
+              if (!isCurrentExecution()) return;
+              goalSessionRef.current = nextGoal;
+              setGoalSession(nextGoal);
+              const result = {
+                status: "queued" as const,
+                noteId: note.id,
+                reviewNumber: nextGoal.reviewCount + 1,
+              };
+              trackedToolCallsRef.current.set(toolCallId, {
+                status: "completed",
+                result,
+              });
+              addTimedToolOutput({ tool: toolName, toolCallId, output: result });
+            } catch (error) {
+              if (!isCurrentExecution()) return;
+              const errorText = error instanceof Error
+                ? error.message
+                : String(error);
+              trackedToolCallsRef.current.set(toolCallId, {
+                status: "completed",
+                result: { error: errorText },
+              });
+              addTimedToolOutput({
+                state: "output-error",
+                tool: toolName,
+                toolCallId,
+                errorText,
+              });
+            }
             return;
           }
 
@@ -4426,6 +4610,7 @@ export function RightSidebar({
       setChats,
       prepareAgentToolResult,
       effectiveSettings.agent.execution.maxParallelReadOnlyCalls,
+      chainedCellExecutionAllowed,
     ],
   );
 
@@ -4505,6 +4690,34 @@ export function RightSidebar({
           },
         );
         if (missingDependency) {
+          const activeGoal = goalSessionRef.current;
+          if (
+            missingDependency === "server" &&
+            activeGoal?.status === "active" &&
+            activeGoal.chatId === effectiveChatIdRef.current
+          ) {
+            const reason = "Goal supervision paused because its pinned Jupyter workspace became unavailable before a worker tool could run.";
+            const paused = pauseGoalSupervision(
+              activeGoal,
+              new Date().toISOString(),
+              reason,
+            );
+            goalContinuationRef.current = undefined;
+            goalSessionRef.current = paused;
+            setGoalSession(paused);
+            void persistGoalSession(paused);
+            trackedToolCallsRef.current.set(inv.toolCallId, {
+              status: "completed",
+              result: { error: reason },
+            });
+            addTimedToolOutput({
+              state: "output-error",
+              tool: toolNameTyped,
+              toolCallId: inv.toolCallId,
+              errorText: reason,
+            });
+            continue;
+          }
           trackedToolCallsRef.current.set(inv.toolCallId, { status: "queued" });
           const pendingToolCall = {
             toolCallId: inv.toolCallId,
@@ -5288,6 +5501,7 @@ export function RightSidebar({
       beginAgentTurn();
       const modelRequestId = crypto.randomUUID();
       modelRequestIdRef.current = modelRequestId;
+      goalWorkerRequestOriginRef.current = false;
       reactiveContextRetryRef.current = false;
       ensureResearchSessionActive(messageText);
       forcedSubagentForCurrentTurnRef.current = null;
@@ -5295,6 +5509,7 @@ export function RightSidebar({
         ...bodyRef.current,
         chatId: action.sourceChat.id,
         modelRequestId,
+        origin: undefined,
       };
 
       await sendMessage(
@@ -5375,14 +5590,61 @@ export function RightSidebar({
       }
       const modelRequestId = crypto.randomUUID();
       modelRequestIdRef.current = modelRequestId;
-      beginAgentTurn();
-      const activeGoal = goalSessionRef.current;
+      goalWorkerRequestOriginRef.current = false;
+      bodyRef.current = { ...bodyRef.current, origin: undefined };
+      let activeGoal = goalSessionRef.current;
       if (activeGoal?.status === "active") {
+        if (!kernelService || !assistant || !isToolServerReady) {
+          const reason = "Goal supervision paused because its pinned Jupyter workspace is unavailable. Reconnect it before resuming; your message was left in the composer.";
+          const paused = pauseGoalSupervision(
+            activeGoal,
+            new Date().toISOString(),
+            reason,
+          );
+          goalContinuationRef.current = undefined;
+          goalSessionRef.current = paused;
+          setGoalSession(paused);
+          void persistGoalSession(paused);
+          toast.warning(reason);
+          return;
+        }
+        const currentWorkspace = createGoalWorkspace(
+          workspaceDirectory,
+          assistant.rootDirectory,
+        );
+        if (
+          !activeGoal.workspace ||
+          !matchesPinnedGoalWorkspace(activeGoal.workspace, currentWorkspace)
+        ) {
+          const reason = activeGoal.workspace
+            ? "Goal supervision paused because the connected workspace no longer matches the goal's pinned workspace. Your message was left in the composer."
+            : "This legacy goal must be resumed once to bind its workspace before work can continue. Your message was left in the composer.";
+          const paused = pauseGoalSupervision(
+            activeGoal,
+            new Date().toISOString(),
+            reason,
+          );
+          goalContinuationRef.current = undefined;
+          goalSessionRef.current = paused;
+          setGoalSession(paused);
+          void persistGoalSession(paused);
+          toast.warning(reason);
+          return;
+        }
         goalEvaluationAbortRef.current?.abort();
+        if (goalEvaluationIdRef.current) {
+          activeGoal = cancelGoalEvaluation(
+            activeGoal,
+            goalEvaluationIdRef.current,
+          );
+          goalEvaluationIdRef.current = null;
+        }
         goalEvaluationRunningRef.current = false;
         const workingGoal: GoalSession = {
           ...activeGoal,
           phase: "working",
+          workerRequestId: modelRequestId,
+          pauseReason: undefined,
           updatedAt: new Date().toISOString(),
         };
         goalSessionRef.current = workingGoal;
@@ -5394,10 +5656,10 @@ export function RightSidebar({
           contract: workingGoal.contract,
           contractVersion: workingGoal.contractVersion,
         };
-        goalWorkerStartProgressRef.current = getTranscriptProgressCount(
-          messagesRef.current,
-        );
+        goalWorkerRequestInFlightRef.current = modelRequestId;
+        setReviewReadyWorkerRequestId(null);
       }
+      beginAgentTurn();
       ensureResearchSessionActive(messageText);
       forcedSubagentForCurrentTurnRef.current = null;
       if (!pendingSubmit) {
@@ -5480,6 +5742,10 @@ export function RightSidebar({
       effectiveSettings.chat.notifyOnAgentFinish,
       ensureResearchSessionActive,
       setContextAnchor,
+      assistant,
+      isToolServerReady,
+      kernelService,
+      workspaceDirectory,
     ],
   );
 
@@ -5780,14 +6046,45 @@ export function RightSidebar({
       !session ||
       session.status !== "active" ||
       goalEvaluationRunningRef.current ||
-      !effectiveChatId ||
-      !kernelService ||
-      !assistant
+      !effectiveChatId
     ) {
       return;
     }
 
+    if (!kernelService || !assistant || !isToolServerReady) {
+      const reason = "Goal supervision paused because its pinned Jupyter workspace is unavailable. Reconnect it before resuming.";
+      const paused = pauseGoalSupervision(session, new Date().toISOString(), reason);
+      goalContinuationRef.current = undefined;
+      goalSessionRef.current = paused;
+      setGoalSession(paused);
+      await persistGoalSession(paused).catch(() => undefined);
+      toast.warning(reason);
+      return;
+    }
+
+    const currentWorkspace = createGoalWorkspace(
+      workspaceDirectory,
+      assistant.rootDirectory,
+    );
+    if (
+      !session.workspace ||
+      !matchesPinnedGoalWorkspace(session.workspace, currentWorkspace)
+    ) {
+      const reason = session.workspace
+        ? `Goal supervision paused because the connected workspace changed. Reconnect Jupyter workspace "${session.workspace.workspaceDirectory || "/"}"${session.workspace.rootDirectory ? ` at root "${session.workspace.rootDirectory}"` : ""} before resuming.`
+        : "Goal supervision paused because this legacy session has not yet been bound to a workspace. Resume it to bind the current workspace.";
+      const paused = pauseGoalSupervision(session, new Date().toISOString(), reason);
+      goalContinuationRef.current = undefined;
+      goalSessionRef.current = paused;
+      setGoalSession(paused);
+      await persistGoalSession(paused).catch(() => undefined);
+      toast.warning(reason);
+      return;
+    }
+
     goalEvaluationRunningRef.current = true;
+    goalWorkerRequestOriginRef.current = false;
+    bodyRef.current = { ...bodyRef.current, origin: undefined };
     liveEvaluatorTranscriptRef.current = null;
     setLiveEvaluatorTranscript(null);
     const abortController = new AbortController();
@@ -5796,14 +6093,24 @@ export function RightSidebar({
     try {
       const scan = await scanGoalWorkspace({
         contents: kernelService.getContentsManager(),
-        rootPath: workspaceDirectory ?? "",
+        rootPath: session.workspace.workspaceDirectory,
+        deliverables: session.contract.deliverables,
         ignoreDirectoryNames: effectiveSettings.agent.filesystem.ignoreDirs,
       });
+      const currentBeforeEvaluation = goalSessionRef.current;
+      if (
+        abortController.signal.aborted ||
+        currentBeforeEvaluation?.id !== session.id ||
+        currentBeforeEvaluation.status !== "active" ||
+        currentBeforeEvaluation.phase !== "working"
+      ) {
+        return;
+      }
       const manifest = buildGoalArtifactManifest({
         baselineEntries: session.baselineEntries,
         currentEntries: scan.entries,
         deliverables: session.contract.deliverables,
-        rootPath: workspaceDirectory ?? "",
+        rootPath: session.workspace.workspaceDirectory,
         truncated: scan.truncated,
       });
       evaluationId = crypto.randomUUID();
@@ -5812,6 +6119,7 @@ export function RightSidebar({
         modelRequestId: crypto.randomUUID(),
         manifest,
       });
+      goalEvaluationIdRef.current = started.evaluation ? evaluationId : null;
       goalSessionRef.current = started.session;
       setGoalSession(started.session);
       await persistGoalSession(started.session);
@@ -5822,19 +6130,20 @@ export function RightSidebar({
         );
         return;
       }
-
       const { notebookPath, activeFilePath } =
         agentEditorContext(activeNotebookPath);
       const verdict = await runGoalEvaluation({
         contract: session.contract,
         manifest,
+        workerNotes: started.evaluation.workerNotes,
+        priorVerdict: session.latestVerdict ?? undefined,
         modelId: session.evaluatorModelId,
         providerId: session.evaluatorProvider as ProviderId,
         modelSettings: session.evaluatorModelSettings,
         chatId: effectiveChatId,
         modelRequestId: started.evaluation.modelRequestId,
-        workspaceDirectory: workspaceDirectory ?? undefined,
-        rootDirectory: assistant.rootDirectory ?? undefined,
+        workspaceDirectory: session.workspace.workspaceDirectory,
+        rootDirectory: session.workspace.rootDirectory,
         notebookPath,
         activeFilePath,
         connectedNotebookPath: assistant.getCurrentConnectedNotebookPath(),
@@ -5842,7 +6151,7 @@ export function RightSidebar({
         serverInfo: assistant.serverInfo,
         jupyterServerIsLocal: assistant.jupyterServerIsLocal,
         clientPlatformOs,
-        contextSettings: effectiveSettings.agent.context,
+        maxSteps: effectiveSettings.agent.goals.maxEvaluatorSteps,
         abortSignal: abortController.signal,
         onMessagesChange: (nextMessages) => {
           liveEvaluatorTranscriptRef.current = nextMessages;
@@ -5857,8 +6166,16 @@ export function RightSidebar({
       });
 
       const latest = goalSessionRef.current;
-      if (!latest || latest.id !== session.id) return;
-      const finished = finishGoalEvaluation(latest, {
+      if (
+        abortController.signal.aborted ||
+        !latest ||
+        latest.id !== session.id ||
+        latest.phase !== "evaluating" ||
+        latest.evaluations.at(-1)?.id !== evaluationId
+      ) {
+        return;
+      }
+      const controllerResult = finishGoalEvaluation(latest, {
         evaluationId,
         contractVersion: started.evaluation.contractVersion,
         verdict,
@@ -5866,6 +6183,19 @@ export function RightSidebar({
           liveEvaluatorTranscriptRef.current ?? [],
         ),
       });
+      const nextWorkerRequestId = controllerResult.action.type === "reprompt"
+        ? crypto.randomUUID()
+        : controllerResult.session.workerRequestId;
+      const finished = {
+        ...controllerResult,
+        session: controllerResult.action.type === "reprompt"
+          ? {
+              ...controllerResult.session,
+              workerRequestId: nextWorkerRequestId,
+              updatedAt: new Date().toISOString(),
+            }
+          : controllerResult.session,
+      };
       goalSessionRef.current = finished.session;
       setGoalSession(finished.session);
       await persistGoalSession(finished.session);
@@ -5880,37 +6210,69 @@ export function RightSidebar({
         toast.info(
           finished.action.reason === "blocked"
             ? "Goal supervision is blocked."
-            : "Goal supervision stopped after repeated unchanged revisions.",
+            : "Goal supervision stopped after repeated unchanged artifacts.",
         );
         return;
       }
       if (finished.action.type === "discard_stale_verdict") {
-        goalWorkerStartProgressRef.current = Math.max(
-          0,
-          getTranscriptProgressCount(messagesRef.current) - 1,
-        );
+        const retriable = cancelGoalEvaluation(finished.session, evaluationId);
+        goalSessionRef.current = retriable;
+        setGoalSession(retriable);
+        await persistGoalSession(retriable);
+        setReviewReadyWorkerRequestId(retriable.workerRequestId);
         return;
       }
 
       goalContinuationRef.current = {
         contract: finished.session.contract,
         contractVersion: finished.session.contractVersion,
-        instruction: finished.action.instruction,
       };
+      goalWorkerRequestOriginRef.current = true;
+      const repairMessage = buildGoalRepairMessage(
+        finished.session,
+        started.evaluation,
+        finished.action.instruction,
+      );
+      modelRequestIdRef.current = nextWorkerRequestId;
       bodyRef.current = {
         ...bodyRef.current,
-        modelRequestId: finished.session.workerRequestId,
+        modelRequestId: nextWorkerRequestId,
         goalContinuation: goalContinuationRef.current,
+        origin: "goal_worker",
       };
-      goalWorkerStartProgressRef.current = getTranscriptProgressCount(
-        messagesRef.current,
-      );
+      goalWorkerRequestInFlightRef.current = nextWorkerRequestId;
+      setReviewReadyWorkerRequestId(null);
       beginAgentTurn();
-      void sendMessage();
+      void sendMessage(
+        repairMessage,
+        {
+          body: buildChatRequestBody({
+            origin: "goal_worker",
+            modelRequestId: nextWorkerRequestId,
+            goalContinuation: goalContinuationRef.current,
+          }),
+        },
+      );
     } catch (error) {
-      if (error instanceof Error && error.name === "AbortError") return;
+      if (
+        abortController.signal.aborted ||
+        (error instanceof Error && error.name === "AbortError")
+      ) {
+        return;
+      }
       const current = goalSessionRef.current;
-      if (!current || current.id !== session.id || !evaluationId) return;
+      if (!current || current.id !== session.id) return;
+      if (!evaluationId) {
+        const reason = "Goal supervision paused because the pinned workspace could not be scanned. Reconnect that workspace before resuming.";
+        const paused = pauseGoalSupervision(current, new Date().toISOString(), reason);
+        goalContinuationRef.current = undefined;
+        goalSessionRef.current = paused;
+        setGoalSession(paused);
+        await persistGoalSession(paused).catch(() => undefined);
+        toast.warning(reason);
+        return;
+      }
+      if (current.evaluations.at(-1)?.id !== evaluationId) return;
       const recoverable = isRecoverableGoalEvaluationError(error);
       const failed = failGoalEvaluation(
         current,
@@ -5936,6 +6298,9 @@ export function RightSidebar({
       }
     } finally {
       goalEvaluationRunningRef.current = false;
+      if (goalEvaluationIdRef.current === evaluationId) {
+        goalEvaluationIdRef.current = null;
+      }
       liveEvaluatorTranscriptRef.current = null;
       setLiveEvaluatorTranscript(null);
       if (goalEvaluationAbortRef.current === abortController) {
@@ -5946,12 +6311,14 @@ export function RightSidebar({
     activeNotebookPath,
     assistant,
     beginAgentTurn,
+    buildChatRequestBody,
     clientPlatformOs,
     effectiveChatId,
-    effectiveSettings.agent.context,
     effectiveSettings.agent.filesystem.ignoreDirs,
+    effectiveSettings.agent.goals.maxEvaluatorSteps,
     effectiveSettings.agent.goals.maxReviews,
     kernelService,
+    isToolServerReady,
     sendMessage,
     workspaceDirectory,
   ]);
@@ -5990,6 +6357,7 @@ export function RightSidebar({
     }
 
     goalContractDraftActiveRef.current = true;
+    goalWorkerRequestOriginRef.current = false;
     setIsGoalContractDraftActive(true);
     setGoalContractErrors(new Map());
     deactivateResearchSession();
@@ -6000,6 +6368,7 @@ export function RightSidebar({
       modelRequestId,
       goalContractDraft: true,
       goalContinuation: undefined,
+      origin: undefined,
     };
 
     const effectiveReferences = [
@@ -6213,10 +6582,25 @@ export function RightSidebar({
         );
         return;
       }
-      if (!effectiveChatId || !kernelService) {
+      if (!effectiveChatId || !kernelService || !assistant || !isToolServerReady) {
         setGoalProposalError(
           toolCallId,
           "Connect to Jupyter before approving and starting this supervised goal.",
+        );
+        return;
+      }
+      const worker = getModel(selectedModel);
+      if (!worker?.provider || worker.isAccessible === false) {
+        setGoalProposalError(
+          toolCallId,
+          "Choose a worker model with an available credential before approving this goal.",
+        );
+        return;
+      }
+      if (worker.supportsToolCalling === false) {
+        setGoalProposalError(
+          toolCallId,
+          "Choose a worker model that supports tools before approving this goal.",
         );
         return;
       }
@@ -6259,6 +6643,7 @@ export function RightSidebar({
         const baseline = await scanGoalWorkspace({
           contents: kernelService.getContentsManager(),
           rootPath: workspaceDirectory ?? "",
+          deliverables: parsedContract.data.deliverables,
           ignoreDirectoryNames: effectiveSettings.agent.filesystem.ignoreDirs,
         });
         if (abortController.signal.aborted) {
@@ -6288,11 +6673,15 @@ export function RightSidebar({
           maxReviews: effectiveSettings.agent.goals.maxReviews,
           baselineEntries: baseline.entries,
           workerRequestId,
+          workspace: createGoalWorkspace(
+            workspaceDirectory,
+            assistant.rootDirectory,
+          ),
         });
         await persistGoalSession(created);
 
         stage = "decision";
-        const approvedMessages = await commitGoalProposalDecision(toolCallId, {
+        await commitGoalProposalDecision(toolCallId, {
           status: "approved",
           goalSessionId: created.id,
         });
@@ -6306,19 +6695,32 @@ export function RightSidebar({
           contract: created.contract,
           contractVersion: created.contractVersion,
         };
+        goalWorkerRequestOriginRef.current = true;
         modelRequestIdRef.current = workerRequestId;
         bodyRef.current = {
           ...bodyRef.current,
           modelRequestId: workerRequestId,
           goalContractDraft: undefined,
           goalContinuation: goalContinuationRef.current,
+          origin: "goal_worker",
         };
-        goalWorkerStartProgressRef.current =
-          getTranscriptProgressCount(approvedMessages);
+        goalWorkerRequestInFlightRef.current = workerRequestId;
+        setReviewReadyWorkerRequestId(null);
 
         stage = "worker";
+        const kickoffMessage = buildGoalKickoffMessage(created);
         beginAgentTurn();
-        await sendMessage();
+        await sendMessage(
+          kickoffMessage,
+          {
+            body: buildChatRequestBody({
+              origin: "goal_worker",
+              modelRequestId: workerRequestId,
+              goalContractDraft: undefined,
+              goalContinuation: goalContinuationRef.current,
+            }),
+          },
+        );
         toast.success("Goal approved and started.");
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") return;
@@ -6354,6 +6756,7 @@ export function RightSidebar({
     },
     [
       beginAgentTurn,
+      buildChatRequestBody,
       commitGoalProposalDecision,
       deactivateResearchSession,
       effectiveChatId,
@@ -6363,20 +6766,29 @@ export function RightSidebar({
       goalContractActionIds,
       goalEvaluatorModel,
       kernelService,
+      isToolServerReady,
       modelSettingsMap,
       selectedModel,
       sendMessage,
       setGoalProposalError,
       workspaceDirectory,
+      assistant,
     ],
   );
 
   /** Pauses the loop while preserving its contract, review history, and current worker turn. */
   const handlePauseGoalSupervision = useCallback(() => {
-    const current = goalSessionRef.current;
+    let current = goalSessionRef.current;
     if (!current || current.status !== "active") return;
     goalEvaluationAbortRef.current?.abort();
+    if (goalEvaluationIdRef.current) {
+      current = cancelGoalEvaluation(current, goalEvaluationIdRef.current);
+      goalEvaluationIdRef.current = null;
+    }
     goalContinuationRef.current = undefined;
+    goalWorkerRequestOriginRef.current = false;
+    goalWorkerRequestInFlightRef.current = null;
+    setReviewReadyWorkerRequestId(null);
     const paused = pauseGoalSupervision(current);
     goalSessionRef.current = paused;
     setGoalSession(paused);
@@ -6386,10 +6798,17 @@ export function RightSidebar({
 
   /** Permanently ends the loop after confirmation while preserving its history. */
   const handleEndGoalSupervision = useCallback(() => {
-    const current = goalSessionRef.current;
+    let current = goalSessionRef.current;
     if (!current || (current.status !== "active" && current.status !== "paused")) return;
     goalEvaluationAbortRef.current?.abort();
+    if (goalEvaluationIdRef.current) {
+      current = cancelGoalEvaluation(current, goalEvaluationIdRef.current);
+      goalEvaluationIdRef.current = null;
+    }
     goalContinuationRef.current = undefined;
+    goalWorkerRequestOriginRef.current = false;
+    goalWorkerRequestInFlightRef.current = null;
+    setReviewReadyWorkerRequestId(null);
     const ended = endGoalSupervision(current);
     goalSessionRef.current = ended;
     setGoalSession(ended);
@@ -6401,48 +6820,70 @@ export function RightSidebar({
   const handleResumeGoalSupervision = useCallback(() => {
     const current = goalSessionRef.current;
     if (!current || current.status !== "paused") return;
+    if (!kernelService || !assistant || !isToolServerReady) {
+      toast.warning("Reconnect Jupyter before resuming this supervised goal.");
+      return;
+    }
+    const connectedWorkspace = createGoalWorkspace(
+      workspaceDirectory,
+      assistant.rootDirectory,
+    );
+    if (
+      current.workspace &&
+      !matchesPinnedGoalWorkspace(current.workspace, connectedWorkspace)
+    ) {
+      const reason = `Reconnect the goal's pinned workspace "${current.workspace.workspaceDirectory || "/"}"${current.workspace.rootDirectory ? ` at root "${current.workspace.rootDirectory}"` : ""} before resuming.`;
+      const paused = pauseGoalSupervision(
+        current,
+        new Date().toISOString(),
+        reason,
+      );
+      goalSessionRef.current = paused;
+      setGoalSession(paused);
+      void persistGoalSession(paused);
+      toast.warning(reason);
+      return;
+    }
     const resumed: GoalSession = {
       ...current,
+      workspace: current.workspace ?? connectedWorkspace,
       status: "active",
       phase: "working",
+      pauseReason: undefined,
       updatedAt: new Date().toISOString(),
     };
     goalSessionRef.current = resumed;
     setGoalSession(resumed);
     void persistGoalSession(resumed);
-    goalWorkerStartProgressRef.current = Math.max(
-      0,
-      getTranscriptProgressCount(messagesRef.current) - 1,
-    );
-  }, []);
+    goalWorkerRequestInFlightRef.current = null;
+    setReviewReadyWorkerRequestId(resumed.workerRequestId);
+    goalContinuationRef.current = {
+      contract: resumed.contract,
+      contractVersion: resumed.contractVersion,
+    };
+  }, [assistant, isToolServerReady, kernelService, workspaceDirectory]);
 
   /** Starts evaluation after the current worker and any queued steering fully finish. */
   useEffect(() => {
     const session = goalSessionRef.current;
-    const startProgress = goalWorkerStartProgressRef.current;
     if (
       !session ||
       session.status !== "active" ||
       session.phase !== "working" ||
-      startProgress == null ||
+      reviewReadyWorkerRequestId !== session.workerRequestId ||
       isAgentTurnActive ||
       status !== "ready" ||
       messageQueue.length > 0 ||
-      queueProcessingRef.current ||
-      getTranscriptProgressCount(messages) <= startProgress
+      queueProcessingRef.current
     ) {
       return;
     }
-    const latest = messages.at(-1);
-    if (!latest || latest.role !== "assistant") return;
-    if (latest.parts.some(isPendingToolPart)) return;
-    goalWorkerStartProgressRef.current = null;
-    const timer = window.setTimeout(() => void runCurrentGoalReview(), 0);
-    return () => window.clearTimeout(timer);
+    setReviewReadyWorkerRequestId(null);
+    void runCurrentGoalReview();
   }, [
     isAgentTurnActive,
     messageQueue.length,
-    messages,
+    reviewReadyWorkerRequestId,
     runCurrentGoalReview,
     status,
   ]);
@@ -6612,6 +7053,25 @@ export function RightSidebar({
 
     stopRequestedRef.current = true;
     automaticContinuationPendingRef.current = false;
+    const activeGoal = goalSessionRef.current;
+    if (
+      activeGoal?.status === "active" &&
+      activeGoal.phase === "working" &&
+      goalWorkerRequestInFlightRef.current === activeGoal.workerRequestId
+    ) {
+      const pausedGoal = pauseGoalSupervision(
+        activeGoal,
+        new Date(cancelledAt).toISOString(),
+        "Goal supervision paused because the worker turn was interrupted. Resume to review the currently saved artifacts.",
+      );
+      goalWorkerRequestInFlightRef.current = null;
+      setReviewReadyWorkerRequestId(null);
+      goalContinuationRef.current = undefined;
+      goalWorkerRequestOriginRef.current = false;
+      goalSessionRef.current = pausedGoal;
+      setGoalSession(pausedGoal);
+      void persistGoalSession(pausedGoal);
+    }
     const outgoingScheduler = toolExecutionSchedulerRef.current;
     toolExecutionAbortControllerRef.current?.abort();
     if (outgoingScheduler) {
@@ -6825,7 +7285,6 @@ export function RightSidebar({
                 goalSession.status === "active" &&
                 goalSession.phase === "evaluating"
               }
-              groupConsecutiveAssistantActivity
               toolTimings={toolTimings}
               onUserMessageClick={() => {}}
               canEditUserMessages={false}
@@ -6850,8 +7309,8 @@ export function RightSidebar({
               pinnedModelIds={pinnedModelIds}
               onReorderPinned={handleReorderPinned}
               onOpenModelsSettings={() => openWithTab("models")}
-              onOpenInteractionModesSettings={() =>
-                openWithTab("agent", "modes")
+              onOpenInteractionModesSettings={(modeId) =>
+                openWithTab("agent", "modes", modeId)
               }
               onOpenProvidersSettings={handleOpenProvidersSettings}
               onConfigureProvider={handleConfigureProvider}
@@ -6941,8 +7400,8 @@ export function RightSidebar({
               pinnedModelIds={pinnedModelIds}
               onReorderPinned={handleReorderPinned}
               onOpenModelsSettings={() => openWithTab("models")}
-              onOpenInteractionModesSettings={() =>
-                openWithTab("agent", "modes")
+              onOpenInteractionModesSettings={(modeId) =>
+                openWithTab("agent", "modes", modeId)
               }
               onOpenProvidersSettings={handleOpenProvidersSettings}
               onConfigureProvider={handleConfigureProvider}
@@ -7057,8 +7516,8 @@ export function RightSidebar({
               pinnedModelIds={pinnedModelIds}
               onReorderPinned={handleReorderPinned}
               onOpenModelsSettings={() => openWithTab("models")}
-              onOpenInteractionModesSettings={() =>
-                openWithTab("agent", "modes")
+              onOpenInteractionModesSettings={(modeId) =>
+                openWithTab("agent", "modes", modeId)
               }
               onOpenProvidersSettings={handleOpenProvidersSettings}
               onConfigureProvider={handleConfigureProvider}

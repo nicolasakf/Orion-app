@@ -1,13 +1,26 @@
 import { basename, isAbsolute, join, relative, resolve, sep } from "path";
 
-import { app, BrowserWindow, dialog, ipcMain, Notification, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Notification,
+  powerSaveBlocker,
+  shell,
+} from "electron";
 
+import { DEFAULT_ORION_PORT } from "../lib/cli/app-server";
 import { parseDesktopOptions } from "../lib/desktop/options";
 import {
   executeManagedWorkspacePathAction,
   type NativeWorkspacePathAction,
 } from "../lib/desktop/workspace-actions";
 import { runDesktopSmoke, startDesktopSession, type DesktopSession } from "../lib/desktop/launcher";
+import {
+  AgentRunPowerManager,
+  type AgentRunPowerState,
+} from "./agent-run-power-manager";
 import { setupDesktopApplicationMenu } from "./menu";
 import {
   checkForDesktopUpdates,
@@ -23,6 +36,7 @@ import {
 let session: DesktopSession | null = null;
 let mainWindow: BrowserWindow | null = null;
 const appWindows = new Set<BrowserWindow>();
+const agentRunPowerManager = new AgentRunPowerManager(powerSaveBlocker);
 
 interface NativeProjectFolderPickerResult {
   absolutePath: string;
@@ -41,6 +55,16 @@ interface DesktopCaptureRegionResult {
   data: string;
   width: number;
   height: number;
+}
+
+/** Returns true for a renderer-provided agent activity and sleep preference payload. */
+function isAgentRunPowerState(value: unknown): value is AgentRunPowerState {
+  if (!value || typeof value !== "object") return false;
+  const state = value as Partial<AgentRunPowerState>;
+  return (
+    typeof state.active === "boolean" &&
+    typeof state.preventSystemSleep === "boolean"
+  );
 }
 
 /** Returns true for the six-digit hex colors Orion sends from the renderer. */
@@ -64,7 +88,7 @@ function resolveDesktopDevUrl(): string | undefined {
   if (process.env.ORION_DESKTOP_DEV_URL) {
     return process.env.ORION_DESKTOP_DEV_URL;
   }
-  return app.isPackaged ? undefined : "http://127.0.0.1:3001";
+  return app.isPackaged ? undefined : `http://127.0.0.1:${DEFAULT_ORION_PORT}`;
 }
 
 /** Converts a selected native folder into a Jupyter-relative project path. */
@@ -144,7 +168,17 @@ function isOrionAppUrl(url: string, appBaseUrl: string): boolean {
 /** Tracks app windows so secondary windows stay alive until they are closed. */
 function registerAppWindow(appWindow: BrowserWindow): void {
   appWindows.add(appWindow);
+  const rendererId = appWindow.webContents.id;
+  appWindow.webContents.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
+    if (isMainFrame) {
+      agentRunPowerManager.removeRenderer(rendererId);
+    }
+  });
+  appWindow.webContents.on("render-process-gone", () => {
+    agentRunPowerManager.removeRenderer(rendererId);
+  });
   appWindow.on("closed", () => {
+    agentRunPowerManager.removeRenderer(rendererId);
     appWindows.delete(appWindow);
     if (mainWindow === appWindow) {
       mainWindow = appWindows.values().next().value ?? null;
@@ -374,6 +408,16 @@ function setupShellIpc(): void {
     }
     return appWindow.isFocused() && !appWindow.isMinimized();
   });
+  ipcMain.handle(
+    "orion:shell:set-agent-run-power-state",
+    (event, value: unknown): void => {
+      requireShellIpcWindow(event);
+      if (!isAgentRunPowerState(value)) {
+        throw new Error("Invalid agent run power state.");
+      }
+      agentRunPowerManager.setRendererState(event.sender.id, value);
+    }
+  );
   ipcMain.handle("orion:shell:show-notification", (event, value: unknown): boolean => {
     const appWindow = getShellIpcWindow(event);
     if (!isDesktopNotificationPayload(value) || !Notification.isSupported()) {
@@ -515,6 +559,7 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   stopDesktopAutoUpdateSchedule();
+  agentRunPowerManager.dispose();
   session?.dispose();
   session = null;
 });

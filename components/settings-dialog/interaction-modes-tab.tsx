@@ -64,6 +64,7 @@ const TOOL_LABELS: Record<OrionToolName, string> = {
   load_skill: "Load skill",
   connections: "Connections",
   ask_question: "Ask question",
+  send_goal_supervisor_message: "Message goal supervisor",
 };
 
 const TOOL_GROUPS: Array<{ label: string; tools: OrionToolName[] }> = [
@@ -137,8 +138,15 @@ function createCustomMode(
   };
 }
 
+interface AgentInteractionModesSectionProps {
+  /** Mode selected by a chat mode edit action. */
+  initialModeId?: string | null;
+}
+
 /** Agent subsection for built-in and custom interaction mode behavior. */
-export function AgentInteractionModesSection() {
+export function AgentInteractionModesSection({
+  initialModeId,
+}: AgentInteractionModesSectionProps) {
   const { effectiveSettings, setUserSettings } = useOrionSettings();
   const modes = React.useMemo(
     () =>
@@ -146,10 +154,20 @@ export function AgentInteractionModesSection() {
     [effectiveSettings.chat.interactionModes],
   );
   const [selectedModeId, setSelectedModeId] = React.useState(
-    modes[0]?.id ?? "Agent",
+    initialModeId ?? modes[0]?.id ?? "Agent",
   );
   const selectedMode =
     modes.find((mode) => mode.id === selectedModeId) ?? modes[0];
+
+  const initialModeIdRef = React.useRef(initialModeId);
+
+  React.useEffect(() => {
+    if (initialModeIdRef.current === initialModeId) return;
+    initialModeIdRef.current = initialModeId;
+    if (initialModeId && modes.some((mode) => mode.id === initialModeId)) {
+      setSelectedModeId(initialModeId);
+    }
+  }, [initialModeId, modes]);
 
   React.useEffect(() => {
     if (modes.some((mode) => mode.id === selectedModeId)) return;
@@ -175,15 +193,15 @@ export function AgentInteractionModesSection() {
     [setUserSettings],
   );
 
-  const updateGoalMaxReviews = React.useCallback(
-    (maxReviews: number) => {
+  const updateGoalSettings = React.useCallback(
+    (patch: Partial<{ maxReviews: number; maxEvaluatorSteps: number }>) => {
       void setUserSettings((current) => ({
         ...current,
         agent: {
           ...current.agent,
           goals: {
             ...current.agent.goals,
-            maxReviews,
+            ...patch,
           },
         },
       })).catch((error) => {
@@ -428,7 +446,18 @@ export function AgentInteractionModesSection() {
                   value={effectiveSettings.agent.goals.maxReviews}
                   min={1}
                   max={50}
-                  onChange={updateGoalMaxReviews}
+                  onChange={(maxReviews) => updateGoalSettings({ maxReviews })}
+                />
+                <SettingsNumberField
+                  id="goal-max-evaluator-steps"
+                  label="Review investigation steps"
+                  description="Investigation steps one review may spend inspecting artifacts before its verdict is forced from the evidence already gathered. Raise it for large deliverables the reviewer has to reproduce."
+                  value={effectiveSettings.agent.goals.maxEvaluatorSteps}
+                  min={4}
+                  max={120}
+                  onChange={(maxEvaluatorSteps) =>
+                    updateGoalSettings({ maxEvaluatorSteps })
+                  }
                 />
               </section>
             ) : (

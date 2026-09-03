@@ -416,6 +416,7 @@ function MobileLayout({
     onOpenChange: setIsSettingsOpen,
     initialTab,
     initialAgentSection,
+    initialInteractionModeId,
   } = useOpenSettings();
 
   /** Wraps file selection to also navigate to the editor view on mobile. */
@@ -565,6 +566,7 @@ function MobileLayout({
         onOpenChange={setIsSettingsOpen}
         initialTab={initialTab}
         initialAgentSection={initialAgentSection}
+        initialInteractionModeId={initialInteractionModeId}
       />
     </div>
   );

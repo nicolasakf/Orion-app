@@ -4,7 +4,7 @@ import { mkdtemp, rm } from "fs/promises";
 import os from "os";
 import path from "path";
 import Database from "better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   clearChats,
@@ -33,7 +33,12 @@ import {
 } from "@/lib/chat/chat-sqlite-storage.server";
 import type { ChatWire } from "@/lib/chat/chat-types";
 import type { OrionDatabase } from "@/lib/chat/sqlite-adapter";
-import { createGoalSession } from "@/lib/agent/goals/controller";
+import {
+  appendGoalWorkerNote,
+  createGoalSession,
+  failGoalEvaluation,
+  startGoalEvaluation,
+} from "@/lib/agent/goals/controller";
 
 let tempDirectory: string;
 
@@ -286,9 +291,21 @@ describe("SQLite chat storage", () => {
       maxReviews: 10,
       baselineEntries: [],
       workerRequestId: "worker-1",
+      workspace: {
+        workspaceDirectory: "project",
+        rootDirectory: "/repo",
+      },
       now: "2026-05-19T12:00:00.000Z",
     });
-    goal.evaluations.push({
+    const goalWithNote = appendGoalWorkerNote(goal, {
+      id: "note-1",
+      toolCallId: "tool-1",
+      workerRequestId: "worker-1",
+      message: "Inspect the appendix.",
+      relatedPaths: ["report.ipynb"],
+      createdAt: "2026-05-19T12:00:30.000Z",
+    });
+    goalWithNote.evaluations.push({
       id: "evaluation-1",
       contractVersion: 1,
       reviewNumber: 1,
@@ -303,20 +320,23 @@ describe("SQLite chat storage", () => {
         truncated: false,
         capturedAt: "2026-05-19T12:01:00.000Z",
       },
+      workerNotes: [],
       verdict: null,
       createdAt: "2026-05-19T12:01:00.000Z",
     });
 
-    await saveGoalSession(goal);
+    await saveGoalSession(goalWithNote);
     await expect(getGoalSession("chat-1")).resolves.toMatchObject({
       id: "goal-1",
       evaluations: [{ id: "evaluation-1" }],
+      workspace: { workspaceDirectory: "project", rootDirectory: "/repo" },
+      workerNotes: [{ id: "note-1", relatedPaths: ["report.ipynb"] }],
     });
 
     const replacement = createGoalSession({
       id: "goal-2",
       chatId: "chat-1",
-      contract: goal.contract,
+      contract: goalWithNote.contract,
       evaluatorModel: "openai:gpt-test",
       evaluatorProvider: "openai",
       evaluatorModelId: "gpt-test",
@@ -333,6 +353,66 @@ describe("SQLite chat storage", () => {
 
     await deleteChat("chat-1");
     await expect(getGoalSession("chat-1")).resolves.toBeNull();
+  });
+
+  it("loads legacy no-message evaluator failures as resumable pauses", async () => {
+    await saveChat(createChat());
+    const goal = createGoalSession({
+      id: "goal-legacy-review-error",
+      chatId: "chat-1",
+      contract: {
+        objective: "Create a report",
+        deliverables: [{ path: "report.ipynb", description: "Report notebook" }],
+        acceptanceCriteria: [{ id: "complete", description: "Contains findings" }],
+        constraints: [],
+      },
+      evaluatorModel: "openai:gpt-test",
+      evaluatorProvider: "openai",
+      evaluatorModelId: "gpt-test",
+      maxReviews: 10,
+      baselineEntries: [],
+      workerRequestId: "worker-1",
+    });
+    const noted = appendGoalWorkerNote(goal, {
+      id: "note-pending-retry",
+      toolCallId: "tool-pending-retry",
+      workerRequestId: "worker-1",
+      message: "Inspect the regenerated report.",
+      relatedPaths: ["report.ipynb"],
+      createdAt: "2026-05-19T12:00:30.000Z",
+    });
+    const started = startGoalEvaluation(noted, {
+      evaluationId: "evaluation-interrupted",
+      modelRequestId: "request-interrupted",
+      manifest: {
+        entries: [],
+        createdPaths: [],
+        modifiedPaths: [],
+        deletedPaths: [],
+        deliverablePaths: [],
+        fingerprint: "empty",
+        truncated: false,
+        capturedAt: "2026-05-19T12:01:00.000Z",
+      },
+    });
+    const failed = failGoalEvaluation(
+      started.session,
+      "evaluation-interrupted",
+      "Goal evaluator returned no assistant message.",
+      { now: "2026-05-19T12:02:00.000Z" },
+    );
+
+    await saveGoalSession(failed);
+
+    const recovered = await getGoalSession("chat-1");
+    expect(recovered).toMatchObject({
+      status: "paused",
+      phase: "paused",
+      pauseReason: expect.stringContaining("Resume to retry"),
+      workerNotes: [{ id: "note-pending-retry" }],
+    });
+    expect(recovered?.workerNotes[0]?.reviewedByEvaluationId).toBeUndefined();
+    expect(recovered?.completedAt).toBeUndefined();
   });
 
   it("returns metadata without hydrating message bodies and sorts newest first", async () => {

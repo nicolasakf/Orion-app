@@ -129,6 +129,7 @@ export function SettingsMenu({
     onOpenChange: setIsSettingsDialogOpen,
     initialTab,
     initialAgentSection,
+    initialInteractionModeId,
   } = useOpenSettings();
 
   const handleThemeToggle = (checked: boolean) => {
@@ -312,6 +313,7 @@ export function SettingsMenu({
         onOpenChange={setIsSettingsDialogOpen}
         initialTab={initialTab}
         initialAgentSection={initialAgentSection}
+        initialInteractionModeId={initialInteractionModeId}
       />
     </>
   );

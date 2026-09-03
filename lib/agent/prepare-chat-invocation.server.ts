@@ -42,6 +42,7 @@ import {
   buildGoalEvaluatorPrompt,
   buildGoalWorkerContinuationPrompt,
 } from "@/lib/agent/goals/prompts";
+import { goalEvaluatorTools } from "@/lib/agent/goals/evaluator-tools";
 
 export interface PrepareChatInvocationInput {
   messages: ModelMessage[];
@@ -278,6 +279,9 @@ export function prepareChatInvocation(
   if (!hasLoadableSkill) {
     unusableTools.add("load_skill");
   }
+  if (!input.goalContinuation) {
+    unusableTools.add("send_goal_supervisor_message");
+  }
 
   const toolMode = {
     ...input.interactionMode,
@@ -285,20 +289,23 @@ export function prepareChatInvocation(
       (toolName) => !unusableTools.has(toolName)
     ),
   };
+  // A review whose investigation budget is spent must return its verdict from the
+  // evidence it already has. Withdrawing the tools makes that structural rather
+  // than a request the model can decline, and works on providers without
+  // reliable tool-choice control.
   const tools: ToolSet = input.origin === "goal_evaluation"
-    ? {
-        read_file: orionTools.read_file,
-        read_notebook: orionTools.read_notebook,
-        read_cell: orionTools.read_cell,
-        read_cell_output: orionTools.read_cell_output,
-        inspect_output: orionTools.inspect_output,
-      }
+    ? (input.goalEvaluation?.investigationBudgetSpent ? {} : goalEvaluatorTools)
     : input.goalContractDraft
       ? goalContractAuthorTools
-      : withAskQuestionLimit(
-          getToolsForInteractionMode(toolMode),
-          input.maxQuestionsPerAsk
-        );
+      : {
+          ...withAskQuestionLimit(
+            getToolsForInteractionMode(toolMode),
+            input.maxQuestionsPerAsk
+          ),
+          ...(input.goalContinuation
+            ? { send_goal_supervisor_message: orionTools.send_goal_supervisor_message }
+            : {}),
+        };
   const requestedToolChoice: PreparedChatInvocation["toolChoice"] =
     goalContractInvestigationBudgetSpent
       ? { type: "tool", toolName: GOAL_CONTRACT_PROPOSAL_TOOL_NAME }

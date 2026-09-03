@@ -3,6 +3,7 @@
 import { Separator } from "@/components/ui/separator";
 import {
   SettingsNumberField,
+  SettingsSwitchField,
   SettingsTextField,
   SettingsTextareaField,
   formatLineList,
@@ -10,6 +11,7 @@ import {
 } from "@/components/settings-dialog/settings-form-fields";
 import { SettingsSectionLayout } from "@/components/settings-dialog/settings-section-layout";
 import { useOrionSettings } from "@/hooks/use-orion-settings";
+import { useIsDesktopApp, useIsMac } from "@/hooks/use-platform";
 import {
   MAX_MAX_QUESTIONS_PER_ASK,
   MIN_MAX_QUESTIONS_PER_ASK,
@@ -19,6 +21,8 @@ import type { AgentSettingsSection } from "@/components/settings-dialog/types";
 /** Agent advanced settings sections backed by `settings.agent` in settings.json. */
 export function AgentAdvancedSection({ section }: { section: AgentSettingsSection }) {
   const { effectiveSettings, setUserSettings } = useOrionSettings();
+  const isDesktopApp = useIsDesktopApp();
+  const isMac = useIsMac();
   const agent = effectiveSettings.agent;
 
   const updateAgent = <K extends keyof typeof agent>(
@@ -47,6 +51,17 @@ export function AgentAdvancedSection({ section }: { section: AgentSettingsSectio
           <div className="space-y-6 max-w-2xl">
             <div className="space-y-4">
               <h3 className="text-sm font-medium">Execution</h3>
+              {isDesktopApp && isMac && (
+                <SettingsSwitchField
+                  id="agent-prevent-system-sleep"
+                  label="Prevent sleep while agents run"
+                  description="Keep your Mac awake while an agent turn is active so long-running tests and tools can finish. The display may still turn off."
+                  checked={agent.execution.preventSystemSleep}
+                  onCheckedChange={(preventSystemSleep) =>
+                    updateAgent("execution", { preventSystemSleep })
+                  }
+                />
+              )}
               <div className="grid gap-4 sm:grid-cols-2">
                 <SettingsNumberField
                   id="agent-max-parallel-read-only-calls"

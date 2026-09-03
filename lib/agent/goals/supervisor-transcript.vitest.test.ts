@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { UIMessage } from "ai";
+import { parseChatMessageGoalMessage } from "@/lib/chat/chat-references";
 
 import { createGoalSession } from "./controller";
 import { buildGoalSupervisorMessages } from "./supervisor-transcript";
@@ -37,6 +38,7 @@ describe("goal supervisor transcript", () => {
         truncated: false,
         capturedAt: "2026-08-21T12:00:00.000Z",
       },
+      workerNotes: [],
       verdict: {
         status: "revise",
         criteria: [{
@@ -156,6 +158,7 @@ describe("evaluator transcript in the supervisor view", () => {
         truncated: false,
         capturedAt: "2026-08-22T12:00:00.000Z",
       },
+      workerNotes: [],
       verdict: null,
       createdAt: "2026-08-22T12:00:00.000Z",
     });
@@ -225,5 +228,31 @@ describe("evaluator transcript in the supervisor view", () => {
     );
 
     expect(toolParts).toHaveLength(1);
+  });
+
+  it("places snapshotted worker notes before the review and labels them unambiguously", () => {
+    const session = runningSession();
+    session.evaluations[0]!.workerNotes = [{
+      id: "note-1",
+      toolCallId: "tool-1",
+      workerRequestId: "worker-1",
+      message: "The exclusions are documented in the appendix.",
+      relatedPaths: ["report.md"],
+      createdAt: "2026-08-22T11:59:00.000Z",
+    }];
+
+    const messages = buildGoalSupervisorMessages(session, [toolCallMessage]);
+    const noteIndex = messages.findIndex((message) =>
+      parseChatMessageGoalMessage(message.metadata)?.source === "worker"
+    );
+    const toolIndex = messages.findIndex((message) =>
+      message.parts.some((part) => part.type.startsWith("tool-"))
+    );
+
+    expect(noteIndex).toBeGreaterThan(0);
+    expect(noteIndex).toBeLessThan(toolIndex);
+    expect(messages[noteIndex]?.parts).toContainEqual(
+      expect.objectContaining({ type: "text", text: expect.stringContaining("Worker message") }),
+    );
   });
 });

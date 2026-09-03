@@ -96,8 +96,10 @@ export function buildGoalArtifactManifest(options: {
       modifiedPaths.push(entry.path);
     }
   }
-  for (const entry of options.baselineEntries) {
-    if (!current.has(entry.path)) deletedPaths.push(entry.path);
+  if (!options.truncated) {
+    for (const entry of options.baselineEntries) {
+      if (!current.has(entry.path)) deletedPaths.push(entry.path);
+    }
   }
 
   const deliverablePaths = options.currentEntries
@@ -118,21 +120,27 @@ export function buildGoalArtifactManifest(options: {
     ...deliverablePaths,
   ]);
   const relevantEntries = options.currentEntries.filter((entry) => relevantPaths.has(entry.path));
+  const deletedEntries = deletedPaths.map((path) => ({
+    path,
+    kind: "file" as const,
+    size: null,
+    lastModified: "deleted",
+  }));
+  // Scoped to the contract's deliverables so scratch notes and logs the worker
+  // rewrites on every pass cannot make an untouched deliverable look like progress.
+  const deliverablePathSet = new Set(deliverablePaths);
+  const deliverableEntries = [
+    ...relevantEntries.filter((entry) => deliverablePathSet.has(entry.path)),
+    ...deletedEntries.filter((entry) => deliverablePathSet.has(entry.path)),
+  ];
   return {
     entries: relevantEntries.sort((left, right) => left.path.localeCompare(right.path)),
     createdPaths: createdPaths.sort(),
     modifiedPaths: modifiedPaths.sort(),
     deletedPaths: deletedPaths.sort(),
     deliverablePaths,
-    fingerprint: fingerprintGoalEntries([
-      ...relevantEntries,
-      ...deletedPaths.map((path) => ({
-        path,
-        kind: "file" as const,
-        size: null,
-        lastModified: "deleted",
-      })),
-    ]),
+    fingerprint: fingerprintGoalEntries([...relevantEntries, ...deletedEntries]),
+    deliverableFingerprint: fingerprintGoalEntries(deliverableEntries),
     truncated: options.truncated ?? false,
     capturedAt: options.capturedAt ?? new Date().toISOString(),
   };
@@ -142,6 +150,7 @@ export function buildGoalArtifactManifest(options: {
 export async function scanGoalWorkspace(options: {
   contents: ContentsManager;
   rootPath: string;
+  deliverables?: GoalDeliverable[];
   ignoreDirectoryNames?: Iterable<string>;
   maxEntries?: number;
 }): Promise<{ entries: GoalArtifactEntry[]; truncated: boolean }> {
@@ -150,12 +159,75 @@ export async function scanGoalWorkspace(options: {
     [...(options.ignoreDirectoryNames ?? DEFAULT_IGNORE_DIRS)].map((value) => value.toLowerCase())
   );
   const maxEntries = options.maxEntries ?? MAX_MANIFEST_ENTRIES;
-  const pending = [rootPath];
+  const pending: string[] = [];
+  const queuedDirectories = new Set<string>();
+  const visitedDirectories = new Set<string>();
+  const entryPaths = new Set<string>();
   const entries: GoalArtifactEntry[] = [];
   let truncated = false;
 
+  /** Adds one file-like Contents model without duplicating prioritized results. */
+  const addEntry = (entry: {
+    name?: unknown;
+    path?: unknown;
+    type?: unknown;
+    size?: unknown;
+    last_modified?: unknown;
+  }): void => {
+    if (
+      typeof entry.name !== "string" ||
+      typeof entry.path !== "string" ||
+      (entry.type !== "file" && entry.type !== "notebook")
+    ) return;
+    const path = normalizeGoalArtifactPath(entry.path);
+    if (entryPaths.has(path)) return;
+    entryPaths.add(path);
+    entries.push({
+      path,
+      kind: entry.type === "notebook" || entry.name.toLowerCase().endsWith(".ipynb")
+        ? "notebook"
+        : "file",
+      size: typeof entry.size === "number" && Number.isFinite(entry.size) ? entry.size : null,
+      lastModified: typeof entry.last_modified === "string" ? entry.last_modified : null,
+    });
+  };
+
+  /** Queues a workspace directory once, preserving deliverable-first order. */
+  const queueDirectory = (path: string): void => {
+    const normalized = normalizeGoalArtifactPath(path);
+    if (queuedDirectories.has(normalized)) return;
+    queuedDirectories.add(normalized);
+    pending.push(normalized);
+  };
+
+  for (const deliverable of options.deliverables ?? []) {
+    const relativePath = normalizeGoalArtifactPath(deliverable.path);
+    const wildcardIndex = relativePath.search(/[?*]/);
+    if (wildcardIndex === -1) {
+      const deliverablePath = normalizeGoalArtifactPath(
+        [rootPath, relativePath].filter(Boolean).join("/")
+      );
+      try {
+        const model = await options.contents.get(deliverablePath, { content: false });
+        addEntry(model);
+      } catch {
+        // A missing explicit deliverable is represented by its absence; the
+        // evaluator will report it rather than turning the manifest scan into an error.
+      }
+      continue;
+    }
+    const staticPrefix = relativePath.slice(0, wildcardIndex);
+    const directoryPrefix = staticPrefix.includes("/")
+      ? staticPrefix.slice(0, staticPrefix.lastIndexOf("/"))
+      : "";
+    queueDirectory([rootPath, directoryPrefix].filter(Boolean).join("/"));
+  }
+  queueDirectory(rootPath);
+
   while (pending.length > 0) {
     const directoryPath = pending.shift()!;
+    if (visitedDirectories.has(directoryPath)) continue;
+    visitedDirectories.add(directoryPath);
     const directory = await options.contents.get(directoryPath, { content: true });
     if (directory.type !== "directory" || !Array.isArray(directory.content)) continue;
 
@@ -179,18 +251,10 @@ export async function scanGoalWorkspace(options: {
         continue;
       }
       if (entry.type === "directory") {
-        if (!ignored.has(entry.name.toLowerCase())) pending.push(entry.path);
+        if (!ignored.has(entry.name.toLowerCase())) queueDirectory(entry.path);
         continue;
       }
-      if (entry.type !== "file" && entry.type !== "notebook") continue;
-      entries.push({
-        path: normalizeGoalArtifactPath(entry.path),
-        kind: entry.type === "notebook" || entry.name.toLowerCase().endsWith(".ipynb")
-          ? "notebook"
-          : "file",
-        size: typeof entry.size === "number" && Number.isFinite(entry.size) ? entry.size : null,
-        lastModified: typeof entry.last_modified === "string" ? entry.last_modified : null,
-      });
+      addEntry(entry);
     }
     if (truncated) break;
   }

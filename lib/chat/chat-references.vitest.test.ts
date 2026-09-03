@@ -8,6 +8,7 @@ import {
 import {
   normalizeChatMessageMetadata,
   parseChatMessageContextUsage,
+  parseChatMessageGoalMessage,
 } from "./chat-references";
 import {
   ChatWireSchema,
@@ -89,6 +90,21 @@ describe("normalizeChatMessageMetadata", () => {
     expect(normalizeChatMessageMetadata({ goalContractDraft: true })).toEqual({
       goalContractDraft: true,
     });
+  });
+
+  it("validates and preserves supervisor message provenance", () => {
+    const goalMessage = {
+      source: "supervisor" as const,
+      kind: "repair" as const,
+      goalSessionId: "goal-1",
+      reviewNumber: 2,
+      evaluationId: "evaluation-2",
+    };
+    expect(normalizeChatMessageMetadata({ goalMessage })).toEqual({ goalMessage });
+    expect(parseChatMessageGoalMessage({ goalMessage })).toEqual(goalMessage);
+    expect(parseChatMessageGoalMessage({
+      goalMessage: { ...goalMessage, reviewNumber: 0 },
+    })).toBeNull();
   });
 
   it("drops malformed context usage rather than persisting it", () => {

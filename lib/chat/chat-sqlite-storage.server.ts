@@ -15,6 +15,7 @@ import {
   type UpdateEditCheckpointStatusRequest,
 } from "@/lib/agent/edit-checkpoints";
 import { UNCALIBRATED_CORRECTION_RATIO } from "@/lib/agent/token-budget";
+import { recoverLegacyGoalEvaluationFailure } from "@/lib/agent/goals/controller";
 import { GoalSessionSchema, type GoalSession } from "@/lib/agent/goals/types";
 import {
   getChatStorageDegradedReason,
@@ -783,7 +784,10 @@ export async function saveGoalSession(session: GoalSession): Promise<void> {
 
 /** Returns the current goal session associated with one chat. */
 export async function getGoalSession(chatId: string): Promise<GoalSession | null> {
-  if (usingFallbackStorage()) return getFallbackGoalSession(chatId);
+  if (usingFallbackStorage()) {
+    const session = await getFallbackGoalSession(chatId);
+    return session ? recoverLegacyGoalEvaluationFailure(session) : null;
+  }
   const db = await getChatDatabase();
   const row = db.prepare("select session_json from goal_session where chat_id = ?")
     .get(chatId) as GoalSessionRow | undefined;
@@ -793,10 +797,14 @@ export async function getGoalSession(chatId: string): Promise<GoalSession | null
   const evaluationRows = db.prepare(
     "select evaluation_json from goal_evaluation where goal_id = ? order by ordinal asc"
   ).all(goalId) as GoalEvaluationRow[];
-  return GoalSessionSchema.parse({
-    ...rawSession,
-    evaluations: evaluationRows.map((evaluation) => JSON.parse(evaluation.evaluation_json)),
-  });
+  return recoverLegacyGoalEvaluationFailure(
+    GoalSessionSchema.parse({
+      ...rawSession,
+      evaluations: evaluationRows.map((evaluation) =>
+        JSON.parse(evaluation.evaluation_json)
+      ),
+    })
+  );
 }
 
 /** Deletes the current goal session associated with one chat. */

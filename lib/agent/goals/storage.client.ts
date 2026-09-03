@@ -28,4 +28,3 @@ export async function removeGoalSession(chatId: string): Promise<void> {
   });
   if (!response.ok) throw new Error(`Failed to delete goal session: ${response.status}`);
 }
-

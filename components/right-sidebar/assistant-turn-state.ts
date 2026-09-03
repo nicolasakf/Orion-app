@@ -44,6 +44,57 @@ export function shouldContinueAfterToolCalls(messages: UIMessage[]): boolean {
   return !toolParts.some(isCancelledToolPart);
 }
 
+const INCOMPLETE_ASSISTANT_PART_STATES = new Set([
+  "streaming",
+  "input-streaming",
+  "input-available",
+  "approval-requested",
+  "approval-responded",
+]);
+
+/**
+ * True only after a goal worker's complete model/tool continuation chain ends.
+ *
+ * This must be evaluated from `useChat.onFinish`, not from React's transient
+ * `status` or transcript growth: those signals can briefly look complete while
+ * the final reasoning or tool continuation is still being appended.
+ */
+export function isCompletedGoalWorkerTurn(messages: UIMessage[]): boolean {
+  const latestMessage = messages.at(-1);
+  if (latestMessage?.role !== "assistant" || latestMessage.parts.length === 0) {
+    return false;
+  }
+  if (shouldContinueAfterToolCalls(messages)) return false;
+  return !latestMessage.parts.some((part) => {
+    if (!("state" in part) || typeof part.state !== "string") return false;
+    return INCOMPLETE_ASSISTANT_PART_STATES.has(part.state);
+  });
+}
+
+/** Resolves the exact worker request whose completed turn may now be reviewed. */
+export function getReviewReadyGoalWorkerRequestId(options: {
+  messages: UIMessage[];
+  goal: {
+    status: string;
+    phase: string;
+    workerRequestId: string;
+  } | null;
+  inFlightWorkerRequestId: string | null;
+  stopRequested: boolean;
+}): string | null {
+  const { goal, inFlightWorkerRequestId } = options;
+  if (
+    options.stopRequested ||
+    goal?.status !== "active" ||
+    goal.phase !== "working" ||
+    inFlightWorkerRequestId !== goal.workerRequestId ||
+    !isCompletedGoalWorkerTurn(options.messages)
+  ) {
+    return null;
+  }
+  return inFlightWorkerRequestId;
+}
+
 function isToolPart(part: UIMessage["parts"][number]): boolean {
   return part.type.startsWith("tool-");
 }

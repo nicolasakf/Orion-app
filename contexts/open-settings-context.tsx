@@ -10,11 +10,17 @@ interface OpenSettingsContextValue {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** Open the settings dialog and switch to the given tab. */
-  openWithTab: (tab: SettingsTab, agentSection?: AgentSettingsSection) => void;
+  openWithTab: (
+    tab: SettingsTab,
+    agentSection?: AgentSettingsSection,
+    interactionModeId?: string,
+  ) => void;
   /** Tab to show when dialog opens (cleared after use). */
   initialTab: SettingsTab | null;
   /** Agent subsection to show when opening the Agent tab. */
   initialAgentSection: AgentSettingsSection | null;
+  /** Interaction mode to select when opening the Interaction modes section. */
+  initialInteractionModeId: string | null;
   /** Opens the user settings JSON file in the main editor. */
   openUserSettingsFile: () => void;
   /** Registers the handler that opens the user settings file in the editor. */
@@ -33,6 +39,8 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
   const [initialTab, setInitialTab] = React.useState<SettingsTab | null>(null);
   const [initialAgentSection, setInitialAgentSection] =
     React.useState<AgentSettingsSection | null>(null);
+  const [initialInteractionModeId, setInitialInteractionModeId] =
+    React.useState<string | null>(null);
   const openUserSettingsFileHandlerRef = React.useRef<(() => void) | null>(null);
   const openPersonalContextFileHandlerRef = React.useRef<(() => void) | null>(null);
 
@@ -42,6 +50,7 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
     const openDefaultSettings = () => {
       setInitialTab(null);
       setInitialAgentSection(null);
+      setInitialInteractionModeId(null);
       setOpen(true);
     };
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -74,9 +83,14 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
   }, []);
 
   const openWithTab = React.useCallback(
-    (tab: SettingsTab, agentSection?: AgentSettingsSection) => {
+    (
+      tab: SettingsTab,
+      agentSection?: AgentSettingsSection,
+      interactionModeId?: string,
+    ) => {
       setInitialTab(tab);
       setInitialAgentSection(agentSection ?? null);
+      setInitialInteractionModeId(interactionModeId ?? null);
       setOpen(true);
     },
     []
@@ -87,6 +101,7 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
     if (!next) {
       setInitialTab(null);
       setInitialAgentSection(null);
+      setInitialInteractionModeId(null);
     }
   }, []);
 
@@ -119,6 +134,7 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
       openWithTab,
       initialTab,
       initialAgentSection,
+      initialInteractionModeId,
       openUserSettingsFile,
       registerOpenUserSettingsFileHandler,
       openPersonalContextFile,
@@ -130,6 +146,7 @@ export function OpenSettingsProvider({ children }: { children: React.ReactNode }
       openWithTab,
       initialTab,
       initialAgentSection,
+      initialInteractionModeId,
       openUserSettingsFile,
       registerOpenUserSettingsFileHandler,
       openPersonalContextFile,

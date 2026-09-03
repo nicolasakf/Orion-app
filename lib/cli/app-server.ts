@@ -1,9 +1,14 @@
 import { spawn, type ChildProcess } from "child_process";
 import { existsSync } from "fs";
+import { createServer } from "net";
 import { join, resolve } from "path";
 
 import { ensureBundledNativeModules } from "./ensure-native-modules";
-import { findFreePort } from "./jupyter";
+
+/** The first local port Orion tries when no port is explicitly configured. */
+export const DEFAULT_ORION_PORT = 7070;
+
+const MAX_PORT_SEARCH_ATTEMPTS = 100;
 
 export interface StartedOrionApp {
   process: ChildProcess;
@@ -23,6 +28,40 @@ export interface StartOrionAppServerOptions {
 
 /** Node's default 16 KiB header limit rejects browsers with large localhost cookie jars (HTTP 431). */
 export const ORION_MAX_HTTP_HEADER_SIZE = 65_536;
+
+/** Returns whether a TCP port can be bound on Orion's loopback interface. */
+async function isPortAvailable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = createServer();
+    const finish = (available: boolean) => {
+      server.removeAllListeners();
+      resolve(available);
+    };
+
+    server.once("error", () => finish(false));
+    server.listen(port, "127.0.0.1", () => {
+      server.close(() => finish(true));
+    });
+  });
+}
+
+/** Finds the first idle local port at or above the requested Orion port. */
+export async function findAvailableOrionPort(requestedPort: number): Promise<number> {
+  if (!Number.isInteger(requestedPort) || requestedPort < 1 || requestedPort > 65_535) {
+    throw new Error("ORION_PORT must be an integer between 1 and 65535.");
+  }
+
+  const finalPort = Math.min(65_535, requestedPort + MAX_PORT_SEARCH_ATTEMPTS - 1);
+  for (let port = requestedPort; port <= finalPort; port += 1) {
+    if (await isPortAvailable(port)) {
+      return port;
+    }
+  }
+
+  throw new Error(
+    `Could not find an available local port between ${requestedPort} and ${finalPort}.`
+  );
+}
 
 /** Returns the app bundle directory for an npm-installed Orion CLI. */
 export function resolveBundledAppDirectory(fromDirectory = __dirname): string {
@@ -90,12 +129,12 @@ async function isServerReady(url: string, timeoutMs = 3_000): Promise<boolean> {
   }
 }
 
-/** Starts the packaged Next standalone server on port 3001 or a free fallback. */
+/** Starts the packaged Next standalone server on the first available Orion port. */
 export async function startOrionAppServer(
   options: StartOrionAppServerOptions = {}
 ): Promise<StartedOrionApp> {
   const requestedPort =
-    options.requestedPort ?? Number(process.env.ORION_PORT ?? "3001");
+    options.requestedPort ?? Number(process.env.ORION_PORT ?? DEFAULT_ORION_PORT);
   const readyTimeoutMs = options.readyTimeoutMs ?? 60_000;
   const appDirectory = options.appDirectory ?? resolveOrionAppDirectory();
   const nodeExecutable = options.nodeExecutable ?? process.execPath;
@@ -109,10 +148,7 @@ export async function startOrionAppServer(
 
   ensureBundledNativeModules(appDirectory, nodeExecutable);
 
-  let port = requestedPort;
-  if (await isServerReady(`http://127.0.0.1:${port}`)) {
-    port = await findFreePort();
-  }
+  const port = await findAvailableOrionPort(requestedPort);
 
   const hideSubprocess = options.hideSubprocess ?? false;
   const proc = spawn(

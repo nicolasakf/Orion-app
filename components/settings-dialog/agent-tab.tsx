@@ -7,15 +7,20 @@ import type { AgentSettingsSection } from "@/components/settings-dialog/types";
 
 interface AgentTabProps {
   section: AgentSettingsSection;
+  initialInteractionModeId?: string | null;
 }
 
 /** Agent tab content router for sidebar subsections. */
-export function AgentTab({ section }: AgentTabProps) {
+export function AgentTab({ section, initialInteractionModeId }: AgentTabProps) {
   switch (section) {
     case "communication":
       return <AgentCommunicationSection />;
     case "modes":
-      return <AgentInteractionModesSection />;
+      return (
+        <AgentInteractionModesSection
+          initialModeId={initialInteractionModeId}
+        />
+      );
     case "context":
     case "tool-execution":
     case "terminal":

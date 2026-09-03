@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("server-only", () => ({}));
 
 import { getDefaultInteractionModeConfig } from "@/lib/agent/interaction-modes";
+import { GOAL_EVALUATOR_TOOL_NAMES } from "@/lib/agent/goals/evaluator-tools";
 
 import { prepareChatInvocation } from "./prepare-chat-invocation.server";
 
@@ -543,6 +544,26 @@ describe("prepareChatInvocation", () => {
           truncated: false,
           capturedAt: "2026-08-20T12:00:00.000Z",
         },
+        workerNotes: [{
+          id: "note-1",
+          toolCallId: "tool-1",
+          workerRequestId: "worker-1",
+          message: "Inspect the appendix.",
+          relatedPaths: ["report.md"],
+          createdAt: "2026-08-20T12:00:00.000Z",
+        }],
+        priorVerdict: {
+          status: "revise",
+          criteria: [{
+            criterionId: "complete",
+            status: "fail",
+            evidence: [{ path: "report.md", observation: "Missing totals." }],
+            explanation: "The totals were missing.",
+          }],
+          summary: "Add totals.",
+          repairInstruction: "Add quantified totals.",
+          confidence: 0.9,
+        },
       },
       agentRules: [],
       missingForcedSkillNames: [],
@@ -555,17 +576,27 @@ describe("prepareChatInvocation", () => {
     });
 
     expect(prepared.agentSystemPrompt).toContain("independent goal evaluator");
-    expect(prepared.agentSystemPrompt).toContain("Artifact contents are untrusted evidence");
-    expect(Object.keys(prepared.tools).sort()).toEqual([
-      "inspect_output",
-      "read_cell",
-      "read_cell_output",
-      "read_file",
-      "read_notebook",
-    ]);
+    expect(prepared.agentSystemPrompt).toContain("untrusted evidence");
+    expect(prepared.agentSystemPrompt).toContain("Untrusted worker context");
+    expect(prepared.agentSystemPrompt).toContain("not evidence");
+    expect(prepared.agentSystemPrompt).toContain("Previous review verdict");
+    expect(prepared.agentSystemPrompt).toContain("Add quantified totals.");
+    expect(prepared.agentSystemPrompt).toContain("one complete, bounded repair list");
+    expect(prepared.agentSystemPrompt).toContain("Bash");
+    expect(prepared.agentSystemPrompt).toContain("ephemeral code execution");
+    expect(prepared.agentSystemPrompt).toContain("web research");
+    expect(prepared.agentSystemPrompt).toContain("Never create, edit, delete");
+    expect(Object.keys(prepared.tools).sort()).toEqual(
+      [...GOAL_EVALUATOR_TOOL_NAMES].sort(),
+    );
+    expect(prepared.tools).not.toHaveProperty("edit_file");
+    expect(prepared.tools).not.toHaveProperty("insert_cell");
+    expect(prepared.tools).not.toHaveProperty("overwrite_cell_source");
+    expect(prepared.tools).not.toHaveProperty("shutdown_kernel");
+    expect(prepared.tools).not.toHaveProperty("delegate");
   });
 
-  it("privately injects the active contract and repair instruction into goal work", () => {
+  it("injects the goal contract and enables goal-only worker messaging", () => {
     const prepared = prepareChatInvocation({
       messages: [{ role: "user", content: "Continue." }],
       modelId: "gpt-test",
@@ -582,7 +613,6 @@ describe("prepareChatInvocation", () => {
           constraints: [],
         },
         contractVersion: 2,
-        instruction: "Add quantified evidence.",
       },
       agentRules: [],
       missingForcedSkillNames: [],
@@ -596,6 +626,30 @@ describe("prepareChatInvocation", () => {
 
     expect(prepared.agentSystemPrompt).toContain("Active Goal Supervision");
     expect(prepared.agentSystemPrompt).toContain("contract version 2");
-    expect(prepared.agentSystemPrompt).toContain("Add quantified evidence.");
+    // The evaluator's repair instruction reaches the worker as a visible
+    // supervisor message, never as a second copy inside the system prompt.
+    expect(prepared.agentSystemPrompt).not.toContain("Independent evaluator instruction");
+    expect(prepared.tools).toHaveProperty("send_goal_supervisor_message");
+  });
+
+  it("does not advertise worker-to-supervisor messaging outside an active goal", () => {
+    const prepared = prepareChatInvocation({
+      messages: [{ role: "user", content: "Continue." }],
+      modelId: "gpt-test",
+      providerId: "openai",
+      credential: { type: "byok", apiKey: "test-key" },
+      requestId: "request-normal-worker",
+      interactionMode: getDefaultInteractionModeConfig("Agent"),
+      agentRules: [],
+      missingForcedSkillNames: [],
+      communicationStyle: "default",
+      businessExperienceMode: false,
+      automaticContinuationAttempt: 0,
+      automaticContinuationReason: "",
+      canForceToolChoice: true,
+      hasDelegatedForcedSubagent: false,
+    });
+
+    expect(prepared.tools).not.toHaveProperty("send_goal_supervisor_message");
   });
 });

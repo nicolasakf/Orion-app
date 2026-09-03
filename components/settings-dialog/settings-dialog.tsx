@@ -42,6 +42,8 @@ interface SettingsDialogProps {
   initialTab?: SettingsTab | null;
   /** Agent subsection to show when opening the Agent tab. */
   initialAgentSection?: AgentSettingsSection | null;
+  /** Interaction mode to select when opening the Interaction modes section. */
+  initialInteractionModeId?: string | null;
 }
 
 /** Settings dialog with local OSS configuration tabs. */
@@ -50,6 +52,7 @@ export function SettingsDialog({
   onOpenChange,
   initialTab,
   initialAgentSection,
+  initialInteractionModeId,
 }: SettingsDialogProps) {
   const [activeTab, setActiveTab] = React.useState<SettingsTab>("appearance");
   const [agentSection, setAgentSection] = React.useState<AgentSettingsSection>(
@@ -135,7 +138,12 @@ export function SettingsDialog({
       case "notebook":
         return <NotebookTab />;
       case "agent":
-        return <AgentTab section={agentSection} />;
+        return (
+          <AgentTab
+            section={agentSection}
+            initialInteractionModeId={initialInteractionModeId}
+          />
+        );
       case "models":
         return (
           <ModelsTab onNavigateToProviders={() => handleTabChange("providers")} />

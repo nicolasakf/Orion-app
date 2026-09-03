@@ -3,7 +3,9 @@ import type { UIMessage } from "ai";
 
 import {
   getCompletedToolContinuationKey,
+  getReviewReadyGoalWorkerRequestId,
   getTranscriptProgressCount,
+  isCompletedGoalWorkerTurn,
   shouldContinueAfterToolCalls,
 } from "./assistant-turn-state";
 
@@ -147,6 +149,79 @@ describe("getTranscriptProgressCount", () => {
     expect(getTranscriptProgressCount(after)).toBeGreaterThan(
       getTranscriptProgressCount(before)
     );
+  });
+});
+
+describe("isCompletedGoalWorkerTurn", () => {
+  it("does not review a worker while its final reasoning is still streaming", () => {
+    const messages = [{
+      id: "assistant-streaming",
+      role: "assistant" as const,
+      parts: [{ type: "reasoning", text: "Finishing checks", state: "streaming" }],
+    }] as unknown as UIMessage[];
+
+    expect(isCompletedGoalWorkerTurn(messages)).toBe(false);
+  });
+
+  it("accepts a worker only after the final assistant parts are complete", () => {
+    const messages = [{
+      id: "assistant-done",
+      role: "assistant" as const,
+      parts: [
+        { type: "reasoning", text: "Checks complete", state: "done" },
+        { type: "text", text: "The saved deliverable is ready.", state: "done" },
+      ],
+    }] as unknown as UIMessage[];
+
+    expect(isCompletedGoalWorkerTurn(messages)).toBe(true);
+  });
+
+  it("waits for the automatic follow-up after a completed tool call", () => {
+    const messages = [{
+      id: "assistant-tool",
+      role: "assistant" as const,
+      parts: [{
+        type: "tool-read_file",
+        toolCallId: "call-read",
+        state: "output-available",
+        input: { path: "report.md" },
+        output: "report",
+      }],
+    }] as unknown as UIMessage[];
+
+    expect(shouldContinueAfterToolCalls(messages)).toBe(true);
+    expect(isCompletedGoalWorkerTurn(messages)).toBe(false);
+  });
+
+  it("does not release review 5 from a temporarily streaming worker response", () => {
+    const messages = [{
+      id: "assistant-review-5-race",
+      role: "assistant" as const,
+      parts: [{ type: "reasoning", text: "Still validating", state: "streaming" }],
+    }] as unknown as UIMessage[];
+
+    expect(getReviewReadyGoalWorkerRequestId({
+      messages,
+      goal: {
+        status: "active",
+        phase: "working",
+        workerRequestId: "worker-review-5",
+      },
+      inFlightWorkerRequestId: "worker-review-5",
+      stopRequested: false,
+    })).toBeNull();
+
+    (messages[0]!.parts[0] as { state: string }).state = "done";
+    expect(getReviewReadyGoalWorkerRequestId({
+      messages,
+      goal: {
+        status: "active",
+        phase: "working",
+        workerRequestId: "worker-review-5",
+      },
+      inFlightWorkerRequestId: "worker-review-5",
+      stopRequested: false,
+    })).toBe("worker-review-5");
   });
 });
 

@@ -52,6 +52,11 @@ export function GoalStatusBar({
       ? session.phase === "evaluating" ? "Reviewing goal" : "Working toward goal"
       : session.status.replaceAll("_", " ");
   const Icon = completed ? CheckCircle2 : terminal ? CircleAlert : ShieldCheck;
+  const statusExplanation = session.status === "stalled"
+    ? session.stallReason === "unchanged_criteria"
+      ? "Goal stopped because two repairs produced no criterion-level progress."
+      : "Goal stopped because consecutive repairs did not change the saved artifacts."
+    : null;
 
   return (
     <>
@@ -76,7 +81,14 @@ export function GoalStatusBar({
                   {session.reviewCount}/{session.maxReviews} reviews
                 </span>
               </div>
-              <p className="truncate text-xs text-muted-foreground">{session.contract.objective}</p>
+              <p
+                className="truncate text-xs text-muted-foreground"
+                title={session.pauseReason ?? session.contract.objective}
+              >
+                {statusExplanation ?? (session.status === "paused" && session.pauseReason
+                  ? session.pauseReason
+                  : session.contract.objective)}
+              </p>
             </div>
           </button>
           {(session.status === "active" || session.status === "paused") && (

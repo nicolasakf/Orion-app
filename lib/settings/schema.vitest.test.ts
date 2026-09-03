@@ -113,6 +113,7 @@ describe("settings migrations", () => {
     expect(migrated.settings.agent.context.compactionAutoThreshold).toBe(0.92);
     expect(migrated.settings.agent.toolOutput.textCharBudget).toBe(40_000);
     expect(migrated.settings.agent.execution.maxParallelReadOnlyCalls).toBe(10);
+    expect(migrated.settings.agent.execution.preventSystemSleep).toBe(true);
     expect(migrated.settings.agent.goals.maxReviews).toBe(10);
     expect(migrated.settings.shell.mobileBreakpointPx).toBe(768);
     expect(migrated.settings.shell.userTerminalWorkingDirectory).toBe(

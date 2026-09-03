@@ -5,6 +5,7 @@ import type { UIMessage } from "ai";
 
 import { BUSINESS_PROMPT_CATEGORIES } from "@/components/right-sidebar/business-prompt-library";
 import { ChatBody } from "@/components/right-sidebar/chat-body";
+import type { LLM } from "@/components/right-sidebar/types";
 import { INSERT_CHAT_MESSAGE_EVENT } from "@/lib/chat/chat-composer-events";
 import { SCROLL_TO_NOTEBOOK_CELL_EVENT_NAME } from "@/lib/notebook/notebook-execution-events";
 
@@ -156,6 +157,81 @@ describe("ChatBody empty prompt library", () => {
     expect(screen.getByText("Writing goal contract…")).toBeInTheDocument();
     expect(screen.queryByText("Invalid goal contract")).toBeNull();
     expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+  });
+
+  it("updates both goal model selectors when their controlled selections change", () => {
+    const message: UIMessage = {
+      id: "assistant-goal-model-pickers",
+      role: "assistant",
+      parts: [
+        {
+          type: "tool-propose_goal_contract",
+          toolCallId: "proposal-models",
+          state: "input-available",
+          input: {
+            objective: "Prepare and review the analysis.",
+            deliverables: [
+              { path: "analysis.ipynb", description: "Reproducible analysis" },
+            ],
+            acceptanceCriteria: [
+              { id: "reviewed", description: "The analysis passes review." },
+            ],
+            constraints: [],
+          },
+        } as UIMessage["parts"][number],
+      ],
+    };
+    const models = [
+      {
+        value: "gpt-test",
+        label: "GPT Test",
+        provider: "openai",
+        isAccessible: true,
+        supportsToolCalling: true,
+      },
+      {
+        value: "claude-test",
+        label: "Claude Test",
+        provider: "anthropic",
+        isAccessible: true,
+        supportsToolCalling: true,
+      },
+    ] as LLM[];
+    const pinnedModelIds = ["openai/gpt-test", "anthropic/claude-test"];
+    const basePicker = {
+      models,
+      pinnedModelIds,
+      onWorkerModelChange: vi.fn(),
+      onSelectedModelChange: vi.fn(),
+    };
+    const { rerender } = renderMessageChatBody([message], {
+      goalEvaluatorPicker: {
+        ...basePicker,
+        workerModel: "openai/gpt-test",
+        selectedModel: "openai/gpt-test",
+      },
+    });
+
+    expect(screen.getByText("Worker").parentElement).toHaveTextContent("GPT Test");
+    expect(screen.getByText("Reviewer").parentElement).toHaveTextContent("GPT Test");
+
+    rerender(
+      <ChatBody
+        messages={[message]}
+        error={undefined}
+        isLoading={false}
+        onUserMessageClick={() => undefined}
+        editingState={null}
+        goalEvaluatorPicker={{
+          ...basePicker,
+          workerModel: "anthropic/claude-test",
+          selectedModel: "anthropic/claude-test",
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Worker").parentElement).toHaveTextContent("Claude Test");
+    expect(screen.getByText("Reviewer").parentElement).toHaveTextContent("Claude Test");
   });
 
   it("renders the runtime warning when a tool is blocked by a disconnected server", () => {
@@ -402,6 +478,86 @@ describe("ChatBody assistant message actions", () => {
 
     expect(screen.queryByRole("button", { name: "Fork from here" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy message" })).toBeInTheDocument();
+  });
+
+  it("renders Supervisor turns as copy-only user messages", () => {
+    const onUserMessageClick = vi.fn();
+    const onRestoreCheckpoint = vi.fn();
+    const message: UIMessage = {
+      id: "supervisor-repair",
+      role: "user",
+      parts: [{ type: "text", text: "Add quantified evidence." }],
+      metadata: {
+        goalMessage: {
+          source: "supervisor",
+          kind: "repair",
+          goalSessionId: "goal-1",
+          reviewNumber: 1,
+          evaluationId: "evaluation-1",
+        },
+      },
+    };
+
+    renderMessageChatBody([message], {
+      onUserMessageClick,
+      checkpointRequestByMessageId: new Map([[message.id, "checkpoint-1"]]),
+      checkpointStatuses: new Map([["checkpoint-1", "completed"]]),
+      onRestoreCheckpoint,
+    });
+
+    expect(screen.getByText("Supervisor")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit message" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Undo Changes" })).toBeNull();
+    expect(onUserMessageClick).not.toHaveBeenCalled();
+    expect(onRestoreCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("shows worker-to-supervisor notes as dedicated tool activity", () => {
+    renderMessageChatBody([{
+      id: "assistant-worker-note",
+      role: "assistant",
+      parts: [{
+        type: "tool-send_goal_supervisor_message",
+        toolCallId: "note-tool-1",
+        state: "output-available",
+        input: {
+          message: "The appendix explains the exclusions.",
+          relatedPaths: ["report.md"],
+        },
+        output: { status: "queued", noteId: "note-1", reviewNumber: 1 },
+      } as UIMessage["parts"][number]],
+    }]);
+
+    expect(screen.getByText("Messaged supervisor")).toBeInTheDocument();
+  });
+
+  it("keeps completed evaluator tool activity expanded beneath its review heading", () => {
+    renderMessageChatBody([
+      {
+        id: "evaluation-heading",
+        role: "assistant",
+        parts: [{ type: "text", text: "## Supervisor review 1: revise" }],
+      },
+      {
+        id: "evaluation-tools",
+        role: "assistant",
+        parts: [{
+          type: "tool-read_file",
+          toolCallId: "evaluation-read-1",
+          state: "output-available",
+          input: { filePath: "report.md", startLine: 1, endLine: 20 },
+          output: "Saved artifact content",
+        } as UIMessage["parts"][number]],
+      },
+    ]);
+
+    expect(screen.getByText("Supervisor review 1: revise")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Used 1 tool/ })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(screen.getByText("Read file")).toBeInTheDocument();
   });
 
   it("scrolls to a notebook cell when its sent-message reference chip is clicked", () => {

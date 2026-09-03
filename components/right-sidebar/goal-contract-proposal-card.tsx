@@ -33,9 +33,12 @@ interface GoalContractProposalCardProps {
   error?: string;
   onApprove?: (toolCallId: string) => void;
   onRequestRevision?: (toolCallId: string) => void;
-  /** Catalog and pins backing the evaluator picker. */
+  /** Catalog and pins backing the worker and evaluator pickers. */
   models?: LLM[];
   pinnedModelIds?: string[];
+  /** Model that will perform the goal work. */
+  workerModel?: string;
+  onWorkerModelChange?: (model: string) => void;
   /** Model that will review the work, chosen independently of the composer's. */
   evaluatorModel?: string;
   onEvaluatorModelChange?: (model: string) => void;
@@ -142,13 +145,18 @@ export function GoalContractProposalCard({
   onRequestRevision,
   models,
   pinnedModelIds,
+  workerModel,
+  onWorkerModelChange,
   evaluatorModel,
   onEvaluatorModelChange,
   onOpenModelsSettings,
   onOpenProvidersSettings,
 }: GoalContractProposalCardProps) {
   const [expanded, setExpanded] = React.useState(false);
+  const [workerPickerOpen, setWorkerPickerOpen] = React.useState(false);
   const [evaluatorPickerOpen, setEvaluatorPickerOpen] = React.useState(false);
+  const workerLlm =
+    models && workerModel ? findModelBySelectionKey(models, workerModel) : undefined;
   const evaluatorLlm =
     models && evaluatorModel
       ? findModelBySelectionKey(models, evaluatorModel)
@@ -166,6 +174,8 @@ export function GoalContractProposalCard({
   const isApproved = result?.status === "approved";
   const isRevisionRequested = result?.status === "revision_requested";
   const isPending = !result && state === "input-available";
+  const canChooseWorker =
+    isPending && Boolean(models?.length) && Boolean(onWorkerModelChange);
   const canChooseEvaluator =
     isPending && Boolean(models?.length) && Boolean(onEvaluatorModelChange);
 
@@ -259,25 +269,48 @@ export function GoalContractProposalCard({
           )}
         </button>
 
-        {canChooseEvaluator ? (
-          <div className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-            <span className="shrink-0">Reviewed by</span>
-            <ModelCombobox
-              models={models ?? []}
-              pinnedModelIds={pinnedModelIds ?? []}
-              selectedModel={evaluatorModel ?? ""}
-              onModelChange={onEvaluatorModelChange!}
-              open={evaluatorPickerOpen}
-              onOpenChange={setEvaluatorPickerOpen}
-              disabled={busy}
-              onOpenModelsSettings={onOpenModelsSettings}
-              onOpenProvidersSettings={onOpenProvidersSettings}
-              placeholder="Choose reviewer"
-            />
+        {canChooseWorker || canChooseEvaluator ? (
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            {canChooseWorker ? (
+              <div className="flex min-w-0 items-center gap-1">
+                <span className="shrink-0">Worker</span>
+                <ModelCombobox
+                  models={models ?? []}
+                  pinnedModelIds={pinnedModelIds ?? []}
+                  selectedModel={workerModel ?? ""}
+                  onModelChange={onWorkerModelChange!}
+                  open={workerPickerOpen}
+                  onOpenChange={setWorkerPickerOpen}
+                  disabled={busy}
+                  onOpenModelsSettings={onOpenModelsSettings}
+                  onOpenProvidersSettings={onOpenProvidersSettings}
+                  placeholder="Choose worker"
+                />
+              </div>
+            ) : null}
+            {canChooseEvaluator ? (
+              <div className="flex min-w-0 items-center gap-1">
+                <span className="shrink-0">Reviewer</span>
+                <ModelCombobox
+                  models={models ?? []}
+                  pinnedModelIds={pinnedModelIds ?? []}
+                  selectedModel={evaluatorModel ?? ""}
+                  onModelChange={onEvaluatorModelChange!}
+                  open={evaluatorPickerOpen}
+                  onOpenChange={setEvaluatorPickerOpen}
+                  disabled={busy}
+                  onOpenModelsSettings={onOpenModelsSettings}
+                  onOpenProvidersSettings={onOpenProvidersSettings}
+                  placeholder="Choose reviewer"
+                />
+              </div>
+            ) : null}
           </div>
-        ) : evaluatorLlm ? (
+        ) : workerLlm || evaluatorLlm ? (
           <span className="min-w-0 truncate text-xs text-muted-foreground">
-            Reviewed by {evaluatorLlm.label}
+            {workerLlm ? `Worker: ${workerLlm.label}` : null}
+            {workerLlm && evaluatorLlm ? " · " : null}
+            {evaluatorLlm ? `Reviewer: ${evaluatorLlm.label}` : null}
           </span>
         ) : null}
 

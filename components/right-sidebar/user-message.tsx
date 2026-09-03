@@ -2,7 +2,7 @@
 
 import { type UIMessage } from "ai";
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Bot, Brain, ChevronDown, ChevronUp, Command, Copy, Pencil, Redo2, Undo2 } from "lucide-react";
+import { Bot, Brain, ChevronDown, ChevronUp, Command, Copy, MessageSquareText, Pencil, Redo2, Target, Undo2 } from "lucide-react";
 import {
   CheckmarkedButton,
   useCheckmarkedFeedback,
@@ -20,6 +20,7 @@ import {
   parseChatMessageSlashCommands,
   getReferenceTypeLabel,
   parseChatMessageReferences,
+  parseChatMessageGoalMessage,
   type ChatSlashCommandCategory,
   type ResolvedChatReference,
 } from "@/lib/chat/chat-references";
@@ -85,6 +86,7 @@ export function UserMessage({
   const textContent = getTextContent(message);
   const references = parseChatMessageReferences(message.metadata);
   const slashCommands = parseChatMessageSlashCommands(message.metadata);
+  const goalMessage = parseChatMessageGoalMessage(message.metadata);
 
   useEffect(() => {
     const el = contentRef.current;
@@ -182,6 +184,18 @@ export function UserMessage({
         )}
         onClick={handleMessageClick}
       >
+        {goalMessage ? (
+          <div className="mb-1 flex">
+            <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[0.75em] font-semibold ${USER_MESSAGE_CHIP_CLASS}`}>
+              {goalMessage.source === "supervisor" ? (
+                <Target className="h-3 w-3" />
+              ) : (
+                <MessageSquareText className="h-3 w-3" />
+              )}
+              {goalMessage.source === "supervisor" ? "Supervisor" : "Worker message"}
+            </span>
+          </div>
+        ) : null}
         {slashCommands.length > 0 && (
           <div className="mb-1 flex flex-wrap gap-1">
             {slashCommands.map((command, index) => {

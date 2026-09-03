@@ -50,6 +50,10 @@ interface OrionDesktopShellBridge {
     listener: (options?: { bypassCache?: boolean }) => void
   ) => () => void;
   isWindowFocused: () => Promise<boolean>;
+  setAgentRunPowerState: (state: {
+    active: boolean;
+    preventSystemSleep: boolean;
+  }) => Promise<void>;
   showNotification: (request: { title: string; body: string }) => Promise<boolean>;
 }
 

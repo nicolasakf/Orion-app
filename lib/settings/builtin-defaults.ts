@@ -153,11 +153,13 @@ export const BUILTIN_AGENT_TOOL_OUTPUT_DEFAULTS: AgentToolOutputSettings = {
 export const BUILTIN_AGENT_EXECUTION_DEFAULTS: AgentExecutionSettings = {
   maxParallelReadOnlyCalls: DEFAULT_MAX_PARALLEL_READ_ONLY_CALLS,
   maxQuestionsPerAsk: DEFAULT_MAX_QUESTIONS_PER_ASK,
+  preventSystemSleep: true,
 };
 
 /** Built-in goal supervisor defaults. */
 export const BUILTIN_AGENT_GOAL_DEFAULTS: AgentGoalSettings = {
   maxReviews: 10,
+  maxEvaluatorSteps: 40,
 };
 
 /** Built-in terminal tool defaults. */

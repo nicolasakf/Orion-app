@@ -27,6 +27,7 @@ import {
   Search,
   Plug,
   MessageCircleQuestion,
+  MessageSquareText,
 } from "lucide-react";
 import type { OrionToolName } from "@/lib/agent/tool-schemas";
 
@@ -145,6 +146,11 @@ export const TOOL_META: Record<OrionToolName, ToolMeta> = {
   connections: { labelPending: "Checking connections", labelDone: "Checked connections", icon: Plug },
   delegate: { labelPending: "Running sub-agent", labelDone: "Sub-agent finished", icon: Bot },
   ask_question: { labelPending: "Asking you", labelDone: "Asked you", icon: MessageCircleQuestion },
+  send_goal_supervisor_message: {
+    labelPending: "Messaging supervisor",
+    labelDone: "Messaged supervisor",
+    icon: MessageSquareText,
+  },
 };
 
 /** Fallback for unknown tool names */
@@ -291,6 +297,7 @@ const TOOLS_WITH_EXPANDED_ARGS_PREVIEW = new Set<OrionToolName>([
   "web_search",
   "load_skill",
   "connections",
+  "send_goal_supervisor_message",
 ]);
 
 /** Expanded preview: filename + line delta from tool result when possible, else from args. */
@@ -531,6 +538,19 @@ export function buildExpandedArgsPreview(
         return { short: toolId ? `Requested connection: ${toolId}` : "Requested a connection" };
       }
       return { short: "Listed connections" };
+    }
+    case "send_goal_supervisor_message": {
+      const message = argStr(args.message);
+      const paths = Array.isArray(args.relatedPaths)
+        ? args.relatedPaths.filter((path): path is string => typeof path === "string")
+        : [];
+      const suffix = paths.length > 0
+        ? ` · ${paths.length} related path${paths.length === 1 ? "" : "s"}`
+        : "";
+      return {
+        short: `${truncateForPreview(message, 100)}${suffix}`,
+        full: message.length > 100 ? message : undefined,
+      };
     }
     case "edit_file":
       return buildEditFileExpandedPreview(args, leadingText, isError);

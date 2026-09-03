@@ -139,11 +139,19 @@ export const AgentExecutionSettingsSchema = z.object({
     .int()
     .min(MIN_MAX_QUESTIONS_PER_ASK)
     .max(MAX_MAX_QUESTIONS_PER_ASK),
+  /** Prevent automatic macOS sleep while an agent turn runs in the desktop app. */
+  preventSystemSleep: z.boolean().catch(true),
 });
 
 export const AgentGoalSettingsSchema = z.object({
   /** Maximum number of supervisor reviews performed for one `/goal` run. */
   maxReviews: z.number().int().min(1).max(50),
+  /**
+   * Investigation steps one supervisor review may spend before its verdict is
+   * forced. A review that cannot finish is not evidence about the goal, so this
+   * has to be large enough for the evaluator to actually reproduce the work.
+   */
+  maxEvaluatorSteps: z.number().int().min(4).max(120).catch(40),
 });
 
 export const AgentTerminalSettingsSchema = z.object({

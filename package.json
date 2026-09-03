@@ -28,11 +28,11 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "next dev -p 3001 --turbopack",
+    "dev": "tsx scripts/start-next.ts dev --turbopack",
     "dev:desktop": "tsx scripts/dev-electron.ts",
     "dev:notebook": "tsx scripts/dev-with-jupyter.ts",
     "build": "node scripts/ensure-build-env.mjs && next build && node scripts/verify-orion-cloud-bundle.mjs",
-    "start": "next start -p 3001",
+    "start": "tsx scripts/start-next.ts start",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",

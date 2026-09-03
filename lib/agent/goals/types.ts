@@ -1,14 +1,16 @@
 import { z } from "zod";
 
-export const GoalDeliverableSchema = z.object({
-  path: z.string().trim().min(1).max(1_000).refine((path) => {
+export const GoalWorkspaceRelativePathSchema = z.string().trim().min(1).max(1_000).refine((path) => {
     const normalized = path.replaceAll("\\", "/");
     return (
       !normalized.startsWith("/") &&
       !/^[A-Za-z]:\//.test(normalized) &&
       !normalized.split("/").includes("..")
     );
-  }, "Deliverable paths must stay within the goal workspace."),
+  }, "Paths must stay within the goal workspace.");
+
+export const GoalDeliverableSchema = z.object({
+  path: GoalWorkspaceRelativePathSchema,
   description: z.string().trim().min(1).max(2_000),
 });
 
@@ -63,6 +65,12 @@ export const GoalArtifactManifestSchema = z.object({
   deletedPaths: z.array(z.string()),
   deliverablePaths: z.array(z.string()),
   fingerprint: z.string().min(1),
+  /**
+   * Fingerprint of the contract's deliverables alone. Stall detection uses this
+   * so a worker rewriting scratch notes each pass cannot disguise deliverables
+   * that never move. Absent on sessions stored before it existed.
+   */
+  deliverableFingerprint: z.string().min(1).optional(),
   truncated: z.boolean().default(false),
   capturedAt: z.string().datetime(),
 });
@@ -119,12 +127,29 @@ export const GoalSessionStatusSchema = z.enum([
 
 export const GoalSessionPhaseSchema = z.enum(["working", "evaluating", "paused"]);
 
+export const GoalWorkspaceSchema = z.object({
+  // Empty string is Jupyter's canonical root workspace.
+  workspaceDirectory: z.string(),
+  rootDirectory: z.string().min(1).optional(),
+});
+
+export const GoalWorkerNoteSchema = z.object({
+  id: z.string().min(1),
+  toolCallId: z.string().min(1),
+  workerRequestId: z.string().min(1),
+  message: z.string().trim().min(1).max(4_000),
+  relatedPaths: z.array(GoalWorkspaceRelativePathSchema).max(20).default([]),
+  createdAt: z.string().datetime(),
+  reviewedByEvaluationId: z.string().min(1).optional(),
+});
+
 export const GoalEvaluationSchema = z.object({
   id: z.string().min(1),
   contractVersion: z.number().int().positive(),
   reviewNumber: z.number().int().positive(),
   modelRequestId: z.string().min(1),
   manifest: GoalArtifactManifestSchema,
+  workerNotes: z.array(GoalWorkerNoteSchema).default([]),
   verdict: GoalVerdictSchema.nullable(),
   // Size-capped copy of the reviewer's own transcript, kept so a finished review
   // stays inspectable. Stored opaquely like chat and sub-agent messages are.
@@ -148,11 +173,21 @@ export const GoalSessionSchema = z.object({
   maxReviews: z.number().int().min(1).max(50),
   reviewCount: z.number().int().nonnegative(),
   unchangedRevisionCount: z.number().int().nonnegative(),
+  unchangedCriterionVerdictCount: z.number().int().nonnegative().default(0),
+  /**
+   * Signature of the criteria the last revise verdict did not pass, used to stop
+   * a loop where reviews keep reporting the same unmet criteria.
+   */
+  lastUnmetCriteriaSignature: z.string().optional(),
   baselineEntries: z.array(GoalArtifactEntrySchema),
   latestManifest: GoalArtifactManifestSchema.nullable(),
   latestVerdict: GoalVerdictSchema.nullable(),
   evaluations: z.array(GoalEvaluationSchema),
+  workspace: GoalWorkspaceSchema.optional(),
+  workerNotes: z.array(GoalWorkerNoteSchema).default([]),
   workerRequestId: z.string().min(1),
+  pauseReason: z.string().trim().min(1).max(8_000).optional(),
+  stallReason: z.enum(["unchanged_artifacts", "unchanged_criteria"]).optional(),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime(),
   completedAt: z.string().datetime().optional(),
@@ -161,12 +196,17 @@ export const GoalSessionSchema = z.object({
 export const GoalEvaluationRequestSchema = z.object({
   contract: GoalContractSchema,
   manifest: GoalArtifactManifestSchema,
+  workerNotes: z.array(GoalWorkerNoteSchema).default([]),
+  priorVerdict: GoalVerdictSchema.optional(),
+  /** Investigation steps this review may spend before its verdict is forced. */
+  investigationBudget: z.number().int().positive().max(500).optional(),
+  /** Set on the final step: tools are withdrawn and only a verdict is accepted. */
+  investigationBudgetSpent: z.boolean().optional(),
 });
 
 export const GoalContinuationSchema = z.object({
   contract: GoalContractSchema,
   contractVersion: z.number().int().positive(),
-  instruction: z.string().trim().max(8_000).optional(),
 });
 
 export const GoalContractProposalResultSchema = z.discriminatedUnion("status", [
@@ -183,8 +223,17 @@ export type GoalArtifactEntry = z.infer<typeof GoalArtifactEntrySchema>;
 export type GoalArtifactManifest = z.infer<typeof GoalArtifactManifestSchema>;
 export type GoalVerdict = z.infer<typeof GoalVerdictSchema>;
 export type GoalEvaluation = z.infer<typeof GoalEvaluationSchema>;
+export type GoalWorkspace = z.infer<typeof GoalWorkspaceSchema>;
+export type GoalWorkerNote = z.infer<typeof GoalWorkerNoteSchema>;
 export type GoalSession = z.infer<typeof GoalSessionSchema>;
 export type GoalSessionStatus = z.infer<typeof GoalSessionStatusSchema>;
-export type GoalEvaluationRequest = z.infer<typeof GoalEvaluationRequestSchema>;
+export type GoalEvaluationRequest = {
+  contract: GoalContract;
+  manifest: GoalArtifactManifest;
+  workerNotes?: GoalWorkerNote[];
+  priorVerdict?: GoalVerdict;
+  investigationBudget?: number;
+  investigationBudgetSpent?: boolean;
+};
 export type GoalContinuation = z.infer<typeof GoalContinuationSchema>;
 export type GoalContractProposalResult = z.infer<typeof GoalContractProposalResultSchema>;

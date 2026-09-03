@@ -47,6 +47,29 @@ describe("durable memory tool schema", () => {
   });
 });
 
+describe("goal supervisor message tool schema", () => {
+  const parseInput = (input: unknown) =>
+    (orionTools.send_goal_supervisor_message as unknown as {
+      inputSchema: { safeParse: (value: unknown) => { success: boolean; data?: unknown } };
+    }).inputSchema.safeParse(input);
+
+  it("is dependency-free and defaults optional related paths", () => {
+    const parsed = parseInput({ message: "Inspect the appendix." });
+    expect(NO_DEPENDENCY_TOOLS.has("send_goal_supervisor_message")).toBe(true);
+    expect(parsed.success).toBe(true);
+    expect(parsed.data).toMatchObject({ relatedPaths: [] });
+  });
+
+  it("rejects traversal, empty messages, and too many related paths", () => {
+    expect(parseInput({ message: "", relatedPaths: [] }).success).toBe(false);
+    expect(parseInput({ message: "Note", relatedPaths: ["../outside.md"] }).success).toBe(false);
+    expect(parseInput({
+      message: "Note",
+      relatedPaths: Array.from({ length: 21 }, (_, index) => `file-${index}.md`),
+    }).success).toBe(false);
+  });
+});
+
 describe("page reload tool schema", () => {
   it("is available without Jupyter or kernel readiness", () => {
     expect(orionTools.reload_page).toBeDefined();

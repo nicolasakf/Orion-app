@@ -142,8 +142,8 @@ export interface ChatTextboxProps {
   models: LLM[];
   /** Opens settings on the models tab so the user can pin models for the selector. */
   onOpenModelsSettings?: () => void;
-  /** Opens settings on the interaction modes tab. */
-  onOpenInteractionModesSettings?: () => void;
+  /** Opens settings on the interaction modes tab with the requested mode selected. */
+  onOpenInteractionModesSettings?: (modeId: InteractionMode) => void;
   /** Opens settings dialog on the providers tab. */
   onOpenProvidersSettings?: () => void;
   /** Opens the provider credentials flow for models without a configured credential. */
@@ -2183,7 +2183,7 @@ export function ChatTextbox({
                               e.preventDefault();
                               e.stopPropagation();
                               setIsModePopoverOpen(false);
-                              onOpenInteractionModesSettings?.();
+                              onOpenInteractionModesSettings?.(m.id);
                             }}
                             className={cn(
                               "corner-squircle flex h-6 w-6 shrink-0 items-center justify-center rounded-md opacity-60 transition-opacity hover:bg-transparent hover:opacity-100",

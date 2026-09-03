@@ -92,4 +92,23 @@ describe("GoalStatusBar", () => {
     expect(onResume).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", { name: "End goal" })).toBeInTheDocument();
   });
+
+  it("explains semantic stalls separately from unchanged artifacts", () => {
+    render(
+      <GoalStatusBar
+        session={{
+          ...createSession(),
+          status: "stalled",
+          phase: "paused",
+          stallReason: "unchanged_criteria",
+        }}
+        onOpen={vi.fn()}
+        onResume={vi.fn()}
+        onPause={vi.fn()}
+        onEnd={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText(/no criterion-level progress/i)).toBeInTheDocument();
+  });
 });

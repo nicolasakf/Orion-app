@@ -259,6 +259,20 @@ describe("ChatTextbox interaction modes", () => {
 
     expect(onInteractionModeChange).toHaveBeenCalledWith("Goal");
   });
+
+  it("opens settings with the mode selected by its edit control", () => {
+    const onOpenInteractionModesSettings = vi.fn();
+    renderTextbox({ onOpenInteractionModesSettings });
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Interaction mode: Agent" }),
+    );
+    fireEvent.mouseDown(
+      screen.getByRole("button", { name: "Edit Ask interaction mode" }),
+    );
+
+    expect(onOpenInteractionModesSettings).toHaveBeenCalledWith("Ask");
+  });
 });
 
 describe("ChatTextbox notebook reference chips", () => {
