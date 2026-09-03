@@ -2662,9 +2662,10 @@ export function NotebookEditor({
         }
 
         capturePendingCellSources();
+        const sourceOverrides = job.sourceOverrides;
         const cellsToRun = prepareCellsForExecution(job.indices).map((cell) => ({
           ...cell,
-          source: job.sourceOverrides?.[cell.index] ?? cell.source,
+          source: sourceOverrides?.[cell.index] ?? cell.source,
         }));
         if (cellsToRun.length === 0) {
           job = queue.dequeue();

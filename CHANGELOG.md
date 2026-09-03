@@ -4,6 +4,24 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.20.1] - 2026-09-03
+
+### Added
+
+- Agent: independent worker and reviewer turns with persisted worker notes, pinned workspaces, and resilient supervision
+- Notebook: run selected or current-line source with Option/Alt+Enter
+- Desktop: prevent macOS sleep during active agent runs when enabled
+
+### Changed
+
+- Agent: expand bounded evaluator investigation, reviewer retries, and stall detection
+- CLI: use port 7070 by default and select the next available local port when needed
+- Notebook: reconcile clean external changes while preserving unsaved cell edits
+
+### Fixed
+
+- Agent: recover interrupted evaluator reviews without consuming review budget
+
 ## [0.20.0] - 2026-08-24
 
 ### Added
