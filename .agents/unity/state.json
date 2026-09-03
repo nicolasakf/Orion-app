@@ -49,6 +49,11 @@
           "files": {
             "SKILL.md": "3e8c2ece72428cf598a021e7eba34c825cf18398bdc61553b732c2565bd897af"
           }
+        },
+        "consult-chat-history": {
+          "files": {
+            "SKILL.md": "f9e7fa59b902a6da280508c1856a5d8a528e116f4c78c7ad4f004f5c1f04b58a"
+          }
         }
       },
       "rules": {
@@ -105,6 +110,11 @@
         "publish-orion-release": {
           "files": {
             "SKILL.md": "3e8c2ece72428cf598a021e7eba34c825cf18398bdc61553b732c2565bd897af"
+          }
+        },
+        "consult-chat-history": {
+          "files": {
+            "SKILL.md": "f9e7fa59b902a6da280508c1856a5d8a528e116f4c78c7ad4f004f5c1f04b58a"
           }
         }
       },
