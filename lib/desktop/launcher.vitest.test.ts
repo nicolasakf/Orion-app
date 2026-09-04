@@ -1,5 +1,7 @@
 // @vitest-environment node
 
+import path from "path";
+
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -21,11 +23,19 @@ const baseOptions = {
 };
 
 describe("desktop launcher policy", () => {
-  it("prevents bundled Python from modifying the signed application bundle", () => {
-    expect(createBundledPythonEnvironment({ NODE_ENV: "test", PATH: "/usr/bin" })).toEqual({
+  it("preserves bundled Jupyter extensions without modifying the signed app", () => {
+    expect(
+      createBundledPythonEnvironment("/Applications/Orion.app/Contents/Resources", {
+        NODE_ENV: "test",
+        PATH: "/usr/bin",
+        JUPYTER_CONFIG_PATH: "/Users/taylor/.jupyter",
+      })
+    ).toEqual({
       NODE_ENV: "test",
       PATH: "/usr/bin",
       PYTHONDONTWRITEBYTECODE: "1",
+      JUPYTER_CONFIG_PATH:
+        `/Applications/Orion.app/Contents/Resources/runtime/python/etc/jupyter${path.delimiter}/Users/taylor/.jupyter`,
     });
   });
 

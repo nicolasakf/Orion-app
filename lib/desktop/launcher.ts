@@ -1,4 +1,5 @@
 import { existsSync } from "fs";
+import path from "path";
 
 import {
   resolveJupyterRootDirectory,
@@ -118,13 +119,31 @@ export function createBundledDesktopJupyterHandoff(
   };
 }
 
-/** Prevents bundled Python from writing bytecode into the signed application bundle. */
+/**
+ * Builds the environment for bundled Jupyter without modifying the signed app.
+ *
+ * Persistent venvs do not include the base interpreter's `etc/jupyter` path,
+ * so expose it explicitly to keep bundled server extensions such as terminals
+ * enabled when the venv inherits their packages through system site-packages.
+ */
 export function createBundledPythonEnvironment(
+  resourcesDirectory: string,
   env: NodeJS.ProcessEnv = process.env
 ): NodeJS.ProcessEnv {
+  const bundledJupyterConfig = path.join(
+    resourcesDirectory,
+    "runtime",
+    "python",
+    "etc",
+    "jupyter"
+  );
+  const inheritedJupyterConfig = env.JUPYTER_CONFIG_PATH;
   return {
     ...env,
     PYTHONDONTWRITEBYTECODE: "1",
+    JUPYTER_CONFIG_PATH: inheritedJupyterConfig
+      ? `${bundledJupyterConfig}${path.delimiter}${inheritedJupyterConfig}`
+      : bundledJupyterConfig,
   };
 }
 
@@ -209,7 +228,7 @@ export async function startBundledDesktopJupyter(
     [],
     jupyterRoot,
     90_000,
-    createBundledPythonEnvironment()
+    createBundledPythonEnvironment(paths.resourcesDirectory)
   );
   const capabilities = await checkJupyterCapabilities(server.baseUrl, server.token);
   if (!capabilities.ok) {

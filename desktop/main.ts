@@ -470,10 +470,13 @@ function setupUpdaterIpc(): void {
   });
 }
 
-/** Reports a startup error through both stderr and a native desktop dialog. */
-function reportStartupError(error: unknown): void {
+/** Reports a startup error through stderr and, for interactive launches, a native dialog. */
+function reportStartupError(error: unknown, showDialog = true): void {
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
+  if (!showDialog) {
+    return;
+  }
   dialog.showErrorBox(
     "Orion could not start",
     `${message}\n\nRun diagnostics from a terminal with: Orion --smoke`
@@ -548,8 +551,13 @@ app.whenReady().then(() => {
   setupShellIpc();
   setupUpdaterIpc();
   void boot().catch((error) => {
-    reportStartupError(error);
-    app.quit();
+    const smoke = parseDesktopOptions(process.argv.slice(1)).smoke;
+    reportStartupError(error, !smoke);
+    if (smoke) {
+      app.exit(1);
+    } else {
+      app.quit();
+    }
   });
 });
 
