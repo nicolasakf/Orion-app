@@ -4,6 +4,19 @@ All notable changes to Orion are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.20.2] - 2026-09-04
+
+### Changed
+
+- Release: publish npm packages through GitHub Actions trusted publishing with retry-safe version checks
+
+### Fixed
+
+- Desktop: load bundled Jupyter server extensions in persistent runtimes so terminal APIs are available
+- Desktop: exit smoke-mode startup failures cleanly instead of blocking CI on a native dialog
+
+[0.20.2]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.20.2
+
 ## [0.20.1] - 2026-09-03
 
 ### Added
@@ -21,6 +34,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 ### Fixed
 
 - Agent: recover interrupted evaluator reviews without consuming review budget
+
+[0.20.1]: https://github.com/nicolasakf/Orion-app/releases/tag/v0.20.1
 
 ## [0.20.0] - 2026-08-24
 
