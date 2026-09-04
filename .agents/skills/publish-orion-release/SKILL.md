@@ -1,6 +1,6 @@
 ---
 name: publish-orion-release
-description: Publishes an Orion release end-to-end — version bump, build, push release prep, wait for GitHub checks/install smoke (skippable when CI already passed on the pre-bump commit), tag, GitHub release, npm/PyPI publish via scripts/publish-release.sh (NPM_TOKEN + PyPI token in ~/.zprofile), sync version tags in Orion-api and Orion-docs, then post-release verification. Use when the user asks to publish a release, ship a version, bump and publish orion-notebook or orion-ui, or cut a new npm/PyPI release.
+description: Publishes an Orion release end-to-end — version bump, build, push release prep, wait for GitHub checks/install smoke, tag, GitHub/npm release through desktop-release.yml, PyPI publish via scripts/publish-release.sh, sync sibling tags, then verify. Use when the user asks to publish a release, ship a version, bump and publish orion-notebook or orion-ui, or cut a new npm/PyPI release.
 ---
 
 # Publish Orion Release
@@ -29,15 +29,15 @@ Detailed reference: [CONTRIBUTING.md — Publishing The CLI](../../../CONTRIBUTI
 
 ## Automated workflow
 
-**Phase 1 — Prepare and gate:** pre-flight → version bump → commit → build → push release prep → wait for GitHub checks (skip if pre-validated — see **Step 5**) → tag/push → GitHub release → build PyPI artifacts.
+**Phase 1 — Prepare and gate:** pre-flight → version bump → commit → build → push release prep → wait for GitHub checks (skip if pre-validated — see **Step 5**) → tag/push → wait for `Desktop Release` to publish the GitHub release and npm package through OIDC → build PyPI artifacts.
 
 **Phase 1b — Sync sibling repos:** bump version markers in `Orion-api` and `Orion-docs`, commit, tag `v<version>`, push (no GitHub releases).
 
-**Phase 2 — Publish:** run `scripts/publish-release.sh` (npm + both PyPI packages, non-interactive via env tokens).
+**Phase 2 — Publish:** run `scripts/publish-release.sh` for both PyPI packages (non-interactive via the PyPI token). npm is already published by `desktop-release.yml` through npm trusted publishing.
 
 **Phase 3 — Verify:** post-release registry checks and sibling-repo tag checks immediately after Phase 2 succeeds.
 
-If the user invokes this skill and has already completed Phase 1 (tag + GitHub release exist for the target version), skip to Phase 1b (if sibling tags missing), Phase 2 (publish), or Phase 3 (verify only) as appropriate.
+If the user invokes this skill and the tag-triggered `Desktop Release` workflow already completed for the target version, skip to Phase 1b (if sibling tags are missing), Phase 2 (if PyPI is missing), or Phase 3 (verify only) as appropriate.
 
 ## Publish credentials (one-time setup)
 
@@ -45,12 +45,11 @@ Store tokens in `~/.zprofile` (or export manually). **Never commit tokens.**
 
 | Variable | Purpose |
 | --- | --- |
-| `NPM_TOKEN` | npm granular access token — **Read and write**, scoped to `orion-notebook`, **Bypass 2FA** checked |
 | `TWINE_PASSWORD` | PyPI API token (`pypi-AgEI…`) with upload access to `orion-ui` and `orion-notebook` |
 | `PYPI_TOKEN` | Alias for `TWINE_PASSWORD` (either works) |
 | `TWINE_USERNAME` | Optional; defaults to `__token__` |
 
-Create the npm token at [npmjs.com → Access Tokens](https://www.npmjs.com/settings/~npm/access-tokens). Create PyPI tokens at [pypi.org → Account settings → API tokens](https://pypi.org/manage/account/token/).
+The npm package uses a trusted-publisher connection for `nicolasakf/Orion-app` and `.github/workflows/desktop-release.yml`; no npm token is required. Create PyPI tokens at [pypi.org → Account settings → API tokens](https://pypi.org/manage/account/token/).
 
 Agent shells may not load `~/.zprofile` automatically. The publish script sources it when vars are missing; if pre-flight still fails, run `source ~/.zprofile` first.
 
@@ -58,11 +57,11 @@ Agent shells may not load `~/.zprofile` automatically. The publish script source
 
 - Clean `main` (or an agreed release branch) with changes merged
 - `gh` authenticated (`gh auth status`)
-- Publish credentials in environment (`bash scripts/publish-release.sh --check`)
+- PyPI publish credential in the environment (`bash scripts/publish-release.sh --check`)
 - Node.js 20+, Python 3.8+ locally for build/test
 - Passing GitHub checks before tagging or publishing, especially the cross-OS `Install Smoke` workflow — on the release prep commit **or** on the parent commit when the release prep commit is version-only (see **Step 5**)
 
-Pre-flight runs `bash scripts/publish-release.sh --check` (validates `NPM_TOKEN`, PyPI token, and `npm whoami`).
+Pre-flight runs `bash scripts/publish-release.sh --check` to confirm the PyPI token is present. npm authentication is validated only when the tag-triggered GitHub Actions job exchanges its OIDC identity with npm.
 
 ## Version Files (keep in sync)
 
@@ -106,16 +105,16 @@ Phase 1 — Prepare and gate
 - [ ] 7. Push release prep branch/main
 - [ ] 8. Wait for GitHub checks to pass (`Install Smoke` is required), or skip if pre-validated (Step 5)
 - [ ] 9. Tag and push `v<version>`
-- [ ] 10. GitHub release + app bundle asset
+- [ ] 10. Wait for `Desktop Release` (GitHub release + npm trusted publish)
 - [ ] 11. Build PyPI artifacts (twine check only)
 - [ ] 11b. Sync Orion-api + Orion-docs (version commit, tag, push — no GitHub release)
 
 Phase 2 — Publish
-- [ ] 12. Run scripts/publish-release.sh
+- [ ] 12. Run scripts/publish-release.sh (PyPI packages)
 
 Phase 3 — Verify
 - [ ] 13. Post-release verification
-- [ ] 14. Clean up temp release files (CHANGELOG-excerpt.md, npm pack .tgz)
+- [ ] 14. Clean up local npm pack tarballs and other scratch artifacts
 ```
 
 ---
@@ -174,8 +173,6 @@ chore(release): v0.5.1
 Include in the commit:
 - all version file updates
 - `CHANGELOG.md`
-
-Do **not** commit `CHANGELOG-excerpt.md` (release-notes scratch file).
 
 ### Step 4: Build and smoke-test
 
@@ -308,7 +305,7 @@ If a sibling repo has **no changes** beyond the version bump, the commit may con
 
 If `v<version>` already exists on the remote for a sibling repo, skip that repo unless the user explicitly wants to move the tag (never force-push tags without explicit approval).
 
-### Step 7: GitHub release (required before PyPI)
+### Step 7: Wait for the automated GitHub and npm release
 
 PyPI users download the app bundle from:
 
@@ -316,18 +313,14 @@ PyPI users download the app bundle from:
 https://github.com/nicolasakf/Orion-app/releases/download/v<version>/orion-app-<version>.tar.gz
 ```
 
-Create the release **before** PyPI upload:
+Pushing `v<version>` triggers `.github/workflows/desktop-release.yml`. That workflow builds the desktop assets, creates or updates the GitHub release, then publishes the npm tarball through the configured npm trusted publisher. Wait for it to succeed:
 
 ```bash
-gh release create v<version> \
-  dist/orion-app-<version>.tar.gz \
-  --title "v<version>" \
-  --notes-file CHANGELOG-excerpt.md
+gh run list --workflow desktop-release.yml --limit 5
+gh run watch <run-id>
 ```
 
-Write `CHANGELOG-excerpt.md` locally from the new `CHANGELOG.md` section (do not commit it). Use `--notes "..."` for a one-liner instead if preferred.
-
-To replace a bad asset after rebuilding: `gh release upload v<version> dist/orion-app-<version>.tar.gz --clobber`
+Do not run `npm publish` locally. The workflow has `id-token: write`, uses npm CLI 11.5.1, and is the only npm publishing path. It skips the npm step safely when the target version is already published, so failed workflow runs can be retried.
 
 Verify the asset URL responds:
 
@@ -369,16 +362,16 @@ cd python && python3 -m pytest tests/test_orion_ui.py tests/test_managed_package
 
 ## Phase 2 — Publish registries
 
-From repo root, after Phase 1 artifacts exist, the GitHub checks passed on the release prep commit, and the GitHub release asset is live:
+From repo root, after `Desktop Release` succeeds and the GitHub release asset plus npm version are live:
 
 ```bash
 bash scripts/publish-release.sh
 ```
 
 The script:
-1. Sources `~/.zprofile` if `NPM_TOKEN` / PyPI token are not already exported
-2. Publishes **npm** (`orion-notebook`) — `prepack` runs again via the npm lifecycle
-3. Publishes **PyPI `orion-ui`** first, then **`orion-notebook`**
+1. Sources `~/.zprofile` if the PyPI token is not already exported
+2. Publishes **PyPI `orion-ui`** first, then **`orion-notebook`**
+3. Uses `--skip-existing` so a partial PyPI publish can be retried safely
 
 Do **not** echo or log token values. On failure, diagnose from the error output and the troubleshooting table — do not re-run publish automatically unless the user asks.
 
@@ -464,7 +457,7 @@ If any check fails, diagnose using the troubleshooting table and tell the user w
 
 ### Cleanup
 
-Remove release temp files: `CHANGELOG-excerpt.md`, local `npm pack` tarballs, and any other scratch artifacts — never commit them.
+Remove local `npm pack` tarballs and any other scratch artifacts — never commit them.
 
 ---
 
@@ -475,10 +468,10 @@ Remove release temp files: `CHANGELOG-excerpt.md`, local `npm pack` tarballs, an
 3. Push the release prep commit to GitHub
 4. Wait for required GitHub checks on that commit, especially `Install Smoke` — or skip if pre-validated on the parent commit (Step 5)
 5. Tag + push **Orion-app**
-6. **GitHub release with app bundle** ← `orion-notebook` PyPI depends on this
+6. Wait for **`Desktop Release`** to create the GitHub release and publish npm through OIDC
 7. Build PyPI artifacts for **`orion-ui`** and **`orion-notebook`**
 8. **Sync Orion-api + Orion-docs** — version commit, `v<version>` tag, push (no GitHub release)
-9. **`scripts/publish-release.sh`** (npm, then PyPI `orion-ui`, then PyPI `orion-notebook`)
+9. **`scripts/publish-release.sh`** (PyPI `orion-ui`, then PyPI `orion-notebook`)
 10. Post-release verification (registries + sibling tags)
 
 Publishing `orion-notebook` to PyPI before the GitHub release asset exists will break first-run `pip install orion-notebook` users. Publishing `orion-notebook` before `orion-ui` will break managed runtime venv sync on first startup.
@@ -491,15 +484,14 @@ Sibling repo sync (step 8) can run in parallel with PyPI artifact build (step 7)
 
 | Symptom | Likely cause | Fix |
 | --- | --- | --- |
-| `Missing publish credentials` | Vars not in agent shell | `source ~/.zprofile` or re-run terminal; verify with `--check` |
-| npm `EOTP` | Token lacks Bypass 2FA | Regenerate npm granular token with **Bypass 2FA** checked |
+| `Missing publish credentials` | PyPI token not in agent shell | `source ~/.zprofile` or re-run terminal; verify with `--check` |
+| npm `ENEEDAUTH` from `publish-npm` | OIDC trust or workflow permissions mismatch | Confirm npm trusts `nicolasakf/Orion-app` + `desktop-release.yml`, the job has `id-token: write`, and it runs on a GitHub-hosted runner |
 | npm `413 Payload Too Large` | `logs/` included in app bundle | Re-run `prepack`; confirm `prepare-app-bundle.mjs` strips `logs/` |
-| npm `401` | Invalid or expired `NPM_TOKEN` | Regenerate token; update `~/.zprofile` |
-| npm `404` on `orion-notebook` at publish | Name taken or not logged in | Confirm `npm whoami`; check registry with `npm view orion-notebook` |
+| npm publish version mismatch | Tag or workflow input differs from `package.json` | Correct the version commit and create a new release tag; never move an already-pushed release tag without explicit approval |
 | PyPI `403` / `401` | Invalid `TWINE_PASSWORD` / `PYPI_TOKEN` | Regenerate PyPI API token; update `~/.zprofile` |
 | PyPI `400` name too similar | Normalized name conflicts with existing project | Pick a distinct name (current: `orion-notebook`); use `--verbose` to confirm |
 | PyPI `400` generic | Bad metadata or description | `twine check dist/*`; use `twine upload --verbose dist/*` for details |
-| Verification: npm still on old version | Publish not finished or registry lag | Wait a minute and re-check; re-run `bash scripts/publish-release.sh` if publish failed |
+| Verification: npm still on old version | `publish-npm` failed or registry lag | Inspect and retry the `Desktop Release` workflow after fixing the reported OIDC/package error |
 | Verification: pip install 404 on bundle | PyPI published before GitHub asset | Upload GitHub asset first, then re-run PyPI publish |
 | Managed runtime `ModuleNotFoundError: orion_ui` | `orion-ui` not on PyPI for this version | Publish `orion-ui` first; users retry after both PyPI packages are live |
 | Verification: `orion-ui` missing on PyPI | Script failed mid-run | `cd python/orion-ui && twine upload dist/*` (with token env set) |
@@ -510,7 +502,7 @@ Sibling repo sync (step 8) can run in parallel with PyPI artifact build (step 7)
 ## Notes
 
 - Do not run `npm run dev` during release unless the user asks; use `prepack` / production build.
-- Do not print, commit, or log `NPM_TOKEN`, `TWINE_PASSWORD`, or `PYPI_TOKEN`.
+- Do not print, commit, or log `TWINE_PASSWORD` or `PYPI_TOKEN`.
 - Do not force-push tags or rewrite published versions without explicit user approval.
 - For breaking changes, bump minor/major semver and call them out in CHANGELOG.
 - npm package size is large (~160 MB compressed, includes app bundle); both PyPI wheels stay small by design.

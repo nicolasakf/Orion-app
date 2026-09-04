@@ -139,11 +139,19 @@ npm install -g ./orion-notebook-<version>.tgz
 orion --yes
 ```
 
-Publish when ready:
+Publishing is automated when the release tag is pushed. The `Desktop Release`
+workflow packages this tarball and publishes it through npm trusted publishing
+(OIDC), so no `NPM_TOKEN` or local `npm publish` is required:
 
 ```bash
-npm publish
+git tag v<version>
+git push origin v<version>
+gh run list --workflow desktop-release.yml --limit 5
 ```
+
+Wait for the workflow's `publish-npm` job to succeed before publishing the
+matching PyPI packages. Retrying the workflow is safe when that npm version is
+already present.
 
 After the first `orion-notebook` publish, deprecate the legacy npm package:
 
@@ -173,24 +181,20 @@ python -m build
 twine upload dist/*
 ```
 
-The PyPI package does **not** include the Orion web app. Users download it on first run from a GitHub release asset. Before publishing a new PyPI version, create a matching GitHub release and attach the app bundle:
+The PyPI package does **not** include the Orion web app. Users download it on
+first run from a GitHub release asset. The tag-triggered `Desktop Release`
+workflow creates the matching release and attaches the app bundle. Confirm that
+workflow succeeds before publishing PyPI:
 
 ```bash
-# from repo root, after bumping version
-npm run prepack
-# uploads dist/orion-app-<version>.tar.gz
+gh run list --workflow desktop-release.yml --limit 5
+gh release view v<version> --json assets
 ```
 
 Release asset URL pattern (configured in `python/orion_agent/cli.py`):
 
 ```text
 https://github.com/nicolasakf/Orion-app/releases/download/v<version>/orion-app-<version>.tar.gz
-```
-
-Create the release with [GitHub CLI](https://cli.github.com/):
-
-```bash
-gh release create v0.4.0 dist/orion-app-0.4.0.tar.gz --title "v0.4.0"
 ```
 
 Without that release asset, `pip install orion-notebook` users will fail when the CLI tries to download the app bundle.
